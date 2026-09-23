@@ -1,0 +1,20 @@
+# XIDER private MQTT broker (Mosquitto) with TLS + auth.
+# Start:   docker compose up -d    (from this folder)
+# Stop:    docker compose down
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: xider-broker
+    restart: unless-stopped
+    ports:
+      - "8883:8883"      # TLS (clients connect here)
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./certs:/mosquitto/certs:ro
+      - ./passwd:/mosquitto/passwd:ro
+      - mosquitto-data:/mosquitto/data
+      - mosquitto-log:/mosquitto/log
+
+volumes:
+  mosquitto-data:
+  mosquitto-log:

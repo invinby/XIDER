@@ -1,0 +1,47 @@
+name: "CI - Test Suite"
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  test:
+    name: "Run Pytest (Python ${{ matrix.python-version }})"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@v4
+
+      - name: "Set up Python ${{ matrix.python-version }}"
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: "Install dependencies for TG-BOT-SERVER"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r TG-BOT-SERVER/requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: "Run TG-BOT-SERVER tests"
+        run: |
+          cd TG-BOT-SERVER
+          python -m pytest tests -v
+
+      - name: "Install dependencies for XGENT-WDS"
+        run: |
+          pip install -r XGENT-WDS/requirements.txt || true
+          # Note: Windows-specific win32 packages are mocked in tests on Linux
+
+      - name: "Run XGENT-WDS tests"
+        run: |
+          cd XGENT-WDS
+          python -m pytest tests -v

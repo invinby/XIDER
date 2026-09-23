@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Secrets & Environment Variables (NEVER COMMIT)
+.env
+*.env
+*.pem
+*.key
+*.crt
+*.pfx
+
+# Runtime logs and local state
+*.log
+audit.log
+known_devices.json
+bot_settings.json
+
+# Pytest / Cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Binaries
+*.exe
+*.zip
+*.app
+XGENT-WDS/dist/
+XGENT-WDS/build/
+XGENT-MCS/dist/
+XGENT-MCS/build/
+
+# OS specific
+.DS_Store
+Thumbs.db

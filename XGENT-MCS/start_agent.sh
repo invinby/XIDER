@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# XIDER Agent Launcher v2.0 — macOS
+# Убивает зомби, проверяет окружение, запускает в фоне с watchdog.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+ENTRY="xgent_mcs.py"
+PIDFILE="agent.pid"
+LOGFILE="agent.log"
+VENV_DIR="venv"
+
+# ──────────────────────────────────────────
+# 0. Флаг --setup — мастер разрешений macOS
+# ──────────────────────────────────────────
+if [[ "${1:-}" == "--setup" ]]; then
+    echo "🍎 Запуск мастера настройки разрешений macOS..."
+    python3 setup_mac.py
+    exit 0
+fi
+
+# ──────────────────────────────────────────
+# 1. Проверка Python
+# ──────────────────────────────────────────
+if ! command -v python3 &>/dev/null; then
+    echo "❌ [ERROR] python3 не найден в PATH"
+    exit 1
+fi
+
+# ──────────────────────────────────────────
+# 2. Создание/активация venv
+# ──────────────────────────────────────────
+if [ ! -d "$VENV_DIR" ]; then
+    echo "📦 Создание виртуального окружения..."
+    python3 -m venv "$VENV_DIR"
+fi
+source "$VENV_DIR/bin/activate"
+pip install -q -r requirements.txt
+
+# ──────────────────────────────────────────
+# 3. Создание .env если нет
+# ──────────────────────────────────────────
+if [ ! -f ".env" ]; then
+    echo "⚠️  Файл .env не найден. Копирую из .env.example..."
+    cp .env.example .env
+    echo "✏️  Заполните .env и перезапустите агент!"
+    exit 1
+fi
+
+# ──────────────────────────────────────────
+# 4. Убийство старых экземпляров (и зомби!)
+# ──────────────────────────────────────────
+# По PID-файлу
+if [ -f "$PIDFILE" ]; then
+    OLD_PID=$(cat "$PIDFILE" 2>/dev/null || echo "")
+    if [ -n "$OLD_PID" ] && ps -p "$OLD_PID" >/dev/null 2>&1; then
+        echo "🛑 Останавливаю предыдущий агент (PID: $OLD_PID)..."
+        kill "$OLD_PID" 2>/dev/null || true
+        sleep 1
+        kill -9 "$OLD_PID" 2>/dev/null || true
+    fi
+    rm -f "$PIDFILE"
+fi
+
+# Убиваем зомби по имени файла (если PID-файл потерялся)
+ZOMBIE_PIDS=$(pgrep -f "$ENTRY" 2>/dev/null || true)
+if [ -n "$ZOMBIE_PIDS" ]; then
+    echo "🧟 Убиваю зомби-процессы: $ZOMBIE_PIDS"
+    echo "$ZOMBIE_PIDS" | xargs kill -9 2>/dev/null || true
+    sleep 1
+fi
+
+# ──────────────────────────────────────────
+# 5. Проверка разрешений на исполнение
+# ──────────────────────────────────────────
+chmod +x "$0"
+
+# ──────────────────────────────────────────
+# 6. Запуск (--foreground или фон)
+# ──────────────────────────────────────────
+if [[ "${1:-}" == "--foreground" || "${1:-}" == "-f" ]]; then
+    echo "🟢 XIDER Agent v2.0 — интерактивный режим (Ctrl+C для выхода)"
+    python3 "$ENTRY"
+else
+    echo "🚀 Запускаю XIDER Agent v2.0 в фоне..."
+    nohup python3 "$ENTRY" >"$LOGFILE" 2>&1 &
+    PID=$!
+    echo "$PID" >"$PIDFILE"
+
+    sleep 1.5
+    if ps -p "$PID" >/dev/null 2>&1; then
+        echo "╔══════════════════════════════════════╗"
+        echo "║  ✅  XIDER Agent запущен успешно!    ║"
+        echo "╠══════════════════════════════════════╣"
+        echo "║  PID:  $PID"
+        echo "║  Лог:  $(pwd)/$LOGFILE"
+        echo "║  Стоп: ./stop_agent.sh               ║"
+        echo "╚══════════════════════════════════════╝"
+        echo ""
+        echo "💡 Если нет доступа к экрану/мику — запусти: ./start_agent.sh --setup"
+    else
+        echo "╔══════════════════════════════════════╗"
+        echo "║  ❌  Агент завершился с ошибкой!     ║"
+        echo "╚══════════════════════════════════════╝"
+        echo ""
+        echo "Последние строки лога:"
+        tail -n 20 "$LOGFILE" 2>/dev/null || echo "(лог пустой)"
+        exit 1
+    fi
+fi
