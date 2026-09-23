@@ -9,7 +9,7 @@ on:
 jobs:
   test:
     name: "Run Pytest (Python ${{ matrix.python-version }})"
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
@@ -38,8 +38,7 @@ jobs:
 
       - name: "Install dependencies for XGENT-WDS"
         run: |
-          pip install -r XGENT-WDS/requirements.txt || true
-          # Note: Windows-specific win32 packages are mocked in tests on Linux
+          pip install -r XGENT-WDS/requirements.txt
 
       - name: "Run XGENT-WDS tests"
         run: |

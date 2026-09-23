@@ -6,6 +6,8 @@
 
 import collections
 import os
+import sys
+from pathlib import Path
 
 import psutil
 import pytest
@@ -388,12 +390,12 @@ def test_config_fails_closed_without_key(tmp_path):
     fake_root = tmp_path / "wds_fake"
     fake_root.mkdir()
     shutil.copy(
-        "C:\\Users\\rog\\Desktop\\XIDER\\XGENT-WDS\\config.py",
+        Path(wds.__file__).with_name("config.py"),
         str(fake_root / "config.py"),
     )
     result = sp.run(
         [
-            "C:\\Users\\rog\\Desktop\\XIDER\\XGENT-WDS\\venv\\Scripts\\python.exe",
+            sys.executable,
             "-c",
             "import runpy; runpy.run_path(r'C:\\TEMP\\cfg.py', run_name='__main__')"
             .replace(r"C:\TEMP\cfg.py", str(fake_root / "config.py")),
@@ -416,12 +418,12 @@ def test_config_fails_closed_with_default_key(tmp_path):
     fake_root = tmp_path / "wds_fake2"
     fake_root.mkdir()
     shutil.copy(
-        "C:\\Users\\rog\\Desktop\\XIDER\\XGENT-WDS\\config.py",
+        Path(wds.__file__).with_name("config.py"),
         str(fake_root / "config.py"),
     )
     result = sp.run(
         [
-            "C:\\Users\\rog\\Desktop\\XIDER\\XGENT-WDS\\venv\\Scripts\\python.exe",
+            sys.executable,
             "-c",
             "import runpy; runpy.run_path(r'X', run_name='__main__')"
             .replace("r'X'", "r'" + str(fake_root / "config.py") + "'"),
@@ -444,12 +446,12 @@ def test_config_ok_with_strong_key(tmp_path):
     fake_root = tmp_path / "wds_fake3"
     fake_root.mkdir()
     shutil.copy(
-        "C:\\Users\\rog\\Desktop\\XIDER\\XGENT-WDS\\config.py",
+        Path(wds.__file__).with_name("config.py"),
         str(fake_root / "config.py"),
     )
     result = sp.run(
         [
-            "C:\\Users\\rog\\Desktop\\XIDER\\XGENT-WDS\\venv\\Scripts\\python.exe",
+            sys.executable,
             "-c",
             "import runpy; runpy.run_path(r'X', run_name='__main__')"
             .replace("r'X'", "r'" + str(fake_root / "config.py") + "'"),

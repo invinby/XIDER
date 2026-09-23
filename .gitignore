@@ -30,6 +30,7 @@ wheels/
 *.key
 *.crt
 *.pfx
+_secrets_embed.py
 
 # Runtime logs and local state
 *.log
