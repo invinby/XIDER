@@ -48,11 +48,17 @@ if ! id -u xider >/dev/null 2>&1; then
   useradd --system --home-dir "${APP_DIR}" --create-home --shell /usr/sbin/nologin xider
 fi
 
-if [[ ! -d "${APP_DIR}/.git" ]]; then
-  git clone --depth 1 --branch "${BRANCH}" "${REPO_URL}" "${APP_DIR}"
-else
-  git -C "${APP_DIR}" fetch --depth 1 origin "${BRANCH}"
-  git -C "${APP_DIR}" merge --ff-only "origin/${BRANCH}"
+if [[ "${SKIP_REPO_SYNC:-0}" != "1" ]]; then
+  if [[ ! -d "${APP_DIR}/.git" ]]; then
+    git clone --depth 1 --branch "${BRANCH}" "${REPO_URL}" "${APP_DIR}"
+  else
+    git -C "${APP_DIR}" fetch --depth 1 origin "${BRANCH}"
+    git -C "${APP_DIR}" merge --ff-only "origin/${BRANCH}"
+  fi
+fi
+if [[ ! -f "${APP_DIR}/TG-BOT-SERVER/requirements.txt" ]]; then
+  echo "XIDER source is missing under ${APP_DIR}." >&2
+  exit 7
 fi
 
 python3 -m venv "${APP_DIR}/TG-BOT-SERVER/venv"

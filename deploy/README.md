@@ -13,7 +13,7 @@ icacls "$env:USERPROFILE\Downloads\ssh-key-2026-09-24 (2).key" /grant:r "$($env:
 powershell -ExecutionPolicy Bypass -File .\deploy\upload-and-install.ps1
 ```
 
-The script uploads the ignored `TG-BOT-SERVER\.env` without printing it, creates `/etc/xider/bot.env` with restricted permissions, installs dependencies, and enables `xider-bot.service`. It refuses to start unless MQTT TLS and payload encryption are enabled.
+The script uploads the ignored `TG-BOT-SERVER\.env` and the current `git-ver` source without printing secrets, creates `/etc/xider/bot.env` with restricted permissions, installs dependencies, and enables `xider-bot.service`. It refuses to start unless MQTT TLS and payload encryption are enabled. A GitHub push is not required for this path.
 
 ## Verify on the VPS
 

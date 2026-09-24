@@ -6,8 +6,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $envFile = (Resolve-Path $EnvPath).Path
 $uploadEnv = Join-Path $env:TEMP ("xider-bot-{0}.env" -f ([guid]::NewGuid().ToString('N')))
+$bundle = Join-Path $env:TEMP ("xider-source-{0}.zip" -f ([guid]::NewGuid().ToString('N')))
 
 try {
     if (-not (Test-Path -LiteralPath $KeyPath)) { throw "SSH key not found: $KeyPath" }
@@ -23,32 +25,44 @@ try {
     # strips that optional BOM before validating the first variable.
     Set-Content -LiteralPath $uploadEnv -Value $lines -Encoding UTF8
 
+    $excluded = @('.git', '.pytest_cache', '__pycache__', 'venv', 'build', 'dist')
+    $bundleItems = Get-ChildItem -LiteralPath $repo -Force | Where-Object { $_.Name -notin $excluded }
+    Compress-Archive -Path $bundleItems.FullName -DestinationPath $bundle -Force
+
     Write-Host "[1/4] Checking SSH access to $ServerIp..."
     & ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i $KeyPath "ubuntu@$ServerIp" 'echo XIDER_SSH_OK' | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'SSH check failed. Fix the key ACL and retry; the server was not changed.' }
 
-    Write-Host '[2/4] Uploading the runtime env (values are not printed)...'
+    Write-Host '[2/5] Uploading the runtime env (values are not printed)...'
     & scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i $KeyPath -- $uploadEnv "ubuntu@${ServerIp}:/tmp/xider-bot.env"
     if ($LASTEXITCODE -ne 0) { throw 'SCP failed; the server was not changed.' }
 
-    Write-Host '[3/4] Installing the service and dependencies...'
+    Write-Host '[3/5] Uploading the current git-ver source bundle...'
+    & scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i $KeyPath -- $bundle "ubuntu@${ServerIp}:/tmp/xider-source.zip"
+    if ($LASTEXITCODE -ne 0) { throw 'Source upload failed; the server was not changed.' }
+
+    Write-Host '[4/5] Installing the service and dependencies...'
     $remote = @'
 set -eu
 sudo install -d -m 0750 /etc/xider
 sudo install -m 0600 /tmp/xider-bot.env /etc/xider/bot.env
 rm -f /tmp/xider-bot.env
-if ! command -v git >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y git; fi
-if [ ! -d /opt/xider/.git ]; then
-  sudo git clone --depth 1 --branch main https://github.com/invinby/XIDER.git /opt/xider
-fi
-sudo bash /opt/xider/deploy/server-install.sh
+sudo apt-get update
+sudo apt-get install -y unzip git
+stage=$(sudo mktemp -d /opt/xider-stage.XXXXXX)
+sudo unzip -q /tmp/xider-source.zip -d "$stage"
+sudo install -d -m 0750 /opt/xider
+sudo cp -a "$stage"/. /opt/xider/
+sudo rm -rf "$stage" /tmp/xider-source.zip
+sudo env SKIP_REPO_SYNC=1 bash /opt/xider/deploy/server-install.sh
 '@
     & ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i $KeyPath "ubuntu@$ServerIp" $remote | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'Remote install failed; inspect journalctl -u xider-bot.' }
 
-    Write-Host '[4/4] Done. The bot is enabled as xider-bot.service.'
+    Write-Host '[5/5] Done. The bot is enabled as xider-bot.service.'
     Write-Host "Logs: ssh -i `"$KeyPath`" ubuntu@$ServerIp 'sudo journalctl -u xider-bot -f'"
 }
 finally {
     Remove-Item -LiteralPath $uploadEnv -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $bundle -Force -ErrorAction SilentlyContinue
 }
