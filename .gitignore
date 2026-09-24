@@ -37,6 +37,8 @@ _secrets_embed.py
 audit.log
 known_devices.json
 bot_settings.json
+access_control.json
+admin_audit.jsonl
 
 # Pytest / Cache
 .pytest_cache/

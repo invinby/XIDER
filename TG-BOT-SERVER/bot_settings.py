@@ -16,6 +16,8 @@ _defaults = {
     "report_hour": "",
     "admins": [],
     "blocked_ids": [],
+    "ui_style": "technical",
+    "require_device_approval": True,
 }
 
 

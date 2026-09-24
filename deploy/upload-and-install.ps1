@@ -2,14 +2,17 @@
 param(
     [string]$ServerIp = '141.145.152.174',
     [string]$KeyPath = "$env:USERPROFILE\Downloads\ssh-key-2026-09-24 (2).key",
-    [string]$EnvPath = "$PSScriptRoot\..\..\TG-BOT-SERVER\.env"
+    [string]$EnvPath = '',
+    [switch]$ResetRuntimeState
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+if (-not $EnvPath) { $EnvPath = Join-Path (Split-Path $repo -Parent) 'TG-BOT-SERVER\.env' }
 $envFile = (Resolve-Path $EnvPath).Path
 $uploadEnv = Join-Path $env:TEMP ("xider-bot-{0}.env" -f ([guid]::NewGuid().ToString('N')))
 $bundle = Join-Path $env:TEMP ("xider-source-{0}.zip" -f ([guid]::NewGuid().ToString('N')))
+$resetLine = if ($ResetRuntimeState) { 'sudo bash /opt/xider/deploy/reset-runtime-state.sh' } else { ':' }
 
 try {
     if (-not (Test-Path -LiteralPath $KeyPath)) { throw "SSH key not found: $KeyPath" }
@@ -25,9 +28,16 @@ try {
     # strips that optional BOM before validating the first variable.
     Set-Content -LiteralPath $uploadEnv -Value $lines -Encoding UTF8
 
-    $excluded = @('.git', '.pytest_cache', '__pycache__', 'venv', 'build', 'dist')
-    $bundleItems = Get-ChildItem -LiteralPath $repo -Force | Where-Object { $_.Name -notin $excluded }
-    Compress-Archive -Path $bundleItems.FullName -DestinationPath $bundle -Force
+    & tar.exe -a -c -f $bundle -C $repo `
+        '--exclude=.git' `
+        '--exclude=.pytest_cache' `
+        '--exclude=__pycache__' `
+        '--exclude=venv' `
+        '--exclude=build' `
+        '--exclude=dist' `
+        '--exclude=.env' `
+        '.'
+    if ($LASTEXITCODE -ne 0) { throw 'Could not create a portable source archive.' }
 
     Write-Host "[1/4] Checking SSH access to $ServerIp..."
     & ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i $KeyPath "ubuntu@$ServerIp" 'echo XIDER_SSH_OK' | Out-Host
@@ -54,12 +64,15 @@ sudo unzip -q /tmp/xider-source.zip -d "$stage"
 sudo install -d -m 0750 /opt/xider
 sudo cp -a "$stage"/. /opt/xider/
 sudo rm -rf "$stage" /tmp/xider-source.zip
+__RESET_RUNTIME__
 sudo env SKIP_REPO_SYNC=1 bash /opt/xider/deploy/server-install.sh
 '@
+    $remote = $remote.Replace('__RESET_RUNTIME__', $resetLine)
     & ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i $KeyPath "ubuntu@$ServerIp" $remote | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'Remote install failed; inspect journalctl -u xider-bot.' }
 
     Write-Host '[5/5] Done. The bot is enabled as xider-bot.service.'
+    if ($ResetRuntimeState) { Write-Host 'Runtime state was backed up and reset; .env secrets were preserved.' }
     Write-Host "Logs: ssh -i `"$KeyPath`" ubuntu@$ServerIp 'sudo journalctl -u xider-bot -f'"
 }
 finally {

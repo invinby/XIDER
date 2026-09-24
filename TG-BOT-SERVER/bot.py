@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import contextvars
 import datetime
 import html
 import io
@@ -54,13 +55,15 @@ from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import bot_settings
+import access_store
 from config import ADMIN_ID, BOT_TOKEN, ENCRYPT_PAYLOAD, MQTT_BROKER, MQTT_PORT, MQTT_PREFIX
-from roles import AdminFilter, AnyAccessFilter, Role, get_user_role
+from roles import AdminFilter, AnyAccessFilter, OwnerFilter, ReadOnlyFilter, Role, get_user_role
 from crypto import verify_message
 from device_store import DeviceStore
 from transport import MQTTTransport
 from wol import send_wol
 from xgencrypto import decrypt_payload
+from version import BUILD_CODE, BUILD_DATE, VERSION
 
 logging.basicConfig(
     level=logging.INFO,
@@ -125,6 +128,7 @@ class Form(StatesGroup):
     wait_shout = State()
     wait_prockill = State()
     wait_brightness = State()
+    wait_admin_message = State()
 
 
 # Диспетчер и роутер создаются ДО декораторов хендлеров (иначе NameError при импорте).
@@ -132,20 +136,66 @@ dp = Dispatcher()
 router = Router()
 dp.include_router(router)
 
+CURRENT_TG_USER: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "xider_current_tg_user", default=ADMIN_ID
+)
+
+
+class SessionRegistry(dict):
+    """Keep the selected device isolated per Telegram user.
+
+    Older XIDER used one global ``SESSION['target']``.  That could send a
+    command from one operator to a device selected by another operator.  The
+    existing call sites keep working, while the target is now per account.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._targets: dict[int, str | None] = {}
+
+    def _user_id(self) -> int:
+        return int(CURRENT_TG_USER.get())
+
+    def __getitem__(self, key):
+        if key == "target":
+            return self._targets.get(self._user_id())
+        return super().__getitem__(key)
+
+    def __setitem__(self, key, value):
+        if key == "target":
+            self._targets[self._user_id()] = value
+            return
+        return super().__setitem__(key, value)
+
+    def get(self, key, default=None):
+        if key == "target":
+            return self._targets.get(self._user_id(), default)
+        return super().get(key, default)
+
 @dp.update.outer_middleware()
 async def _live_log_middleware(handler, event, data):
+    user = None
+    kind = "update"
+    detail = ""
     if event.message:
         m = event.message
-        u = m.from_user
-        tag = f"@{u.username}" if u and u.username else f"id:{u.id if u else '?'}"
-        content = m.text or f"<{m.content_type}>"
-        log.info("📨 [TG MSG] %s: %s", tag, content)
+        user = m.from_user
+        kind = "telegram_message"
+        detail = m.text or f"<{m.content_type}>"
     elif event.callback_query:
         cq = event.callback_query
-        u = cq.from_user
-        tag = f"@{u.username}" if u and u.username else f"id:{u.id if u else '?'}"
-        log.info("🔘 [TG BTN] %s: click '%s'", tag, cq.data)
-    return await handler(event, data)
+        user = cq.from_user
+        kind = "telegram_callback"
+        detail = cq.data or ""
+    token = CURRENT_TG_USER.set(int(user.id) if user else ADMIN_ID)
+    try:
+        if user:
+            tag = f"@{user.username}" if user.username else f"id:{user.id}"
+            log.info("[TG %s] %s: %s", kind, tag, detail)
+            access_store.touch_user(user, kind, detail)
+        return await handler(event, data)
+    finally:
+        CURRENT_TG_USER.reset(token)
 
 
 @router.callback_query(AdminFilter(), F.data == "cmd:clipboard")
@@ -570,8 +620,9 @@ def device_card(device_id: str) -> str:
 
 
 # ====== XIDER System Constants ======
-XIDER_VERSION = "2.0.0"
-XIDER_BUILD   = "2026-09-21"
+XIDER_VERSION = VERSION
+XIDER_BUILD   = BUILD_DATE
+XIDER_BUILD_CODE = BUILD_CODE
 XIDER_AUTHOR  = "@sciph"
 # =====================================
 
@@ -613,12 +664,28 @@ def toggle_server_autostart() -> tuple[bool, str]:
         return False, f"⚠️ Ошибка реестра: {exc}"
 
 
-def main_menu():
+def _technical_ui() -> bool:
+    return bot_settings.get("ui_style", "technical") == "technical"
+
+
+def main_menu(user_id: int | None = None):
+    user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
+    role = get_user_role(user_id)
     kb = InlineKeyboardBuilder()
-    kb.button(text="💻 Список устройств", callback_data="menu:devices", style="primary")
-    kb.button(text="🌐 Все устройства", callback_data="dev:all", style="primary")
-    kb.button(text="🔔 Настройки & События", callback_data="ev:menu", style="primary")
-    kb.button(text="ℹ️ О системе XIDER", callback_data="menu:about", style="primary")
+    if role in (Role.OWNER, Role.COOWNER):
+        kb.button(text="Устройства" if _technical_ui() else "💻 Список устройств", callback_data="menu:devices", style="primary")
+        kb.button(text="Все устройства" if _technical_ui() else "🌐 Все устройства", callback_data="dev:all", style="primary")
+        kb.button(text="Серверная", callback_data="menu:server", style="primary")
+        kb.button(text="События и настройки" if _technical_ui() else "🔔 Настройки & События", callback_data="ev:menu", style="primary")
+    elif role == Role.USER:
+        kb.button(text="Мои устройства", callback_data="menu:devices", style="primary")
+        kb.button(text="Серверная: обзор", callback_data="menu:server", style="primary")
+    else:
+        kb.button(text="Обзор устройств", callback_data="menu:guest_devices", style="primary")
+        kb.button(text="Серверная: обзор", callback_data="menu:server", style="primary")
+    kb.button(text="О системе" if _technical_ui() else "ℹ️ О системе XIDER", callback_data="menu:about", style="primary")
+    if role == Role.OWNER:
+        kb.button(text="Администрирование", callback_data="menu:admin", style="danger")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -1131,6 +1198,152 @@ def admins_menu():
     return kb.as_markup()
 
 
+ROLE_LABELS = {
+    Role.OWNER: "Владелец",
+    Role.COOWNER: "Со-владелец",
+    Role.USER: "Пользователь",
+    Role.GUEST: "Гость",
+    Role.BLOCKED: "Заблокирован",
+}
+
+USER_PERMISSION_CHOICES = {
+    "cmd:status": "Статус устройства",
+    "cmd:sysinfo": "Сведения о системе",
+    "cmd:battery": "Батарея",
+    "cmd:screenshot": "Скриншот",
+    "cmd:lock": "Блокировка экрана",
+    "full_device": "Полное управление выданными устройствами",
+}
+
+
+def _user_label(record: dict) -> str:
+    username = str(record.get("username") or "").strip()
+    name = str(record.get("display_name") or "").strip()
+    if username:
+        return f"@{username}"
+    if name:
+        return name
+    return f"id:{record.get('id', '?')}"
+
+
+def _role_label(role: str) -> str:
+    return ROLE_LABELS.get(role, role)
+
+
+def admin_menu():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Пользователи", callback_data="admin:users", style="primary")
+    kb.button(text="Журнал действий", callback_data="admin:audit", style="primary")
+    mode = bot_settings.get("ui_style", "technical")
+    kb.button(
+        text=f"Текст: {'технический' if mode == 'technical' else 'разговорный'}",
+        callback_data="admin:style",
+        style="success" if mode == "technical" else "primary",
+    )
+    kb.button(text="Серверная", callback_data="menu:server", style="primary")
+    kb.button(text="Главное меню", callback_data="menu:main", style="primary")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_users_menu():
+    kb = InlineKeyboardBuilder()
+    users = access_store.list_users()
+    if not users:
+        kb.button(text="Пока никто не запускал бота", callback_data="noop", style="primary")
+    for record in users[:30]:
+        uid = int(record.get("id") or 0)
+        role = access_store.get_role(uid, ADMIN_ID)
+        blocked = role == Role.BLOCKED
+        text = f"{'Заблокирован: ' if blocked else ''}{_user_label(record)} — {_role_label(role)}"
+        kb.button(text=text[:62], callback_data=f"admin:user:{uid}", style="danger" if blocked else "primary")
+    kb.button(text="Назад", callback_data="menu:admin", style="primary")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_user_menu(user_id: int):
+    record = access_store.get_user(user_id) or {"id": user_id, "role": Role.GUEST, "permissions": {}}
+    role = access_store.get_role(user_id, ADMIN_ID)
+    blocked = role == Role.BLOCKED
+    kb = InlineKeyboardBuilder()
+    if user_id != ADMIN_ID:
+        kb.button(text="Сделать со-владельцем", callback_data=f"admin:role:{user_id}:coowner", style="danger")
+        kb.button(text="Сделать пользователем", callback_data=f"admin:role:{user_id}:user", style="success")
+        kb.button(text="Сделать гостем", callback_data=f"admin:role:{user_id}:guest", style="primary")
+        kb.button(
+            text="Разблокировать" if blocked else "Заблокировать",
+            callback_data=f"admin:block:{user_id}",
+            style="success" if blocked else "danger",
+        )
+        kb.button(text="Выдать устройства", callback_data=f"admin:devices:{user_id}", style="primary")
+        kb.button(text="Выдать кнопки", callback_data=f"admin:perms:{user_id}", style="primary")
+        kb.button(text="Написать пользователю", callback_data=f"admin:message:{user_id}", style="primary")
+    kb.button(text="К пользователям", callback_data="admin:users", style="primary")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_devices_menu(user_id: int):
+    record = access_store.get_user(user_id) or {}
+    granted = set((record.get("permissions") or {}).get("devices") or [])
+    kb = InlineKeyboardBuilder()
+    for device_id, info in sorted(devices.all().items()):
+        mark = "Выдано: " if device_id in granted else "Выдать: "
+        name = str(info.get("name") or device_id)
+        kb.button(
+            text=f"{mark}{name}"[:62],
+            callback_data=f"admin:device:{user_id}:{device_id}",
+            style="success" if device_id in granted else "primary",
+        )
+    kb.button(text="К пользователю", callback_data=f"admin:user:{user_id}", style="primary")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_permissions_menu(user_id: int):
+    record = access_store.get_user(user_id) or {}
+    granted = set((record.get("permissions") or {}).get("callbacks") or [])
+    kb = InlineKeyboardBuilder()
+    for callback, label in USER_PERMISSION_CHOICES.items():
+        enabled = callback in granted
+        kb.button(
+            text=("Выдано: " if enabled else "Выдать: ") + label,
+            callback_data=f"admin:perm:{user_id}:{callback.replace(':', '_')}",
+            style="success" if enabled else "primary",
+        )
+    kb.button(text="К пользователю", callback_data=f"admin:user:{user_id}", style="primary")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def guest_devices_menu():
+    kb = InlineKeyboardBuilder()
+    for _, info in sorted(devices.all().items()):
+        name = str(info.get("name") or "Устройство")
+        status = "онлайн" if _status_dot(info) in ("🟢", "🟡") else "офлайн"
+        kb.button(text=f"{name}: {status}"[:62], callback_data="guest:readonly", style="primary")
+    kb.button(text="Главное меню", callback_data="menu:main", style="primary")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def server_menu(user_id: int | None = None):
+    user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
+    role = get_user_role(user_id)
+    kb = InlineKeyboardBuilder()
+    if role == Role.OWNER:
+        approval = bool(bot_settings.get("require_device_approval", True))
+        kb.button(
+            text=f"Подтверждение новых устройств: {'включено' if approval else 'выключено'}",
+            callback_data="server:approval",
+            style="success" if approval else "danger",
+        )
+    kb.button(text="Главное меню", callback_data="menu:main", style="primary")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
 def blocked_menu():
     s = bot_settings.all_settings()
     kb = InlineKeyboardBuilder()
@@ -1260,7 +1473,7 @@ _NOTIFY_DEBOUNCE: dict[str, tuple] = {}  # {device_id: (was_online, ts)}
 _NOTIFY_DEBOUNCE_SEC = 15  # не слать уведомление если статус изменился < N сек назад
 
 LOOP: asyncio.AbstractEventLoop | None = None
-SESSION: dict = {"target": None}
+SESSION: SessionRegistry = SessionRegistry()
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
@@ -1378,7 +1591,7 @@ def on_mqtt_message(topic: str, data: dict) -> None:
                 ),
                 LOOP,
             )
-        if is_new and LOOP is not None:
+        if is_new and LOOP is not None and bot_settings.get("require_device_approval", True):
             kb = InlineKeyboardBuilder()
             kb.button(text="✅ Добавить", callback_data=f"devmg:allow:{device_id}", style="success")
             kb.button(text="⛔ Заблокировать", callback_data=f"devmg:block:{device_id}", style="danger")
@@ -1445,23 +1658,48 @@ transport = MQTTTransport(on_mqtt_message)
 #  Хендлеры: текстовые сообщения
 # =====================================================================
 
-@router.message(AdminFilter(), Command("start"))
+@router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     SESSION["target"] = None
+    record, first_start = access_store.register_start(message.from_user)
+    role = get_user_role(message.from_user.id)
     online_count = sum(
         1 for v in devices.all().values() if v.get("status") == "online"
     )
     total_count = len(devices.all())
+    if first_start and message.from_user.id != ADMIN_ID:
+        try:
+            kb = InlineKeyboardBuilder()
+            kb.button(text="Открыть пользователя", callback_data=f"admin:user:{message.from_user.id}", style="primary")
+            kb.adjust(1)
+            await bot.send_message(
+                ADMIN_ID,
+                "Новый запуск бота: "
+                f"<b>{html.escape(_user_label(record))}</b> "
+                f"(<code>{message.from_user.id}</code>). Роль по умолчанию: гость.",
+                reply_markup=kb.as_markup(),
+            )
+        except Exception:
+            log.exception("Не удалось уведомить владельца о новом пользователе")
+    if role == Role.BLOCKED:
+        await message.answer("Доступ для этого аккаунта заблокирован.")
+        return
+    if role == Role.GUEST:
+        intro = (
+            "XIDER: доступ для просмотра. Управляющие действия недоступны, "
+            "пока владелец не выдаст права."
+        )
+    elif role == Role.USER:
+        intro = "XIDER: доступны только выданные тебе устройства и кнопки."
+    else:
+        intro = "XIDER: панель управления готова."
     await message.answer(
-        f"⚡ <b>XIDER v{XIDER_VERSION}</b> — пульт удалённого управления\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📡 Устройств онлайн: <b>{online_count}/{total_count}</b>\n"
-        f"🔐 Транспорт: MQTT/TLS (EMQX Cloud)\n"
-        f"🛡 Безопасность: HMAC-SHA256\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Выберите устройство из списка или нажмите кнопку ниже.",
-        reply_markup=main_menu(),
+        f"<b>XIDER {XIDER_BUILD_CODE}</b>\n"
+        f"Роль: <b>{html.escape(_role_label(role))}</b>\n"
+        f"Устройств онлайн: <b>{online_count}/{total_count}</b>\n\n"
+        f"{intro}",
+        reply_markup=main_menu(message.from_user.id),
     )
 
 
@@ -1478,7 +1716,7 @@ async def cmd_cancel(message: Message, state: FSMContext):
         await message.answer("Нечего отменять.", reply_markup=main_menu())
 
 
-@router.callback_query(AdminFilter(), F.data == "menu:about")
+@router.callback_query(ReadOnlyFilter(), F.data == "menu:about")
 async def on_menu_about(cq: CallbackQuery):
     """Раздел 'О системе XIDER' — полная инфо-карточка."""
     await cq.answer()
@@ -1490,8 +1728,8 @@ async def on_menu_about(cq: CallbackQuery):
         f"⚡ <b>XIDER</b> — Remote Control System\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"\n"
-        f"<b>📦 Версия:</b> {XIDER_VERSION}\n"
-        f"<b>📅 Сборка:</b>  {XIDER_BUILD}\n"
+        f"<b>Версия:</b> {XIDER_BUILD_CODE}\n"
+        f"<b>Сборка:</b>  {XIDER_BUILD}\n"
         f"<b>👨‍💻 Автор:</b>   {XIDER_AUTHOR}\n"
         f"\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -1580,7 +1818,264 @@ async def on_sound_input(message: Message, state: FSMContext):
 
 @router.message(F.from_user.id != ADMIN_ID)
 async def on_denied(message: Message):
-    await message.answer("⛔ Доступ запрещён.")
+    if get_user_role(message.from_user.id) == Role.BLOCKED:
+        await message.answer("Доступ для этого аккаунта заблокирован.")
+    else:
+        await message.answer("Используй /start, чтобы открыть доступные разделы.")
+
+
+# ---------- XIDER 3: доступ, администрирование и серверная ----------
+
+@router.callback_query(ReadOnlyFilter(), F.data == "menu:server")
+async def on_menu_server(cq: CallbackQuery):
+    broker = "подключён" if transport.connected.is_set() else "ожидает подключения"
+    approval = "включено" if bot_settings.get("require_device_approval", True) else "выключено"
+    await cq.message.edit_text(
+        "<b>Серверная</b>\n"
+        f"Сборка: <code>{XIDER_BUILD_CODE}</code>\n"
+        f"MQTT: <b>{broker}</b>\n"
+        f"Новые устройства: подтверждение {approval}\n"
+        "Секреты, токены и ключи никогда не показываются в этом разделе.",
+        reply_markup=server_menu(cq.from_user.id),
+    )
+    await cq.answer()
+
+
+@router.callback_query(OwnerFilter(), F.data == "server:approval")
+async def on_server_approval(cq: CallbackQuery):
+    value = bot_settings.toggle("require_device_approval")
+    access_store.append_audit("device_approval_policy", actor_id=cq.from_user.id, detail=str(value))
+    broker = "подключён" if transport.connected.is_set() else "ожидает подключения"
+    await cq.message.edit_text(
+        "<b>Серверная</b>\n"
+        f"Сборка: <code>{XIDER_BUILD_CODE}</code>\n"
+        f"MQTT: <b>{broker}</b>\n"
+        f"Новые устройства: подтверждение {'включено' if value else 'выключено'}\n"
+        "Секреты, токены и ключи никогда не показываются в этом разделе.",
+        reply_markup=server_menu(cq.from_user.id),
+    )
+    await cq.answer("Подтверждение включено" if value else "Автодобавление включено")
+
+
+@router.callback_query(ReadOnlyFilter(), F.data == "menu:guest_devices")
+async def on_guest_devices(cq: CallbackQuery):
+    devs = devices.all()
+    online = sum(1 for info in devs.values() if _status_dot(info) in ("🟢", "🟡"))
+    await cq.message.edit_text(
+        f"<b>Обзор устройств</b>\nОнлайн: <b>{online}/{len(devs)}</b>\n"
+        "Это режим просмотра: управляющие кнопки отключены.",
+        reply_markup=guest_devices_menu(),
+    )
+    await cq.answer()
+
+
+@router.callback_query(ReadOnlyFilter(), F.data == "guest:readonly")
+async def on_guest_readonly(cq: CallbackQuery):
+    await cq.answer("Режим просмотра: эта кнопка недоступна гостю.", show_alert=True)
+
+
+@router.callback_query(OwnerFilter(), F.data == "menu:admin")
+async def on_menu_admin(cq: CallbackQuery):
+    await cq.message.edit_text(
+        "<b>Администрирование</b>\n"
+        "Пользователи, роли, выданные права и журнал действий.\n"
+        "Владелец защищён: его нельзя заблокировать, понизить или удалить.",
+        reply_markup=admin_menu(),
+    )
+    await cq.answer()
+
+
+@router.callback_query(OwnerFilter(), F.data == "admin:users")
+async def on_admin_users(cq: CallbackQuery):
+    users = access_store.list_users()
+    await cq.message.edit_text(
+        f"<b>Пользователи</b>\nВсего запусков: <b>{len(users)}</b>\n"
+        "Открой пользователя, чтобы изменить роль, блокировку или разрешения.",
+        reply_markup=admin_users_menu(),
+    )
+    await cq.answer()
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("admin:user:"))
+async def on_admin_user(cq: CallbackQuery):
+    raw = cq.data.rsplit(":", 1)[-1]
+    if not raw.isdigit():
+        await cq.answer("Некорректный пользователь", show_alert=True)
+        return
+    user_id = int(raw)
+    record = access_store.get_user(user_id)
+    if not record:
+        await cq.answer("Пользователь не найден", show_alert=True)
+        return
+    role = access_store.get_role(user_id, ADMIN_ID)
+    perms = record.get("permissions") or {}
+    device_count = len(perms.get("devices") or [])
+    button_count = len(perms.get("callbacks") or [])
+    await cq.message.edit_text(
+        f"<b>{html.escape(_user_label(record))}</b>\n"
+        f"Telegram ID: <code>{user_id}</code>\n"
+        f"Роль: <b>{html.escape(_role_label(role))}</b>\n"
+        f"Устройств выдано: {device_count}; кнопок выдано: {button_count}.",
+        reply_markup=admin_user_menu(user_id),
+    )
+    await cq.answer()
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("admin:role:"))
+async def on_admin_role(cq: CallbackQuery):
+    parts = cq.data.split(":")
+    if len(parts) != 4 or not parts[2].isdigit():
+        await cq.answer("Некорректная роль", show_alert=True)
+        return
+    user_id, role = int(parts[2]), parts[3]
+    if not access_store.set_role(cq.from_user.id, user_id, role, ADMIN_ID):
+        await cq.answer("Владельца менять нельзя", show_alert=True)
+        return
+    await cq.answer(f"Роль: {_role_label(role)}")
+    await on_admin_user(cq)
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("admin:block:"))
+async def on_admin_block(cq: CallbackQuery):
+    raw = cq.data.rsplit(":", 1)[-1]
+    if not raw.isdigit():
+        await cq.answer("Некорректный пользователь", show_alert=True)
+        return
+    user_id = int(raw)
+    blocked = access_store.get_role(user_id, ADMIN_ID) != Role.BLOCKED
+    if not access_store.set_blocked(cq.from_user.id, user_id, blocked, ADMIN_ID):
+        await cq.answer("Владельца блокировать нельзя", show_alert=True)
+        return
+    await cq.answer("Пользователь заблокирован" if blocked else "Пользователь разблокирован")
+    await on_admin_user(cq)
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("admin:devices:"))
+async def on_admin_devices(cq: CallbackQuery):
+    raw = cq.data.rsplit(":", 1)[-1]
+    if not raw.isdigit():
+        await cq.answer("Некорректный пользователь", show_alert=True)
+        return
+    await cq.message.edit_text(
+        "<b>Доступ к устройствам</b>\n"
+        "Зелёная кнопка означает, что устройство уже выдано пользователю.",
+        reply_markup=admin_devices_menu(int(raw)),
+    )
+    await cq.answer()
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("admin:device:"))
+async def on_admin_device_toggle(cq: CallbackQuery):
+    parts = cq.data.split(":", 3)
+    if len(parts) != 4 or not parts[2].isdigit():
+        await cq.answer("Некорректные данные", show_alert=True)
+        return
+    user_id, device_id = int(parts[2]), parts[3]
+    if device_id not in devices.all():
+        await cq.answer("Устройство уже не существует", show_alert=True)
+        return
+    enabled = access_store.toggle_device(cq.from_user.id, user_id, device_id, ADMIN_ID)
+    await cq.answer("Устройство выдано" if enabled else "Доступ к устройству отозван")
+    await cq.message.edit_text(
+        "<b>Доступ к устройствам</b>\n"
+        "Зелёная кнопка означает, что устройство уже выдано пользователю.",
+        reply_markup=admin_devices_menu(user_id),
+    )
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("admin:perms:"))
+async def on_admin_permissions(cq: CallbackQuery):
+    raw = cq.data.rsplit(":", 1)[-1]
+    if not raw.isdigit():
+        await cq.answer("Некорректный пользователь", show_alert=True)
+        return
+    await cq.message.edit_text(
+        "<b>Разрешения кнопок</b>\n"
+        "Выдавай только нужные кнопки. «Полное управление» действует только на выданные устройства.",
+        reply_markup=admin_permissions_menu(int(raw)),
+    )
+    await cq.answer()
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("admin:perm:"))
+async def on_admin_permission_toggle(cq: CallbackQuery):
+    parts = cq.data.split(":", 3)
+    if len(parts) != 4 or not parts[2].isdigit():
+        await cq.answer("Некорректные данные", show_alert=True)
+        return
+    user_id, encoded = int(parts[2]), parts[3]
+    callback = next((item for item in USER_PERMISSION_CHOICES if item.replace(":", "_") == encoded), None)
+    if not callback:
+        await cq.answer("Неизвестная кнопка", show_alert=True)
+        return
+    enabled = access_store.toggle_callback(cq.from_user.id, user_id, callback, ADMIN_ID)
+    await cq.answer("Кнопка выдана" if enabled else "Кнопка отозвана")
+    await cq.message.edit_text(
+        "<b>Разрешения кнопок</b>\n"
+        "Выдавай только нужные кнопки. «Полное управление» действует только на выданные устройства.",
+        reply_markup=admin_permissions_menu(user_id),
+    )
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("admin:message:"))
+async def on_admin_message(cq: CallbackQuery, state: FSMContext):
+    raw = cq.data.rsplit(":", 1)[-1]
+    if not raw.isdigit() or not access_store.get_user(int(raw)):
+        await cq.answer("Пользователь не найден", show_alert=True)
+        return
+    await state.set_state(Form.wait_admin_message)
+    await state.update_data(admin_message_user=int(raw))
+    await cq.message.answer("Пришли текст сообщения. Он будет отправлен только выбранному пользователю.")
+    await cq.answer()
+
+
+@router.message(OwnerFilter(), Form.wait_admin_message)
+async def on_admin_message_text(message: Message, state: FSMContext):
+    data = await state.get_data()
+    await state.clear()
+    target_id = int(data.get("admin_message_user") or 0)
+    text = (message.text or "").strip()
+    if not target_id or not text:
+        await message.answer("Сообщение не отправлено: пустой текст или пользователь не выбран.", reply_markup=admin_menu())
+        return
+    try:
+        await bot.send_message(target_id, html.escape(text))
+        access_store.append_audit("admin_message_sent", actor_id=message.from_user.id, target_id=target_id, detail=text)
+        await message.answer("Сообщение отправлено.", reply_markup=admin_menu())
+    except Exception:
+        log.exception("Не удалось отправить администраторское сообщение")
+        await message.answer("Telegram не принял сообщение: пользователь мог не запускать бота или заблокировать его.", reply_markup=admin_menu())
+
+
+@router.callback_query(OwnerFilter(), F.data == "admin:audit")
+async def on_admin_audit(cq: CallbackQuery):
+    rows = access_store.recent_audit(12)
+    if not rows:
+        text = "<b>Журнал действий</b>\nЗаписей пока нет."
+    else:
+        lines = []
+        for row in rows:
+            moment = datetime.datetime.fromtimestamp(int(row.get("at") or 0)).strftime("%d.%m %H:%M")
+            actor = row.get("actor_id") or "system"
+            detail = html.escape(str(row.get("detail") or ""))
+            lines.append(f"<code>{moment}</code> {html.escape(str(row.get('kind') or 'event'))} [{actor}] {detail}")
+        text = "<b>Журнал действий</b>\n" + "\n".join(lines)
+    await cq.message.edit_text(text[:3900], reply_markup=admin_menu())
+    await cq.answer()
+
+
+@router.callback_query(OwnerFilter(), F.data == "admin:style")
+async def on_admin_style(cq: CallbackQuery):
+    new_style = "conversational" if _technical_ui() else "technical"
+    bot_settings.set_key("ui_style", new_style)
+    access_store.append_audit("ui_style_set", actor_id=cq.from_user.id, detail=new_style)
+    await cq.message.edit_text(
+        "<b>Администрирование</b>\n"
+        "Пользователи, роли, выданные права и журнал действий.\n"
+        "Владелец защищён: его нельзя заблокировать, понизить или удалить.",
+        reply_markup=admin_menu(),
+    )
+    await cq.answer("Разговорный режим" if new_style == "conversational" else "Технический режим")
 
 # =====================================================================
 #  Хендлеры: навигация
@@ -1836,10 +2331,10 @@ async def on_manualadd_input(message: Message, state: FSMContext):
             reply_markup=device_menu(device_id),
         )
 
-@router.callback_query(AdminFilter(), F.data == "menu:main")
+@router.callback_query(ReadOnlyFilter(), F.data == "menu:main")
 async def on_menu_main(cq: CallbackQuery):
     SESSION["target"] = None
-    await cq.message.edit_text("🎛 Главное меню", reply_markup=main_menu())
+    await cq.message.edit_text("Главное меню", reply_markup=main_menu(cq.from_user.id))
     await cq.answer()
 
 @router.callback_query(AdminFilter(), F.data == "menu:devices")

@@ -20,6 +20,7 @@ fi
 # Windows PowerShell 5.1 writes UTF-8 with a BOM. Normalize only the first
 # byte sequence so SHARED_KEY remains readable by grep and dotenv alike.
 sed -i '1s/^\xEF\xBB\xBF//' "${ENV_FILE}"
+sed -i 's/\r$//' "${ENV_FILE}"
 
 for key in "${required[@]}"; do
   if ! grep -Eq "^[[:space:]]*${key}=[^#[:space:]]+" "${ENV_FILE}"; then
@@ -71,5 +72,6 @@ chown root:xider "${ENV_FILE}"
 chmod 0640 "${ENV_FILE}"
 
 systemctl daemon-reload
-systemctl enable --now xider-bot.service
+systemctl enable xider-bot.service
+systemctl restart xider-bot.service
 systemctl --no-pager --full status xider-bot.service --lines=20

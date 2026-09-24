@@ -72,7 +72,7 @@ CONFIG_DIR = Path.home() / ".xgent"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 # Версия клиента и строка платформы для статусов.
-VERSION = "2.0.0"
+VERSION = "3.1.0"
 PLATFORM = f"Windows {platform.win32_ver()[0]}"
 
 
