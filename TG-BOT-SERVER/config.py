@@ -42,7 +42,9 @@ BOT_TOKEN = _require_env("BOT_TOKEN")
 
 # Публичный MQTT-брокер — не нужен проброс портов, но трафик идёт через
 # сторонний сервис. Для личного использования приемлемо при подписи сообщений.
-MQTT_BROKER = os.getenv("MQTT_BROKER", "broker.emqx.io")
+MQTT_BROKER = os.getenv("MQTT_BROKER", "").strip()
+if not MQTT_BROKER:
+    raise SystemExit("FATAL: MQTT_BROKER must be set in .env")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_PREFIX = os.getenv("MQTT_PREFIX", "xgent/v1")
 MQTT_TLS = os.getenv("MQTT_TLS", "false").strip().lower() in ("1", "true", "yes")

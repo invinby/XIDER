@@ -22,7 +22,9 @@ except TypeError:
     load_dotenv(_ENV_FILE)
 
 # Параметры MQTT-брокера. Используется EMQX Cloud Serverless (TLS), без проброса портов.
-MQTT_BROKER = os.getenv("MQTT_BROKER", "broker.emqx.io")
+MQTT_BROKER = os.getenv("MQTT_BROKER", "").strip()
+if not MQTT_BROKER:
+    raise SystemExit("FATAL: MQTT_BROKER must be set in .env")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_PREFIX = os.getenv("MQTT_PREFIX", "xgent/v1")
 MQTT_TLS = os.getenv("MQTT_TLS", "false").strip().lower() in ("1", "true", "yes")

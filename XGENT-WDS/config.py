@@ -30,16 +30,10 @@ except TypeError:
 # Значения, вшитые при сборке exe (файл генерирует build_exe.bat из .env
 # на момент сборки; в git не попадает). Приоритет: переменные окружения
 # и .env рядом с exe выше встроенных значений.
-try:  # pragma: no cover
-    import _secrets_embed  # type: ignore
-
-    for _k, _v in getattr(_secrets_embed, "VALUES", {}).items():
-        os.environ.setdefault(_k, str(_v))
-except ImportError:
-    pass
-
 # Параметры MQTT-брокера. Используется EMQX Cloud Serverless (TLS), без проброса портов.
-MQTT_BROKER = os.getenv("MQTT_BROKER", "broker.emqx.io")
+MQTT_BROKER = os.getenv("MQTT_BROKER", "").strip()
+if not MQTT_BROKER:
+    raise SystemExit("FATAL: MQTT_BROKER must be set in .env")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_PREFIX = os.getenv("MQTT_PREFIX", "xgent/v1")
 MQTT_TLS = os.getenv("MQTT_TLS", "false").strip().lower() in ("1", "true", "yes")
