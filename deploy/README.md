@@ -24,3 +24,13 @@ sudo systemctl restart xider-bot
 ```
 
 The bot process runs headless under the dedicated `xider` user and restarts after a crash or reboot. Secrets stay in `/etc/xider/bot.env`; do not commit them or embed them in an EXE.
+
+## Windows agent background install
+
+Put `XGENT-WDS.exe` and a filled sidecar `.env` in one folder, then run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install_agent.ps1
+```
+
+The installer registers a hidden per-user Scheduled Task named `XIDER Agent`, starts it immediately, and keeps the `.env` readable only by the current Windows account. `start_agent.bat` starts the task; `stop_agent.bat` stops it.
