@@ -13,6 +13,8 @@ $envFile = (Resolve-Path $EnvPath).Path
 $uploadEnv = Join-Path $env:TEMP ("xider-bot-{0}.env" -f ([guid]::NewGuid().ToString('N')))
 $bundle = Join-Path $env:TEMP ("xider-source-{0}.zip" -f ([guid]::NewGuid().ToString('N')))
 $resetLine = if ($ResetRuntimeState) { 'sudo bash /opt/xider/deploy/reset-runtime-state.sh' } else { ':' }
+$knownHosts = Join-Path $env:TEMP 'xider-known-hosts'
+$sshOpts = @('-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new', '-o', "UserKnownHostsFile=$knownHosts", '-o', 'IdentitiesOnly=yes', '-i', $KeyPath)
 
 try {
     if (-not (Test-Path -LiteralPath $KeyPath)) { throw "SSH key not found: $KeyPath" }
@@ -33,15 +35,15 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Could not create a portable source archive.' }
 
     Write-Host "[1/4] Checking SSH access to $ServerIp..."
-    & ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i $KeyPath "ubuntu@$ServerIp" 'echo XIDER_SSH_OK' | Out-Host
+    & ssh @sshOpts "ubuntu@$ServerIp" 'echo XIDER_SSH_OK' | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'SSH check failed. Fix the key ACL and retry; the server was not changed.' }
 
     Write-Host '[2/5] Uploading the runtime env (values are not printed)...'
-    & scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i $KeyPath -- $uploadEnv "ubuntu@${ServerIp}:/tmp/xider-bot.env"
+    & scp @sshOpts -- $uploadEnv "ubuntu@${ServerIp}:/tmp/xider-bot.env"
     if ($LASTEXITCODE -ne 0) { throw 'SCP failed; the server was not changed.' }
 
     Write-Host '[3/5] Uploading the current git-ver source bundle...'
-    & scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i $KeyPath -- $bundle "ubuntu@${ServerIp}:/tmp/xider-source.zip"
+    & scp @sshOpts -- $bundle "ubuntu@${ServerIp}:/tmp/xider-source.zip"
     if ($LASTEXITCODE -ne 0) { throw 'Source upload failed; the server was not changed.' }
 
     Write-Host '[4/5] Installing the service and dependencies...'
@@ -61,7 +63,7 @@ __RESET_RUNTIME__
 sudo env SKIP_REPO_SYNC=1 bash /opt/xider/deploy/server-install.sh
 '@
     $remote = $remote.Replace('__RESET_RUNTIME__', $resetLine)
-    & ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i $KeyPath "ubuntu@$ServerIp" $remote | Out-Host
+    & ssh @sshOpts "ubuntu@$ServerIp" $remote | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'Remote install failed; inspect journalctl -u xider-bot.' }
 
     Write-Host '[5/5] Done. The bot is enabled as xider-bot.service.'
