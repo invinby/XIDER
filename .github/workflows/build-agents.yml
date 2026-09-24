@@ -34,12 +34,16 @@ jobs:
         run: |
           cd XGENT-WDS
           pyinstaller --clean XGENT-WDS.spec
+          Copy-Item .env.example dist/.env.example
+          Copy-Item install_agent.ps1 dist/install_agent.ps1
+          Copy-Item start_agent.bat dist/start_agent.bat
+          Copy-Item stop_agent.bat dist/stop_agent.bat
 
       - name: "Upload Windows EXE Artifact"
         uses: actions/upload-artifact@v4
         with:
           name: XGENT-WDS-Windows
-          path: XGENT-WDS/dist/XGENT-WDS.exe
+          path: XGENT-WDS/dist/*
 
   build-macos:
     name: "Build macOS Agent (Mach-O Standalone)"
@@ -66,14 +70,18 @@ jobs:
           cd XGENT-MCS
           pyinstaller --clean XGENT-MCS.spec
           chmod +x dist/XGENT-MCS
+          cp .env.example dist/.env.example
+          cp start_agent.sh dist/start_agent.sh
+          cp stop_agent.sh dist/stop_agent.sh
           cd dist
           zip -r XGENT-MCS-macos.zip XGENT-MCS
+          zip -r XGENT-MCS-macos-bundle.zip XGENT-MCS .env.example start_agent.sh stop_agent.sh
 
       - name: "Upload macOS Binary Artifact"
         uses: actions/upload-artifact@v4
         with:
           name: XGENT-MCS-macOS
-          path: XGENT-MCS/dist/XGENT-MCS-macos.zip
+          path: XGENT-MCS/dist/XGENT-MCS-macos-bundle.zip
 
   create-release:
     name: "Publish GitHub Release"
@@ -98,8 +106,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/windows/XGENT-WDS.exe
-            artifacts/macos/XGENT-MCS-macos.zip
+            artifacts/windows/*
+            artifacts/macos/XGENT-MCS-macos-bundle.zip
           draft: false
           prerelease: false
           generate_release_notes: true
