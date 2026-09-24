@@ -29,7 +29,7 @@ try {
     Set-Content -LiteralPath $uploadEnv -Value $lines -Encoding UTF8
 
     # Archive tracked source only: this avoids protected caches and secrets.
-    & git -C $repo archive --format=zip --output=$bundle HEAD
+    & git -c safe.directory=$repo -C $repo archive --format=zip --output=$bundle HEAD
     if ($LASTEXITCODE -ne 0) { throw 'Could not create a portable source archive.' }
 
     Write-Host "[1/4] Checking SSH access to $ServerIp..."
