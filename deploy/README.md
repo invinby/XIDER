@@ -34,3 +34,5 @@ powershell -ExecutionPolicy Bypass -File .\install_agent.ps1
 ```
 
 The installer registers a hidden per-user Scheduled Task named `XIDER Agent`, starts it immediately, and keeps the `.env` readable only by the current Windows account. `start_agent.bat` starts the task; `stop_agent.bat` stops it.
+
+For the complete local flow (VPS bot + Windows build + hidden agent), run `deploy\setup-all.ps1`. It uses the ignored root `XGENT-WDS\.env` as the sidecar source and never prints its values.
