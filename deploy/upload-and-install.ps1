@@ -28,15 +28,8 @@ try {
     # strips that optional BOM before validating the first variable.
     Set-Content -LiteralPath $uploadEnv -Value $lines -Encoding UTF8
 
-    & tar.exe -a -c -f $bundle -C $repo `
-        '--exclude=.git' `
-        '--exclude=.pytest_cache' `
-        '--exclude=__pycache__' `
-        '--exclude=venv' `
-        '--exclude=build' `
-        '--exclude=dist' `
-        '--exclude=.env' `
-        '.'
+    # Archive tracked source only: this avoids protected caches and secrets.
+    & git -C $repo archive --format=zip --output=$bundle HEAD
     if ($LASTEXITCODE -ne 0) { throw 'Could not create a portable source archive.' }
 
     Write-Host "[1/4] Checking SSH access to $ServerIp..."
