@@ -1,5 +1,12 @@
 # XIDER release history
 
+## X3.3.4+20260925 — Custom copy and VPS control panel
+
+- Added a third, owner-editable custom text mode for the bot.
+- Added VPS load snapshots, PNG history charts and a restricted diagnostic command panel.
+- Added a narrow root helper for service status, logs, restart, update and rollback.
+- Callback results for common device actions now replace the existing card when Telegram allows it.
+
 ## X3.3.3+20260925 — Correlated command responses
 
 - Legacy status, media, system, network and file-adjacent requests now carry

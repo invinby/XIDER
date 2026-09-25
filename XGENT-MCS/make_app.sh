@@ -37,7 +37,7 @@ cat > "${CONTENTS_DIR}/Info.plist" <<EOF
     <key>CFBundleShortVersionString</key>
     <string>2.0</string>
     <key>CFBundleVersion</key>
-    <string>3.3.3</string>
+    <string>3.3.4</string>
     <key>LSUIElement</key>
     <true/> <!-- Приложение работает в фоне, без иконки в Dock -->
     <key>NSAppleEventsUsageDescription</key>
