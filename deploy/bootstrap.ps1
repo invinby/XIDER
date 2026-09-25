@@ -13,8 +13,7 @@ $extract = Join-Path $env:TEMP ('xider-bootstrap-' + [guid]::NewGuid().ToString(
 $repo = Join-Path $InstallRoot 'git-ver'
 $stagedKey = $null
 
-try {
-    New-Item -ItemType Directory -Path $extract -Force | Out-Null
+New-Item -ItemType Directory -Path $extract -Force | Out-Null
     Invoke-WebRequest -Uri $repoUrl -OutFile $zip -UseBasicParsing
     if (Test-Path -LiteralPath $repo) { Remove-Item -LiteralPath $repo -Recurse -Force }
     Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
@@ -24,11 +23,16 @@ try {
     Move-Item -LiteralPath $downloaded.FullName -Destination $repo
 
     if (-not $EnvRoot) {
-        foreach ($candidateRoot in @((Split-Path $repo -Parent), "$env:USERPROFILE\Desktop\XIDER")) {
+        $candidateRoot = Split-Path $repo -Parent
+        $candidate = Join-Path $candidateRoot 'TG-BOT-SERVER'
+        if (Test-Path -LiteralPath (Join-Path $candidate '.env')) {
+            $EnvRoot = $candidateRoot
+        }
+        if (-not $EnvRoot) {
+            $candidateRoot = "$env:USERPROFILE\Desktop\XIDER"
             $candidate = Join-Path $candidateRoot 'TG-BOT-SERVER'
             if (Test-Path -LiteralPath (Join-Path $candidate '.env')) {
                 $EnvRoot = $candidateRoot
-                break
             }
         }
     }
@@ -38,7 +42,18 @@ try {
         $envSource = Join-Path (Join-Path $EnvRoot 'TG-BOT-SERVER') '.env'
         $agentEnvSource = Join-Path (Join-Path $EnvRoot 'XGENT-WDS') '.env'
     }
-    if (-not $EnvRoot -or -not (Test-Path -LiteralPath $envSource) -or -not (Test-Path -LiteralPath $agentEnvSource)) {
+    $botEnvExists = Test-Path -LiteralPath $envSource
+    $agentEnvExists = Test-Path -LiteralPath $agentEnvSource
+    if (-not $EnvRoot) {
+        Write-Host "XIDER скачан в $repo"
+        Write-Host 'Нужен каталог с TG-BOT-SERVER\.env и XGENT-WDS\.env. Укажи его через -EnvRoot или XIDER_ENV_ROOT.'
+        exit 3
+    }
+    if (-not $botEnvExists) {
+        Write-Host "Не найден файл TG-BOT-SERVER\.env в $EnvRoot"
+        exit 3
+    }
+    if (-not $agentEnvExists) {
         Write-Host "XIDER скачан в $repo"
         Write-Host 'Нужен каталог с TG-BOT-SERVER\.env и XGENT-WDS\.env. Укажи его через -EnvRoot или XIDER_ENV_ROOT.'
         exit 3
@@ -57,16 +72,18 @@ try {
         Copy-Item -LiteralPath $KeyPath -Destination $stagedKey -Force
         icacls.exe $stagedKey /inheritance:r | Out-Null
         $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-        icacls.exe $stagedKey /grant:r "$($currentUser):(R)" | Out-Null
+        $grant = '{0}:(R)' -f $currentUser
+        icacls.exe $stagedKey /grant:r $grant | Out-Null
     }
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'deploy\setup-all.ps1') -ServerIp $ServerIp -KeyPath $(if ($stagedKey) { $stagedKey } else { $KeyPath })
-    if ($LASTEXITCODE -ne 0) { throw 'XIDER setup failed.' }
-    Write-Host 'XIDER готов. Повторный запуск этой же команды обновит локальную копию и переустановит компоненты.'
-}
-finally {
-    Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue
+    $effectiveKey = $KeyPath
     if ($stagedKey) {
-        Remove-Item -LiteralPath $stagedKey -Force -ErrorAction SilentlyContinue
+        $effectiveKey = $stagedKey
     }
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'deploy\setup-all.ps1') -ServerIp $ServerIp -KeyPath $effectiveKey
+    if ($LASTEXITCODE -ne 0) { throw 'XIDER setup failed.' }
+Write-Host "XIDER готов. Повторный запуск этой же команды обновит локальную копию и переустановит компоненты."
+Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue
+if ($stagedKey) {
+    Remove-Item -LiteralPath $stagedKey -Force -ErrorAction SilentlyContinue
 }
