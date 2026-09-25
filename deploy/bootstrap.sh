@@ -45,7 +45,10 @@ else
     exit 4
   fi
 
-  for required in SHARED_KEY MQTT_BROKER MQTT_PORT MQTT_PREFIX MQTT_TLS ENCRYPT_PAYLOAD; do
+  if ! grep -q '^MQTT_PREFIX=' "${fetched_env}"; then
+    printf 'MQTT_PREFIX=xgent/v1\n' >> "${fetched_env}"
+  fi
+  for required in SHARED_KEY MQTT_BROKER MQTT_PORT MQTT_TLS ENCRYPT_PAYLOAD; do
     if ! grep -q "^${required}=..*" "${fetched_env}"; then
       echo "На VPS отсутствует обязательный параметр ${required}." >&2
       exit 4
