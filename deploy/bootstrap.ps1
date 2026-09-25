@@ -66,5 +66,7 @@ try {
 finally {
     Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $stagedKey -Force -ErrorAction SilentlyContinue
+    if ($stagedKey) {
+        Remove-Item -LiteralPath $stagedKey -Force -ErrorAction SilentlyContinue
+    }
 }
