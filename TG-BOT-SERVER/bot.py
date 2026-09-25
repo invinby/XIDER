@@ -4665,7 +4665,7 @@ async def simple_command(cq: CallbackQuery, action: str, emoji: str, label: str,
 
 @router.callback_query(AdminFilter(), F.data == "cmd:check_update")
 async def on_cmd_check_update(cq: CallbackQuery):
-    await simple_command(cq, "agent_update", "🔄", "Статус и обновление агента", timeout=12.0)
+    await simple_command(cq, "agent_update", "🔄", "Обновить агента", timeout=45.0, update=True)
 
 
 @router.callback_query(AdminFilter(), F.data == "cmd:smart")

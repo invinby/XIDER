@@ -19,6 +19,11 @@ if [[ "${1:-}" == "--setup" ]]; then
 fi
 
 if [[ "${1:-}" == "--status" || "${1:-}" == "-s" ]]; then
+    if command -v launchctl >/dev/null 2>&1 && launchctl print "gui/$(id -u)/com.xgent.agent" >/dev/null 2>&1; then
+        echo "[OK] XIDER Agent работает через LaunchAgent"
+        echo "[LOG] $(pwd)/$LOGFILE"
+        exit 0
+    fi
     if [[ -f "$PIDFILE" ]]; then
         PID="$(cat "$PIDFILE" 2>/dev/null || true)"
         if [[ -n "$PID" ]] && ps -p "$PID" >/dev/null 2>&1; then
@@ -88,7 +93,19 @@ fi
 chmod +x "$0"
 
 # ──────────────────────────────────────────
-# 6. Запуск (--foreground или фон)
+# 6. Автозапуск: сначала регистрируем LaunchAgent,
+#    затем отдаём запуск самому launchd (без второго процесса).
+# ──────────────────────────────────────────
+if [[ "${1:-}" != "--foreground" && "${1:-}" != "-f" && "${XIDER_NO_AUTOSTART:-0}" != "1" && -x "$VENV_DIR/bin/python3" ]]; then
+    if "$VENV_DIR/bin/python3" -c 'from xgent_mcs import XgentClient; XgentClient()._do_autorun_enable({})' >/dev/null 2>&1 \
+       && launchctl print "gui/$(id -u)/com.xgent.agent" >/dev/null 2>&1; then
+        echo "🚀 LaunchAgent зарегистрирован; агент запускается через launchd."
+        exit 0
+    fi
+fi
+
+# ──────────────────────────────────────────
+# 7. Запуск (--foreground или фон)
 # ──────────────────────────────────────────
 if [[ "${1:-}" == "--foreground" || "${1:-}" == "-f" ]]; then
     echo "🟢 XIDER Agent v2.0 — интерактивный режим (Ctrl+C для выхода)"
