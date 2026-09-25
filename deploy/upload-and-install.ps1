@@ -31,11 +31,28 @@ try {
     # strips that optional BOM before validating the first variable.
     Set-Content -LiteralPath $uploadEnv -Value $lines -Encoding UTF8
 
-    # Archive the current working tree files (not only HEAD). This keeps the
-    # deploy correct even when a protected Windows worktree cannot update .git.
+    # Archive the current working tree files. A normal checkout uses git ls-files;
+    # the one-line bootstrap downloads a ZIP without .git, so fall back to a
+    # recursive file list in that case.
     New-Item -ItemType Directory -Path $stage -Force | Out-Null
-    $tracked = @( & git -c safe.directory=$repo -C $repo ls-files )
-    if ($LASTEXITCODE -ne 0 -or $tracked.Count -eq 0) { throw 'Could not enumerate source files.' }
+    $tracked = @()
+    if (Test-Path -LiteralPath (Join-Path $repo '.git')) {
+        $tracked = @( & git -c safe.directory=$repo -C $repo ls-files )
+    }
+    if ($tracked.Count -eq 0) {
+        $repoPrefix = $repo.TrimEnd('\') + '\'
+        $tracked = @(
+            Get-ChildItem -LiteralPath $repo -File -Recurse -Force |
+                Where-Object {
+                    $_.FullName -notmatch '\\.git\\' -and
+                    $_.FullName -notmatch '\\(?:venv|\.venv|__pycache__|node_modules)\\' -and
+                    $_.Name -notin @('.env', '.key') -and
+                    $_.Extension -notin @('.pem', '.p12')
+                } |
+                ForEach-Object { $_.FullName.Substring($repoPrefix.Length) }
+        )
+    }
+    if ($tracked.Count -eq 0) { throw 'Could not enumerate source files.' }
     foreach ($relative in $tracked) {
         $source = Join-Path $repo $relative
         $target = Join-Path $stage $relative
