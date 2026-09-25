@@ -1,5 +1,14 @@
 # XIDER release history
 
+## X3.3.3+20260925 — Correlated command responses
+
+- Legacy status, media, system, network and file-adjacent requests now carry
+  a unique command id through the response wait path.
+- Fast replies are retained briefly, so an agent response arriving before the
+  Telegram handler starts waiting is still delivered to the correct request.
+- Parallel users or repeated button presses no longer mix responses between
+  commands of the same type.
+
 ## X3.3.0+20260925 — Server operations and controlled copy
 
 - Owner-only server panel now exposes service status, recent logs, restart,
