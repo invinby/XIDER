@@ -1,5 +1,13 @@
 """Telegram-бот XGENT: команды администратора -> MQTT -> клиенты."""
 
+# Локальный запуск по умолчанию идёт через безопасный launcher. Серверный
+# процесс должен явно использовать ``--serve``.
+if __name__ == "__main__":
+    import sys
+    if "--serve" not in sys.argv:
+        from launcher import main as launch
+        raise SystemExit(launch())
+
 import asyncio
 import base64
 import contextvars
@@ -13,6 +21,7 @@ import socket
 import sys
 import threading
 import time
+import uuid
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -56,6 +65,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import bot_settings
 import access_store
+import text_store
 from config import ADMIN_ID, BOT_TOKEN, ENCRYPT_PAYLOAD, MQTT_BROKER, MQTT_PORT, MQTT_PREFIX
 from roles import AdminFilter, AnyAccessFilter, OwnerFilter, ReadOnlyFilter, Role, get_user_role
 from crypto import verify_message
@@ -64,6 +74,7 @@ from transport import MQTTTransport
 from wol import send_wol
 from xgencrypto import decrypt_payload
 from version import BUILD_CODE, BUILD_DATE, VERSION
+import server_ops
 
 logging.basicConfig(
     level=logging.INFO,
@@ -129,6 +140,7 @@ class Form(StatesGroup):
     wait_prockill = State()
     wait_brightness = State()
     wait_admin_message = State()
+    wait_bot_text = State()
 
 
 # Диспетчер и роутер создаются ДО декораторов хендлеров (иначе NameError при импорте).
@@ -409,6 +421,8 @@ class ResponseCollector:
         self._event = threading.Event()
         self._data: dict | None = None
         self._waiters: dict[str, list] = {}
+        self._recent: dict[tuple[str, str, str], tuple[float, dict]] = {}
+        self._recent_ttl = 30.0
 
     def reset(self) -> None:
         self._event.clear()
@@ -419,9 +433,17 @@ class ResponseCollector:
         self._data = data
         self._event.set()
         action_type = info.get("type", "")
+        command_id = str(info.get("id") or "")
+        if command_id:
+            self._recent[(device_id, action_type, command_id)] = (time.monotonic(), data)
+            cutoff = time.monotonic() - self._recent_ttl
+            self._recent = {k: v for k, v in self._recent.items() if v[0] >= cutoff}
         loop = LOOP
         if loop and not loop.is_closed():
-            keys = [f"{device_id}:{action_type}", f"{device_id}", f"*:{action_type}", "*"]
+            keys = []
+            if command_id:
+                keys.append(f"{device_id}:{action_type}:{command_id}")
+            keys.extend([f"{device_id}:{action_type}", f"{device_id}", f"*:{action_type}", "*"])
             for k in keys:
                 waiters = self._waiters.get(k, [])
                 while waiters:
@@ -433,9 +455,13 @@ class ResponseCollector:
         await asyncio.to_thread(self._event.wait, timeout)
         return self._data if self._event.is_set() else None
 
-    async def wait_for(self, device_id: str = "*", action_type: str = "*", timeout: float = 12.0) -> dict | None:
+    async def wait_for(self, device_id: str = "*", action_type: str = "*", timeout: float = 12.0, command_id: str | None = None) -> dict | None:
         """Тикетное/точечное ожидание конкретного ответа от устройства без race condition."""
-        key = f"{device_id}:{action_type}"
+        if command_id:
+            cached = self._recent.get((device_id, action_type, str(command_id)))
+            if cached and time.monotonic() - cached[0] <= self._recent_ttl:
+                return cached[1]
+        key = f"{device_id}:{action_type}:{command_id}" if command_id else f"{device_id}:{action_type}"
         loop = asyncio.get_running_loop()
         fut = loop.create_future()
         self._waiters.setdefault(key, []).append(fut)
@@ -623,7 +649,7 @@ def device_card(device_id: str) -> str:
 XIDER_VERSION = VERSION
 XIDER_BUILD   = BUILD_DATE
 XIDER_BUILD_CODE = BUILD_CODE
-XIDER_AUTHOR  = "@sciph"
+XIDER_AUTHOR  = bot_settings.developer_contact()
 # =====================================
 
 
@@ -1234,6 +1260,7 @@ def admin_menu():
     kb = InlineKeyboardBuilder()
     kb.button(text="Пользователи", callback_data="admin:users", style="primary")
     kb.button(text="Журнал действий", callback_data="admin:audit", style="primary")
+    kb.button(text="Тексты бота", callback_data="admin:texts", style="primary")
     mode = bot_settings.get("ui_style", "technical")
     kb.button(
         text=f"Текст: {'технический' if mode == 'technical' else 'разговорный'}",
@@ -1242,6 +1269,24 @@ def admin_menu():
     )
     kb.button(text="Серверная", callback_data="menu:server", style="primary")
     kb.button(text="Главное меню", callback_data="menu:main", style="primary")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+TEXT_LABELS = {
+    "start_guest": "Приветствие гостя",
+    "start_user": "Приветствие пользователя",
+    "start_owner": "Приветствие владельца",
+    "blocked": "Сообщение заблокированному",
+}
+
+
+def admin_texts_menu():
+    kb = InlineKeyboardBuilder()
+    for key, label in TEXT_LABELS.items():
+        preview = text_store.get(key).replace("\n", " ")[:34]
+        kb.button(text=f"{label}: {preview}", callback_data=f"admin:text:{key}", style="primary")
+    kb.button(text="Назад", callback_data="menu:admin", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -1268,7 +1313,6 @@ def admin_user_menu(user_id: int):
     blocked = role == Role.BLOCKED
     kb = InlineKeyboardBuilder()
     if user_id != ADMIN_ID:
-        kb.button(text="Сделать со-владельцем", callback_data=f"admin:role:{user_id}:coowner", style="danger")
         kb.button(text="Сделать пользователем", callback_data=f"admin:role:{user_id}:user", style="success")
         kb.button(text="Сделать гостем", callback_data=f"admin:role:{user_id}:guest", style="primary")
         kb.button(
@@ -1334,12 +1378,30 @@ def server_menu(user_id: int | None = None):
     kb = InlineKeyboardBuilder()
     if role == Role.OWNER:
         approval = bool(bot_settings.get("require_device_approval", True))
+        kb.button(text="📊 Статус сервиса", callback_data="server:status", style="primary")
+        kb.button(text="📜 Последние логи", callback_data="server:logs", style="primary")
+        kb.button(text="🔄 Перезапустить", callback_data="server:restart", style="danger")
+        kb.button(text="⬆️ Обновить из подготовленного пакета", callback_data="server:update", style="primary")
+        kb.button(text="↩️ Откатить последнюю версию", callback_data="server:rollback", style="danger")
         kb.button(
             text=f"Подтверждение новых устройств: {'включено' if approval else 'выключено'}",
             callback_data="server:approval",
             style="success" if approval else "danger",
         )
     kb.button(text="Главное меню", callback_data="menu:main", style="primary")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def server_confirm_menu(action: str):
+    labels = {
+        "restart": "перезапустить сервис",
+        "update": "установить подготовленный пакет и проверить здоровье",
+        "rollback": "откатить последнюю резервную копию",
+    }
+    kb = InlineKeyboardBuilder()
+    kb.button(text=f"✅ Подтвердить: {labels.get(action, action)}", callback_data=f"server_confirm:{action}", style="danger")
+    kb.button(text="Отмена", callback_data="menu:server", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -1391,6 +1453,13 @@ def publish(action: str, **kwargs) -> bool:
     HISTORY.setdefault(target, []).append((action, dict(kwargs), time.time()))
     del HISTORY[target][:-20]
     return transport.publish_command(target, action, **kwargs)
+
+
+def publish_tracked(action: str, **kwargs) -> tuple[bool, str]:
+    """Отправить команду с известным correlation id для точного ожидания ответа."""
+    command_id = uuid.uuid4().hex[:12]
+    ok = publish(action, id=command_id, **kwargs)
+    return ok, command_id
 
 def _no_target_text() -> str:
     return "⚠️ Цель не выбрана. Нажмите «Назад» и выберите устройство."
@@ -1647,7 +1716,7 @@ def on_mqtt_message(topic: str, data: dict) -> None:
           or (msg_type == "output" and payload.get("type") in FUN_RESPONSE_TYPES)):
         # Волна новых команд: ответы с текстом → общий текст-коллектор,
         # файлы (file_get) → файловый коллектор.
-        if msg_type == "file_get" and payload.get("ok"):
+        if payload.get("type") == "file_get":
             file_collector.submit(device_id, payload)
         elif "text" in payload or "error" in payload or not payload.get("ok", True):
             fun_text_collector.submit(device_id, payload)
@@ -1683,22 +1752,19 @@ async def cmd_start(message: Message, state: FSMContext):
         except Exception:
             log.exception("Не удалось уведомить владельца о новом пользователе")
     if role == Role.BLOCKED:
-        await message.answer("Доступ для этого аккаунта заблокирован.")
+        await message.answer(text_store.get("blocked"))
         return
     if role == Role.GUEST:
-        intro = (
-            "XIDER: доступ для просмотра. Управляющие действия недоступны, "
-            "пока владелец не выдаст права."
-        )
+        intro = text_store.get("start_guest")
     elif role == Role.USER:
-        intro = "XIDER: доступны только выданные тебе устройства и кнопки."
+        intro = text_store.get("start_user")
     else:
-        intro = "XIDER: панель управления готова."
+        intro = text_store.get("start_owner")
     await message.answer(
         f"<b>XIDER {XIDER_BUILD_CODE}</b>\n"
         f"Роль: <b>{html.escape(_role_label(role))}</b>\n"
         f"Устройств онлайн: <b>{online_count}/{total_count}</b>\n\n"
-        f"{intro}",
+        f"{html.escape(intro)}",
         reply_markup=main_menu(message.from_user.id),
     )
 
@@ -1857,6 +1923,60 @@ async def on_server_approval(cq: CallbackQuery):
     await cq.answer("Подтверждение включено" if value else "Автодобавление включено")
 
 
+@router.callback_query(OwnerFilter(), F.data.in_({"server:restart", "server:update", "server:rollback"}))
+async def on_server_dangerous_request(cq: CallbackQuery):
+    action = cq.data.split(":", 1)[1]
+    await cq.message.edit_text(
+        "<b>Подтверждение серверной операции</b>\n"
+        "Операция затрагивает работающий VPS и может временно прервать бота.\n"
+        f"Действие: <code>{html.escape(action)}</code>",
+        reply_markup=server_confirm_menu(action),
+    )
+    await cq.answer()
+
+
+@router.callback_query(OwnerFilter(), F.data == "server:status")
+async def on_server_status(cq: CallbackQuery):
+    result = await asyncio.to_thread(server_ops.status)
+    access_store.append_audit("server_status", actor_id=cq.from_user.id, detail=f"ok={result.ok}")
+    await cq.message.edit_text(
+        f"<b>Статус сервиса</b>\n<pre>{html.escape(result.text)}</pre>",
+        reply_markup=server_menu(cq.from_user.id),
+    )
+    await cq.answer("Готово" if result.ok else "Сервис ответил с ошибкой", show_alert=not result.ok)
+
+
+@router.callback_query(OwnerFilter(), F.data == "server:logs")
+async def on_server_logs(cq: CallbackQuery):
+    result = await asyncio.to_thread(server_ops.logs, 45)
+    access_store.append_audit("server_logs", actor_id=cq.from_user.id, detail=f"ok={result.ok}")
+    await cq.message.edit_text(
+        f"<b>Последние логи xider-bot</b>\n<pre>{html.escape(result.text[-3600:])}</pre>",
+        reply_markup=server_menu(cq.from_user.id),
+    )
+    await cq.answer("Готово" if result.ok else "Не удалось получить логи", show_alert=not result.ok)
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("server_confirm:"))
+async def on_server_confirm(cq: CallbackQuery):
+    action = cq.data.split(":", 1)[1]
+    operations = {"restart": server_ops.restart, "update": server_ops.update, "rollback": server_ops.rollback}
+    operation = operations.get(action)
+    if operation is None:
+        await cq.answer("Неизвестная операция", show_alert=True)
+        return
+    await cq.message.edit_text("⏳ Выполняю операцию. Это может занять до нескольких минут…")
+    result = await asyncio.to_thread(operation)
+    access_store.append_audit("server_operation", actor_id=cq.from_user.id, detail=f"action={action}; ok={result.ok}; code={result.code}")
+    await cq.message.edit_text(
+        f"<b>Серверная операция: {html.escape(action)}</b>\n"
+        f"Результат: {'успешно' if result.ok else 'ошибка'}\n"
+        f"<pre>{html.escape(result.text[-3500:])}</pre>",
+        reply_markup=server_menu(cq.from_user.id),
+    )
+    await cq.answer("Готово" if result.ok else "Операция завершилась ошибкой", show_alert=not result.ok)
+
+
 @router.callback_query(ReadOnlyFilter(), F.data == "menu:guest_devices")
 async def on_guest_devices(cq: CallbackQuery):
     devs = devices.all()
@@ -1894,6 +2014,49 @@ async def on_admin_users(cq: CallbackQuery):
         reply_markup=admin_users_menu(),
     )
     await cq.answer()
+
+
+@router.callback_query(OwnerFilter(), F.data == "admin:texts")
+async def on_admin_texts(cq: CallbackQuery):
+    await cq.message.edit_text(
+        "<b>Тексты бота</b>\nВыбери сообщение, которое нужно заменить. Секреты сюда не сохраняются.",
+        reply_markup=admin_texts_menu(),
+    )
+    await cq.answer()
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("admin:text:"))
+async def on_admin_text_edit(cq: CallbackQuery, state: FSMContext):
+    key = cq.data.split(":", 2)[2]
+    if key not in TEXT_LABELS:
+        await cq.answer("Неизвестный текст", show_alert=True)
+        return
+    await state.set_state(Form.wait_bot_text)
+    await state.update_data(bot_text_key=key)
+    await cq.message.answer(
+        f"Отправь новый текст для «{TEXT_LABELS[key]}».\n"
+        f"Текущий: <code>{html.escape(text_store.get(key))}</code>\n"
+        "Ограничение: 1–1000 символов. /cancel — отмена.",
+        reply_markup=admin_texts_menu(),
+    )
+    await cq.answer()
+
+
+@router.message(OwnerFilter(), Form.wait_bot_text)
+async def on_admin_text_value(message: Message, state: FSMContext):
+    data = await state.get_data()
+    key = str(data.get("bot_text_key") or "")
+    await state.clear()
+    if key not in TEXT_LABELS:
+        await message.answer("Редактирование устарело.", reply_markup=admin_menu())
+        return
+    try:
+        text_store.set_text(key, message.text or "")
+    except (KeyError, ValueError) as exc:
+        await message.answer(str(exc), reply_markup=admin_texts_menu())
+        return
+    access_store.append_audit("bot_text_updated", actor_id=message.from_user.id, detail=key)
+    await message.answer("Текст сохранён.", reply_markup=admin_texts_menu())
 
 
 @router.callback_query(OwnerFilter(), F.data.startswith("admin:user:"))
@@ -3725,9 +3888,17 @@ async def on_path_input(message: Message, state: FSMContext):
         if not result:
             await message.answer("⏳ Файл не получен (нет ответа / слишком большой).", reply_markup=back_to_device_kb())
             return
-        data = base64.b64decode(result.get("data") or "")
+        if not result.get("ok", False):
+            await message.answer(f"⚠️ {html.escape(str(result.get('error') or 'Устройство не смогло прочитать файл.'))}", reply_markup=back_to_device_kb())
+            return
+        encoded = result.get("data") or result.get("b64") or ""
+        try:
+            data = base64.b64decode(encoded, validate=True)
+        except (ValueError, TypeError):
+            await message.answer("⚠️ Устройство вернуло повреждённый файл.", reply_markup=back_to_device_kb())
+            return
         await message.answer_document(
-            BufferedInputFile(data, filename=result.get("filename") or "file.bin"),
+            BufferedInputFile(data, filename=result.get("filename") or result.get("name") or "file.bin"),
             caption=f"📥 Файл с <b>{target_label(target)}</b>",
         )
     elif mode == "del":
@@ -4260,11 +4431,11 @@ async def on_brightness_input(message: Message, state: FSMContext):
         f"⏳ <b>☀️ Яркость экрана</b> · <b>{html.escape(target_label(target))}</b>\n<code>[■□□□□] 25% Настройка яркости {lvl}%...</code>",
         reply_markup=back_to_device_kb(),
     )
-    fun_text_collector.reset()
-    publish("display_brightness", level=lvl)
-    result = await fun_text_collector.wait_for(target, "display_brightness", timeout=8.0)
-    if result is None:
-        result = fun_text_collector._data
+    sent, command_id = publish_tracked("display_brightness", level=lvl)
+    if not sent:
+        await status_msg.edit_text("⚠️ MQTT-брокер недоступен: команда не отправлена.", reply_markup=back_to_device_kb())
+        return
+    result = await fun_text_collector.wait_for(target, "display_brightness", timeout=8.0, command_id=command_id)
     txt = (result or {}).get("text") or f"☀️ Яркость экрана установлена на {lvl}%"
     try:
         await status_msg.edit_text(
@@ -4286,18 +4457,21 @@ async def on_cmd_nightlight(cq: CallbackQuery):
         return
     current_state = bool(SESSION.get(f"nightlight_{target}", False))
     new_state = not current_state
-    if publish("display_night_light", enabled=new_state):
+    sent, command_id = publish_tracked("display_night_light", enabled=new_state)
+    if not sent:
+        await cq.answer("⚠️ Ошибка отправки на брокер", show_alert=True)
+        return
+    await cq.answer("🌙 Переключаю ночной свет...")
+    result = await fun_text_collector.wait_for(target, "display_night_light", timeout=8.0, command_id=command_id)
+    ok = bool(result and result.get("ok", False))
+    if ok:
         SESSION[f"nightlight_{target}"] = new_state
         try:
             await cq.message.edit_reply_markup(reply_markup=screen_menu(target=target))
         except Exception:
             pass
-        if new_state:
-            await cq.answer("🌙 Ночной свет ВКЛЮЧЕН!", show_alert=True)
-        else:
-            await cq.answer("☀️ Ночной свет ВЫКЛЮЧЕН!", show_alert=True)
-    else:
-        await cq.answer("⚠️ Ошибка отправки на брокер", show_alert=True)
+    text = (result or {}).get("text") or ("Ночной свет переключён." if ok else "⚠️ Агент не подтвердил переключение ночного света.")
+    await cq.message.answer(html.escape(str(text)), reply_markup=back_to_device_kb())
 
 
 @router.callback_query(AdminFilter(), F.data == "cmd:rotate")
@@ -4323,14 +4497,14 @@ async def on_rotate_select(cq: CallbackQuery):
         angle = int(cq.data.split(":", 1)[1])
     except Exception:
         angle = 0
-    if publish("display_rotate", angle=angle):
-        await cq.answer(f"🔄 Экран: {angle}°")
-        await cq.message.answer(
-            f"🔄 <b>Экран повернут на {angle}° на:</b> {target_label(target)}",
-            reply_markup=back_to_device_kb(),
-        )
-    else:
+    sent, command_id = publish_tracked("display_rotate", angle=angle)
+    if not sent:
         await cq.answer("⚠️ Ошибка отправки", show_alert=True)
+        return
+    await cq.answer("🔄 Поворачиваю экран...")
+    result = await fun_text_collector.wait_for(target, "display_rotate", timeout=8.0, command_id=command_id)
+    text = (result or {}).get("text") or (f"Экран повернут на {angle}°" if result and result.get("ok") else "⚠️ Агент не подтвердил поворот экрана.")
+    await cq.message.answer(f"🔄 <b>{html.escape(target_label(target))}:</b>\n{html.escape(str(text))}", reply_markup=back_to_device_kb())
 
 
 async def simple_command(cq: CallbackQuery, action: str, emoji: str, label: str, timeout: float = 12.0, **publish_kwargs) -> None:
@@ -4339,8 +4513,10 @@ async def simple_command(cq: CallbackQuery, action: str, emoji: str, label: str,
         await cq.answer("Сначала выберите цель", show_alert=True)
         return
     await cq.answer(f"{emoji} {label}...")
-    fun_text_collector.reset()
-    publish(action, **publish_kwargs)
+    sent, command_id = publish_tracked(action, **publish_kwargs)
+    if not sent:
+        await cq.message.answer("⚠️ MQTT-брокер недоступен: команда не отправлена.", reply_markup=back_to_device_kb())
+        return
 
     # Initial status message with text animation loader
     status_msg = await cq.message.answer(
@@ -4376,7 +4552,7 @@ async def simple_command(cq: CallbackQuery, action: str, emoji: str, label: str,
     anim_task = asyncio.create_task(_animate_loader())
 
     try:
-        result = await fun_text_collector.wait_for(target, action, timeout=timeout)
+        result = await fun_text_collector.wait_for(target, action, timeout=timeout, command_id=command_id)
     finally:
         stop_anim.set()
         if anim_task:
@@ -4386,9 +4562,9 @@ async def simple_command(cq: CallbackQuery, action: str, emoji: str, label: str,
             except (asyncio.CancelledError, Exception):
                 pass
 
+    text = (result or {}).get("text") or ("Агент не ответил за отведённое время." if result is None else "Ответ без текста")
     if result is None:
-        result = fun_text_collector._data
-    text = (result or {}).get("text") or "Запрос отправлен агенту"
+        text = "⚠️ Агент не ответил за отведённое время. Проверьте его статус и MQTT-соединение."
     final_text = f"{emoji} <b>{label} ({html.escape(target_label(target))}):</b>\n<pre>{html.escape(str(text)[:3800])}</pre>"
     try:
         await status_msg.edit_text(final_text, reply_markup=back_to_device_kb())

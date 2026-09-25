@@ -1,0 +1,4 @@
+# Defense-in-depth topic ACL. Keep this file next to passwd and never commit
+# real usernames or passwords. Regenerate it when adding another MQTT client.
+user xider
+topic readwrite xgent/v1/#

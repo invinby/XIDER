@@ -1,6 +1,7 @@
 """Настройки бота (JSON-файл рядом с bot.py): флаги уведомлений и т.п."""
 
 import json
+import re
 import threading
 import time
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 FILE = Path(__file__).resolve().parent / "bot_settings.json"
 _lock = threading.Lock()
 _defaults = {
+    "developer_contact": "@a9m6u",
     "notify_online": True,
     "notify_offline": True,
     "notify_battery_low": True,
@@ -19,6 +21,20 @@ _defaults = {
     "ui_style": "technical",
     "require_device_approval": True,
 }
+
+
+def normalize_contact(value: str) -> str:
+    value = value.strip().removeprefix("https://t.me/").removeprefix("@").rstrip("/")
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", value):
+        raise ValueError("Нужен Telegram username: 5–32 символа, латиница, цифры и _, первая — буква.")
+    return "@" + value
+
+
+def developer_contact() -> str:
+    try:
+        return normalize_contact(str(get("developer_contact", "@a9m6u")))
+    except ValueError:
+        return "@a9m6u"
 
 
 def _load() -> dict:

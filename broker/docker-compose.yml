@@ -12,6 +12,7 @@ services:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ./certs:/mosquitto/certs:ro
       - ./passwd:/mosquitto/passwd:ro
+      - ./acl:/mosquitto/acl:ro
       - mosquitto-data:/mosquitto/data
       - mosquitto-log:/mosquitto/log
 

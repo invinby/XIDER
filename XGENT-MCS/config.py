@@ -63,7 +63,7 @@ CONFIG_DIR = Path.home() / ".xgent"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 # Версия клиента и строка платформы для статусов.
-VERSION = "3.1.0"
+VERSION = "3.3.0"
 PLATFORM = f"macOS {platform.mac_ver()[0]}"
 
 
