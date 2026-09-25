@@ -217,14 +217,14 @@ async def on_cmd_clipboard(cq: CallbackQuery):
         await cq.answer("Сначала выберите цель", show_alert=True)
         return
     await cq.answer("📋 Запрашиваю буфер обмена...")
-    clipboard_collector.reset()
-    if not transport.publish_command(target, "clipboard"):
+    sent, command_id = publish_tracked("clipboard")
+    if not sent:
         await cq.message.answer(
             "⚠️ Нет соединения с MQTT-брокером.",
             reply_markup=back_to_device_kb(),
         )
         return
-    result = await clipboard_collector.wait(10.0)
+    result = await clipboard_collector.wait_for(target, "clipboard", 10.0, command_id)
     if result is None:
         await cq.message.answer(
             "⏳ Ответ не получен за 10 сек — устройство офлайн.",
@@ -253,14 +253,14 @@ async def on_cmd_processes(cq: CallbackQuery):
         await cq.answer("Сначала выберите цель", show_alert=True)
         return
     await cq.answer("⚙️ Запрашиваю процессы (Топ-5)...")
-    processes_collector.reset()
-    if not transport.publish_command(target, "processes"):
+    sent, command_id = publish_tracked("processes")
+    if not sent:
         await cq.message.answer(
             "⚠️ Нет соединения с MQTT-брокером.",
             reply_markup=back_to_device_kb(),
         )
         return
-    result = await processes_collector.wait(15.0)
+    result = await processes_collector.wait_for(target, "processes", 15.0, command_id)
     if result is None:
         await cq.message.answer(
             "⏳ Ответ не получен за 15 сек — устройство офлайн.",
@@ -288,14 +288,14 @@ async def on_cmd_mic(cq: CallbackQuery):
         await cq.answer("Сначала выберите цель", show_alert=True)
         return
     await cq.answer("🎙 Идет запись звука (5 сек)...")
-    mic_collector.reset()
-    if not transport.publish_command(target, "mic"):
+    sent, command_id = publish_tracked("mic")
+    if not sent:
         await cq.message.answer(
             "⚠️ Нет соединения с MQTT-брокером.",
             reply_markup=back_to_device_kb(),
         )
         return
-    result = await mic_collector.wait(20.0)
+    result = await mic_collector.wait_for(target, "mic", 20.0, command_id)
     if result is None:
         await cq.message.answer(
             "⏳ Звук не получен за 20 сек — устройство офлайн или нет микрофона.",
@@ -350,15 +350,15 @@ async def on_shell_input(message: Message, state: FSMContext):
     target = SESSION.get("target")
     
     await message.answer(f"💻 Выполняю команду: <code>{cmd}</code>...")
-    shell_collector.reset()
-    if not publish("shell", command=cmd):
+    sent, command_id = publish_tracked("shell", command=cmd)
+    if not sent:
         await message.answer(
             "⚠️ Нет соединения с MQTT-брокером.",
             reply_markup=back_to_device_kb(),
         )
         return
         
-    result = await shell_collector.wait(20.0)
+    result = await shell_collector.wait_for(target, "shell", 20.0, command_id)
     if result is None:
         await message.answer(
             "⏳ Ответ не получен за 20 сек — устройство зависло или офлайн.",
@@ -2607,14 +2607,14 @@ async def on_cmd_screenshot(cq: CallbackQuery):
         await cq.answer("Скриншот — только для одного устройства", show_alert=True)
         return
     await cq.answer("📸 Делаю скриншот...")
-    screenshot_collector.reset()
-    if not transport.publish_command(target, "screenshot"):
+    sent, command_id = publish_tracked("screenshot")
+    if not sent:
         await cq.message.answer(
             "⚠️ Нет соединения с MQTT-брокером.",
             reply_markup=back_to_device_kb(),
         )
         return
-    result = await screenshot_collector.wait(15.0)
+    result = await screenshot_collector.wait_for(target, "screenshot", 15.0, command_id)
     if result is None:
         await cq.message.answer(
             "⏳ Скриншот не получен за 15 сек — устройство офлайн.",
@@ -2655,14 +2655,14 @@ async def on_cmd_webcam(cq: CallbackQuery):
         await cq.answer("Вебкамера — только для одного устройства", show_alert=True)
         return
     await cq.answer("📷 Делаю снимок с вебки (может занять пару секунд)...")
-    webcam_collector.reset()
-    if not transport.publish_command(target, "webcam"):
+    sent, command_id = publish_tracked("webcam")
+    if not sent:
         await cq.message.answer(
             "⚠️ Нет соединения с MQTT-брокером.",
             reply_markup=back_to_device_kb(),
         )
         return
-    result = await webcam_collector.wait(20.0)
+    result = await webcam_collector.wait_for(target, "webcam", 20.0, command_id)
     if result is None:
         await cq.message.answer(
             "⏳ Снимок не получен за 20 сек — устройство офлайн или нет вебки.",
@@ -2700,12 +2700,12 @@ async def on_cmd_battery(cq: CallbackQuery):
         await cq.answer("Сначала выберите цель", show_alert=True)
         return
     await cq.answer("🔋 Запрашиваю батарею...")
-    battery_collector.reset()
-    if not transport.publish_command(target, "battery"):
+    sent, command_id = publish_tracked("battery")
+    if not sent:
         await cq.message.answer("⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
         await cq.answer()
         return
-    res = await battery_collector.wait(15.0)
+    res = await battery_collector.wait_for(target, "battery", 15.0, command_id)
     if not res:
         await cq.message.answer("⏳ Нет ответа.", reply_markup=back_to_device_kb())
         await cq.answer()
@@ -2727,12 +2727,12 @@ async def on_cmd_network(cq: CallbackQuery):
         await cq.answer("Сначала выберите цель", show_alert=True)
         return
     await cq.answer("🌐 Запрашиваю сеть...")
-    network_collector.reset()
-    if not transport.publish_command(target, "network"):
+    sent, command_id = publish_tracked("network")
+    if not sent:
         await cq.message.answer("⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
         await cq.answer()
         return
-    res = await network_collector.wait(15.0)
+    res = await network_collector.wait_for(target, "network", 15.0, command_id)
     if not res:
         await cq.message.answer("⏳ Нет ответа.", reply_markup=back_to_device_kb())
         await cq.answer()
@@ -2752,12 +2752,12 @@ async def on_cmd_services(cq: CallbackQuery):
         await cq.answer("Сначала выберите цель", show_alert=True)
         return
     await cq.answer("🛠 Запрашиваю службы...")
-    services_collector.reset()
-    if not transport.publish_command(target, "services"):
+    sent, command_id = publish_tracked("services")
+    if not sent:
         await cq.message.answer("⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
         await cq.answer()
         return
-    res = await services_collector.wait(15.0)
+    res = await services_collector.wait_for(target, "services", 15.0, command_id)
     if not res:
         await cq.message.answer("⏳ Нет ответа.", reply_markup=back_to_device_kb())
         await cq.answer()
@@ -2774,12 +2774,12 @@ async def on_cmd_capabilities(cq: CallbackQuery):
         await cq.answer("Сначала выберите цель", show_alert=True)
         return
     await cq.answer("📊 Запрашиваю возможности...")
-    capabilities_collector.reset()
-    if not transport.publish_command(target, "capabilities"):
+    sent, command_id = publish_tracked("capabilities")
+    if not sent:
         await cq.message.answer("⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
         await cq.answer()
         return
-    res = await capabilities_collector.wait(15.0)
+    res = await capabilities_collector.wait_for(target, "capabilities", 15.0, command_id)
     if not res:
         await cq.message.answer("⏳ Нет ответа.", reply_markup=back_to_device_kb())
         await cq.answer()
@@ -2798,15 +2798,15 @@ async def on_cmd_sysinfo(cq: CallbackQuery):
         await cq.answer("Инфо — только для одного устройства", show_alert=True)
         return
     await cq.answer("💻 Запрашиваю...")
-    sysinfo_collector.reset()
-    if not transport.publish_command(target, "sysinfo"):
+    sent, command_id = publish_tracked("sysinfo")
+    if not sent:
         await cq.message.answer(
             "⚠️ Нет соединения с MQTT-брокером.",
             reply_markup=back_to_device_kb(),
         )
         await cq.answer()
         return
-    result = await sysinfo_collector.wait(12.0)
+    result = await sysinfo_collector.wait_for(target, "sysinfo", 12.0, command_id)
     if result is None:
         await cq.message.answer(
             "⏳ Ответ не получен за 12 сек — устройство офлайн.",
@@ -2879,15 +2879,15 @@ async def on_cmd_status(cq: CallbackQuery):
             )
         await cq.answer()
         return
-    status_collector.reset()
-    if not transport.publish_command(target, "status_request"):
+    sent, command_id = publish_tracked("status_request")
+    if not sent:
         await cq.message.answer(
             "⚠️ Нет соединения с MQTT-брокером.",
             reply_markup=back_to_device_kb(),
         )
         await cq.answer()
         return
-    status = await status_collector.wait(12.0)
+    status = await status_collector.wait_for(target, "status", 12.0, command_id)
     if status is None:
         await cq.message.answer(
             "⏳ Ответ не получен — устройство офлайн.",
@@ -3320,12 +3320,12 @@ async def on_cmd_disks(cq: CallbackQuery):
         await cq.answer("Только для одного устройства", show_alert=True)
         return
     await cq.answer("🗂 Запрашиваю диски...")
-    disks_collector.reset()
-    if not transport.publish_command(target, "disks"):
+    sent, command_id = publish_tracked("disks")
+    if not sent:
         await cq.message.answer("⚠️ Нет соединения с MQTT-брокером.")
         await cq.answer()
         return
-    res = await disks_collector.wait(15.0)
+    res = await disks_collector.wait_for(target, "disks", 15.0, command_id)
     if not res:
         await cq.message.answer("⏳ Нет ответа.", reply_markup=back_to_device_kb())
         await cq.answer()
@@ -3369,12 +3369,12 @@ async def on_mic_dur(cq: CallbackQuery):
         return
     dur = int(cq.data.split(":", 1)[1] or 5)
     await cq.answer(f"🎙 Запись {dur} сек...")
-    mic_collector.reset()
-    if not transport.publish_command(target, "mic", duration=dur):
+    sent, command_id = publish_tracked("mic", duration=dur)
+    if not sent:
         await cq.message.answer("⚠️ Нет соединения с MQTT-брокером.")
         await cq.answer()
         return
-    res = await mic_collector.wait(dur + 12.0)
+    res = await mic_collector.wait_for(target, "mic", dur + 12.0, command_id)
     if not res or not res.get("audio"):
         await cq.message.answer("⏳ Звук не получен — офлайн или нет микрофона.")
         await cq.answer()

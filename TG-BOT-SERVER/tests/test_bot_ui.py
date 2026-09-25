@@ -168,3 +168,16 @@ def test_response_collector_wait_for_and_race_safety():
         assert res_wifi is not None and res_wifi.get("text") == "Home_WiFi: 12345"
 
     asyncio.run(_async_test())
+
+
+def test_response_collector_keeps_fast_response_for_command_id():
+    """Ответ, пришедший сразу после публикации, не теряется до wait_for."""
+    async def _async_test():
+        collector = bot.ResponseCollector()
+        bot.LOOP = asyncio.get_running_loop()
+        collector.submit("dev1", {"type": "battery", "id": "cmd123", "percent": 88})
+        result = await collector.wait_for("dev1", "battery", timeout=0.2, command_id="cmd123")
+        assert result is not None
+        assert result.get("percent") == 88
+
+    asyncio.run(_async_test())
