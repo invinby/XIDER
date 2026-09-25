@@ -18,6 +18,19 @@ if [[ "${1:-}" == "--setup" ]]; then
     exit 0
 fi
 
+if [[ "${1:-}" == "--status" || "${1:-}" == "-s" ]]; then
+    if [[ -f "$PIDFILE" ]]; then
+        PID="$(cat "$PIDFILE" 2>/dev/null || true)"
+        if [[ -n "$PID" ]] && ps -p "$PID" >/dev/null 2>&1; then
+            echo "[OK] XIDER Agent работает (PID: $PID)"
+            echo "[LOG] $(pwd)/$LOGFILE"
+            exit 0
+        fi
+    fi
+    echo "[STOPPED] XIDER Agent не запущен"
+    exit 1
+fi
+
 # ──────────────────────────────────────────
 # 1. Проверка Python
 # ──────────────────────────────────────────

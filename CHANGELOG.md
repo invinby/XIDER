@@ -1,5 +1,9 @@
 # XIDER release history
 
+## X3.3.5+20260925 — Agent status checks
+
+- Added exact background status commands for Windows and macOS agent launchers.
+
 ## X3.3.4+20260925 — Custom copy and VPS control panel
 
 - Added a third, owner-editable custom text mode for the bot.
