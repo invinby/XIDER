@@ -58,9 +58,14 @@ For the complete local flow (VPS bot + Windows build + hidden agent), run `deplo
 curl -fsSL https://raw.githubusercontent.com/invinby/XIDER/main/deploy/bootstrap.sh | bash
 ```
 
-The macOS bootstrap downloads the repository, copies the sidecar `.env` from
-`XIDER_ENV_ROOT` (or `~/XIDER`) and starts the agent. It does not deploy the
-VPS bot; that remains the Windows/server deployment flow.
+The macOS bootstrap downloads the repository and starts the agent. If a local
+sidecar `.env` is absent, it logs in to the configured XIDER VPS
+(`XIDER_SERVER_HOST`, default `141.145.152.174`) over SSH, asks for the VPS
+password, and retrieves only the agent configuration keys from
+`/etc/xider/bot.env`; `BOT_TOKEN` is never copied. The generated local file is
+mode `0600`. Set `XIDER_ENV_ROOT` to use an existing local `.env`, or set
+`XIDER_SERVER_HOST`/`XIDER_SERVER_USER` for another VPS. This does not deploy
+the VPS bot; that remains the Windows/server deployment flow.
 
 ## Updates, rollback, and secret rotation
 
