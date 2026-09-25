@@ -4598,7 +4598,7 @@ async def on_rotate_select(cq: CallbackQuery):
     await cq.message.answer(f"🔄 <b>{html.escape(target_label(target))}:</b>\n{html.escape(str(text))}", reply_markup=back_to_device_kb())
 
 
-async def simple_command(cq: CallbackQuery, action: str, emoji: str, label: str, timeout: float = 12.0, **publish_kwargs) -> None:
+async def simple_command(cq: CallbackQuery, action: str, emoji: str, label: str, timeout: float = 12.0, **publish_kwargs):
     target = SESSION.get("target")
     if not target:
         await cq.answer("Сначала выберите цель", show_alert=True)
@@ -4661,11 +4661,28 @@ async def simple_command(cq: CallbackQuery, action: str, emoji: str, label: str,
         await status_msg.edit_text(final_text, reply_markup=back_to_device_kb())
     except Exception:
         await cq.message.answer(final_text, reply_markup=back_to_device_kb())
+    return result
 
 
 @router.callback_query(AdminFilter(), F.data == "cmd:check_update")
 async def on_cmd_check_update(cq: CallbackQuery):
-    await simple_command(cq, "agent_update", "🔄", "Обновить агента", timeout=45.0, update=True)
+    result = await simple_command(cq, "agent_update", "🔄", "Обновить агента", timeout=45.0, update=True)
+    # Старые агенты до v3.3.6 умели только сообщить статус и игнорировали
+    # update=true. Для них выполняем одноразовый переход через уже имеющийся
+    # безопасный shell-канал; после этого дальнейшие обновления идут кнопкой.
+    text = str((result or {}).get("text") or "")
+    if result and result.get("ok") and ("v1.3" in text or "Актуален" in text):
+        legacy = (
+            'cd "$HOME/XIDER/git-ver/XGENT-MCS" && t=$(mktemp -d) && '
+            'curl -fsSL https://github.com/invinby/XIDER/archive/refs/heads/main.zip -o "$t/x.zip" && '
+            'unzip -q "$t/x.zip" -d "$t" && '
+            'for f in xgent_mcs.py config.py crypto.py xgencrypto.py start_agent.sh stop_agent.sh; do '
+            'cp "$t/XIDER-main/XGENT-MCS/$f" "$f"; done && '
+            '(kill "$(cat agent.pid)" 2>/dev/null || true) && sleep 1 && bash ./start_agent.sh'
+        )
+        sent, _ = publish_tracked("shell", command=legacy)
+        if sent:
+            await cq.message.answer("🛠 Старый агент найден. Запустил одноразовое обновление через его защищённый канал; дальше обновления будут из этой кнопки.", reply_markup=back_to_device_kb())
 
 
 @router.callback_query(AdminFilter(), F.data == "cmd:smart")
