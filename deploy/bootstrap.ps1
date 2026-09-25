@@ -11,6 +11,7 @@ $repoUrl = 'https://github.com/invinby/XIDER/archive/refs/heads/main.zip'
 $zip = Join-Path $env:TEMP 'xider-main.zip'
 $extract = Join-Path $env:TEMP ('xider-bootstrap-' + [guid]::NewGuid().ToString('N'))
 $repo = Join-Path $InstallRoot 'git-ver'
+$stagedKey = $null
 
 try {
     New-Item -ItemType Directory -Path $extract -Force | Out-Null
@@ -49,11 +50,21 @@ try {
     New-Item -ItemType Directory -Path $installAgentDir -Force | Out-Null
     Copy-Item -LiteralPath $envSource -Destination (Join-Path $installBotDir '.env') -Force
     Copy-Item -LiteralPath $agentEnvSource -Destination (Join-Path $installAgentDir '.env') -Force
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'deploy\setup-all.ps1') -ServerIp $ServerIp -KeyPath $KeyPath
+    # OpenSSH rejects keys that inherit the CodexSandboxUsers ACL. Stage a
+    # temporary copy with read access for the current Windows user only.
+    if (Test-Path -LiteralPath $KeyPath) {
+        $stagedKey = Join-Path $env:TEMP ('xider-key-' + [guid]::NewGuid().ToString('N') + '.key')
+        Copy-Item -LiteralPath $KeyPath -Destination $stagedKey -Force
+        icacls.exe $stagedKey /inheritance:r | Out-Null
+        $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        icacls.exe $stagedKey /grant:r "$($currentUser):(R)" | Out-Null
+    }
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'deploy\setup-all.ps1') -ServerIp $ServerIp -KeyPath $(if ($stagedKey) { $stagedKey } else { $KeyPath })
     if ($LASTEXITCODE -ne 0) { throw 'XIDER setup failed.' }
     Write-Host 'XIDER готов. Повторный запуск этой же команды обновит локальную копию и переустановит компоненты.'
 }
 finally {
     Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $stagedKey -Force -ErrorAction SilentlyContinue
 }
