@@ -181,3 +181,17 @@ def test_response_collector_keeps_fast_response_for_command_id():
         assert result.get("percent") == 88
 
     asyncio.run(_async_test())
+
+
+def test_custom_ui_mode_changes_admin_label_and_main_menu(monkeypatch):
+    monkeypatch.setattr(bot.bot_settings, "get", lambda key, default=None: "custom" if key == "ui_style" else default)
+    markup = bot.main_menu(bot.ADMIN_ID)
+    texts = [b.text for row in markup.inline_keyboard for b in row]
+    assert "🧰 Мои машинки" in texts
+    assert "🌍 Весь зоопарк" in texts
+
+
+def test_server_menu_contains_metrics_chart_and_safe_terminal():
+    markup = bot.server_menu(bot.ADMIN_ID)
+    callbacks = _callback_data(markup)
+    assert {"server:metrics", "server:chart", "server:terminal"}.issubset(set(callbacks))

@@ -67,6 +67,12 @@ python3 -m venv "${APP_DIR}/TG-BOT-SERVER/venv"
 "${APP_DIR}/TG-BOT-SERVER/venv/bin/pip" install --requirement "${APP_DIR}/TG-BOT-SERVER/requirements.txt"
 
 install -m 0644 "${APP_DIR}/deploy/xider-bot.service" /etc/systemd/system/xider-bot.service
+install -m 0755 "${APP_DIR}/deploy/xider-server-ops.sh" /usr/local/sbin/xider-server-ops
+cat > /etc/sudoers.d/xider-server-ops <<EOF
+xider ALL=(root) NOPASSWD: /usr/local/sbin/xider-server-ops
+EOF
+chmod 0440 /etc/sudoers.d/xider-server-ops
+visudo -cf /etc/sudoers.d/xider-server-ops
 chown -R xider:xider "${APP_DIR}"
 chown root:xider "${ENV_FILE}"
 chmod 0640 "${ENV_FILE}"

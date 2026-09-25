@@ -34,6 +34,12 @@ sudo systemctl restart xider-bot
 
 The bot process runs headless under the dedicated `xider` user and restarts after a crash or reboot. Secrets stay in `/etc/xider/bot.env`; do not commit them or embed them in an EXE.
 
+The owner's Server panel also provides VPS load snapshots, a PNG history chart,
+recent logs, and a small allow-list of diagnostic commands (`uptime`, `memory`,
+`disk`, `processes`, `service`, `logs`). The installer deploys the root helper
+`xider-server-ops` through a narrow sudoers rule; Telegram never receives a
+free-form root shell or any secret values.
+
 ## Windows agent background install
 
 Put `XGENT-WDS.exe` and a filled sidecar `.env` in one folder, then run:

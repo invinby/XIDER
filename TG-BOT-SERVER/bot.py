@@ -141,6 +141,7 @@ class Form(StatesGroup):
     wait_brightness = State()
     wait_admin_message = State()
     wait_bot_text = State()
+    wait_server_command = State()
 
 
 # Диспетчер и роутер создаются ДО декораторов хендлеров (иначе NameError при импорте).
@@ -219,28 +220,28 @@ async def on_cmd_clipboard(cq: CallbackQuery):
     await cq.answer("📋 Запрашиваю буфер обмена...")
     sent, command_id = publish_tracked("clipboard")
     if not sent:
-        await cq.message.answer(
+        await _replace_callback_message(cq,
             "⚠️ Нет соединения с MQTT-брокером.",
             reply_markup=back_to_device_kb(),
         )
         return
     result = await clipboard_collector.wait_for(target, "clipboard", 10.0, command_id)
     if result is None:
-        await cq.message.answer(
+        await _replace_callback_message(cq,
             "⏳ Ответ не получен за 10 сек — устройство офлайн.",
             reply_markup=back_to_device_kb(),
         )
         return
     text = result.get("text")
     if not text:
-        await cq.message.answer(
+        await _replace_callback_message(cq,
             "⚠️ Буфер обмена пуст или недоступен.",
             reply_markup=back_to_device_kb(),
         )
     else:
         # Экранируем текст для безопасного вывода
         safe_text = html.escape(text)
-        await cq.message.answer(
+        await _replace_callback_message(cq,
             f"📋 <b>Буфер обмена:</b>\n<pre>{safe_text}</pre>",
             reply_markup=back_to_device_kb(),
         )
@@ -255,27 +256,27 @@ async def on_cmd_processes(cq: CallbackQuery):
     await cq.answer("⚙️ Запрашиваю процессы (Топ-5)...")
     sent, command_id = publish_tracked("processes")
     if not sent:
-        await cq.message.answer(
+        await _replace_callback_message(cq,
             "⚠️ Нет соединения с MQTT-брокером.",
             reply_markup=back_to_device_kb(),
         )
         return
     result = await processes_collector.wait_for(target, "processes", 15.0, command_id)
     if result is None:
-        await cq.message.answer(
+        await _replace_callback_message(cq,
             "⏳ Ответ не получен за 15 сек — устройство офлайн.",
             reply_markup=back_to_device_kb(),
         )
         return
     lines = result.get("lines", [])
     if not lines:
-        await cq.message.answer(
+        await _replace_callback_message(cq,
             "⚠️ Не удалось получить список процессов.",
             reply_markup=back_to_device_kb(),
         )
     else:
         text = "\n".join(html.escape(line) for line in lines)
-        await cq.message.answer(
+        await _replace_callback_message(cq,
             f"⚙️ <b>Топ-5 процессов по памяти:</b>\n<pre>{text}</pre>",
             reply_markup=back_to_device_kb(),
         )
@@ -290,21 +291,21 @@ async def on_cmd_mic(cq: CallbackQuery):
     await cq.answer("🎙 Идет запись звука (5 сек)...")
     sent, command_id = publish_tracked("mic")
     if not sent:
-        await cq.message.answer(
+        await _replace_callback_message(cq,
             "⚠️ Нет соединения с MQTT-брокером.",
             reply_markup=back_to_device_kb(),
         )
         return
     result = await mic_collector.wait_for(target, "mic", 20.0, command_id)
     if result is None:
-        await cq.message.answer(
+        await _replace_callback_message(cq,
             "⏳ Звук не получен за 20 сек — устройство офлайн или нет микрофона.",
             reply_markup=back_to_device_kb(),
         )
         return
     audio_b64 = result.get("audio")
     if not audio_b64:
-        await cq.message.answer(
+        await _replace_callback_message(cq,
             "⚠️ Устройство ответило ошибкой или микрофон недоступен.",
             reply_markup=back_to_device_kb(),
         )
@@ -320,7 +321,7 @@ async def on_cmd_mic(cq: CallbackQuery):
         )
     except Exception:
         log.exception("Ошибка декодирования аудио")
-        await cq.message.answer(
+        await _replace_callback_message(cq,
             "⚠️ Ошибка обработки звука.",
             reply_markup=back_to_device_kb(),
         )
@@ -694,22 +695,33 @@ def _technical_ui() -> bool:
     return bot_settings.get("ui_style", "technical") == "technical"
 
 
+def _custom_ui() -> bool:
+    return bot_settings.get("ui_style", "technical") == "custom"
+
+
+def _ui_phrase(technical: str, conversational: str, custom: str) -> str:
+    style = str(bot_settings.get("ui_style", "technical"))
+    if style == "custom":
+        return custom
+    return technical if style == "technical" else conversational
+
+
 def main_menu(user_id: int | None = None):
     user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
     role = get_user_role(user_id)
     kb = InlineKeyboardBuilder()
     if role in (Role.OWNER, Role.COOWNER):
-        kb.button(text="Устройства" if _technical_ui() else "💻 Список устройств", callback_data="menu:devices", style="primary")
-        kb.button(text="Все устройства" if _technical_ui() else "🌐 Все устройства", callback_data="dev:all", style="primary")
+        kb.button(text=_ui_phrase("Устройства", "💻 Список устройств", "🧰 Мои машинки"), callback_data="menu:devices", style="primary")
+        kb.button(text=_ui_phrase("Все устройства", "🌐 Все устройства", "🌍 Весь зоопарк"), callback_data="dev:all", style="primary")
         kb.button(text="Серверная", callback_data="menu:server", style="primary")
-        kb.button(text="События и настройки" if _technical_ui() else "🔔 Настройки & События", callback_data="ev:menu", style="primary")
+        kb.button(text=_ui_phrase("События и настройки", "🔔 Настройки & События", "🔔 Шум и настройки"), callback_data="ev:menu", style="primary")
     elif role == Role.USER:
         kb.button(text="Мои устройства", callback_data="menu:devices", style="primary")
         kb.button(text="Серверная: обзор", callback_data="menu:server", style="primary")
     else:
         kb.button(text="Обзор устройств", callback_data="menu:guest_devices", style="primary")
         kb.button(text="Серверная: обзор", callback_data="menu:server", style="primary")
-    kb.button(text="О системе" if _technical_ui() else "ℹ️ О системе XIDER", callback_data="menu:about", style="primary")
+    kb.button(text=_ui_phrase("О системе", "ℹ️ О системе XIDER", "🤖 Что за зверь XIDER"), callback_data="menu:about", style="primary")
     if role == Role.OWNER:
         kb.button(text="Администрирование", callback_data="menu:admin", style="danger")
     kb.adjust(1)
@@ -1262,10 +1274,11 @@ def admin_menu():
     kb.button(text="Журнал действий", callback_data="admin:audit", style="primary")
     kb.button(text="Тексты бота", callback_data="admin:texts", style="primary")
     mode = bot_settings.get("ui_style", "technical")
+    labels = {"technical": "технический", "conversational": "разговорный", "custom": "кастомный"}
     kb.button(
-        text=f"Текст: {'технический' if mode == 'technical' else 'разговорный'}",
+        text=f"Текст: {labels.get(mode, 'технический')}",
         callback_data="admin:style",
-        style="success" if mode == "technical" else "primary",
+        style="success" if mode == "custom" else "primary",
     )
     kb.button(text="Серверная", callback_data="menu:server", style="primary")
     kb.button(text="Главное меню", callback_data="menu:main", style="primary")
@@ -1278,6 +1291,10 @@ TEXT_LABELS = {
     "start_user": "Приветствие пользователя",
     "start_owner": "Приветствие владельца",
     "blocked": "Сообщение заблокированному",
+    "custom_start_guest": "Кастомное приветствие гостя",
+    "custom_start_user": "Кастомное приветствие пользователя",
+    "custom_start_owner": "Кастомное приветствие владельца",
+    "custom_blocked": "Кастомное сообщение блокировки",
 }
 
 
@@ -1379,7 +1396,10 @@ def server_menu(user_id: int | None = None):
     if role == Role.OWNER:
         approval = bool(bot_settings.get("require_device_approval", True))
         kb.button(text="📊 Статус сервиса", callback_data="server:status", style="primary")
+        kb.button(text="📈 Нагрузка сейчас", callback_data="server:metrics", style="primary")
+        kb.button(text="🖼 График нагрузки", callback_data="server:chart", style="primary")
         kb.button(text="📜 Последние логи", callback_data="server:logs", style="primary")
+        kb.button(text="🧪 SSH-команды", callback_data="server:terminal", style="primary")
         kb.button(text="🔄 Перезапустить", callback_data="server:restart", style="danger")
         kb.button(text="⬆️ Обновить из подготовленного пакета", callback_data="server:update", style="primary")
         kb.button(text="↩️ Откатить последнюю версию", callback_data="server:rollback", style="danger")
@@ -1463,6 +1483,14 @@ def publish_tracked(action: str, **kwargs) -> tuple[bool, str]:
 
 def _no_target_text() -> str:
     return "⚠️ Цель не выбрана. Нажмите «Назад» и выберите устройство."
+
+
+async def _replace_callback_message(cq: CallbackQuery, text: str, reply_markup=None):
+    """Изменить карточку вместо отправки нового сообщения."""
+    try:
+        await cq.message.edit_text(text, reply_markup=reply_markup)
+    except Exception:
+        await cq.message.answer(text, reply_markup=reply_markup)
 
 # =====================================================================
 #  Глобальные объекты
@@ -1752,14 +1780,14 @@ async def cmd_start(message: Message, state: FSMContext):
         except Exception:
             log.exception("Не удалось уведомить владельца о новом пользователе")
     if role == Role.BLOCKED:
-        await message.answer(text_store.get("blocked"))
+        await message.answer(text_store.get("custom_blocked" if _custom_ui() else "blocked"))
         return
     if role == Role.GUEST:
-        intro = text_store.get("start_guest")
+        intro = text_store.get("custom_start_guest" if _custom_ui() else "start_guest")
     elif role == Role.USER:
-        intro = text_store.get("start_user")
+        intro = text_store.get("custom_start_user" if _custom_ui() else "start_user")
     else:
-        intro = text_store.get("start_owner")
+        intro = text_store.get("custom_start_owner" if _custom_ui() else "start_owner")
     await message.answer(
         f"<b>XIDER {XIDER_BUILD_CODE}</b>\n"
         f"Роль: <b>{html.escape(_role_label(role))}</b>\n"
@@ -1955,6 +1983,67 @@ async def on_server_logs(cq: CallbackQuery):
         reply_markup=server_menu(cq.from_user.id),
     )
     await cq.answer("Готово" if result.ok else "Не удалось получить логи", show_alert=not result.ok)
+
+
+@router.callback_query(OwnerFilter(), F.data == "server:metrics")
+async def on_server_metrics(cq: CallbackQuery):
+    snapshot = await asyncio.to_thread(server_ops.metrics)
+    access_store.append_audit("server_metrics", actor_id=cq.from_user.id, detail="snapshot")
+    await cq.message.edit_text(
+        "<b>Нагрузка VPS</b>\n"
+        f"CPU: <b>{snapshot['load']:.1f}%</b>\n"
+        f"RAM: <b>{snapshot['memory']:.1f}%</b>\n"
+        f"Диск /: <b>{snapshot['disk']:.1f}%</b>\n\n"
+        "Нажми «График нагрузки», чтобы увидеть историю последних замеров.",
+        reply_markup=server_menu(cq.from_user.id),
+    )
+    await cq.answer("Снял показатели")
+
+
+@router.callback_query(OwnerFilter(), F.data == "server:chart")
+async def on_server_chart(cq: CallbackQuery):
+    snapshot = await asyncio.to_thread(server_ops.metrics)
+    image = await asyncio.to_thread(server_ops.render_metrics_chart, snapshot)
+    access_store.append_audit("server_chart", actor_id=cq.from_user.id, detail="snapshot")
+    await cq.message.edit_text(
+        "<b>График нагрузки VPS</b>\nЗамер сохранён. Кнопки ниже возвращают в серверную.",
+        reply_markup=server_menu(cq.from_user.id),
+    )
+    await cq.message.answer_photo(
+        BufferedInputFile(image, filename="xider-server-load.png"),
+        caption="CPU / RAM / диск за последние замеры",
+    )
+    await cq.answer("График готов")
+
+
+@router.callback_query(OwnerFilter(), F.data == "server:terminal")
+async def on_server_terminal(cq: CallbackQuery, state: FSMContext):
+    await state.set_state(Form.wait_server_command)
+    await cq.message.edit_text(
+        "<b>SSH-команды сервера</b>\n"
+        "Бот работает на этом VPS, поэтому отдельный SSH-ключ здесь не нужен.\n"
+        "Разрешены только безопасные диагностические команды:\n"
+        "<code>uptime</code>, <code>memory</code>, <code>disk</code>, "
+        "<code>processes</code>, <code>service</code>, <code>logs</code>\n\n"
+        "Пришли одно слово или нажми /cancel.",
+        reply_markup=server_menu(cq.from_user.id),
+    )
+    await cq.answer()
+
+
+@router.message(OwnerFilter(), Form.wait_server_command)
+async def on_server_terminal_command(message: Message, state: FSMContext):
+    await state.clear()
+    command = (message.text or "").strip()
+    result = await asyncio.to_thread(server_ops.run_terminal, command)
+    access_store.append_audit(
+        "server_terminal", actor_id=message.from_user.id,
+        detail=f"command={command[:32]!r}; ok={result.ok}",
+    )
+    await message.answer(
+        f"<b>Результат серверной команды</b>\n<pre>{html.escape(result.text[-3600:])}</pre>",
+        reply_markup=server_menu(message.from_user.id),
+    )
 
 
 @router.callback_query(OwnerFilter(), F.data.startswith("server_confirm:"))
@@ -2229,7 +2318,9 @@ async def on_admin_audit(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data == "admin:style")
 async def on_admin_style(cq: CallbackQuery):
-    new_style = "conversational" if _technical_ui() else "technical"
+    current = str(bot_settings.get("ui_style", "technical"))
+    new_style = {"technical": "conversational", "conversational": "custom", "custom": "technical"}.get(current, "technical")
+    labels = {"technical": "Технический режим", "conversational": "Разговорный режим", "custom": "Кастомный режим"}
     bot_settings.set_key("ui_style", new_style)
     access_store.append_audit("ui_style_set", actor_id=cq.from_user.id, detail=new_style)
     await cq.message.edit_text(
@@ -2238,7 +2329,7 @@ async def on_admin_style(cq: CallbackQuery):
         "Владелец защищён: его нельзя заблокировать, понизить или удалить.",
         reply_markup=admin_menu(),
     )
-    await cq.answer("Разговорный режим" if new_style == "conversational" else "Технический режим")
+    await cq.answer(labels[new_style])
 
 # =====================================================================
 #  Хендлеры: навигация

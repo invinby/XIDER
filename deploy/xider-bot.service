@@ -14,7 +14,6 @@ Restart=on-failure
 RestartSec=5
 TimeoutStopSec=20
 UMask=0077
-NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict

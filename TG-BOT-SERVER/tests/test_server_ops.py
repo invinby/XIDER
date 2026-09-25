@@ -17,5 +17,6 @@ def test_run_uses_allowlisted_environment(monkeypatch):
     monkeypatch.setattr(server_ops.subprocess, "run", fake_run)
     result = server_ops.status()
     assert result.ok
-    assert seen["args"][0] == "systemctl"
+    assert seen["args"][:2] == ["sudo", "-n"]
+    assert seen["args"][-1] == "status"
     assert "BOT_TOKEN" not in seen["env"]
