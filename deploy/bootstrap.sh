@@ -58,5 +58,5 @@ else
 fi
 chmod 600 "${agent_env}"
 cd "${INSTALL_ROOT}/git-ver/XGENT-MCS"
-./start_agent.sh
+bash ./start_agent.sh
 echo "XIDER macOS-агент готов."
