@@ -1175,10 +1175,17 @@ class XgentClient:
         self._publish_response("prank_shout_tts", {"type": "prank_shout_tts", "device_id": DEVICE_ID, "ok": True})
 
     def _do_prank_swap_mouse(self, payload: dict) -> None:
-        self._publish_response("prank_swap_mouse", {"type": "prank_swap_mouse", "device_id": DEVICE_ID, "ok": True, "note": "Mouse swap toggled"})
+        self._publish_response("prank_swap_mouse", {"type": "prank_swap_mouse", "device_id": DEVICE_ID, "ok": False,
+                                                    "text": "⚠️ Смена кнопок мыши отключена: macOS не позволяет безопасно менять её удалённо без системного разрешения."})
 
     def _do_prank_crazy_cursor(self, payload: dict) -> None:
         duration = min(int(payload.get("duration", 10) or 10), 30)
+        try:
+            import Quartz  # noqa: F401
+        except Exception:
+            self._publish_response("prank_crazy_cursor", {"type": "prank_crazy_cursor", "device_id": DEVICE_ID,
+                                                           "ok": False, "text": "⚠️ Для движения курсора нужен PyObjC Quartz и разрешение Accessibility."})
+            return
         def _run():
             try:
                 import Quartz
@@ -1576,7 +1583,7 @@ end tell'''
     def _do_prank_invert_screen(self, payload: dict) -> None:
         sc = 'tell application "System Events" to display dialog "Режим рентгеновского зрения активирован! 🕶️" with title "macOS Display" buttons {"OK"} default button "OK"'
         subprocess.Popen(["osascript", "-e", sc])
-        self._publish_response("output", {"type": "prank_invert_screen", "device_id": DEVICE_ID, "ok": True, "text": "🙃 Шуточное диалоговое окно показано на экране!"})
+        self._publish_response("output", {"type": "prank_invert_screen", "device_id": DEVICE_ID, "ok": False, "text": "⚠️ Реальная инверсия экрана не применена: macOS не даёт надёжного безопасного CLI. Показано только шуточное окно."})
 
     def _do_prank_slow_mouse(self, payload: dict) -> None:
         def _slow():
@@ -1587,7 +1594,7 @@ end tell'''
         self._publish_response("output", {"type": "prank_slow_mouse", "device_id": DEVICE_ID, "ok": True, "text": "🐌 Скорость мыши временно снижена на 8 секунд!"})
 
     def _do_prank_random_clicks(self, payload: dict) -> None:
-        self._publish_response("output", {"type": "prank_random_clicks", "device_id": DEVICE_ID, "ok": True, "text": "🤹 Случайные подёргивания мыши активированы на 5 секунд!"})
+        self._publish_response("output", {"type": "prank_random_clicks", "device_id": DEVICE_ID, "ok": False, "text": "⚠️ Случайные клики не выполняются: функция не реализована безопасно."})
 
     def _do_prank_paste_clipboard_spam(self, payload: dict) -> None:
         meme = "( ͡° ͜ʖ ͡°) Взлом жопы завершен на 99.9%"
