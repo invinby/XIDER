@@ -1024,7 +1024,11 @@ def power_menu_new():
     kb.button(text="🚀 Автозапуск: Статус", callback_data="cmd:autorun_status", style="primary")
     kb.button(text="✅ Вкл автозапуск", callback_data="cmd:autorun_enable", style="success")
     kb.button(text="🛑 Выкл автозапуск", callback_data="cmd:autorun_disable", style="danger")
-    kb.button(text="🛡 Guardian", callback_data="cmd:guardian_menu", style="primary")
+    # Guardian управляет macOS supervisor; Windows-агент этого протокола не
+    # поддерживает, поэтому не показываем кнопку, которая заведомо зависнет.
+    target_os = str(dev_info.get("os") or "").lower()
+    if "windows" not in target_os:
+        kb.button(text="🛡 Guardian", callback_data="cmd:guardian_menu", style="primary")
     kb.button(text="🌐 Wake-on-LAN", callback_data="cmd:wol", style="primary")
     kb.button(text="⏹ Стоп процесса агента", callback_data="cfm:stop", style="danger")
     kb.button(text="⬅️ Назад к ПК", callback_data="back:device", style="primary")
@@ -4833,6 +4837,9 @@ async def simple_command(cq: CallbackQuery, action: str, emoji: str, label: str,
 @router.callback_query(AdminFilter(), F.data == "cmd:check_update")
 async def on_cmd_check_update(cq: CallbackQuery):
     result = await simple_command(cq, "agent_update", "🔄", "Обновить агента", timeout=45.0, update=True)
+    target = SESSION.get("target") or ""
+    target_os = str((devices.get(target) or {}).get("os") or "").lower()
+    is_windows = "windows" in target_os
     # Старые агенты до v3.3.6 умели только сообщить статус и игнорировали
     # update=true. Для них выполняем одноразовый переход через уже имеющийся
     # безопасный shell-канал; после этого дальнейшие обновления идут кнопкой.
@@ -4844,6 +4851,13 @@ async def on_cmd_check_update(cq: CallbackQuery):
     if result and result.get("ok"):
         needs_legacy = "v1.3" in text or "Актуален" in text
     if needs_legacy:
+        if is_windows:
+            await _replace_callback_message(
+                cq,
+                "⚠️ Windows-агент ответил старым форматом. Автообновление через macOS-команду отключено; обновите Windows-агент установщиком.",
+                reply_markup=back_to_device_kb(),
+            )
+            return
         legacy = (
             'cd "$HOME/XIDER/git-ver/XGENT-MCS" && t=$(mktemp -d) && '
             'curl -fsSL https://github.com/invinby/XIDER/archive/refs/heads/main.zip -o "$t/x.zip" && '
@@ -5034,6 +5048,10 @@ async def on_cmd_guardian_menu(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
         await cq.answer("Сначала выберите устройство", show_alert=True)
+        return
+    target_os = str((devices.get(target) or {}).get("os") or "").lower()
+    if "windows" in target_os:
+        await cq.answer("Windows Guardian ещё не установлен", show_alert=True)
         return
     await cq.message.edit_text(
         f"🛡 <b>Guardian</b> · {html.escape(target_label(target))}\n\n"

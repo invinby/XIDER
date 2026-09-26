@@ -85,6 +85,18 @@ def test_each_category_menu_builds_buttons():
         assert cbs, f"{builder.__name__} вернул пустую клавиатуру"
 
 
+def test_power_menu_hides_guardian_for_windows(monkeypatch):
+    monkeypatch.setattr(bot, "SESSION", {"target": "win1"})
+    _setup(monkeypatch, {"win1": {"name": "PC", "os": "Windows 11"}})
+    windows_cbs = _callback_data(bot.power_menu_new())
+    assert "cmd:guardian_menu" not in windows_cbs
+
+    monkeypatch.setattr(bot, "SESSION", {"target": "mac1"})
+    _setup(monkeypatch, {"mac1": {"name": "Mac", "os": "macOS 27"}})
+    mac_cbs = _callback_data(bot.power_menu_new())
+    assert "cmd:guardian_menu" in mac_cbs
+
+
 def test_buttons_have_colored_styles(monkeypatch):
     """Проверяет, что кнопки имеют цветные стили (style: success/primary/danger)."""
     _setup(monkeypatch, {"dev1": {"name": "Dev", "os": "macOS", "last_seen": time.time()}})

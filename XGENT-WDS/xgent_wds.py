@@ -50,6 +50,31 @@ from crypto import sign_message, verify_message
 from xgencrypto import decrypt_payload, encrypt_payload
 
 log = logging.getLogger("xgent.wds")
+WINDOWS_TASK_NAME = "XIDER Agent"
+
+
+def _scheduled_task_exists() -> bool:
+    """Проверить реальный Scheduled Task, которым устанавливается агент."""
+    result = subprocess.run(
+        ["schtasks.exe", "/Query", "/TN", WINDOWS_TASK_NAME],
+        capture_output=True, text=True, check=False,
+    )
+    return result.returncode == 0
+
+
+def _remove_scheduled_task() -> tuple[bool, str]:
+    """Удалить автозапуск агента независимо от старого Registry-варианта."""
+    subprocess.run(
+        ["schtasks.exe", "/End", "/TN", WINDOWS_TASK_NAME],
+        capture_output=True, text=True, check=False,
+    )
+    delete = subprocess.run(
+        ["schtasks.exe", "/Delete", "/TN", WINDOWS_TASK_NAME, "/F"],
+        capture_output=True, text=True, check=False,
+    )
+    ok = delete.returncode == 0 or "cannot find" in (delete.stderr or "").lower()
+    detail = (delete.stdout or delete.stderr or "").strip()
+    return ok, detail
 
 # Команды, которые умеет выполнять этот клиент. Используются и для
 # маршрутизации, и для отчёта о возможностях (capabilities).
@@ -2176,15 +2201,13 @@ class XgentClient:
         })
 
     def _do_autorun_status(self, payload: dict) -> None:
-        """Проверка статуса автозапуска в реестре Windows."""
-        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        """Проверка фактического Scheduled Task автозапуска."""
         try:
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ) as key:
-                val, _ = winreg.QueryValueEx(key, "XGENT")
-                text = f"🚀 Автозапуск Windows: ✅ ВКЛЮЧЕН\nПараметр: {val}"
-                ok = True
-        except FileNotFoundError:
-            text = "🚀 Автозапуск Windows: ❌ ВЫКЛЮЧЕН\n(Агент не запускается при входе в систему)"
+            enabled = _scheduled_task_exists()
+            text = (
+                f"🚀 Автозапуск Windows: {'✅ ВКЛЮЧЕН' if enabled else '❌ ВЫКЛЮЧЕН'}\n"
+                f"Источник: Scheduled Task «{WINDOWS_TASK_NAME}»"
+            )
             ok = True
         except Exception as exc:
             text = f"⚠️ Ошибка проверки автозапуска: {exc}"
@@ -2194,25 +2217,21 @@ class XgentClient:
         })
 
     def _do_autorun_enable(self, payload: dict) -> None:
-        """Включение автозапуска в реестре Windows (HKCU\\...\\Run)."""
-        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        """Включить тот же Scheduled Task, который создаёт установщик."""
         try:
-            cur_dir = Path(__file__).resolve().parent
-            exe_path = cur_dir / "XGENT-WDS.exe"
-            if getattr(sys, "frozen", False):
-                cmd = f'"{sys.executable}"'
-            elif exe_path.exists():
-                cmd = f'"{exe_path}"'
-            else:
-                pyw = cur_dir / "venv" / "Scripts" / "pythonw.exe"
-                if not pyw.exists():
-                    pyw = Path(sys.executable).parent / "pythonw.exe"
-                if not pyw.exists():
-                    pyw = Path(sys.executable)
-                cmd = f'"{pyw}" "{cur_dir / "xgent_wds.py"}"'
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_ALL_ACCESS) as key:
-                winreg.SetValueEx(key, "XGENT", 0, winreg.REG_SZ, cmd)
-            text = f"✅ Автозапуск Windows успешно добавлен в реестр!\nКоманда запуска: {cmd}"
+            cur_dir = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
+            installer = cur_dir / "install_agent.ps1"
+            if not installer.exists():
+                raise RuntimeError("install_agent.ps1 не найден рядом с агентом")
+            result = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                 "-File", str(installer), "-AgentDir", str(cur_dir),
+                 "-TaskName", WINDOWS_TASK_NAME],
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+            if result.returncode != 0:
+                raise RuntimeError((result.stderr or result.stdout or "schtasks failed").strip())
+            text = f"✅ Автозапуск Windows включён через Scheduled Task «{WINDOWS_TASK_NAME}»."
             ok = True
         except Exception as exc:
             text = f"⚠️ Ошибка включения автозапуска: {exc}"
@@ -2222,16 +2241,19 @@ class XgentClient:
         })
 
     def _do_autorun_disable(self, payload: dict) -> None:
-        """Отключение автозапуска в реестре Windows."""
-        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        """Отключить Scheduled Task и убрать старый Registry-вариант."""
         try:
+            ok, detail = _remove_scheduled_task()
+            key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_ALL_ACCESS) as key:
-                try:
-                    winreg.DeleteValue(key, "XGENT")
-                    text = "🛑 Автозапуск Windows успешно удалён из реестра."
-                except FileNotFoundError:
-                    text = "ℹ️ Автозапуск Windows уже был отключен."
-            ok = True
+                for value_name in ("XGENT", "XGentAgent"):
+                    try:
+                        winreg.DeleteValue(key, value_name)
+                    except FileNotFoundError:
+                        pass
+            text = "🛑 Автозапуск Windows отключён (Scheduled Task и старый реестр очищены)."
+            if detail and not ok:
+                text += f"\n{detail[:500]}"
         except Exception as exc:
             text = f"⚠️ Ошибка отключения автозапуска: {exc}"
             ok = False
@@ -3182,7 +3204,7 @@ setTimeout(()=>window.close(),15000);
         pid = os.getpid()
         exe_path = sys.executable
         text = (
-            f"🔄 <b>Агент XGENT v1.3 (Актуален)</b>\n"
+            f"🔄 <b>Агент XGENT v{VERSION}</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"• Платформа: Windows ({platform.system()} {platform.release()})\n"
             f"• Процесс: <code>{html.escape(exe_path)}</code>\n"
@@ -3202,6 +3224,9 @@ setTimeout(()=>window.close(),15000);
     def _do_uninstall_agent(self, payload: dict) -> None:
         """Полное удаление агента с ПК: автозапуск, конфиги, логи и завершение процесса."""
         log.warning("Получена команда полного удаления агента с ПК!")
+        # Установщик Windows создаёт Scheduled Task; удаляем его первым,
+        # иначе задача сможет запустить агент снова после удаления файлов.
+        _remove_scheduled_task()
         try:
             import winreg
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE)
