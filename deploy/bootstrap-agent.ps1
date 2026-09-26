@@ -40,7 +40,19 @@ try {
         $envSource = $fetched
     }
 
-    if (Test-Path -LiteralPath $repo) { Remove-Item -LiteralPath $repo -Recurse -Force }
+    # Предыдущий установщик специально закрыл ACL на .env. Сначала делаем
+    # временную копию, затем возвращаем права текущему пользователю и только
+    # после этого заменяем старую checkout-папку.
+    $stagedEnv = Join-Path $extract 'agent-preserved.env'
+    Copy-Item -LiteralPath $envSource -Destination $stagedEnv -Force
+    $envSource = $stagedEnv
+    if (Test-Path -LiteralPath $repo) {
+        $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        $grantFull = '{0}:(OI)(CI)F' -f $currentUser
+        & icacls.exe $repo /grant:r $grantFull /T /C | Out-Null
+        & attrib.exe -R "$repo\*" /S /D 2>$null
+        Remove-Item -LiteralPath $repo -Recurse -Force
+    }
     New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
     Move-Item -LiteralPath $downloaded.FullName -Destination $repo
     Copy-Item -LiteralPath $envSource -Destination (Join-Path $agent '.env') -Force
