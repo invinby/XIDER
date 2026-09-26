@@ -588,10 +588,14 @@ def _status_dot(info: dict | None) -> str:
     if not info:
         return "⚪"
     ago = time.time() - float(info.get("last_seen", 0) or 0)
-    if info.get("standby", False) and ago < 120:
+    # Устройство считается свежим в тот же момент, что и watchdog.
+    # Раньше UI переключался в офлайн через 120 с, а watchdog через 150 с,
+    # из-за чего при нормальном heartbeat в 60 с появлялось мигание статуса.
+    freshness = _OFFLINE_TIMEOUT_SEC
+    online = bool(info.get("online", True))
+    if info.get("standby", False) and online and ago < freshness:
         return "🟡"
-    online = info.get("online", True)
-    return "🟢" if online and ago < 120 else "⚪"
+    return "🟢" if online and ago < freshness else "⚪"
 
 
 def device_card(device_id: str) -> str:
@@ -790,6 +794,11 @@ def device_menu(device_id: str):
             style="primary",
         )
 
+    # Критичные действия должны быть доступны прямо из карточки устройства,
+    # а не спрятаны только внутри «Настройки ПК».
+    kb.button(text="🔄 Обновить агента", callback_data="cmd:check_update", style="success")
+    kb.button(text="⏹ Остановить агента", callback_data="cfm:stop", style="danger")
+
     # Bottom row: Back
     kb.button(text="🔙 К списку устройств", callback_data="menu:target", style="danger")
 
@@ -798,7 +807,7 @@ def device_menu(device_id: str):
         rows.extend([2] * (len(favs) // 2))
         if len(favs) % 2:
             rows.append(1)
-    rows.append(1)
+    rows.extend([2, 1])
     kb.adjust(*rows)
     return kb.as_markup()
 
@@ -1876,7 +1885,7 @@ async def on_menu_about(cq: CallbackQuery):
     """Раздел 'О системе XIDER' — полная инфо-карточка."""
     await cq.answer()
     devs   = devices.all()
-    online = sum(1 for v in devs.values() if v.get("status") == "online")
+    online = sum(1 for v in devs.values() if _status_dot(v) in ("🟢", "🟡"))
     total  = len(devs)
 
     text = (
@@ -2668,7 +2677,7 @@ async def on_menu_devices(cq: CallbackQuery):
         text = "💻 <b>Устройства</b>\n\n" + "\n".join(lines)
     else:
         text = "💻 Пока нет ни одного устройства.\nЗапустите клиент — оно появится само."
-    await cq.message.edit_text(text, reply_markup=devices_menu())
+    await _replace_callback_message(cq, text, reply_markup=devices_menu())
     await cq.answer()
 
 @router.callback_query(AdminFilter(), F.data == "menu:target")
@@ -3125,12 +3134,14 @@ async def on_cmd_stop(cq: CallbackQuery):
         await cq.answer("Сначала выберите цель", show_alert=True)
         return
     if publish("stop"):
-        await cq.message.answer(
+        await _replace_callback_message(
+            cq,
             f"⏹ Клиент остановлен: <b>{target_label(target)}</b>",
             reply_markup=back_to_device_kb(),
         )
     else:
-        await cq.message.answer(
+        await _replace_callback_message(
+            cq,
             "⚠️ Нет соединения с MQTT-брокером.",
             reply_markup=back_to_device_kb(),
         )
@@ -3851,11 +3862,17 @@ async def on_openapp_ok(cq: CallbackQuery, state: FSMContext):
 @router.callback_query(AdminFilter(), F.data == "stop:ok")
 async def on_stop_ok(cq: CallbackQuery):
     if publish("stop"):
-        await cq.message.answer(
-            f"⏹ Клиент остановлен: <b>{target_label(SESSION.get('target'))}</b>"
+        await _replace_callback_message(
+            cq,
+            f"⏹ Клиент остановлен: <b>{target_label(SESSION.get('target'))}</b>",
+            reply_markup=back_to_device_kb(),
         )
     else:
-        await cq.message.answer("⚠️ Нет соединения с MQTT-брокером.")
+        await _replace_callback_message(
+            cq,
+            "⚠️ Нет соединения с MQTT-брокером.",
+            reply_markup=back_to_device_kb(),
+        )
     await cq.answer()
 
 

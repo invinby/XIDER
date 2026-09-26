@@ -910,6 +910,19 @@ class XgentClient:
         self._publish_response("output", {"type": "power", "device_id": DEVICE_ID, "ok": ok, "text": text})
 
     def _do_stop(self, payload: dict) -> None:
+        # KeepAlive у LaunchAgent иначе мгновенно поднимет процесс обратно.
+        # При явной команде «Остановить агента» отключаем автозапуск заранее.
+        plist_path = os.path.expanduser("~/Library/LaunchAgents/com.xgent.agent.plist")
+        try:
+            if os.path.exists(plist_path):
+                subprocess.run(
+                    ["launchctl", "bootout", f"gui/{os.getuid()}", plist_path],
+                    capture_output=True,
+                    check=False,
+                )
+                os.remove(plist_path)
+        except Exception:
+            log.exception("Не удалось отключить LaunchAgent перед остановкой")
         self.request_stop()
 
     # ---------- волна 1: файлы, система, приколы (паритет с WDS) ----------

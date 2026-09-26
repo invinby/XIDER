@@ -18,11 +18,27 @@ if [[ "${1:-}" == "--setup" ]]; then
     exit 0
 fi
 
+# Полная остановка: убрать LaunchAgent, чтобы macOS не подняла его снова.
+if [[ "${1:-}" == "--stop" || "${1:-}" == "-x" ]]; then
+    PLIST="$HOME/Library/LaunchAgents/com.xgent.agent.plist"
+    launchctl bootout "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || true
+    rm -f "$PLIST"
+    ./stop_agent.sh
+    exit 0
+fi
+
 if [[ "${1:-}" == "--status" || "${1:-}" == "-s" ]]; then
-    if command -v launchctl >/dev/null 2>&1 && launchctl print "gui/$(id -u)/com.xgent.agent" >/dev/null 2>&1; then
-        echo "[OK] XIDER Agent работает через LaunchAgent"
-        echo "[LOG] $(pwd)/$LOGFILE"
-        exit 0
+    if command -v launchctl >/dev/null 2>&1; then
+        LAUNCH_STATE="$(launchctl print "gui/$(id -u)/com.xgent.agent" 2>/dev/null || true)"
+        if printf '%s\n' "$LAUNCH_STATE" | grep -Eq 'pid = [0-9]+|state = running'; then
+            echo "[OK] XIDER Agent работает через LaunchAgent"
+            echo "[LOG] $(pwd)/$LOGFILE"
+            exit 0
+        elif [ -n "$LAUNCH_STATE" ]; then
+            echo "[STOPPED] LaunchAgent загружен, но процесс агента не запущен"
+            echo "[LOG] $(pwd)/$LOGFILE"
+            exit 1
+        fi
     fi
     if [[ -f "$PIDFILE" ]]; then
         PID="$(cat "$PIDFILE" 2>/dev/null || true)"
