@@ -4737,7 +4737,7 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
     status_msg = cq.message
     try:
         await status_msg.edit_text(
-        f"⏳ <b>{emoji} {label}</b> · <b>{html.escape(target_label(target))}</b>\n<code>[■□□□□] 20% Связь с агентом...</code>",
+        f"⏳ <b>{emoji} {label}</b> · <b>{html.escape(target_label(target))}</b>\n<code>◐ Ожидаю ответ агента…</code>",
         reply_markup=back_to_device_kb(),
         )
     except Exception:
@@ -4748,7 +4748,7 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
         except Exception:
             pass
         status_msg = await cq.message.answer(
-            f"⏳ <b>{emoji} {label}</b> · <b>{html.escape(target_label(target))}</b>\n<code>[■□□□□] 20% Связь с агентом...</code>",
+            f"⏳ <b>{emoji} {label}</b> · <b>{html.escape(target_label(target))}</b>\n<code>◐ Ожидаю ответ агента…</code>",
             reply_markup=back_to_device_kb(),
         )
 
@@ -4757,17 +4757,16 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
 
     async def _animate_loader():
         frames = [
-            "<code>[■□□□□] 20% Связь с агентом...</code>",
-            "<code>[■■□□□] 40% Выполнение на ПК...</code>",
-            "<code>[■■■□□] 60% Обработка результата...</code>",
-            "<code>[■■■■□] 80% Сбор данных...</code>",
-            "<code>[■■■■■] 95% Ожидание ответа...</code>",
+            "<code>◐ Ожидаю ответ агента…</code>",
+            "<code>◓ Ожидаю ответ агента…</code>",
+            "<code>◑ Ожидаю ответ агента…</code>",
+            "<code>◒ Ожидаю ответ агента…</code>",
         ]
         idx = 0
         while not stop_anim.is_set():
-            # Telegram ограничивает частые правки одного сообщения; 1.4 с
-            # убирает фризы и ошибки Flood control.
-            await asyncio.sleep(1.4)
+            # Быстрый визуальный спиннер без ложных процентов: это ожидание,
+            # а не измеренный прогресс операции.
+            await asyncio.sleep(0.9)
             if stop_anim.is_set():
                 break
             idx = (idx + 1) % len(frames)
