@@ -194,4 +194,4 @@ def test_custom_ui_mode_changes_admin_label_and_main_menu(monkeypatch):
 def test_server_menu_contains_metrics_chart_and_safe_terminal():
     markup = bot.server_menu(bot.ADMIN_ID)
     callbacks = _callback_data(markup)
-    assert {"server:metrics", "server:chart", "server:terminal"}.issubset(set(callbacks))
+    assert {"server:specs", "server:metrics", "server:chart", "server:terminal"}.issubset(set(callbacks))

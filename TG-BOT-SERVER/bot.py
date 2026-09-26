@@ -1419,6 +1419,7 @@ def server_menu(user_id: int | None = None):
     if role == Role.OWNER:
         approval = bool(bot_settings.get("require_device_approval", True))
         kb.button(text="📊 Статус сервиса", callback_data="server:status", style="primary")
+        kb.button(text="🧰 Характеристики VPS", callback_data="server:specs", style="primary")
         kb.button(text="📈 Нагрузка сейчас", callback_data="server:metrics", style="primary")
         kb.button(text="🖼 График нагрузки", callback_data="server:chart", style="primary")
         kb.button(text="📜 Последние логи", callback_data="server:logs", style="primary")
@@ -2085,6 +2086,17 @@ async def on_server_metrics(cq: CallbackQuery):
     await cq.answer("Снял показатели")
 
 
+@router.callback_query(OwnerFilter(), F.data == "server:specs")
+async def on_server_specs(cq: CallbackQuery):
+    result = await asyncio.to_thread(server_ops.specs)
+    access_store.append_audit("server_specs", actor_id=cq.from_user.id, detail=f"ok={result.ok}")
+    await cq.message.edit_text(
+        f"<b>Характеристики VPS</b>\n<pre>{html.escape(result.text[-3600:])}</pre>",
+        reply_markup=server_menu(cq.from_user.id),
+    )
+    await cq.answer("Готово" if result.ok else "Не удалось получить характеристики", show_alert=not result.ok)
+
+
 @router.callback_query(OwnerFilter(), F.data == "server:chart")
 async def on_server_chart(cq: CallbackQuery):
     snapshot = await asyncio.to_thread(server_ops.metrics)
@@ -2109,7 +2121,8 @@ async def on_server_terminal(cq: CallbackQuery, state: FSMContext):
         "Бот работает на этом VPS, поэтому отдельный SSH-ключ здесь не нужен.\n"
         "Разрешены только безопасные диагностические команды:\n"
         "<code>uptime</code>, <code>memory</code>, <code>disk</code>, "
-        "<code>processes</code>, <code>service</code>, <code>logs</code>\n\n"
+        "<code>processes</code>, <code>service</code>, <code>logs</code>, "
+        "<code>specs</code> / <code>fastfetch</code>\n\n"
         "Пришли одно слово или нажми /cancel.",
         reply_markup=server_menu(cq.from_user.id),
     )

@@ -42,6 +42,8 @@ SAFE_ALIASES = {
     "диск": "disk", "disk": "disk", "место": "disk",
     "процессы": "processes", "processes": "processes", "ps": "processes",
     "статус": "service", "service": "service", "логи": "logs", "logs": "logs",
+    "характеристики": "specs", "характеристика": "specs", "specs": "specs",
+    "fastfetch": "specs", "neofetch": "specs", "инфо": "specs",
 }
 
 
@@ -133,6 +135,42 @@ def metrics() -> dict:
     return item
 
 
+def specs() -> Result:
+    """Return a bounded, credential-free VPS hardware/OS summary.
+
+    Prefer fastfetch/neofetch when installed, otherwise use a small built-in
+    summary. No shell string or environment variable is exposed.
+    """
+    for tool, args in (("fastfetch", ["--pipe"]), ("neofetch", ["--stdout"])):
+        executable = shutil.which(tool)
+        if executable:
+            return _run([executable, *args], 15)
+    commands = [
+        ("Хост", ["hostname"]),
+        ("Ядро", ["uname", "-srmo"]),
+        ("CPU", ["nproc"]),
+        ("Аптайм", ["uptime", "-p"]),
+        ("RAM", ["free", "-h"]),
+        ("Диск", ["df", "-h", "/"]),
+    ]
+    lines = []
+    for label, args in commands:
+        result = _run(args, 10)
+        lines.append(f"{label}:\n{result.text[-900:]}")
+    try:
+        os_release = Path("/etc/os-release").read_text(encoding="utf-8")
+        pretty_name = next(
+            (line.split("=", 1)[1].strip().strip('"')
+             for line in os_release.splitlines()
+             if line.startswith("PRETTY_NAME=") and "=" in line),
+            "неизвестно",
+        )
+    except OSError:
+        pretty_name = "неизвестно"
+    lines.insert(1, f"ОС:\n{pretty_name}")
+    return Result(True, "\n\n".join(lines)[-3400:])
+
+
 def render_metrics_chart(snapshot: dict) -> bytes:
     """Нарисовать PNG-график без внешнего сервиса и без передачи секретов."""
     from PIL import Image, ImageDraw
@@ -173,6 +211,8 @@ def run_terminal(command: str) -> Result:
         return Result(False, "Команда отклонена: shell-операторы запрещены.", 2)
     alias = SAFE_ALIASES.get(normalized)
     if not alias:
-        choices = ", ".join(sorted(SAFE_COMMANDS))
+        choices = ", ".join(sorted({*SAFE_COMMANDS, "specs", "fastfetch"}))
         return Result(False, f"Разрешены только: {choices}", 2)
+    if alias == "specs":
+        return specs()
     return _run(SAFE_COMMANDS[alias], 30)
