@@ -193,6 +193,18 @@ class Guardian:
         return proc.pid
 
     def stop_agent(self) -> None:
+        # Перед остановкой выгружаем старый LaunchAgent, иначе его KeepAlive
+        # мгновенно поднимет рабочий процесс обратно. Сам Guardian остаётся
+        # загруженным и поэтому может запустить агент снова из Telegram.
+        subprocess.run(
+            ["launchctl", "bootout", f"gui/{os.getuid()}",
+             str(Path.home() / "Library" / "LaunchAgents" / "com.xgent.agent.plist")],
+            capture_output=True, check=False,
+        )
+        try:
+            (Path.home() / "Library" / "LaunchAgents" / "com.xgent.agent.plist").unlink()
+        except FileNotFoundError:
+            pass
         pid = self.agent_pid()
         self.state["desired_running"] = False
         _save_state(self.state)
