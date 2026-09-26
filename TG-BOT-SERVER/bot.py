@@ -1578,7 +1578,9 @@ LAST_BATTERY_ALERT: dict[str, float] = {}
 # Дебаунс онлайн/офлайн уведомлений: не слать спам при флипе публичного брокера.
 # Ключ: device_id, значение: (last_status: bool, last_notify_time: float)
 _NOTIFY_DEBOUNCE: dict[str, tuple] = {}  # {device_id: (was_online, ts)}
-_NOTIFY_DEBOUNCE_SEC = 15  # не слать уведомление если статус изменился < N сек назад
+_NOTIFY_DEBOUNCE_SEC = 5  # не слать уведомление при мгновенном флипе брокера
+_START_NOTIFY_LAST: dict[int, float] = {}
+_OFFLINE_TIMEOUT_SEC = 150  # два пропущенных heartbeat-а считаем офлайном
 
 LOOP: asyncio.AbstractEventLoop | None = None
 SESSION: SessionRegistry = SessionRegistry()
@@ -1588,6 +1590,37 @@ bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTM
 # =====================================================================
 #  MQTT → бот
 # =====================================================================
+
+def _notification_recipients() -> list[int]:
+    """Владелец и добавленные администраторы получают watchdog-уведомления."""
+    ids = [int(ADMIN_ID)]
+    for value in bot_settings.get("admins", []) or []:
+        try:
+            uid = int(value)
+        except (TypeError, ValueError):
+            continue
+        if uid not in ids:
+            ids.append(uid)
+    return ids
+
+
+async def _notify_admins(text: str, reply_markup=None) -> None:
+    for user_id in _notification_recipients():
+        try:
+            await bot.send_message(user_id, text, reply_markup=reply_markup)
+        except Exception:
+            log.exception("Не удалось отправить уведомление администратору %s", user_id)
+
+
+def _schedule_admin_notice(text: str, reply_markup=None) -> None:
+    """Безопасно отправить уведомление из MQTT-потока в asyncio-цикл."""
+    if LOOP is None or LOOP.is_closed():
+        log.warning("Уведомление не отправлено: asyncio loop ещё не запущен")
+        return
+    future = asyncio.run_coroutine_threadsafe(_notify_admins(text, reply_markup), LOOP)
+    future.add_done_callback(
+        lambda done: done.exception() if not done.cancelled() else None
+    )
 
 def _maybe_battery_alert(device_id: str, payload: dict) -> None:
     """Watchdog по батарее: алерт при заряде <=20% не чаще раза в 30 минут."""
@@ -1611,12 +1644,8 @@ def _maybe_battery_alert(device_id: str, payload: dict) -> None:
     name = target_label(device_id)
     if LOOP is None:
         return
-    asyncio.run_coroutine_threadsafe(
-        bot.send_message(
-            ADMIN_ID,
-            f"🔋 <b>{html.escape(name)}</b>: низкий заряд батареи — {percent:.0f}%",
-        ),
-        LOOP,
+    _schedule_admin_notice(
+        f"🔋 <b>{html.escape(name)}</b>: низкий заряд батареи — {percent:.0f}%",
     )
 
 
@@ -1650,7 +1679,10 @@ def on_mqtt_message(topic: str, data: dict) -> None:
         online = raw_status != "offline"
         is_standby = (raw_status == "standby")
         old = devices.get(device_id) or {}
-        was_online = bool(old) and _status_dot(old) in ("🟢", "🟡")
+        # Для LWT нельзя вычислять прошлое состояние через _status_dot():
+        # старый online-агент может быть уже старше 120 секунд, но событие
+        # «ушёл офлайн» всё равно должно прийти владельцу.
+        was_online = bool(old.get("online", False))
         info = {
             "name": str(payload.get("name") or device_id),
             "os": str(payload.get("os") or "unknown"),
@@ -1681,37 +1713,25 @@ def on_mqtt_message(topic: str, data: dict) -> None:
                 _debounce_ok = False  # изменился слишком быстро — флип брокера
         _NOTIFY_DEBOUNCE[device_id] = (online, _now)
 
-        if LOOP is not None and not is_new and online and not was_online \
+        if not is_new and online and not was_online \
                 and bot_settings.get("notify_online", True) and not quiet and _debounce_ok:
-            asyncio.run_coroutine_threadsafe(
-                bot.send_message(
-                    ADMIN_ID,
-                    f"🟢 <b>{html.escape(info['name'])}</b> вернулся онлайн",
-                ),
-                LOOP,
+            _schedule_admin_notice(
+                f"🟢 <b>{html.escape(info['name'])}</b> вернулся онлайн",
             )
-        if LOOP is not None and not online and was_online \
+        if not online and was_online \
                 and bot_settings.get("notify_offline", True) and not quiet and _debounce_ok:
-            asyncio.run_coroutine_threadsafe(
-                bot.send_message(
-                    ADMIN_ID,
-                    f"🔴 <b>{html.escape(info['name'])}</b> ушёл в оффлайн",
-                ),
-                LOOP,
+            _schedule_admin_notice(
+                f"🔴 <b>{html.escape(info['name'])}</b> ушёл в оффлайн",
             )
         if is_new and LOOP is not None and bot_settings.get("require_device_approval", True):
             kb = InlineKeyboardBuilder()
             kb.button(text="✅ Добавить", callback_data=f"devmg:allow:{device_id}", style="success")
             kb.button(text="⛔ Заблокировать", callback_data=f"devmg:block:{device_id}", style="danger")
             kb.adjust(1)
-            asyncio.run_coroutine_threadsafe(
-                bot.send_message(
-                    ADMIN_ID,
-                    f"🆕 Новое устройство: <b>{html.escape(info['name'])}</b> "
-                    f"(<code>{device_id}</code>)\nПодтверди, чтобы работать с ним:",
-                    reply_markup=kb.as_markup(),
-                ),
-                LOOP,
+            _schedule_admin_notice(
+                f"🆕 Новое устройство: <b>{html.escape(info['name'])}</b> "
+                f"(<code>{device_id}</code>)\nПодтверди, чтобы работать с ним:",
+                reply_markup=kb.as_markup(),
             )
 
     elif msg_type == "screenshot" and payload.get("type") == "screenshot":
@@ -1760,6 +1780,28 @@ def on_mqtt_message(topic: str, data: dict) -> None:
         elif "text" in payload or "error" in payload or not payload.get("ok", True):
             fun_text_collector.submit(device_id, payload)
 
+
+async def _device_offline_watchdog() -> None:
+    """Страховка на случай, если брокер не доставил MQTT Last Will."""
+    while True:
+        await asyncio.sleep(30)
+        now = time.time()
+        quiet = bot_settings.quiet_active()
+        for device_id, info in devices.all().items():
+            if not info.get("online"):
+                continue
+            last_seen = float(info.get("last_seen", 0) or 0)
+            if not last_seen or now - last_seen < _OFFLINE_TIMEOUT_SEC:
+                continue
+            devices.upsert(device_id, {"online": False, "standby": False})
+            _NOTIFY_DEBOUNCE[device_id] = (False, now)
+            audit("device_offline_watchdog", device_id=device_id, name=info.get("name", device_id))
+            if bot_settings.get("notify_offline", True) and not quiet:
+                _schedule_admin_notice(
+                    f"🔴 <b>{html.escape(str(info.get('name') or device_id))}</b> "
+                    "не выходит на связь (heartbeat просрочен)"
+                )
+
 transport = MQTTTransport(on_mqtt_message)
 
 # =====================================================================
@@ -1773,21 +1815,29 @@ async def cmd_start(message: Message, state: FSMContext):
     record, first_start = access_store.register_start(message.from_user)
     role = get_user_role(message.from_user.id)
     online_count = sum(
-        1 for v in devices.all().values() if v.get("status") == "online"
+        1 for v in devices.all().values() if _status_dot(v) in ("🟢", "🟡")
     )
     total_count = len(devices.all())
-    if first_start and message.from_user.id != ADMIN_ID:
+    now = time.time()
+    last_notice = _START_NOTIFY_LAST.get(message.from_user.id, 0.0)
+    # Нового человека уведомляем всегда; повторный /start от гостя — не чаще
+    # раза в 10 минут, чтобы случайный спам не засыпал владельца.
+    should_notify_start = (
+        message.from_user.id != ADMIN_ID
+        and (first_start or now - last_notice >= 600)
+    )
+    if should_notify_start:
         try:
             kb = InlineKeyboardBuilder()
             kb.button(text="Открыть пользователя", callback_data=f"admin:user:{message.from_user.id}", style="primary")
             kb.adjust(1)
-            await bot.send_message(
-                ADMIN_ID,
+            await _notify_admins(
                 "Новый запуск бота: "
                 f"<b>{html.escape(_user_label(record))}</b> "
                 f"(<code>{message.from_user.id}</code>). Роль по умолчанию: гость.",
                 reply_markup=kb.as_markup(),
             )
+            _START_NOTIFY_LAST[message.from_user.id] = now
         except Exception:
             log.exception("Не удалось уведомить владельца о новом пользователе")
     if role == Role.BLOCKED:
@@ -4948,9 +4998,15 @@ async def main() -> None:
     print("  [*] Live server console active. Real-time events stream below:\n")
     log.info("Запуск бота XGENT и MQTT-транспорта...")
     transport.start()
+    offline_watchdog = asyncio.create_task(_device_offline_watchdog())
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        offline_watchdog.cancel()
+        try:
+            await offline_watchdog
+        except asyncio.CancelledError:
+            pass
         transport.stop()
 
 

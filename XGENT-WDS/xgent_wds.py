@@ -822,7 +822,7 @@ class XgentClient:
         will_payload = sign_message(
             encrypt_payload(will_body) if ENCRYPT_PAYLOAD else will_body
         )
-        self._client.will_set(will_topic, json.dumps(will_payload, ensure_ascii=False), qos=0, retain=False)
+        self._client.will_set(will_topic, json.dumps(will_payload, ensure_ascii=False), qos=1, retain=False)
 
         self._client.connect_async(MQTT_BROKER, MQTT_PORT, keepalive=60)
         self._client.loop_start()
@@ -949,7 +949,7 @@ class XgentClient:
         self._client.publish(
             f"{MQTT_PREFIX}/{DEVICE_ID}/status",
             json.dumps(envelope, ensure_ascii=False),
-            qos=0,
+            qos=1,
         )
 
     def _publish_response(self, topic_suffix: str, payload: dict) -> None:
