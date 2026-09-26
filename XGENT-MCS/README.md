@@ -1,82 +1,66 @@
-# XGENT — XGENT-MCS
+# XGENT-MCS — macOS agent + XIDER Guardian
 
-Клиент XGENT для macOS (MacBook). Консольный агент без скрытых функций:
-работа логируется в файл, статус виден в Telegram-боте («Статус» и список
-устройств).
+## English
 
-## Установка и запуск
+`XGENT-MCS` is the macOS endpoint agent for authorized personal device
+management. It reports status and telemetry through the signed MQTT channel and
+is controlled from the owner-only Telegram bot.
 
-Требуется Python 3.10+.
+### Guardian
 
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python xgent_mcs.py
-```
+`XIDER Guardian` is a separate, visible `launchd` supervisor. It keeps the
+recovery channel alive while the worker agent is stopped and supports status,
+start, stop, restart, and opt-in automatic recovery. It writes a clear local
+`guardian.log`.
 
-После запуска агент подключается к брокеру и появится в списке устройств бота.
+Guardian is not a hidden process and does not bypass macOS controls. Camera,
+microphone, screen recording, and location remain permission-gated by macOS.
+If the Mac is powered off or discharged, the VPS can only report its last
+heartbeat and notify the owner.
 
-## Сборка приложения и автозапуск
-
-1. Соберите однофайловое приложение (в venv должен быть установлен PyInstaller):
-
-```bash
-pip install pyinstaller
-pyinstaller --onefile --windowed --name XGENT xgent_mcs.py
-```
-
-Бинарь появится в `dist/XGENT`.
-
-2. Создайте файл `~/Library/LaunchAgents/com.xgent.client.plist`:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.xgent.client</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/полный/путь/к/dist/XGENT</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-</dict>
-</plist>
-```
-
-3. Загрузите агент:
+### One-command install/update
 
 ```bash
-launchctl load ~/Library/LaunchAgents/com.xgent.client.plist
+curl -fsSL https://raw.githubusercontent.com/invinby/XIDER/main/deploy/bootstrap.sh | bash
 ```
 
-⚠️ Из-за `KeepAlive` клиент автоматически перезапустится после команды
-«Остановить клиент» из Telegram. Полная остановка до следующего входа:
+The bootstrap preserves the local `.env`, downloads the current source, fixes
+script permissions, starts the worker, and registers Guardian. Do not paste the
+shell prompt or surrounding backticks into Terminal.
+
+### Manual status
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.xgent.client.plist
+cd "$HOME/XIDER/git-ver/XGENT-MCS"
+bash ./start_agent.sh --status
+bash ./start_guardian.sh --status
 ```
 
-## Настройка
+Open **Device → Power & Protection → Guardian** in Telegram for status, start,
+stop, restart, and automatic recovery.
 
-- Идентификатор устройства создаётся автоматически при первом запуске
-  в `~/.xgent/config.json` и в дальнейшем не меняется.
-- Лог клиента: `~/.xgent/xgent.log` (ротация, 3 файла по 500 КБ).
-- Секреты и параметры брокера — в `.env` (скопируйте из `.env.example`):
-  `SHARED_KEY` должен совпадать с TG-BOT-SERVER и XGENT-WDS;
-  `MQTT_TLS`, `MQTT_USERNAME`, `MQTT_PASSWORD` — опционально, для своего брокера.
+## Русский
 
-## Команды из Telegram
+`XGENT-MCS` — агент macOS для управления собственными устройствами через
+подписанный MQTT-канал и Telegram-бот владельца.
 
-| Команда | Действие на MacBook |
-|---|---|
-| Открыть ссылку | открывает URL в браузере по умолчанию |
-| Показать текст | системное уведомление macOS |
-| Озвучить текст | озвучка через `say`; `beep` — системный звук |
-| Статус | мгновенный ответ со статусом «online» |
-| Остановить клиент | завершение работы клиента |
+`XIDER Guardian` — отдельный видимый supervisor через `launchd`. Он оставляет
+канал восстановления доступным, когда рабочий агент остановлен, и умеет
+показывать статус, запускать, останавливать и перезапускать агент, а также
+включать или отключать автовосстановление.
+
+Guardian не скрывается в системе и не обходит контроль macOS. Камера,
+микрофон, запись экрана и геолокация доступны только после разрешения
+пользователя. Если Mac выключен или разряжен, VPS покажет последний heartbeat,
+но не сможет включить ноутбук программно.
+
+### Установка или обновление одной командой
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/invinby/XIDER/main/deploy/bootstrap.sh | bash
+```
+
+Bootstrap сохраняет локальный `.env`, скачивает свежий код, исправляет права
+скриптов, запускает агент и регистрирует Guardian.
+
+Открой в Telegram: **Устройство → Питание & Защита → Guardian**.

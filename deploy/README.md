@@ -48,9 +48,9 @@ Put `XGENT-WDS.exe` and a filled sidecar `.env` in one folder, then run:
 powershell -ExecutionPolicy Bypass -File .\install_agent.ps1
 ```
 
-The installer registers a hidden per-user Scheduled Task named `XIDER Agent`, starts it immediately, and keeps the `.env` readable only by the current Windows account. `start_agent.bat` starts the task; `stop_agent.bat` stops it.
+The installer registers a per-user Scheduled Task named `XIDER Agent`, starts it immediately, and keeps the `.env` readable only by the current Windows account. The task is visible in Task Scheduler; `start_agent.bat` starts it and `stop_agent.bat` stops it.
 
-For the complete local flow (VPS bot + Windows build + hidden agent), run `deploy\setup-all.ps1`. It uses the ignored root `XGENT-WDS\.env` as the sidecar source and never prints its values.
+For the complete local flow (VPS bot + Windows build + visible agent), run `deploy\setup-all.ps1`. It uses the ignored root `XGENT-WDS\.env` as the sidecar source and never prints its values.
 
 ## macOS quick install
 
@@ -65,7 +65,15 @@ password, and retrieves only the agent configuration keys from
 `/etc/xider/bot.env`; `BOT_TOKEN` is never copied. The generated local file is
 mode `0600`. Set `XIDER_ENV_ROOT` to use an existing local `.env`, or set
 `XIDER_SERVER_HOST`/`XIDER_SERVER_USER` for another VPS. This does not deploy
-the VPS bot; that remains the Windows/server deployment flow.
+the VPS bot; that remains the Windows/server deployment flow. The bootstrap also
+registers the visible macOS `XIDER Guardian` LaunchAgent.
+
+### XIDER Guardian
+
+Guardian is a transparent macOS supervisor. It keeps a small control channel
+available while the worker is stopped and exposes status, start, stop, restart,
+and opt-in recovery through Telegram. It does not hide itself or grant privacy
+permissions. If the Mac is powered off, the VPS reports the last heartbeat.
 
 ## Updates, rollback, and secret rotation
 

@@ -1,4 +1,4 @@
-# ⚡ XIDER: Zero-Trust Endpoint Management & Telemetry System
+# ⚡ XIDER 3.3.8: Zero-Trust Endpoint Management, Telemetry & Guardian
 
 <p align="center">
   <img src="XDicon.png" alt="XIDER Logo" width="128" height="128" />
@@ -18,6 +18,12 @@
 
 **XIDER** is a high-performance, asynchronous remote endpoint administration and telemetry system. It enables secure, real-time device monitoring, diagnostics, and management through a Telegram Bot interface backed by a hardened, TLS-encrypted MQTT pub/sub message broker.
 
+Version 3.3.8 adds **XIDER Guardian** for macOS: a visible supervisor that
+keeps a separate control channel alive, reports agent loss to the VPS, and can
+start, stop, restart, or recover the worker agent from the owner-only Telegram
+panel. Guardian does not bypass local OS controls or access camera, microphone,
+screen, or location without the operating-system permission.
+
 Designed with a **Zero-Trust** security architecture, XIDER treats the network transport as untrusted: all commands and telemetry are authenticated with **HMAC-SHA256**, protected against replay attacks via **nonce/timestamp deduplication**, and optionally encrypted end-to-end with **AES-256-GCM**.
 
 ---
@@ -29,20 +35,23 @@ graph TD
     User([Telegram User / Admin]) <-->|Telegram Bot API (HTTPS)| BotServer[TG-BOT-SERVER (aiogram 3)]
     
     subgraph Secure Messaging Mesh
-        BotServer <-->|TLS 1.3 / mTLS| Broker[Mosquitto MQTT Broker]
+        BotServer <-->|TLS 1.3| Broker[Mosquitto MQTT Broker]
     end
 
     subgraph Endpoints [Managed Devices]
         Broker <-->|HMAC-SHA256 + AES-256-GCM| WDS[XGENT-WDS<br/>Windows Endpoint Agent]
         Broker <-->|HMAC-SHA256 + AES-256-GCM| MCS[XGENT-MCS<br/>macOS Endpoint Agent]
+        Broker <-->|HMAC-SHA256 + AES-256-GCM| Guardian[XIDER Guardian<br/>macOS Supervisor]
     end
 
     classDef server fill:#2b3a42,stroke:#4f5d75,stroke-width:2px,color:#fff;
     classDef broker fill:#1f4068,stroke:#162447,stroke-width:2px,color:#fff;
     classDef agent fill:#0f4c75,stroke:#3282b8,stroke-width:2px,color:#fff;
+    classDef guardian fill:#5b3b8a,stroke:#9b72cf,stroke-width:2px,color:#fff;
     class BotServer server;
     class Broker broker;
     class WDS,MCS agent;
+    class Guardian guardian;
 ```
 
 ---
@@ -64,7 +73,7 @@ Detailed specification is available in [SECURITY.md](SECURITY.md).
 
 | Feature Category | Capability | Windows (`XGENT-WDS`) | macOS (`XGENT-MCS`) |
 | :--- | :--- | :---: | :---: |
-| **Surveillance & Media** | Screen capture (all monitors) | ✅ | ✅ |
+| **Permissioned Media & Privacy** | Screen capture (all monitors) | ✅ | ✅ |
 | | Webcam snapshot / video record | ✅ | ✅ |
 | | Microphone audio surveillance | ✅ | ✅ |
 | | Text-to-Speech (TTS) broadcast | ✅ | ✅ |
@@ -81,7 +90,7 @@ Detailed specification is available in [SECURITY.md](SECURITY.md).
 | | Command line (PowerShell / Bash) | ✅ | ✅ |
 | | Desktop Wallpaper change & restore | ✅ | ✅ |
 | | Wake-on-LAN (Magic Packet) | ✅ | ✅ |
-| | Background Windows Service / Autostart | ✅ (Registry/Task) | ✅ (LaunchAgent) |
+| | Visible supervisor / autostart | ✅ (Registry/Task) | ✅ (LaunchAgent + Guardian) |
 
 ---
 
@@ -126,6 +135,8 @@ cp .env.example .env
 # Edit .env with your broker credentials and SHARED_KEY
 pip install -r requirements.txt
 ./start_agent.sh
+# Optional visible supervisor and Telegram recovery controls:
+./start_guardian.sh
 # Or compile standalone binary:
 ./build_standalone.sh
 ```
@@ -143,3 +154,33 @@ This repository includes GitHub Actions workflows:
 ## ⚖️ Legal Disclaimer
 
 This software is developed strictly for educational purposes, defensive security research, and authorized personal endpoint management. The authors assume no liability for misuse or damage caused by this software.
+
+---
+
+## 🇷🇺 Кратко по-русски
+
+**XIDER** — система управления собственными Windows/macOS-устройствами через
+Telegram и MQTT. Команды подписываются HMAC-SHA256, при необходимости
+шифруются AES-256-GCM, а сервер получает уведомления о heartbeat и LWT.
+
+### XIDER Guardian 3.3.8
+
+Guardian — отдельный видимый supervisor для macOS. Он:
+
+- сообщает VPS, что устройство и рабочий агент живы;
+- показывает статус Guardian в Telegram;
+- запускает, останавливает и перезапускает рабочий агент;
+- умеет включать или отключать автоматическое восстановление;
+- оставляет локальный контроль пользователю и не скрывается в системе.
+
+Установка на Mac одной командой:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/invinby/XIDER/main/deploy/bootstrap.sh | bash
+```
+
+Затем открой в боте: **Устройство → Питание & Защита → Guardian**.
+
+Камера, микрофон, запись экрана и геолокация работают только после выдачи
+разрешений macOS. Если ноутбук выключен или разряжен, Guardian не может
+запуститься физически: VPS покажет последний heartbeat и уведомит об офлайне.

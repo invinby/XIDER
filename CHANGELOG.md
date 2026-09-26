@@ -1,5 +1,34 @@
 # XIDER release history
 
+## X3.3.8+20260926 — XIDER Guardian supervisor
+
+### English
+
+- Added the visible macOS `XIDER Guardian` supervisor as a separate LaunchAgent.
+- Added Telegram controls for Guardian status, agent start/stop/restart, and
+  opt-in automatic recovery.
+- Guardian keeps the recovery channel available while the worker agent is
+  stopped; it does not collect camera, microphone, screen, or location data by
+  itself and does not bypass local operating-system controls.
+- Added a VPS-side heartbeat/LWT explanation and truthful offline behavior: a
+  powered-off laptop can only report its last heartbeat.
+- Legacy Mac agents can bootstrap the new Guardian through the existing shell
+  update fallback.
+
+### Русский
+
+- Добавлен видимый supervisor `XIDER Guardian` для macOS через отдельный
+  LaunchAgent.
+- В Telegram появились кнопки статуса Guardian, запуска, остановки,
+  перезапуска агента и опционального автовосстановления.
+- Guardian сохраняет канал восстановления, пока рабочий агент остановлен, но
+  сам не включает камеру, микрофон, запись экрана или геолокацию и не обходит
+  локальный контроль macOS.
+- VPS использует heartbeat/LWT и честно показывает последний момент связи,
+  если ноутбук выключен или разряжен.
+- Старый Mac-агент умеет получить Guardian через запасной shell-канал кнопки
+  обновления.
+
 ## X3.3.5+20260925 — Agent status checks
 
 - Added exact background status commands for Windows and macOS agent launchers.

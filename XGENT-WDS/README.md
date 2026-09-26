@@ -4,7 +4,7 @@
 всегда виден значок, через него же можно остановить клиент. Скрытых
 функций нет.
 
-## Установка и запуск
+## Installation / Установка и запуск
 
 Требуется Python 3.10+.
 
@@ -40,6 +40,11 @@ schtasks /Create /TN "XGENT" /TR "C:\полный\путь\к\XGENT.exe" /SC ONL
 reg add HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v XGENT /t REG_SZ /d "C:\полный\путь\к\XGENT.exe" /f
 ```
 
+The Windows agent is visible in the tray and can be stopped locally. A future
+Windows Guardian will provide the same separate supervisor model as macOS;
+the current Windows launcher remains a visible Scheduled Task or registry
+autostart entry.
+
 ⚠️ «Остановить клиент» из Telegram завершает клиент до следующего входа
 в систему (автозапуск сработает при следующем входе).
 
@@ -61,3 +66,10 @@ reg add HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v XGENT /t REG_SZ /d
 | Озвучить текст | озвучка через pyttsx3; `beep` — системный сигнал |
 | Статус | мгновенный ответ со статусом «online» |
 | Остановить клиент | завершение работы клиента |
+
+## English summary
+
+`XGENT-WDS` is the visible Windows endpoint agent. It uses the same signed
+MQTT protocol as macOS and keeps secrets in the sidecar `.env`. Telegram
+controls are restricted by the bot's owner/admin roles. Do not describe this
+agent as hidden: its tray icon and local startup entry are intentional.
