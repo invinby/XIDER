@@ -195,3 +195,15 @@ def test_server_menu_contains_metrics_chart_and_safe_terminal():
     markup = bot.server_menu(bot.ADMIN_ID)
     callbacks = _callback_data(markup)
     assert {"server:specs", "server:metrics", "server:chart", "server:terminal"}.issubset(set(callbacks))
+
+
+def test_device_card_shows_guardian_state(monkeypatch):
+    monkeypatch.setattr(bot.devices, "get", lambda device_id: {
+        "name": "MacBook-Air.local", "os": "macOS 27.0", "version": "3.3.8",
+        "online": True, "last_seen": __import__("time").time(),
+        "guardian": {"version": "1.0"},
+        "guardian_last_seen": __import__("time").time(),
+    })
+    text = bot.device_card("mac-1")
+    assert "Guardian" in text
+    assert "v1.0" in text

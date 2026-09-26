@@ -636,6 +636,16 @@ def device_card(device_id: str) -> str:
     else:
         seen_str = "не в сети"
 
+    guardian = info.get("guardian") or {}
+    guardian_seen = float(info.get("guardian_last_seen", 0) or 0)
+    if guardian:
+        guardian_version = html.escape(str(guardian.get("version") or "?"))
+        guardian_fresh = bool(is_online and guardian_seen and time.time() - guardian_seen < _OFFLINE_TIMEOUT_SEC)
+        guardian_state = "🟢 ответил" if guardian_fresh else "⚪ нет свежего ответа"
+        guardian_str = f"{guardian_state}, v{guardian_version}"
+    else:
+        guardian_str = "не обнаружен"
+
     os_low = os_str.lower()
     os_icon = "🍏" if ("mac" in os_low or "darwin" in os_low) else ("🪟" if "win" in os_low else "🐧")
 
@@ -645,6 +655,7 @@ def device_card(device_id: str) -> str:
         "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"• <b>ОС:</b> {os_str}\n"
         f"• <b>Агент:</b> v{ver}  •  <b>Пинг:</b> {seen_str}\n"
+        f"• <b>Guardian:</b> {guardian_str}\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "<i>Выберите категорию:</i>"
     )
@@ -1792,6 +1803,19 @@ def on_mqtt_message(topic: str, data: dict) -> None:
         disks_collector.submit(device_id, payload)
     elif msg_type == "capabilities" and payload.get("type") == "capabilities":
         capabilities_collector.submit(device_id, payload)
+    elif msg_type == "guardian" and payload.get("type") == "guardian":
+        # Храним только последний подписанный ответ Guardian без лишних
+        # данных. Это позволяет показать его состояние в карточке устройства.
+        devices.upsert(device_id, {
+            "guardian": {
+                "version": str(payload.get("guardian") or payload.get("version") or "?"),
+                "agent_running": bool(payload.get("agent_running")),
+                "launchd_loaded": bool(payload.get("launchd_loaded")),
+                "auto_restart": bool(payload.get("auto_restart")),
+            },
+            "guardian_last_seen": time.time(),
+        })
+        fun_text_collector.submit(device_id, payload)
     elif msg_type == "ack" and payload.get("type") == "ack":
         status = payload.get("status")
         action = payload.get("action")
