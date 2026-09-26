@@ -14,12 +14,14 @@ $repo = Join-Path $InstallRoot 'git-ver'
 $agent = Join-Path $repo 'XGENT-WDS'
 
 try {
+    Write-Host '[1/5] Скачиваю последнюю версию XIDER...'
     New-Item -ItemType Directory -Path $extract -Force | Out-Null
-    Invoke-WebRequest -Uri $repoUrl -OutFile $zip -UseBasicParsing
+    Invoke-WebRequest -Uri $repoUrl -OutFile $zip -UseBasicParsing -TimeoutSec 90
     Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
     $downloaded = Get-ChildItem -LiteralPath $extract -Directory | Select-Object -First 1
     if (-not $downloaded) { throw 'GitHub archive is empty.' }
 
+    Write-Host '[2/5] Ищу локальный .env...'
     $envCandidates = @()
     if ($EnvRoot) { $envCandidates += (Join-Path $EnvRoot 'XGENT-WDS\.env') }
     $envCandidates += @(
@@ -46,6 +48,7 @@ try {
     $stagedEnv = Join-Path $extract 'agent-preserved.env'
     Copy-Item -LiteralPath $envSource -Destination $stagedEnv -Force
     $envSource = $stagedEnv
+    Write-Host '[3/5] Обновляю файлы агента, защищённый .env сохраняю...'
     New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
     New-Item -ItemType Directory -Path $repo -Force | Out-Null
     Copy-Item -Path (Join-Path $downloaded.FullName '*') -Destination $repo -Recurse -Force
@@ -55,15 +58,25 @@ try {
     }
 
     Push-Location $agent
+    $venvCreated = $false
     if (-not (Test-Path -LiteralPath '.\venv\Scripts\python.exe')) {
+        Write-Host '[4/5] Создаю виртуальное окружение и ставлю зависимости...'
         $pythonLauncher = (Get-Command py.exe -ErrorAction SilentlyContinue).Source
         if ($pythonLauncher) {
             & $pythonLauncher -3 -m venv venv
         } else {
             & (Get-Command python.exe -ErrorAction Stop).Source -m venv venv
         }
+        if ($LASTEXITCODE -ne 0) { throw 'Не удалось создать Python venv.' }
+        $venvCreated = $true
+    } else {
+        Write-Host '[4/5] Существующее venv найдено, повторную установку пакетов пропускаю.'
     }
-    & .\venv\Scripts\python.exe -m pip install -q -r requirements.txt
+    if ($venvCreated) {
+        & .\venv\Scripts\python.exe -m pip install --disable-pip-version-check --no-input -r requirements.txt
+        if ($LASTEXITCODE -ne 0) { throw 'Не удалось установить зависимости Python.' }
+    }
+    Write-Host '[5/5] Регистрирую Agent и Guardian...'
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install_agent.ps1 -AgentDir (Get-Location).Path
     if ($LASTEXITCODE -ne 0) { throw 'Установка Windows-агента/Guardian завершилась ошибкой.' }
     Pop-Location
