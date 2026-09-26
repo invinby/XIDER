@@ -1587,7 +1587,7 @@ LAST_BATTERY_ALERT: dict[str, float] = {}
 # Дебаунс онлайн/офлайн уведомлений: не слать спам при флипе публичного брокера.
 # Ключ: device_id, значение: (last_status: bool, last_notify_time: float)
 _NOTIFY_DEBOUNCE: dict[str, tuple] = {}  # {device_id: (was_online, ts)}
-_NOTIFY_DEBOUNCE_SEC = 5  # не слать уведомление при мгновенном флипе брокера
+_NOTIFY_DEBOUNCE_SEC = 120  # не спамить при серии перезапусков/флипов агента
 _START_NOTIFY_LAST: dict[int, float] = {}
 _OFFLINE_TIMEOUT_SEC = 150  # два пропущенных heartbeat-а считаем офлайном
 

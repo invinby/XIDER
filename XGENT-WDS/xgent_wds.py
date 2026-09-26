@@ -962,10 +962,15 @@ class XgentClient:
         info = self._client.publish(
             f"{MQTT_PREFIX}/{DEVICE_ID}/{topic_suffix}",
             json.dumps(envelope, ensure_ascii=False),
-            qos=0,
+            qos=1,
         )
         if info.rc != mqtt.MQTT_ERR_SUCCESS:
             log.warning("Не удалось опубликовать ответ %s (rc=%s)", topic_suffix, info.rc)
+        else:
+            try:
+                info.wait_for_publish(timeout=3.0)
+            except Exception:
+                log.exception("Не дождались доставки ответа %s", topic_suffix)
 
     def _publish_ack(self, action, status, detail=None, cmd_id=None) -> None:
         """Подтверждение выполнения команды (received/ok/error)."""

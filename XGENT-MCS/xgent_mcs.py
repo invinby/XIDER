@@ -493,13 +493,19 @@ class XgentClient:
             payload = {**payload, "id": cmd_id}
         body = encrypt_payload(payload) if ENCRYPT_PAYLOAD else payload
         envelope = sign_message(body)
+        # Ответ обновления должен пережить немедленный перезапуск агента.
         info = self._client.publish(
             f"{MQTT_PREFIX}/{DEVICE_ID}/{topic_suffix}",
             json.dumps(envelope, ensure_ascii=False),
-            qos=0,
+            qos=1,
         )
         if info.rc != mqtt.MQTT_ERR_SUCCESS:
             log.warning("Не удалось опубликовать ответ %s (rc=%s)", topic_suffix, info.rc)
+        else:
+            try:
+                info.wait_for_publish(timeout=3.0)
+            except Exception:
+                log.exception("Не дождались доставки ответа %s", topic_suffix)
 
     def _publish_ack(self, action, status, detail=None, cmd_id=None) -> None:
         payload = {"type": "ack", "device_id": DEVICE_ID, "action": action, "status": status}
