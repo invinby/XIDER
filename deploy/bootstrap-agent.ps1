@@ -40,22 +40,19 @@ try {
         $envSource = $fetched
     }
 
-    # Предыдущий установщик специально закрыл ACL на .env. Сначала делаем
-    # временную копию, затем возвращаем права текущему пользователю и только
-    # после этого заменяем старую checkout-папку.
+    # Предыдущий установщик специально закрыл ACL на .env. Сохраняем его во
+    # временную копию, но старую checkout-папку не удаляем: Windows может не
+    # разрешить удалить защищённый файл даже после попытки сменить ACL.
     $stagedEnv = Join-Path $extract 'agent-preserved.env'
     Copy-Item -LiteralPath $envSource -Destination $stagedEnv -Force
     $envSource = $stagedEnv
-    if (Test-Path -LiteralPath $repo) {
-        $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-        $grantFull = '{0}:(OI)(CI)F' -f $currentUser
-        & icacls.exe $repo /grant:r $grantFull /T /C | Out-Null
-        & attrib.exe -R "$repo\*" /S /D 2>$null
-        Remove-Item -LiteralPath $repo -Recurse -Force
-    }
     New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
-    Move-Item -LiteralPath $downloaded.FullName -Destination $repo
-    Copy-Item -LiteralPath $envSource -Destination (Join-Path $agent '.env') -Force
+    New-Item -ItemType Directory -Path $repo -Force | Out-Null
+    Copy-Item -Path (Join-Path $downloaded.FullName '*') -Destination $repo -Recurse -Force
+    $targetEnv = Join-Path $agent '.env'
+    if (-not (Test-Path -LiteralPath $targetEnv)) {
+        Copy-Item -LiteralPath $envSource -Destination $targetEnv -Force
+    }
 
     Push-Location $agent
     if (-not (Test-Path -LiteralPath '.\venv\Scripts\python.exe')) {
