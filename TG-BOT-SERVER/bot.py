@@ -1024,11 +1024,7 @@ def power_menu_new():
     kb.button(text="🚀 Автозапуск: Статус", callback_data="cmd:autorun_status", style="primary")
     kb.button(text="✅ Вкл автозапуск", callback_data="cmd:autorun_enable", style="success")
     kb.button(text="🛑 Выкл автозапуск", callback_data="cmd:autorun_disable", style="danger")
-    # Guardian управляет macOS supervisor; Windows-агент этого протокола не
-    # поддерживает, поэтому не показываем кнопку, которая заведомо зависнет.
-    target_os = str(dev_info.get("os") or "").lower()
-    if "windows" not in target_os:
-        kb.button(text="🛡 Guardian", callback_data="cmd:guardian_menu", style="primary")
+    kb.button(text="🛡 Guardian", callback_data="cmd:guardian_menu", style="primary")
     kb.button(text="🌐 Wake-on-LAN", callback_data="cmd:wol", style="primary")
     kb.button(text="⏹ Стоп процесса агента", callback_data="cfm:stop", style="danger")
     kb.button(text="⬅️ Назад к ПК", callback_data="back:device", style="primary")
@@ -5058,10 +5054,6 @@ async def on_cmd_guardian_menu(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
         await cq.answer("Сначала выберите устройство", show_alert=True)
-        return
-    target_os = str((devices.get(target) or {}).get("os") or "").lower()
-    if "windows" in target_os:
-        await cq.answer("Windows Guardian ещё не установлен", show_alert=True)
         return
     await cq.message.edit_text(
         f"🛡 <b>Guardian</b> · {html.escape(target_label(target))}\n\n"

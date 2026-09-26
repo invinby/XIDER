@@ -51,25 +51,26 @@ from xgencrypto import decrypt_payload, encrypt_payload
 
 log = logging.getLogger("xgent.wds")
 WINDOWS_TASK_NAME = "XIDER Agent"
+WINDOWS_GUARDIAN_TASK_NAME = "XIDER Guardian"
 
 
-def _scheduled_task_exists() -> bool:
+def _scheduled_task_exists(task_name: str = WINDOWS_TASK_NAME) -> bool:
     """Проверить реальный Scheduled Task, которым устанавливается агент."""
     result = subprocess.run(
-        ["schtasks.exe", "/Query", "/TN", WINDOWS_TASK_NAME],
+        ["schtasks.exe", "/Query", "/TN", task_name],
         capture_output=True, text=True, check=False,
     )
     return result.returncode == 0
 
 
-def _remove_scheduled_task() -> tuple[bool, str]:
+def _remove_scheduled_task(task_name: str = WINDOWS_TASK_NAME) -> tuple[bool, str]:
     """Удалить автозапуск агента независимо от старого Registry-варианта."""
     subprocess.run(
-        ["schtasks.exe", "/End", "/TN", WINDOWS_TASK_NAME],
+        ["schtasks.exe", "/End", "/TN", task_name],
         capture_output=True, text=True, check=False,
     )
     delete = subprocess.run(
-        ["schtasks.exe", "/Delete", "/TN", WINDOWS_TASK_NAME, "/F"],
+        ["schtasks.exe", "/Delete", "/TN", task_name, "/F"],
         capture_output=True, text=True, check=False,
     )
     ok = delete.returncode == 0 or "cannot find" in (delete.stderr or "").lower()
@@ -3227,6 +3228,7 @@ setTimeout(()=>window.close(),15000);
         # Установщик Windows создаёт Scheduled Task; удаляем его первым,
         # иначе задача сможет запустить агент снова после удаления файлов.
         _remove_scheduled_task()
+        _remove_scheduled_task(WINDOWS_GUARDIAN_TASK_NAME)
         try:
             import winreg
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE)

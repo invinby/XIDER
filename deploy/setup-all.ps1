@@ -21,7 +21,7 @@ if (Test-Path -LiteralPath (Join-Path $agentDir 'XGENT-WDS.exe')) {
     schtasks /End /TN 'XIDER Agent' >$null 2>&1
 }
 
-Write-Host '=== 3/3: build and register hidden Windows agent ==='
+Write-Host '=== 3/3: build and register Windows agent + Guardian ==='
 & cmd.exe /d /c (Join-Path $agentDir 'build_exe.bat')
 if ($LASTEXITCODE -ne 0) { throw 'Windows agent build failed.' }
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $agentDir 'install_agent.ps1') -AgentDir $agentDir

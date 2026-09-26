@@ -85,11 +85,11 @@ def test_each_category_menu_builds_buttons():
         assert cbs, f"{builder.__name__} вернул пустую клавиатуру"
 
 
-def test_power_menu_hides_guardian_for_windows(monkeypatch):
+def test_power_menu_exposes_guardian_for_windows_and_mac(monkeypatch):
     monkeypatch.setattr(bot, "SESSION", {"target": "win1"})
     _setup(monkeypatch, {"win1": {"name": "PC", "os": "Windows 11"}})
     windows_cbs = _callback_data(bot.power_menu_new())
-    assert "cmd:guardian_menu" not in windows_cbs
+    assert "cmd:guardian_menu" in windows_cbs
 
     monkeypatch.setattr(bot, "SESSION", {"target": "mac1"})
     _setup(monkeypatch, {"mac1": {"name": "Mac", "os": "macOS 27"}})

@@ -40,10 +40,24 @@ schtasks /Create /TN "XGENT" /TR "C:\полный\путь\к\XGENT.exe" /SC ONL
 reg add HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v XGENT /t REG_SZ /d "C:\полный\путь\к\XGENT.exe" /f
 ```
 
-The Windows agent is visible in the tray and can be stopped locally. A future
-Windows Guardian will provide the same separate supervisor model as macOS;
-the current Windows launcher remains a visible Scheduled Task or registry
-autostart entry.
+The Windows agent is visible in the tray. Windows Guardian is a separate
+Scheduled Task that can report status and restart the agent when its
+auto-recovery policy is enabled.
+
+Install both tasks from an elevated PowerShell prompt:
+
+```powershell
+Set-Location C:\path\to\XIDER\XGENT-WDS
+PowerShell -NoProfile -ExecutionPolicy Bypass -File .\install_agent.ps1
+```
+
+Guardian commands from Telegram work the same way as on macOS. Manual task
+commands, if needed:
+
+```powershell
+PowerShell -NoProfile -ExecutionPolicy Bypass -File .\install_guardian.ps1
+schtasks /End /TN "XIDER Guardian"
+```
 
 ⚠️ «Остановить клиент» из Telegram завершает клиент до следующего входа
 в систему (автозапуск сработает при следующем входе).

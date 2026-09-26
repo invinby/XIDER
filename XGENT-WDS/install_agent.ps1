@@ -35,3 +35,9 @@ Start-ScheduledTask -TaskName $TaskName
 
 Write-Host "[OK] $TaskName installed and started in the background."
 Write-Host "[OK] To stop it: schtasks /End /TN `"$TaskName`""
+
+$guardianInstaller = Join-Path $AgentDir 'install_guardian.ps1'
+if (Test-Path -LiteralPath $guardianInstaller) {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $guardianInstaller -AgentDir $AgentDir
+    if ($LASTEXITCODE -ne 0) { throw 'Windows Guardian installation failed.' }
+}
