@@ -47,7 +47,12 @@ try {
 
     Push-Location $agent
     if (-not (Test-Path -LiteralPath '.\venv\Scripts\python.exe')) {
-        py -3 -m venv venv
+        $pythonLauncher = (Get-Command py.exe -ErrorAction SilentlyContinue).Source
+        if ($pythonLauncher) {
+            & $pythonLauncher -3 -m venv venv
+        } else {
+            & (Get-Command python.exe -ErrorAction Stop).Source -m venv venv
+        }
     }
     & .\venv\Scripts\python.exe -m pip install -q -r requirements.txt
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install_agent.ps1 -AgentDir (Get-Location).Path
