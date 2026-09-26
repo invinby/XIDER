@@ -2857,6 +2857,12 @@ async def on_cmd_screenshot(cq: CallbackQuery):
             caption=f"📸 <b>{target_label(target)}</b>",
             reply_markup=back_to_device_kb(),
         )
+        # Фото Telegram нельзя встроить в исходную текстовую карточку;
+        # удаляем её после отправки, чтобы в чате не оставался дубль.
+        try:
+            await cq.message.delete()
+        except Exception:
+            pass
     except Exception:
         log.exception("Ошибка декодирования скриншота")
         await _replace_callback_message(
@@ -2909,6 +2915,10 @@ async def on_cmd_webcam(cq: CallbackQuery):
             caption=f"📷 <b>{target_label(target)}</b>",
             reply_markup=back_to_device_kb(),
         )
+        try:
+            await cq.message.delete()
+        except Exception:
+            pass
     except Exception:
         log.exception("Ошибка декодирования снимка вебки")
         await _replace_callback_message(
