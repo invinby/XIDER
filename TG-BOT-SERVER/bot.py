@@ -4786,16 +4786,25 @@ async def on_cmd_check_update(cq: CallbackQuery):
     # update=true. Для них выполняем одноразовый переход через уже имеющийся
     # безопасный shell-канал; после этого дальнейшие обновления идут кнопкой.
     text = str((result or {}).get("text") or "")
-    if result and result.get("ok") and ("v1.3" in text or "Актуален" in text):
+    # Если старый агент вообще не ответил, result будет None (обычный случай
+    # для старой версии). Не ждём, что он подтвердит agent_update: shell уже
+    # есть в старом агенте и может сам подтянуть новую версию.
+    needs_legacy = not result
+    if result and result.get("ok"):
+        needs_legacy = "v1.3" in text or "Актуален" in text
+    if needs_legacy:
         legacy = (
             'cd "$HOME/XIDER/git-ver/XGENT-MCS" && t=$(mktemp -d) && '
             'curl -fsSL https://github.com/invinby/XIDER/archive/refs/heads/main.zip -o "$t/x.zip" && '
             'unzip -q "$t/x.zip" -d "$t" && '
-            'for f in xgent_mcs.py config.py crypto.py xgencrypto.py start_agent.sh stop_agent.sh; do '
+            'for f in xgent_mcs.py config.py crypto.py xgencrypto.py requirements.txt setup_mac.py start_agent.sh stop_agent.sh; do '
             'cp "$t/XIDER-main/XGENT-MCS/$f" "$f"; done && '
+            'chmod +x start_agent.sh stop_agent.sh && '
+            'launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.xgent.agent.plist" 2>/dev/null || true && '
+            'rm -f "$HOME/Library/LaunchAgents/com.xgent.agent.plist" && '
             '(kill "$(cat agent.pid)" 2>/dev/null || true) && sleep 1 && bash ./start_agent.sh'
         )
-        sent, _ = publish_tracked("shell", command=legacy)
+        sent, _ = publish_tracked("shell", command=legacy, timeout=60)
         if sent:
             await _replace_callback_message(
                 cq,
