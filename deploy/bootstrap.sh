@@ -10,19 +10,31 @@ command -v curl >/dev/null || { echo "curl is required" >&2; exit 2; }
 command -v unzip >/dev/null || { echo "unzip is required" >&2; exit 2; }
 mkdir -p "${INSTALL_ROOT}"
 curl -fsSL "$URL" -o "$ARCHIVE"
-rm -rf "${INSTALL_ROOT}/git-ver"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp" "$ARCHIVE"' EXIT
+
+# Сохраняем локальный .env до замены исходников. GitHub-архив содержит код,
+# но секреты в репозитории не хранятся.
+preserved_env="${tmp}/xider-agent.env"
+for candidate in \
+    "${INSTALL_ROOT}/git-ver/XGENT-MCS/.env" \
+    "${ENV_ROOT}/XGENT-MCS/.env" \
+    "${ENV_ROOT}/git-ver/XGENT-MCS/.env"; do
+  if [[ -f "$candidate" ]]; then
+    cp "$candidate" "$preserved_env"
+    break
+  fi
+done
+
+rm -rf "${INSTALL_ROOT}/git-ver"
 unzip -q "$ARCHIVE" -d "$tmp"
 downloaded="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -n1)"
 [[ -n "$downloaded" ]] || { echo "GitHub archive is empty" >&2; exit 3; }
 mv "$downloaded" "${INSTALL_ROOT}/git-ver"
 
 agent_env="${INSTALL_ROOT}/git-ver/XGENT-MCS/.env"
-if [[ -f "${ENV_ROOT}/XGENT-MCS/.env" ]]; then
-  cp "${ENV_ROOT}/XGENT-MCS/.env" "${agent_env}"
-elif [[ -f "${ENV_ROOT}/git-ver/XGENT-MCS/.env" ]]; then
-  cp "${ENV_ROOT}/git-ver/XGENT-MCS/.env" "${agent_env}"
+if [[ -f "$preserved_env" ]]; then
+  cp "$preserved_env" "$agent_env"
 else
   server_host="${XIDER_SERVER_HOST:-141.145.152.174}"
   server_user="${XIDER_SERVER_USER:-ubuntu}"
@@ -58,5 +70,11 @@ else
 fi
 chmod 600 "${agent_env}"
 cd "${INSTALL_ROOT}/git-ver/XGENT-MCS"
+# GitHub ZIP не гарантирует executable-биты у shell-файлов.
+chmod +x ./start_agent.sh ./stop_agent.sh
+# Старая LaunchAgent-служба могла держать предыдущий процесс и сразу
+# запускать его обратно; перед новой установкой выгружаем её безопасно.
+launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.xgent.agent.plist" >/dev/null 2>&1 || true
+rm -f "$HOME/Library/LaunchAgents/com.xgent.agent.plist"
 bash ./start_agent.sh
 echo "XIDER macOS-агент готов."
