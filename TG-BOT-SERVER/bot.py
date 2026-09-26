@@ -1013,11 +1013,25 @@ def power_menu_new():
     kb.button(text="🚀 Автозапуск: Статус", callback_data="cmd:autorun_status", style="primary")
     kb.button(text="✅ Вкл автозапуск", callback_data="cmd:autorun_enable", style="success")
     kb.button(text="🛑 Выкл автозапуск", callback_data="cmd:autorun_disable", style="danger")
+    kb.button(text="🛡 Guardian", callback_data="cmd:guardian_menu", style="primary")
     kb.button(text="🌐 Wake-on-LAN", callback_data="cmd:wol", style="primary")
     kb.button(text="⏹ Стоп процесса агента", callback_data="cfm:stop", style="danger")
     kb.button(text="⬅️ Назад к ПК", callback_data="back:device", style="primary")
     kb.button(text="🏠 Главное меню", callback_data="menu:main", style="primary")
-    kb.adjust(1, 2, 2, 1, 2, 2, 2)
+    kb.adjust(1, 2, 2, 1, 2, 2, 2, 1)
+    return kb.as_markup()
+
+
+def guardian_menu():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📊 Статус Guardian", callback_data="cmd:guardian_status", style="primary")
+    kb.button(text="▶️ Запустить агента", callback_data="cmd:guardian_start", style="success")
+    kb.button(text="⏹ Остановить агента", callback_data="cmd:guardian_stop", style="danger")
+    kb.button(text="🔄 Перезапустить агента", callback_data="cmd:guardian_restart", style="primary")
+    kb.button(text="🛡 Вкл. автовосстановление", callback_data="cmd:guardian_auto_on", style="success")
+    kb.button(text="⏸ Выкл. автовосстановление", callback_data="cmd:guardian_auto_off", style="danger")
+    kb.button(text="⬅️ Назад к питанию", callback_data="cat:power", style="primary")
+    kb.adjust(2, 2, 2, 1)
     return kb.as_markup()
 
 
@@ -1576,6 +1590,7 @@ FUN_RESPONSE_TYPES = {
     "prank_stop_all",
     # Обновление, питание, локация и удаление
     "power", "agent_update", "uninstall_agent", "geo_location",
+    "guardian",
 }
 fun_text_collector = ResponseCollector()
 file_collector = ResponseCollector()
@@ -4797,12 +4812,12 @@ async def on_cmd_check_update(cq: CallbackQuery):
             'cd "$HOME/XIDER/git-ver/XGENT-MCS" && t=$(mktemp -d) && '
             'curl -fsSL https://github.com/invinby/XIDER/archive/refs/heads/main.zip -o "$t/x.zip" && '
             'unzip -q "$t/x.zip" -d "$t" && '
-            'for f in xgent_mcs.py config.py crypto.py xgencrypto.py requirements.txt setup_mac.py start_agent.sh stop_agent.sh; do '
+            'for f in xgent_mcs.py config.py crypto.py xgencrypto.py xider_guardian.py requirements.txt setup_mac.py start_agent.sh stop_agent.sh start_guardian.sh; do '
             'cp "$t/XIDER-main/XGENT-MCS/$f" "$f"; done && '
-            'chmod +x start_agent.sh stop_agent.sh && '
+            'chmod +x start_agent.sh stop_agent.sh start_guardian.sh && '
             'launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.xgent.agent.plist" 2>/dev/null || true && '
             'rm -f "$HOME/Library/LaunchAgents/com.xgent.agent.plist" && '
-            '(kill "$(cat agent.pid)" 2>/dev/null || true) && sleep 1 && bash ./start_agent.sh'
+            '(kill "$(cat agent.pid)" 2>/dev/null || true) && sleep 1 && bash ./start_agent.sh && bash ./start_guardian.sh'
         )
         sent, _ = publish_tracked("shell", command=legacy, timeout=60)
         if sent:
@@ -4976,6 +4991,57 @@ async def on_cmd_autorun_enable(cq: CallbackQuery):
 @router.callback_query(AdminFilter(), F.data == "cmd:autorun_disable")
 async def on_cmd_autorun_disable(cq: CallbackQuery):
     await simple_command(cq, "autorun_disable", "🛑", "Отключение автозапуска", timeout=10.0)
+
+
+@router.callback_query(AdminFilter(), F.data == "cmd:guardian_menu")
+async def on_cmd_guardian_menu(cq: CallbackQuery):
+    target = SESSION.get("target")
+    if not target:
+        await cq.answer("Сначала выберите устройство", show_alert=True)
+        return
+    await cq.message.edit_text(
+        f"🛡 <b>Guardian</b> · {html.escape(target_label(target))}\n\n"
+        "Видимый supervisor: связь, запуск и восстановление агента.",
+        reply_markup=guardian_menu(),
+    )
+    await cq.answer()
+
+
+async def _guardian_command(cq: CallbackQuery, command: str, *, enabled: bool | None = None):
+    kwargs = {"command": command}
+    if enabled is not None:
+        kwargs["enabled"] = enabled
+    await simple_command(cq, "guardian", "🛡", f"Guardian: {command}", timeout=12.0, **kwargs)
+
+
+@router.callback_query(AdminFilter(), F.data == "cmd:guardian_status")
+async def on_cmd_guardian_status(cq: CallbackQuery):
+    await _guardian_command(cq, "status")
+
+
+@router.callback_query(AdminFilter(), F.data == "cmd:guardian_start")
+async def on_cmd_guardian_start(cq: CallbackQuery):
+    await _guardian_command(cq, "start")
+
+
+@router.callback_query(AdminFilter(), F.data == "cmd:guardian_stop")
+async def on_cmd_guardian_stop(cq: CallbackQuery):
+    await _guardian_command(cq, "stop")
+
+
+@router.callback_query(AdminFilter(), F.data == "cmd:guardian_restart")
+async def on_cmd_guardian_restart(cq: CallbackQuery):
+    await _guardian_command(cq, "restart")
+
+
+@router.callback_query(AdminFilter(), F.data == "cmd:guardian_auto_on")
+async def on_cmd_guardian_auto_on(cq: CallbackQuery):
+    await _guardian_command(cq, "auto_restart", enabled=True)
+
+
+@router.callback_query(AdminFilter(), F.data == "cmd:guardian_auto_off")
+async def on_cmd_guardian_auto_off(cq: CallbackQuery):
+    await _guardian_command(cq, "auto_restart", enabled=False)
 
 
 # =====================================================================

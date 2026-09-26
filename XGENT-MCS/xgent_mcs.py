@@ -1874,7 +1874,7 @@ end tell'''
         source_url = "https://github.com/invinby/XIDER/archive/refs/heads/main.zip"
         script_dir = Path(__file__).resolve().parent
         backup_dir = CONFIG_DIR / "agent-backups" / time.strftime("%Y%m%d-%H%M%S")
-        files = ("xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py", "requirements.txt", "setup_mac.py", "start_agent.sh", "stop_agent.sh")
+        files = ("xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py", "xider_guardian.py", "requirements.txt", "setup_mac.py", "start_agent.sh", "stop_agent.sh", "start_guardian.sh")
         try:
             with tempfile.TemporaryDirectory(prefix="xgent-update-") as tmp:
                 archive = Path(tmp) / "xider.zip"
@@ -1904,6 +1904,13 @@ end tell'''
 
             def _reboot_agent():
                 time.sleep(1.5)
+                guardian_script = script_dir / "start_guardian.sh"
+                if guardian_script.exists():
+                    subprocess.Popen(
+                        ["bash", str(guardian_script)], cwd=str(script_dir),
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
                 subprocess.Popen([sys.executable, str(script_dir / "xgent_mcs.py")], cwd=str(script_dir),
                                  stdout=open(script_dir / "agent.log", "a", encoding="utf-8"),
                                  stderr=subprocess.STDOUT, start_new_session=True)

@@ -116,6 +116,7 @@ class MQTTTransport:
             client.subscribe(f"{MQTT_PREFIX}/+/autorun_disable", qos=0)
             client.subscribe(f"{MQTT_PREFIX}/+/power", qos=0)
             client.subscribe(f"{MQTT_PREFIX}/+/agent_update", qos=1)
+            client.subscribe(f"{MQTT_PREFIX}/+/guardian", qos=1)
             client.subscribe(f"{MQTT_PREFIX}/+/uninstall_agent", qos=0)
             client.subscribe(f"{MQTT_PREFIX}/+/sys_uptime", qos=0)
             client.subscribe(f"{MQTT_PREFIX}/+/sys_clean_temp", qos=0)

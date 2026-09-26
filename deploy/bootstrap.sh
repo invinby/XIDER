@@ -71,10 +71,11 @@ fi
 chmod 600 "${agent_env}"
 cd "${INSTALL_ROOT}/git-ver/XGENT-MCS"
 # GitHub ZIP не гарантирует executable-биты у shell-файлов.
-chmod +x ./start_agent.sh ./stop_agent.sh
+chmod +x ./start_agent.sh ./stop_agent.sh ./start_guardian.sh
 # Старая LaunchAgent-служба могла держать предыдущий процесс и сразу
 # запускать его обратно; перед новой установкой выгружаем её безопасно.
 launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.xgent.agent.plist" >/dev/null 2>&1 || true
 rm -f "$HOME/Library/LaunchAgents/com.xgent.agent.plist"
 bash ./start_agent.sh
+bash ./start_guardian.sh
 echo "XIDER macOS-агент готов."
