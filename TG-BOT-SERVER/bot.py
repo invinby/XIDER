@@ -1486,10 +1486,18 @@ def _no_target_text() -> str:
 
 
 async def _replace_callback_message(cq: CallbackQuery, text: str, reply_markup=None):
-    """Изменить карточку вместо отправки нового сообщения."""
+    """Обновить текущую карточку; при запрете редактирования убрать старую."""
     try:
         await cq.message.edit_text(text, reply_markup=reply_markup)
-    except Exception:
+    except Exception as exc:
+        # Telegram возвращает эту ошибку, когда текст уже такой же. В этом
+        # случае нельзя удалять карточку и создавать дубль.
+        if "not modified" in str(exc).lower():
+            return
+        try:
+            await cq.message.delete()
+        except Exception:
+            pass
         await cq.message.answer(text, reply_markup=reply_markup)
 
 # =====================================================================
@@ -1512,6 +1520,9 @@ capabilities_collector = ResponseCollector()
 disks_collector = ResponseCollector()
 multi_status = MultiCollector()
 multi_screenshot = MultiCollector()
+# Защита от двойного клика: одна Telegram-карточка не должна одновременно
+# обслуживаться несколькими долгими командами.
+_ACTIVE_UI_COMMANDS: set[tuple[int, int, int, str]] = set()
 
 # Волна новых команд: текстовые ответы приходят в общий коллектор.
 # ВАЖНО: здесь перечислены ВСЕ типы ответов, которые публикуются агентом
@@ -2700,21 +2711,24 @@ async def on_cmd_screenshot(cq: CallbackQuery):
     await cq.answer("📸 Делаю скриншот...")
     sent, command_id = publish_tracked("screenshot")
     if not sent:
-        await cq.message.answer(
+        await _replace_callback_message(
+            cq,
             "⚠️ Нет соединения с MQTT-брокером.",
             reply_markup=back_to_device_kb(),
         )
         return
     result = await screenshot_collector.wait_for(target, "screenshot", 15.0, command_id)
     if result is None:
-        await cq.message.answer(
+        await _replace_callback_message(
+            cq,
             "⏳ Скриншот не получен за 15 сек — устройство офлайн.",
             reply_markup=back_to_device_kb(),
         )
         return
     img_b64 = result.get("image")
     if not img_b64:
-        await cq.message.answer(
+        await _replace_callback_message(
+            cq,
             "⚠️ Устройство ответило, но скриншот пустой.",
             reply_markup=back_to_device_kb(),
         )
@@ -2730,7 +2744,8 @@ async def on_cmd_screenshot(cq: CallbackQuery):
         )
     except Exception:
         log.exception("Ошибка декодирования скриншота")
-        await cq.message.answer(
+        await _replace_callback_message(
+            cq,
             "⚠️ Ошибка обработки скриншота.",
             reply_markup=back_to_device_kb(),
         )
@@ -2748,21 +2763,24 @@ async def on_cmd_webcam(cq: CallbackQuery):
     await cq.answer("📷 Делаю снимок с вебки (может занять пару секунд)...")
     sent, command_id = publish_tracked("webcam")
     if not sent:
-        await cq.message.answer(
+        await _replace_callback_message(
+            cq,
             "⚠️ Нет соединения с MQTT-брокером.",
             reply_markup=back_to_device_kb(),
         )
         return
     result = await webcam_collector.wait_for(target, "webcam", 20.0, command_id)
     if result is None:
-        await cq.message.answer(
+        await _replace_callback_message(
+            cq,
             "⏳ Снимок не получен за 20 сек — устройство офлайн или нет вебки.",
             reply_markup=back_to_device_kb(),
         )
         return
     img_b64 = result.get("image")
     if not img_b64:
-        await cq.message.answer(
+        await _replace_callback_message(
+            cq,
             "⚠️ Устройство ответило ошибкой или камера недоступна.",
             reply_markup=back_to_device_kb(),
         )
@@ -2778,7 +2796,8 @@ async def on_cmd_webcam(cq: CallbackQuery):
         )
     except Exception:
         log.exception("Ошибка декодирования снимка вебки")
-        await cq.message.answer(
+        await _replace_callback_message(
+            cq,
             "⚠️ Ошибка обработки снимка вебки.",
             reply_markup=back_to_device_kb(),
         )
@@ -2793,23 +2812,19 @@ async def on_cmd_battery(cq: CallbackQuery):
     await cq.answer("🔋 Запрашиваю батарею...")
     sent, command_id = publish_tracked("battery")
     if not sent:
-        await cq.message.answer("⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
-        await cq.answer()
+        await _replace_callback_message(cq, "⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
         return
     res = await battery_collector.wait_for(target, "battery", 15.0, command_id)
     if not res:
-        await cq.message.answer("⏳ Нет ответа.", reply_markup=back_to_device_kb())
-        await cq.answer()
+        await _replace_callback_message(cq, "⏳ Нет ответа.", reply_markup=back_to_device_kb())
         return
     if not res.get("available"):
-        await cq.message.answer("🔋 Батарея отсутствует на устройстве.", reply_markup=back_to_device_kb())
-        await cq.answer()
+        await _replace_callback_message(cq, "🔋 Батарея отсутствует на устройстве.", reply_markup=back_to_device_kb())
         return
     pct = res.get("percent", "?")
     state = res.get("state", "?")
     tl = res.get("time_left") or "Неизвестно"
-    await cq.message.answer(f"🔋 <b>Батарея:</b> {pct}%\nСтатус: {state}\nОсталось: {tl}", reply_markup=back_to_device_kb())
-    await cq.answer()
+    await _replace_callback_message(cq, f"🔋 <b>Батарея:</b> {pct}%\nСтатус: {state}\nОсталось: {tl}", reply_markup=back_to_device_kb())
 
 @router.callback_query(AdminFilter(), F.data == "cmd:network")
 async def on_cmd_network(cq: CallbackQuery):
@@ -2820,21 +2835,18 @@ async def on_cmd_network(cq: CallbackQuery):
     await cq.answer("🌐 Запрашиваю сеть...")
     sent, command_id = publish_tracked("network")
     if not sent:
-        await cq.message.answer("⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
-        await cq.answer()
+        await _replace_callback_message(cq, "⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
         return
     res = await network_collector.wait_for(target, "network", 15.0, command_id)
     if not res:
-        await cq.message.answer("⏳ Нет ответа.", reply_markup=back_to_device_kb())
-        await cq.answer()
+        await _replace_callback_message(cq, "⏳ Нет ответа.", reply_markup=back_to_device_kb())
         return
     lines = []
     for i in res.get("interfaces", []):
         if i.get("up"):
             ip = i.get("ipv4") or i.get("ipv6") or "No IP"
             lines.append(f"• <b>{i['name']}</b>: {ip}")
-    await cq.message.answer("🌐 <b>Сеть:</b>\n" + ("\n".join(lines) if lines else "Нет активных интерфейсов"), reply_markup=back_to_device_kb())
-    await cq.answer()
+    await _replace_callback_message(cq, "🌐 <b>Сеть:</b>\n" + ("\n".join(lines) if lines else "Нет активных интерфейсов"), reply_markup=back_to_device_kb())
 
 @router.callback_query(AdminFilter(), F.data == "cmd:services")
 async def on_cmd_services(cq: CallbackQuery):
@@ -2845,18 +2857,15 @@ async def on_cmd_services(cq: CallbackQuery):
     await cq.answer("🛠 Запрашиваю службы...")
     sent, command_id = publish_tracked("services")
     if not sent:
-        await cq.message.answer("⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
-        await cq.answer()
+        await _replace_callback_message(cq, "⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
         return
     res = await services_collector.wait_for(target, "services", 15.0, command_id)
     if not res:
-        await cq.message.answer("⏳ Нет ответа.", reply_markup=back_to_device_kb())
-        await cq.answer()
+        await _replace_callback_message(cq, "⏳ Нет ответа.", reply_markup=back_to_device_kb())
         return
     tot = res.get("total", "?")
     run = res.get("running", "?")
-    await cq.message.answer(f"🛠 <b>Службы:</b>\nВсего: {tot}\nЗапущено: {run}", reply_markup=back_to_device_kb())
-    await cq.answer()
+    await _replace_callback_message(cq, f"🛠 <b>Службы:</b>\nВсего: {tot}\nЗапущено: {run}", reply_markup=back_to_device_kb())
 
 @router.callback_query(AdminFilter(), F.data == "cmd:capabilities")
 async def on_cmd_capabilities(cq: CallbackQuery):
@@ -2867,17 +2876,14 @@ async def on_cmd_capabilities(cq: CallbackQuery):
     await cq.answer("📊 Запрашиваю возможности...")
     sent, command_id = publish_tracked("capabilities")
     if not sent:
-        await cq.message.answer("⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
-        await cq.answer()
+        await _replace_callback_message(cq, "⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
         return
     res = await capabilities_collector.wait_for(target, "capabilities", 15.0, command_id)
     if not res:
-        await cq.message.answer("⏳ Нет ответа.", reply_markup=back_to_device_kb())
-        await cq.answer()
+        await _replace_callback_message(cq, "⏳ Нет ответа.", reply_markup=back_to_device_kb())
         return
     cmds = res.get("commands", [])
-    await cq.message.answer(f"📊 <b>Поддерживаемые команды:</b>\n" + ", ".join(cmds), reply_markup=back_to_device_kb())
-    await cq.answer()
+    await _replace_callback_message(cq, f"📊 <b>Поддерживаемые команды:</b>\n" + ", ".join(cmds), reply_markup=back_to_device_kb())
 
 @router.callback_query(AdminFilter(), F.data == "cmd:sysinfo")
 async def on_cmd_sysinfo(cq: CallbackQuery):
@@ -2891,19 +2897,19 @@ async def on_cmd_sysinfo(cq: CallbackQuery):
     await cq.answer("💻 Запрашиваю...")
     sent, command_id = publish_tracked("sysinfo")
     if not sent:
-        await cq.message.answer(
+        await _replace_callback_message(
+            cq,
             "⚠️ Нет соединения с MQTT-брокером.",
             reply_markup=back_to_device_kb(),
         )
-        await cq.answer()
         return
     result = await sysinfo_collector.wait_for(target, "sysinfo", 12.0, command_id)
     if result is None:
-        await cq.message.answer(
+        await _replace_callback_message(
+            cq,
             "⏳ Ответ не получен за 12 сек — устройство офлайн.",
             reply_markup=back_to_device_kb(),
         )
-        await cq.answer()
         return
     info = devices.get(result.get("device_id")) or {}
     cpu = result.get("cpu_percent", "?")
@@ -2914,7 +2920,8 @@ async def on_cmd_sysinfo(cq: CallbackQuery):
     disk_total = result.get("disk_total_gb", "?")
     disk_pct = result.get("disk_percent", "?")
     uptime_str = result.get("uptime", "?")
-    await cq.message.answer(
+    await _replace_callback_message(
+        cq,
         f"💻 <b>{info.get('name', '?')}</b>\n\n"
         f"🔲 CPU: {cpu}%\n"
         f"🧠 RAM: {ram_used} / {ram_total} ГБ ({ram_pct}%)\n"
@@ -2922,7 +2929,6 @@ async def on_cmd_sysinfo(cq: CallbackQuery):
         f"⏱ Аптайм: {uptime_str}",
         reply_markup=back_to_device_kb(),
     )
-    await cq.answer()
 
 
 @router.callback_query(AdminFilter(), F.data == "cmd:lock")
@@ -2932,16 +2938,17 @@ async def on_cmd_lock(cq: CallbackQuery):
         await cq.answer("Сначала выберите цель", show_alert=True)
         return
     if publish("lock"):
-        await cq.message.answer(
+        await _replace_callback_message(
+            cq,
             f"🔒 Экран заблокирован: <b>{target_label(target)}</b>",
             reply_markup=back_to_device_kb(),
         )
     else:
-        await cq.message.answer(
+        await _replace_callback_message(
+            cq,
             "⚠️ Нет соединения с MQTT-брокером.",
             reply_markup=back_to_device_kb(),
         )
-    await cq.answer()
 
 
 @router.callback_query(AdminFilter(), F.data == "cmd:volume")
@@ -2958,44 +2965,48 @@ async def on_cmd_status(cq: CallbackQuery):
     await cq.answer("Запрашиваю статус...")
     if target == "all":
         if transport.publish_command("all", "status_request"):
-            await cq.message.answer(
+            await _replace_callback_message(
+                cq,
                 "📡 Запрос отправлен всем устройствам.\n"
                 "Обновлённый список — в «Список устройств».",
-                reply_markup=back_to_device_kb(),
+                reply_markup=system_menu(),
             )
         else:
-            await cq.message.answer(
+            await _replace_callback_message(
+                cq,
                 "⚠️ Нет соединения с MQTT-брокером.",
-                reply_markup=back_to_device_kb(),
+                reply_markup=system_menu(),
             )
-        await cq.answer()
         return
     sent, command_id = publish_tracked("status_request")
     if not sent:
-        await cq.message.answer(
+        await _replace_callback_message(
+            cq,
             "⚠️ Нет соединения с MQTT-брокером.",
-            reply_markup=back_to_device_kb(),
+            reply_markup=system_menu(),
         )
-        await cq.answer()
         return
+    try:
+        await cq.message.edit_text(
+            f"⏳ <b>Статус {html.escape(target_label(target))}</b>\n"
+            "<code>Запрашиваю свежие данные у агента...</code>",
+            reply_markup=system_menu(),
+        )
+    except Exception:
+        pass
     status = await status_collector.wait_for(target, "status", 12.0, command_id)
     if status is None:
-        await cq.message.answer(
+        await _replace_callback_message(
+            cq,
             "⏳ Ответ не получен — устройство офлайн.",
-            reply_markup=back_to_device_kb(),
+            reply_markup=system_menu(),
         )
-        await cq.answer()
         return
-    device_id = status.get("device_id")
-    info = devices.get(device_id) or {}
-    await cq.message.answer(
-        f"✅ <b>{info.get('name', device_id)}</b>\n"
-        f"ID: <code>{device_id}</code>\n"
-        f"ОС: {info.get('os', '?')}\n"
-        f"Версия: {status.get('version', '?')}",
-        reply_markup=back_to_device_kb(),
+    await _replace_callback_message(
+        cq,
+        device_card(target),
+        reply_markup=system_menu(),
     )
-    await cq.answer()
 
 
 @router.callback_query(AdminFilter(), F.data == "cmd:power_menu")
@@ -4035,18 +4046,6 @@ async def on_find_input(message: Message, state: FSMContext):
 #  Утилиты и удаленный ввод (Fun / Tools)
 # =====================================================================
 
-@router.callback_query(AdminFilter(), F.data == "cmd:status")
-async def on_cmd_status_refresh(cq: CallbackQuery):
-    target = SESSION.get("target")
-    if not target:
-        await cq.answer("Цель не выбрана", show_alert=True)
-        return
-    publish("status_request")
-    await cq.answer("🔄 Запрос статуса отправлен...")
-    await asyncio.sleep(0.5)
-    await cq.message.edit_text(device_card(target), reply_markup=device_menu(target))
-
-
 @router.callback_query(AdminFilter(), F.data.in_({"fun:extip", "cmd:extip"}))
 async def on_fun_extip(cq: CallbackQuery):
     target = SESSION.get("target")
@@ -4056,11 +4055,11 @@ async def on_fun_extip(cq: CallbackQuery):
     await cq.answer("🌍 Запрашиваю внешний IP...")
     fun_text_collector.reset()
     if not publish("ext_ip"):
-        await cq.message.answer("⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, "⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
         return
     result = await fun_text_collector.wait(10.0)
     text = (result or {}).get("text") or "⏳ Нет ответа от устройства"
-    await cq.message.answer(f"🌍 <b>Внешний IP ({target_label(target)}):</b>\n<code>{html.escape(str(text))}</code>", reply_markup=back_to_device_kb())
+    await _replace_callback_message(cq, f"🌍 <b>Внешний IP ({target_label(target)}):</b>\n<code>{html.escape(str(text))}</code>", reply_markup=back_to_device_kb())
 
 
 @router.callback_query(AdminFilter(), F.data.in_({"fun:screenoff", "cmd:screenoff"}))
@@ -4071,9 +4070,10 @@ async def on_fun_screenoff(cq: CallbackQuery):
         return
     if publish("screen_off"):
         await cq.answer("🧯 Экран выключен")
-        await cq.message.answer(f"🧯 Экран успешно погашен: <b>{target_label(target)}</b>", reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, f"🧯 Экран успешно погашен: <b>{target_label(target)}</b>", reply_markup=back_to_device_kb())
     else:
         await cq.answer("⚠️ Ошибка отправки")
+        await _replace_callback_message(cq, "⚠️ Ошибка отправки", reply_markup=back_to_device_kb())
 
 
 @router.callback_query(AdminFilter(), F.data.in_({"fun:screensaver", "cmd:saveron"}))
@@ -4084,9 +4084,10 @@ async def on_fun_screensaver(cq: CallbackQuery):
         return
     if publish("screensaver_on"):
         await cq.answer("💤 Заставка запущена")
-        await cq.message.answer(f"💤 Заставка экрана включена: <b>{target_label(target)}</b>", reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, f"💤 Заставка экрана включена: <b>{target_label(target)}</b>", reply_markup=back_to_device_kb())
     else:
         await cq.answer("⚠️ Ошибка отправки")
+        await _replace_callback_message(cq, "⚠️ Ошибка отправки", reply_markup=back_to_device_kb())
 
 
 @router.callback_query(AdminFilter(), F.data.in_({"fun:type", "cmd:typetxt"}))
@@ -4595,10 +4596,14 @@ async def on_rotate_select(cq: CallbackQuery):
     await cq.answer("🔄 Поворачиваю экран...")
     result = await fun_text_collector.wait_for(target, "display_rotate", timeout=8.0, command_id=command_id)
     text = (result or {}).get("text") or (f"Экран повернут на {angle}°" if result and result.get("ok") else "⚠️ Агент не подтвердил поворот экрана.")
-    await cq.message.answer(f"🔄 <b>{html.escape(target_label(target))}:</b>\n{html.escape(str(text))}", reply_markup=back_to_device_kb())
+    await _replace_callback_message(
+        cq,
+        f"🔄 <b>{html.escape(target_label(target))}:</b>\n{html.escape(str(text))}",
+        reply_markup=back_to_device_kb(),
+    )
 
 
-async def simple_command(cq: CallbackQuery, action: str, emoji: str, label: str, timeout: float = 12.0, **publish_kwargs):
+async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, label: str, timeout: float = 12.0, **publish_kwargs):
     target = SESSION.get("target")
     if not target:
         await cq.answer("Сначала выберите цель", show_alert=True)
@@ -4606,14 +4611,27 @@ async def simple_command(cq: CallbackQuery, action: str, emoji: str, label: str,
     await cq.answer(f"{emoji} {label}...")
     sent, command_id = publish_tracked(action, **publish_kwargs)
     if not sent:
-        await cq.message.answer("⚠️ MQTT-брокер недоступен: команда не отправлена.", reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, "⚠️ MQTT-брокер недоступен: команда не отправлена.", reply_markup=back_to_device_kb())
         return
 
-    # Initial status message with text animation loader
-    status_msg = await cq.message.answer(
+    # Одна карточка на всю операцию: меню -> прогресс -> результат.
+    status_msg = cq.message
+    try:
+        await status_msg.edit_text(
         f"⏳ <b>{emoji} {label}</b> · <b>{html.escape(target_label(target))}</b>\n<code>[■□□□□] 20% Связь с агентом...</code>",
         reply_markup=back_to_device_kb(),
-    )
+        )
+    except Exception:
+        # Если Telegram не разрешил редактирование (например, старое медиа),
+        # удаляем старую карточку и создаём ровно одну новую.
+        try:
+            await cq.message.delete()
+        except Exception:
+            pass
+        status_msg = await cq.message.answer(
+            f"⏳ <b>{emoji} {label}</b> · <b>{html.escape(target_label(target))}</b>\n<code>[■□□□□] 20% Связь с агентом...</code>",
+            reply_markup=back_to_device_kb(),
+        )
 
     anim_task = None
     stop_anim = asyncio.Event()
@@ -4628,7 +4646,9 @@ async def simple_command(cq: CallbackQuery, action: str, emoji: str, label: str,
         ]
         idx = 0
         while not stop_anim.is_set():
-            await asyncio.sleep(0.7)
+            # Telegram ограничивает частые правки одного сообщения; 1.4 с
+            # убирает фризы и ошибки Flood control.
+            await asyncio.sleep(1.4)
             if stop_anim.is_set():
                 break
             idx = (idx + 1) % len(frames)
@@ -4659,9 +4679,37 @@ async def simple_command(cq: CallbackQuery, action: str, emoji: str, label: str,
     final_text = f"{emoji} <b>{label} ({html.escape(target_label(target))}):</b>\n<pre>{html.escape(str(text)[:3800])}</pre>"
     try:
         await status_msg.edit_text(final_text, reply_markup=back_to_device_kb())
-    except Exception:
-        await cq.message.answer(final_text, reply_markup=back_to_device_kb())
+    except Exception as exc:
+        # Не создаём копию сообщения при безобидной ошибке
+        # «message is not modified» (так бывает при быстром повторном клике).
+        if "not modified" not in str(exc).lower():
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+            await cq.message.answer(final_text, reply_markup=back_to_device_kb())
     return result
+
+
+async def simple_command(cq: CallbackQuery, action: str, emoji: str, label: str, timeout: float = 12.0, **publish_kwargs):
+    """Запустить одну команду на одной карточке без параллельных дублей."""
+    message = cq.message
+    key = (
+        int(cq.from_user.id),
+        int(message.chat.id),
+        int(message.message_id),
+        str(action),
+    )
+    if key in _ACTIVE_UI_COMMANDS:
+        await cq.answer("Эта команда уже выполняется", show_alert=True)
+        return None
+    _ACTIVE_UI_COMMANDS.add(key)
+    try:
+        return await _simple_command_unlocked(
+            cq, action, emoji, label, timeout=timeout, **publish_kwargs
+        )
+    finally:
+        _ACTIVE_UI_COMMANDS.discard(key)
 
 
 @router.callback_query(AdminFilter(), F.data == "cmd:check_update")
@@ -4682,7 +4730,11 @@ async def on_cmd_check_update(cq: CallbackQuery):
         )
         sent, _ = publish_tracked("shell", command=legacy)
         if sent:
-            await cq.message.answer("🛠 Старый агент найден. Запустил одноразовое обновление через его защищённый канал; дальше обновления будут из этой кнопки.", reply_markup=back_to_device_kb())
+            await _replace_callback_message(
+                cq,
+                "🛠 Старый агент найден. Запустил одноразовое обновление через его защищённый канал; дальше обновления будут из этой кнопки.",
+                reply_markup=back_to_device_kb(),
+            )
 
 
 @router.callback_query(AdminFilter(), F.data == "cmd:smart")
