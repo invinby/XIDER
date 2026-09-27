@@ -104,7 +104,10 @@ class Catalog:
 
     def list(self) -> list[Release]:
         with self._lock:
-            if time.monotonic() - self._fetched_at < 600:
+            # На свежем CI/хосте monotonic() может быть меньше TTL. Нулевой
+            # timestamp означает, что каталог ещё ни разу не загружался, а не
+            # действующий кэш от эпохи процесса.
+            if self._fetched_at and time.monotonic() - self._fetched_at < 600:
                 return list(self._releases)
             try:
                 releases = parse_releases(self._loader())
