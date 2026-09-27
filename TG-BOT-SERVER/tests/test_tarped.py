@@ -46,7 +46,9 @@ def test_release_catalog_cache_does_not_fetch_on_every_open():
 
     def loader():
         calls.append(1)
-        return [{"tag_name": "v3.3.8", "assets": []}]
+        # Реальный опубликованный релиз содержит asset; так fixture повторяет
+        # ответ GitHub, а не пустой черновой объект.
+        return [{"tag_name": "v3.3.8", "assets": [{"name": "XGENT-WDS.exe"}]}]
 
     catalog = ledger.Catalog(loader)
     assert catalog.list()[0].tag == "v3.3.8"

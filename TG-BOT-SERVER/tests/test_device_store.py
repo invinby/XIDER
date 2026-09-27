@@ -18,9 +18,10 @@ def test_upsert_writes_only_on_change(tmp_path, monkeypatch):
     store.upsert("a1", {"name": "Alpha", "os": "test"})
     assert f.stat().st_mtime_ns == mtime_before
 
-    # Изменившиеся данные — файл перезаписан
+    # Изменившиеся данные должны оказаться на диске.  Не сравниваем mtime:
+    # на Windows его точность зависит от файловой системы и два write могут
+    # попасть в один временной тик.
     store.upsert("a1", {"name": "Alpha-2"})
-    assert f.stat().st_mtime_ns != mtime_before
     assert json.loads(f.read_text(encoding="utf-8"))["a1"]["name"] == "Alpha-2"
 
 
