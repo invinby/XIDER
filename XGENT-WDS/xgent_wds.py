@@ -7,10 +7,12 @@
 
 import base64
 import ctypes
+import html
 import io
 import json
 import logging
 import math
+import msvcrt
 import os
 from pathlib import Path
 import random
@@ -52,6 +54,32 @@ from xgencrypto import decrypt_payload, encrypt_payload
 log = logging.getLogger("xgent.wds")
 WINDOWS_TASK_NAME = "XIDER Agent"
 WINDOWS_GUARDIAN_TASK_NAME = "XIDER Guardian"
+_instance_lock_file = None
+
+
+def acquire_instance_lock() -> bool:
+    """X-LOCK: only one interactive Windows agent per user session.
+
+    The OS releases this byte-range lock if the process exits unexpectedly.
+    All installations use the same user config directory, so an old desktop
+    copy and a new LocalAppData copy cannot both own the tray once updated.
+    """
+    global _instance_lock_file
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = CONFIG_DIR / "agent.lock"
+    handle = open(lock_path, "a+b")
+    try:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        handle.close()
+        return False
+    _instance_lock_file = handle
+    return True
 
 
 def _scheduled_task_exists(task_name: str = WINDOWS_TASK_NAME) -> bool:
@@ -1092,27 +1120,43 @@ class XgentClient:
             })
 
     def _do_geo_location(self, payload: dict) -> None:
-        """Получить приблизительную геолокацию по IP."""
+        """Approximate public-IP location; never claim GPS precision."""
         import urllib.request
-        try:
-            req = urllib.request.Request("https://ipapi.co/json/", headers={'User-Agent': 'XIDER-Agent/3'})
-            with urllib.request.urlopen(req, timeout=10) as response:
-                data = json.loads(response.read().decode())
-            if not data.get("error") and (data.get("ip") or data.get("city")):
-                info = (f"📍 <b>Геолокация (по IP):</b>\n"
-                        f"🌍 Страна: {data.get('country_name') or data.get('country')}\n"
-                        f"🏙 Город: {data.get('city') or '?'}\n"
-                        f"📡 Провайдер: {data.get('org') or '?'}\n"
-                        f"🗺 Координаты: {data.get('latitude')}, {data.get('longitude')}\n"
-                        f"💻 IP: {data.get('ip') or '?'}")
-                ok = True
-            else:
-                info = "⚠️ Не удалось определить локацию."
-                ok = False
-        except Exception as exc:
-            info = f"❌ Ошибка геолокации: {exc}"
+        data = None
+        provider = ""
+        errors = []
+        for name, url in (
+            ("ipapi.co", "https://ipapi.co/json/"),
+            ("ipinfo.io", "https://ipinfo.io/json"),
+        ):
+            try:
+                request = urllib.request.Request(url, headers={"User-Agent": "XIDER-Agent/3"})
+                with urllib.request.urlopen(request, timeout=6) as response:
+                    candidate = json.loads(response.read(16_385).decode("utf-8", "replace"))
+                if not isinstance(candidate, dict) or candidate.get("error") or not (candidate.get("ip") or candidate.get("city")):
+                    raise ValueError("нет пригодного ответа")
+                data, provider = candidate, name
+                break
+            except (OSError, ValueError) as exc:
+                errors.append(f"{name}: {exc}")
+        if data is None:
             ok = False
-            
+            info = "Локация по IP недоступна: " + "; ".join(errors)[:300]
+        else:
+            def safe(value):
+                return str(value if value not in (None, "") else "?")[:120]
+
+            coordinates = data.get("loc") or f"{data.get('latitude') or '?'}, {data.get('longitude') or '?'}"
+            info = (
+                "Приблизительная локация по публичному IP, не GPS:\n"
+                f"🌍 Страна: {safe(data.get('country_name') or data.get('country'))}\n"
+                f"🏙 Город: {safe(data.get('city'))}\n"
+                f"📡 Провайдер: {safe(data.get('org'))}\n"
+                f"🗺 Координаты: {safe(coordinates)}\n"
+                f"💻 IP: {safe(data.get('ip'))}\n"
+                f"🔎 Источник: {safe(provider)}"
+            )
+            ok = True
         self._publish_response("geo_location", {
             "type": "geo_location",
             "device_id": DEVICE_ID,
@@ -3348,6 +3392,9 @@ def setup_logging() -> None:
 
 def main() -> None:
     setup_logging()
+    if not acquire_instance_lock():
+        log.info("X-LOCK: другой экземпляр Windows-агента уже запущен; второй не стартует")
+        return
     client = XgentClient()
     if "--console" in sys.argv or "--no-tray" in sys.argv:
         log.info("Запуск XGENT в консольном режиме")

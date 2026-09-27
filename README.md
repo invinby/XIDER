@@ -1,5 +1,11 @@
 # ⚡ XIDER 3.3.8: Zero-Trust Endpoint Management, Telemetry & Guardian
 
+> TARPED is under development, not released or deployed. The agreed module
+> names, version rules and unfinished acceptance checks are recorded in
+> [docs/TARPED.md](docs/TARPED.md). / TARPED пока разрабатывается; это не
+> опубликованная и не установленная версия. План и критерии готовности —
+> в [docs/TARPED.md](docs/TARPED.md).
+
 <p align="center">
   <img src="XDicon.png" alt="XIDER Logo" width="128" height="128" />
 </p>

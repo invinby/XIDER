@@ -66,6 +66,10 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 import bot_settings
 import access_store
 import text_store
+import xlex
+import release_catalog
+import info_book
+import ui_cards
 from config import ADMIN_ID, BOT_TOKEN, ENCRYPT_PAYLOAD, MQTT_BROKER, MQTT_PORT, MQTT_PREFIX
 from roles import AdminFilter, AnyAccessFilter, OwnerFilter, ReadOnlyFilter, Role, get_user_role
 from crypto import verify_message
@@ -510,7 +514,7 @@ ACTION_LABELS = {
     "processes": "⚙️ Процессы",
     "disks": "🗂 Диски",
     "tts": "🗣 Синтез речи",
-    "geo_location": "📍 Локация (IP)",
+    "geo_location": "⚠️ Локация по IP (неточно)",
     "battery": "🔋 Батарея",
     "network": "🌐 Сеть",
     "services": "🛠 Службы",
@@ -648,6 +652,13 @@ def device_card(device_id: str) -> str:
 
     os_low = os_str.lower()
     os_icon = "🍏" if ("mac" in os_low or "darwin" in os_low) else ("🪟" if "win" in os_low else "🐧")
+    component = release_catalog.component_for(os_str)
+    latest = release_catalog.newest_with_package(release_catalog.catalog.cached(), component or "")
+    old_version_note = ""
+    if release_catalog.is_older(ver, latest):
+        old_version_note = "\n⚠️ " + _lex(
+            "version_warning", current=ver, latest=html.escape(latest.tag.removeprefix("v"))
+        ) + "\n"
 
     return (
         f"{os_icon} <b>{name}</b> {online_dot} <code>[{status_str}]</code>\n"
@@ -656,6 +667,7 @@ def device_card(device_id: str) -> str:
         f"• <b>ОС:</b> {os_str}\n"
         f"• <b>Агент:</b> v{ver}  •  <b>Пинг:</b> {seen_str}\n"
         f"• <b>Guardian:</b> {guardian_str}\n"
+        f"{old_version_note}"
         "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "<i>Выберите категорию:</i>"
     )
@@ -707,18 +719,26 @@ def toggle_server_autostart() -> tuple[bool, str]:
 
 
 def _technical_ui() -> bool:
-    return bot_settings.get("ui_style", "technical") == "technical"
+    return xlex.normalize_style(bot_settings.get("ui_style", "technical")) == "xtexbo"
 
 
 def _custom_ui() -> bool:
-    return bot_settings.get("ui_style", "technical") == "custom"
+    return xlex.normalize_style(bot_settings.get("ui_style", "technical")) == "xperson"
 
 
 def _ui_phrase(technical: str, conversational: str, custom: str) -> str:
-    style = str(bot_settings.get("ui_style", "technical"))
-    if style == "custom":
+    style = xlex.normalize_style(bot_settings.get("ui_style", "technical"))
+    if style == "xperson":
         return custom
-    return technical if style == "technical" else conversational
+    return technical if style == "xtexbo" else conversational
+
+
+def _lex(key: str, **values: str) -> str:
+    return xlex.render(key, bot_settings.get("ui_style", "technical"), **values)
+
+
+def _nav(key: str) -> str:
+    return xlex.nav(key, bot_settings.get("ui_style", "technical"))
 
 
 def main_menu(user_id: int | None = None):
@@ -726,19 +746,19 @@ def main_menu(user_id: int | None = None):
     role = get_user_role(user_id)
     kb = InlineKeyboardBuilder()
     if role in (Role.OWNER, Role.COOWNER):
-        kb.button(text=_ui_phrase("Устройства", "💻 Список устройств", "🧰 Мои машинки"), callback_data="menu:devices", style="primary")
-        kb.button(text=_ui_phrase("Все устройства", "🌐 Все устройства", "🌍 Весь зоопарк"), callback_data="dev:all", style="primary")
-        kb.button(text="Серверная", callback_data="menu:server", style="primary")
-        kb.button(text=_ui_phrase("События и настройки", "🔔 Настройки & События", "🔔 Шум и настройки"), callback_data="ev:menu", style="primary")
+        kb.button(text=_lex("devices_button"), callback_data="menu:devices", style="primary")
+        kb.button(text=_nav("all_devices"), callback_data="dev:all", style="primary")
+        kb.button(text=_lex("server_button"), callback_data="menu:server", style="primary")
+        kb.button(text=_nav("events"), callback_data="ev:menu", style="primary")
     elif role == Role.USER:
         kb.button(text="Мои устройства", callback_data="menu:devices", style="primary")
         kb.button(text="Серверная: обзор", callback_data="menu:server", style="primary")
     else:
         kb.button(text="Обзор устройств", callback_data="menu:guest_devices", style="primary")
         kb.button(text="Серверная: обзор", callback_data="menu:server", style="primary")
-    kb.button(text=_ui_phrase("О системе", "ℹ️ О системе XIDER", "🤖 Что за зверь XIDER"), callback_data="menu:about", style="primary")
+    kb.button(text=_lex("about_button"), callback_data="menu:about", style="primary")
     if role == Role.OWNER:
-        kb.button(text="Администрирование", callback_data="menu:admin", style="danger")
+        kb.button(text=_nav("admin"), callback_data="menu:admin", style="danger")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -781,20 +801,20 @@ def device_menu(device_id: str):
     kb = InlineKeyboardBuilder()
 
     # 9 Distinct Detailed Categories with Vibrant Colors!
-    kb.button(text="📸 Медиа & Зрение", callback_data="cat:media", style="success")
-    kb.button(text="🖥 Экран & Дисплей", callback_data="cat:screen", style="primary")
+    kb.button(text=_nav("media"), callback_data="cat:media", style="success")
+    kb.button(text=_nav("screen"), callback_data="cat:screen", style="primary")
 
-    kb.button(text="⌨️ Ввод & Мышь", callback_data="cat:input", style="primary")
-    kb.button(text="📊 Система & Сенсоры", callback_data="cat:system", style="primary")
+    kb.button(text=_nav("input"), callback_data="cat:input", style="primary")
+    kb.button(text=_nav("system"), callback_data="cat:system", style="primary")
 
-    kb.button(text="🌐 Сеть & Коннект", callback_data="cat:network", style="primary")
-    kb.button(text="📁 Файлы & Диски", callback_data="cat:files", style="primary")
+    kb.button(text=_nav("network"), callback_data="cat:network", style="primary")
+    kb.button(text=_nav("files"), callback_data="cat:files", style="primary")
 
-    kb.button(text="🛠 Терминал & Софт", callback_data="cat:terminal", style="primary")
-    kb.button(text="🔒 Питание & Защита", callback_data="cat:power", style="danger")
+    kb.button(text=_nav("terminal"), callback_data="cat:terminal", style="primary")
+    kb.button(text=_nav("power"), callback_data="cat:power", style="danger")
 
-    kb.button(text="🎭 Приколы & Розыгрыши", callback_data="cat:pranks", style="success")
-    kb.button(text="⚙️ Настройки ПК", callback_data="cat:device", style="primary")
+    kb.button(text=_nav("pranks"), callback_data="cat:pranks", style="success")
+    kb.button(text=_nav("device_settings"), callback_data="cat:device", style="primary")
 
     # Favorite actions (if configured)
     favs = devices.get_favorites(device_id)[:4]
@@ -805,9 +825,13 @@ def device_menu(device_id: str):
             style="primary",
         )
 
-    # Критичные действия должны быть доступны прямо из карточки устройства,
-    # а не спрятаны только внутри «Настройки ПК».
-    kb.button(text="🔄 Обновить агента", callback_data="cmd:check_update", style="success")
+    info = devices.get(device_id) or {}
+    agent_ver = str(info.get("version") or "?")
+    keeper_ver = str((info.get("guardian") or {}).get("version") or "?")
+    kb.button(
+        text=_lex("versions_button", agent=agent_ver, keeper=keeper_ver)[:64],
+        callback_data="versions:device", style="success",
+    )
     kb.button(text="⏹ Остановить агента", callback_data="cfm:stop", style="danger")
 
     # Bottom row: Back
@@ -827,7 +851,7 @@ def all_menu():
     kb = InlineKeyboardBuilder()
     kb.button(text="📊 Сводка статусов", callback_data="all:status", style="primary")
     kb.button(text="📸 Скриншоты со всех", callback_data="all:screenshot", style="success")
-    kb.button(text="📍 Локация (IP)", callback_data="cmd:geo_location", style="success")
+    kb.button(text="⚠️ " + _lex("geo_beta"), callback_data="cmd:geo_location", style="primary")
     kb.button(text="🔒 Заблокировать все", callback_data="cmd:lock", style="danger")
     kb.button(text="🔇 Mute/Unmute звук", callback_data="cmd:volume", style="primary")
     kb.button(text="⏹ Остановить все клиенты", callback_data="cfm:stop_all", style="danger")
@@ -886,7 +910,7 @@ def rotate_menu():
 def media_menu():
     kb = InlineKeyboardBuilder()
     kb.button(text="📸 Скриншот экрана", callback_data="cmd:screenshot", style="success")
-    kb.button(text="📍 Локация (IP)", callback_data="cmd:geo_location", style="success")
+    kb.button(text="⚠️ " + _lex("geo_beta"), callback_data="cmd:geo_location", style="primary")
     kb.button(text="📷 Снимок с вебки", callback_data="cmd:webcam", style="success")
     kb.button(text="🎙 Микрофон (запись)", callback_data="mic:opts", style="success")
     kb.button(text="🔊 Озвучить текст", callback_data="cmd:sound", style="primary")
@@ -1142,7 +1166,7 @@ def device_settings_menu():
     kb.button(text="✏️ Переименовать", callback_data=f"devmg:rename:{device_id}", style="primary")
     kb.button(text="⭐ Избранные кнопки", callback_data="fav:menu", style="primary")
     kb.button(text="🕘 История команд", callback_data="hist:0", style="primary")
-    kb.button(text="🔄 Проверить обновление", callback_data="cmd:check_update", style="success")
+    kb.button(text="Версии агента и Guard Keeper", callback_data="versions:device", style="success")
     kb.button(text="🚀 Автозапуск: Статус", callback_data="cmd:autorun_status", style="primary")
     kb.button(text="✅ Вкл автозапуск ПК", callback_data="cmd:autorun_enable", style="success")
     kb.button(text="🛑 Выкл автозапуск ПК", callback_data="cmd:autorun_disable", style="danger")
@@ -1307,12 +1331,11 @@ def admin_menu():
     kb.button(text="Пользователи", callback_data="admin:users", style="primary")
     kb.button(text="Журнал действий", callback_data="admin:audit", style="primary")
     kb.button(text="Тексты бота", callback_data="admin:texts", style="primary")
-    mode = bot_settings.get("ui_style", "technical")
-    labels = {"technical": "технический", "conversational": "разговорный", "custom": "кастомный"}
+    mode = xlex.normalize_style(bot_settings.get("ui_style", "technical"))
     kb.button(
-        text=f"Текст: {labels.get(mode, 'технический')}",
+        text=f"X-LEX: {xlex.STYLE_NAMES[mode]}",
         callback_data="admin:style",
-        style="success" if mode == "custom" else "primary",
+        style="success",
     )
     kb.button(text="Серверная", callback_data="menu:server", style="primary")
     kb.button(text="Главное меню", callback_data="menu:main", style="primary")
@@ -1320,23 +1343,28 @@ def admin_menu():
     return kb.as_markup()
 
 
-TEXT_LABELS = {
+_TEXT_TYPES = {
     "start_guest": "Приветствие гостя",
     "start_user": "Приветствие пользователя",
     "start_owner": "Приветствие владельца",
     "blocked": "Сообщение заблокированному",
-    "custom_start_guest": "Кастомное приветствие гостя",
-    "custom_start_user": "Кастомное приветствие пользователя",
-    "custom_start_owner": "Кастомное приветствие владельца",
-    "custom_blocked": "Кастомное сообщение блокировки",
+}
+TEXT_LABELS = {
+    f"{style}_{key}": f"{xlex.STYLE_NAMES[style]} · {label}"
+    for style in xlex.STYLES
+    for key, label in _TEXT_TYPES.items()
 }
 
 
 def admin_texts_menu():
     kb = InlineKeyboardBuilder()
-    for key, label in TEXT_LABELS.items():
+    mode = xlex.normalize_style(bot_settings.get("ui_style", "technical"))
+    for suffix in _TEXT_TYPES:
+        key = f"{mode}_{suffix}"
+        label = _TEXT_TYPES[suffix]
         preview = text_store.get(key).replace("\n", " ")[:34]
         kb.button(text=f"{label}: {preview}", callback_data=f"admin:text:{key}", style="primary")
+    kb.button(text="Сменить стиль", callback_data="admin:style", style="primary")
     kb.button(text="Назад", callback_data="menu:admin", style="primary")
     kb.adjust(1)
     return kb.as_markup()
@@ -1429,6 +1457,7 @@ def server_menu(user_id: int | None = None):
     kb = InlineKeyboardBuilder()
     if role == Role.OWNER:
         approval = bool(bot_settings.get("require_device_approval", True))
+        kb.button(text=f"Версии X-STAB / X-CORE · {VERSION}", callback_data="versions:server", style="success")
         kb.button(text="📊 Статус сервиса", callback_data="server:status", style="primary")
         kb.button(text="🧰 Характеристики VPS", callback_data="server:specs", style="primary")
         kb.button(text="📈 Нагрузка сейчас", callback_data="server:metrics", style="primary")
@@ -1524,6 +1553,10 @@ async def _replace_callback_message(cq: CallbackQuery, text: str, reply_markup=N
     """Обновить текущую карточку; при запрете редактирования убрать старую."""
     try:
         await cq.message.edit_text(text, reply_markup=reply_markup)
+        try:
+            ui_cards.set_card(cq.message.chat.id, cq.from_user.id, cq.message.message_id)
+        except OSError:
+            log.exception("Не удалось сохранить ID карточки")
     except Exception as exc:
         # Telegram возвращает эту ошибку, когда текст уже такой же. В этом
         # случае нельзя удалять карточку и создавать дубль.
@@ -1533,7 +1566,11 @@ async def _replace_callback_message(cq: CallbackQuery, text: str, reply_markup=N
             await cq.message.delete()
         except Exception:
             pass
-        await cq.message.answer(text, reply_markup=reply_markup)
+        sent = await cq.message.answer(text, reply_markup=reply_markup)
+        try:
+            ui_cards.set_card(sent.chat.id, cq.from_user.id, sent.message_id)
+        except OSError:
+            log.exception("Не удалось сохранить ID новой карточки")
 
 # =====================================================================
 #  Глобальные объекты
@@ -1802,6 +1839,24 @@ def on_mqtt_message(topic: str, data: dict) -> None:
     elif msg_type == "disks" and payload.get("type") == "disks":
         disks_collector.submit(device_id, payload)
     elif msg_type == "capabilities" and payload.get("type") == "capabilities":
+        # X-MAP stores only bounded declarations, never arbitrary agent fields
+        # or credentials. A declaration is not proof that hardware works.
+        commands = payload.get("commands")
+        features = payload.get("features")
+        if isinstance(commands, list):
+            clean_commands = sorted({
+                str(command) for command in commands[:256]
+                if isinstance(command, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", command)
+            })
+            clean_features = {
+                str(key): value for key, value in (features or {}).items()
+                if isinstance(key, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key)
+                and isinstance(value, bool)
+            } if isinstance(features, dict) else {}
+            devices.upsert(device_id, {
+                "capabilities": {"commands": clean_commands, "features": clean_features},
+                "capabilities_seen": time.time(),
+            })
         capabilities_collector.submit(device_id, payload)
     elif msg_type == "guardian" and payload.get("type") == "guardian":
         # Храним только последний подписанный ответ Guardian без лишних
@@ -1890,21 +1945,40 @@ async def cmd_start(message: Message, state: FSMContext):
         except Exception:
             log.exception("Не удалось уведомить владельца о новом пользователе")
     if role == Role.BLOCKED:
-        await message.answer(text_store.get("custom_blocked" if _custom_ui() else "blocked"))
+        await message.answer(text_store.get_for_style("blocked", bot_settings.get("ui_style", "technical")))
         return
     if role == Role.GUEST:
-        intro = text_store.get("custom_start_guest" if _custom_ui() else "start_guest")
+        intro_key = "start_guest"
     elif role == Role.USER:
-        intro = text_store.get("custom_start_user" if _custom_ui() else "start_user")
+        intro_key = "start_user"
     else:
-        intro = text_store.get("custom_start_owner" if _custom_ui() else "start_owner")
-    await message.answer(
+        intro_key = "start_owner"
+    intro = text_store.get_for_style(intro_key, bot_settings.get("ui_style", "technical"))
+    start_text = (
         f"<b>XIDER {XIDER_BUILD_CODE}</b>\n"
         f"Роль: <b>{html.escape(_role_label(role))}</b>\n"
         f"Устройств онлайн: <b>{online_count}/{total_count}</b>\n\n"
-        f"{html.escape(intro)}",
-        reply_markup=main_menu(message.from_user.id),
+        f"{html.escape(intro)}"
     )
+    card_id = ui_cards.get(message.chat.id, message.from_user.id)
+    if card_id:
+        try:
+            await bot.edit_message_text(
+                start_text,
+                chat_id=message.chat.id,
+                message_id=card_id,
+                reply_markup=main_menu(message.from_user.id),
+            )
+            return
+        except Exception as exc:
+            if "not modified" in str(exc).lower():
+                return
+            log.info("Не удалось обновить старую карточку /start; создам новую: %s", exc)
+    sent = await message.answer(start_text, reply_markup=main_menu(message.from_user.id))
+    try:
+        ui_cards.set_card(sent.chat.id, message.from_user.id, sent.message_id)
+    except OSError:
+        log.exception("Не удалось сохранить ID главной карточки")
 
 
 @router.message(AdminFilter(), Command("cancel"))
@@ -1922,46 +1996,39 @@ async def cmd_cancel(message: Message, state: FSMContext):
 
 @router.callback_query(ReadOnlyFilter(), F.data == "menu:about")
 async def on_menu_about(cq: CallbackQuery):
-    """Раздел 'О системе XIDER' — полная инфо-карточка."""
-    await cq.answer()
-    devs   = devices.all()
-    online = sum(1 for v in devs.values() if _status_dot(v) in ("🟢", "🟡"))
-    total  = len(devs)
-
-    text = (
-        f"⚡ <b>XIDER</b> — Remote Control System\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"\n"
-        f"<b>Версия:</b> {XIDER_BUILD_CODE}\n"
-        f"<b>Сборка:</b>  {XIDER_BUILD}\n"
-        f"<b>👨‍💻 Автор:</b>   {XIDER_AUTHOR}\n"
-        f"\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"<b>🏗 Архитектура</b>\n"
-        f"┌ Бот:      Python 3.10+ / aiogram 3.x\n"
-        f"├ Агент Win: Python + pystray + WinAPI\n"
-        f"└ Агент Mac: Python + pyobjc + osascript\n"
-        f"\n"
-        f"<b>📡 Транспорт</b>\n"
-        f"┌ Протокол: MQTT v3.1.1\n"
-        f"├ Брокер:   EMQX Cloud Serverless\n"
-        f"├ TLS:      ✅ 8883 (SSL/TLS)\n"
-        f"└ Топик:    xgent/v1/{{device_id}}/cmd\n"
-        f"\n"
-        f"<b>🔐 Безопасность</b>\n"
-        f"┌ Подпись:  HMAC-SHA256 (каждое сообщение)\n"
-        f"├ Антирепл: Nonce + временное окно 120с\n"
-        f"├ Шифровка: AES-256-GCM (опционально)\n"
-        f"└ Доступ:   whitelist по Telegram ID\n"
-        f"\n"
-        f"<b>📊 Статус прямо сейчас</b>\n"
-        f"└ Устройств онлайн: <b>{online} / {total}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━"
-    )
+    """XIDER handbook: short index, then individually readable chapters."""
     kb = InlineKeyboardBuilder()
+    for slug, title, _ in info_book.CHAPTERS:
+        kb.button(text=title, callback_data=f"about:chapter:{slug}", style="primary")
     kb.button(text="🏠 Главное меню", callback_data="menu:main", style="primary")
     kb.adjust(1)
-    await cq.message.answer(text, reply_markup=kb.as_markup())
+    await _replace_callback_message(
+        cq,
+        "<b>XIDER · книга проекта</b>\n"
+        f"Сборка бота: <code>{html.escape(XIDER_BUILD_CODE)}</code>\n"
+        "Выбери главу. Внутри — назначение частей, версии, ограничения и план TARPED.",
+        reply_markup=kb.as_markup(),
+    )
+    await cq.answer()
+
+
+@router.callback_query(ReadOnlyFilter(), F.data.startswith("about:chapter:"))
+async def on_about_chapter(cq: CallbackQuery):
+    slug = cq.data.rsplit(":", 1)[-1]
+    try:
+        index, title, body = info_book.chapter(slug)
+    except KeyError:
+        await cq.answer("Такой главы нет", show_alert=True)
+        return
+    kb = InlineKeyboardBuilder()
+    if index:
+        kb.button(text="⬅️ Предыдущая", callback_data=f"about:chapter:{info_book.CHAPTERS[index - 1][0]}", style="primary")
+    if index + 1 < len(info_book.CHAPTERS):
+        kb.button(text="Следующая ➡️", callback_data=f"about:chapter:{info_book.CHAPTERS[index + 1][0]}", style="primary")
+    kb.button(text="К оглавлению", callback_data="menu:about", style="primary")
+    kb.adjust(2, 1)
+    await _replace_callback_message(cq, f"<b>{html.escape(title)}</b>\n\n{html.escape(body)}", reply_markup=kb.as_markup())
+    await cq.answer()
 
 
 @router.message(AdminFilter(), Form.wait_url)
@@ -2229,8 +2296,10 @@ async def on_admin_users(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data == "admin:texts")
 async def on_admin_texts(cq: CallbackQuery):
+    mode = xlex.normalize_style(bot_settings.get("ui_style", "technical"))
     await cq.message.edit_text(
-        "<b>Тексты бота</b>\nВыбери сообщение, которое нужно заменить. Секреты сюда не сохраняются.",
+        f"<b>X-LEX · {html.escape(xlex.STYLE_NAMES[mode])}</b>\n"
+        "Выбери сообщение для изменения. Секреты сюда не сохраняются.",
         reply_markup=admin_texts_menu(),
     )
     await cq.answer()
@@ -2440,18 +2509,36 @@ async def on_admin_audit(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data == "admin:style")
 async def on_admin_style(cq: CallbackQuery):
-    current = str(bot_settings.get("ui_style", "technical"))
-    new_style = {"technical": "conversational", "conversational": "custom", "custom": "technical"}.get(current, "technical")
-    labels = {"technical": "Технический режим", "conversational": "Разговорный режим", "custom": "Кастомный режим"}
-    bot_settings.set_key("ui_style", new_style)
-    access_store.append_audit("ui_style_set", actor_id=cq.from_user.id, detail=new_style)
+    kb = InlineKeyboardBuilder()
+    current = xlex.normalize_style(bot_settings.get("ui_style", "technical"))
+    for style in xlex.STYLES:
+        prefix = "● " if style == current else "○ "
+        kb.button(text=prefix + xlex.STYLE_NAMES[style], callback_data=f"admin:style:set:{style}", style="success" if style == current else "primary")
+    kb.button(text="Назад", callback_data="menu:admin", style="primary")
+    kb.adjust(1)
     await cq.message.edit_text(
-        "<b>Администрирование</b>\n"
-        "Пользователи, роли, выданные права и журнал действий.\n"
-        "Владелец защищён: его нельзя заблокировать, понизить или удалить.",
+        "<b>X-LEX · стиль текста</b>\n"
+        "Меняются формулировки, но не права доступа и не смысл подтверждений.",
+        reply_markup=kb.as_markup(),
+    )
+    await cq.answer()
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("admin:style:set:"))
+async def on_admin_style_set(cq: CallbackQuery):
+    style = cq.data.rsplit(":", 1)[-1]
+    if style not in xlex.STYLES:
+        await cq.answer("Неизвестный стиль", show_alert=True)
+        return
+    bot_settings.set_key("ui_style", style)
+    access_store.append_audit("ui_style_set", actor_id=cq.from_user.id, detail=style)
+    await cq.message.edit_text(
+        f"<b>X-LEX · {html.escape(xlex.STYLE_NAMES[style])}</b>\n"
+        f"{html.escape(xlex.render('start_owner', style))}\n\n"
+        "Приветствие этого стиля можно изменить в разделе «Тексты бота».",
         reply_markup=admin_menu(),
     )
-    await cq.answer(labels[new_style])
+    await cq.answer("Стиль выбран")
 
 # =====================================================================
 #  Хендлеры: навигация
@@ -4762,44 +4849,9 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
             reply_markup=back_to_device_kb(),
         )
 
-    anim_task = None
-    stop_anim = asyncio.Event()
-
-    async def _animate_loader():
-        frames = [
-            "<code>◐ Ожидаю ответ агента…</code>",
-            "<code>◓ Ожидаю ответ агента…</code>",
-            "<code>◑ Ожидаю ответ агента…</code>",
-            "<code>◒ Ожидаю ответ агента…</code>",
-        ]
-        idx = 0
-        while not stop_anim.is_set():
-            # Быстрый визуальный спиннер без ложных процентов: это ожидание,
-            # а не измеренный прогресс операции.
-            await asyncio.sleep(0.9)
-            if stop_anim.is_set():
-                break
-            idx = (idx + 1) % len(frames)
-            try:
-                await status_msg.edit_text(
-                    f"⏳ <b>{emoji} {label}</b> · <b>{html.escape(target_label(target))}</b>\n{frames[idx]}",
-                    reply_markup=back_to_device_kb(),
-                )
-            except Exception:
-                pass
-
-    anim_task = asyncio.create_task(_animate_loader())
-
-    try:
-        result = await fun_text_collector.wait_for(target, action, timeout=timeout, command_id=command_id)
-    finally:
-        stop_anim.set()
-        if anim_task:
-            anim_task.cancel()
-            try:
-                await anim_task
-            except (asyncio.CancelledError, Exception):
-                pass
+    # A single real progress state is more reliable than a rapid, decorative
+    # edit loop that can hit Telegram rate limits and look like a freeze.
+    result = await fun_text_collector.wait_for(target, action, timeout=timeout, command_id=command_id)
 
     text = (result or {}).get("text") or ("Агент не ответил за отведённое время." if result is None else "Ответ без текста")
     if result is None:
@@ -5063,6 +5115,179 @@ async def on_cmd_guardian_menu(cq: CallbackQuery):
     await cq.answer()
 
 
+def _version_context(kind: str) -> tuple[str, str, str] | None:
+    """Return title, component key and current version for one version page."""
+    if kind == "server":
+        return "X-STAB / X-CORE", "server", VERSION
+    target = SESSION.get("target")
+    info = devices.get(target) if target else None
+    if not info:
+        return None
+    component = release_catalog.component_for(str(info.get("os") or ""), keeper=kind == "keeper")
+    if not component:
+        return None
+    if kind == "keeper":
+        current = str((info.get("guardian") or {}).get("version") or "?")
+        return "Guard Keeper", component, current
+    return "X-EDGE-W" if component == "windows_agent" else "X-EDGE-M", component, str(info.get("version") or "?")
+
+
+def _version_root_menu(server: bool = False):
+    kb = InlineKeyboardBuilder()
+    if server:
+        kb.button(text=f"X-STAB / X-CORE · {VERSION}", callback_data="versions:list:server:0", style="primary")
+        kb.button(text="Назад в серверную", callback_data="menu:server", style="primary")
+    else:
+        target = SESSION.get("target") or ""
+        info = devices.get(target) or {}
+        agent = str(info.get("version") or "?")
+        keeper = str((info.get("guardian") or {}).get("version") or "?")
+        kb.button(text=f"Агент · {agent}", callback_data="versions:list:agent:0", style="primary")
+        kb.button(text=f"Guard Keeper · {keeper}", callback_data="versions:list:keeper:0", style="primary")
+        kb.button(text="К устройству", callback_data="back:device", style="primary")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+@router.callback_query(AdminFilter(), F.data == "versions:device")
+async def on_versions_device(cq: CallbackQuery):
+    target = SESSION.get("target")
+    if not target or not devices.get(target):
+        await cq.answer("Сначала выбери устройство", show_alert=True)
+        return
+    await _replace_callback_message(
+        cq,
+        f"<b>Версии · {html.escape(target_label(target))}</b>\n"
+        "У агента и Guard Keeper отдельные версии. Ниже — история опубликованных "
+        "выпусков GitHub; наличие тега ещё не означает наличие установочного пакета.",
+        reply_markup=_version_root_menu(),
+    )
+    await cq.answer()
+
+
+@router.callback_query(OwnerFilter(), F.data == "versions:server")
+async def on_versions_server(cq: CallbackQuery):
+    await _replace_callback_message(
+        cq,
+        f"<b>Версии сервера</b>\nТекущая сборка: <code>{html.escape(XIDER_BUILD_CODE)}</code>\n"
+        "X-STAB и X-CORE пока выпускаются одним серверным пакетом. История GitHub "
+        "показывается отдельно от кнопки установки подготовленного пакета.",
+        reply_markup=_version_root_menu(server=True),
+    )
+    await cq.answer()
+
+
+@router.callback_query(AdminFilter(), F.data.startswith("versions:list:"))
+async def on_versions_list(cq: CallbackQuery):
+    parts = cq.data.split(":")
+    if len(parts) != 4 or parts[2] not in {"agent", "keeper", "server"} or not parts[3].isdigit():
+        await cq.answer("Некорректный запрос", show_alert=True)
+        return
+    kind, page = parts[2], min(int(parts[3]), 100)
+    if kind == "server" and get_user_role(cq.from_user.id) != Role.OWNER:
+        await cq.answer("Только для владельца", show_alert=True)
+        return
+    context = _version_context(kind)
+    if context is None:
+        await cq.answer("Нет данных об ОС устройства", show_alert=True)
+        return
+    title, component, current = context
+    try:
+        releases = await asyncio.to_thread(release_catalog.catalog.list)
+    except (OSError, ValueError) as exc:
+        await _replace_callback_message(
+            cq,
+            f"<b>X-LEDGER · {html.escape(title)}</b>\n"
+            "Не удалось получить GitHub Releases. Локальная версия не изменена.\n"
+            f"Причина: <code>{html.escape(str(exc)[:180])}</code>",
+            reply_markup=_version_root_menu(server=kind == "server"),
+        )
+        await cq.answer("Каталог временно недоступен")
+        return
+    page_size = 8
+    start = page * page_size
+    if start >= len(releases) and page:
+        page = 0
+        start = 0
+    shown = releases[start:start + page_size]
+    lines = [
+        f"<b>X-LEDGER · {html.escape(title)}</b>",
+        f"Установлено: <code>{html.escape(current)}</code>",
+        "✅ — пакет для этой части найден; ○ — только описание выпуска.",
+    ]
+    kb = InlineKeyboardBuilder()
+    for release in shown:
+        available = release.has_package(component)
+        lines.append(f"{'✅' if available else '○'} <code>{release.tag}</code> · {html.escape(release.name[:55])}")
+        kb.button(text=f"{'✅' if available else '○'} {release.tag} · Что нового", callback_data=f"versions:detail:{kind}:{release.tag}", style="success" if available else "primary")
+    if not releases:
+        lines.append("Опубликованных выпусков пока не найдено.")
+    if page:
+        kb.button(text="⬅️ Ранее", callback_data=f"versions:list:{kind}:{page - 1}", style="primary")
+    if start + page_size < len(releases):
+        kb.button(text="Дальше ➡️", callback_data=f"versions:list:{kind}:{page + 1}", style="primary")
+    kb.button(text="К разделам версий", callback_data="versions:server" if kind == "server" else "versions:device", style="primary")
+    kb.adjust(1)
+    await _replace_callback_message(cq, "\n".join(lines), reply_markup=kb.as_markup())
+    await cq.answer()
+
+
+@router.callback_query(AdminFilter(), F.data.startswith("versions:detail:"))
+async def on_versions_detail(cq: CallbackQuery):
+    parts = cq.data.split(":")
+    if len(parts) not in (4, 5) or parts[2] not in {"agent", "keeper", "server"}:
+        await cq.answer("Некорректный запрос", show_alert=True)
+        return
+    kind, tag = parts[2], parts[3]
+    if len(parts) == 5 and not parts[4].isdigit():
+        await cq.answer("Некорректная страница", show_alert=True)
+        return
+    notes_page = min(int(parts[4]), 10) if len(parts) == 5 else 0
+    if kind == "server" and get_user_role(cq.from_user.id) != Role.OWNER:
+        await cq.answer("Только для владельца", show_alert=True)
+        return
+    context = _version_context(kind)
+    if context is None:
+        await cq.answer("Нет данных об ОС устройства", show_alert=True)
+        return
+    title, component, current = context
+    try:
+        releases = await asyncio.to_thread(release_catalog.catalog.list)
+    except (OSError, ValueError):
+        await cq.answer("Каталог временно недоступен", show_alert=True)
+        return
+    release = next((item for item in releases if item.tag == tag), None)
+    if not release:
+        await cq.answer("Выпуск не найден", show_alert=True)
+        return
+    available = release.has_package(component)
+    status = "Готовый пакет этого компонента есть" if available else "Установочного пакета этого компонента нет"
+    notes = release.notes.strip() or "Описание выпуска отсутствует."
+    note_size = 2500
+    note_count = max(1, (len(notes) + note_size - 1) // note_size)
+    notes_page = min(notes_page, note_count - 1)
+    note_chunk = notes[notes_page * note_size:(notes_page + 1) * note_size]
+    kb = InlineKeyboardBuilder()
+    if notes_page:
+        kb.button(text="⬅️ Предыдущая часть", callback_data=f"versions:detail:{kind}:{tag}:{notes_page - 1}", style="primary")
+    if notes_page + 1 < note_count:
+        kb.button(text="Следующая часть ➡️", callback_data=f"versions:detail:{kind}:{tag}:{notes_page + 1}", style="primary")
+    kb.button(text="К списку выпусков", callback_data=f"versions:list:{kind}:0", style="primary")
+    kb.adjust(1)
+    await _replace_callback_message(
+        cq,
+        f"<b>{html.escape(title)} · {html.escape(release.tag)}</b>\n"
+        f"Установлено: <code>{html.escape(current)}</code>\n"
+        f"Опубликовано: {html.escape(release.published_at[:10] or 'неизвестно')}\n"
+        f"{html.escape(status)}.\n\n"
+        f"<b>Что нового · часть {notes_page + 1}/{note_count}</b>\n<pre>{html.escape(note_chunk)}</pre>\n\n"
+        "Установка из каталога появится после проверки TwinShift и совместимости; "
+        "эта карточка ничего не меняет на устройстве.",
+        reply_markup=kb.as_markup(),
+    )
+    await cq.answer()
+
+
 async def _guardian_command(cq: CallbackQuery, command: str, *, enabled: bool | None = None):
     kwargs = {"command": command}
     if enabled is not None:
@@ -5120,7 +5345,7 @@ async def on_cmd_net_ping(cq: CallbackQuery):
 
 @router.callback_query(AnyAccessFilter(), F.data == "cmd:geo_location")
 async def on_cmd_geo_location(cq: CallbackQuery):
-    await simple_command(cq, "geo_location", "📍", "Геолокация", timeout=15.0)
+    await simple_command(cq, "geo_location", "⚠️", _lex("geo_beta"), timeout=16.0)
 
 
 # =====================================================================

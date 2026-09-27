@@ -4,8 +4,8 @@
 #
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(2, 0, 0, 0),
-    prodvers=(2, 0, 0, 0),
+    filevers=(4, 0, 0, 0),
+    prodvers=(4, 0, 0, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -21,12 +21,12 @@ VSVersionInfo(
           [
             StringStruct(u'CompanyName', u'XIDER Systems'),
             StringStruct(u'FileDescription', u'XIDER Remote Endpoint Agent'),
-            StringStruct(u'FileVersion', u'2.0.0.0'),
+            StringStruct(u'FileVersion', u'4.0.0.0'),
             StringStruct(u'InternalName', u'XGENT-WDS'),
             StringStruct(u'LegalCopyright', u'Copyright (C) 2026 XIDER Project. All rights reserved.'),
             StringStruct(u'OriginalFilename', u'XGENT-WDS.exe'),
             StringStruct(u'ProductName', u'XIDER Endpoint Management'),
-            StringStruct(u'ProductVersion', u'2.0.0.0'),
+            StringStruct(u'ProductVersion', u'4.0.0.0'),
           ]
         )
       ]

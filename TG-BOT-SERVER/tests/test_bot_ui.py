@@ -199,8 +199,8 @@ def test_custom_ui_mode_changes_admin_label_and_main_menu(monkeypatch):
     monkeypatch.setattr(bot.bot_settings, "get", lambda key, default=None: "custom" if key == "ui_style" else default)
     markup = bot.main_menu(bot.ADMIN_ID)
     texts = [b.text for row in markup.inline_keyboard for b in row]
-    assert "🧰 Мои машинки" in texts
-    assert "🌍 Весь зоопарк" in texts
+    assert "Устройства · кто тут живой?" in texts
+    assert "Все устройства · полный состав" in texts
 
 
 def test_server_menu_contains_metrics_chart_and_safe_terminal():

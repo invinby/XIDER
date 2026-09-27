@@ -1,5 +1,38 @@
 # XIDER release history
 
+## X4.0.0-TARPED+20260927 — TARPED foundation
+
+Deployed to the XIDER VPS on 2026-09-27. Release artifacts are built from the
+matching Git tag by GitHub Actions.
+
+### English
+
+- Started X-LEX with six named voices and a test for missing phrases.
+- Added a chapter-based in-bot handbook and X-LEDGER's read-only GitHub
+  Releases browser for agent, Guard Keeper and server components.
+- Prepared future release packaging for Windows/macOS agents, Guard Keeper,
+  the server and a SHA-256 asset inventory. Verified installation and A/B
+  rollback are still outstanding.
+- Added X-LOCK to prevent two updated Windows agents from creating duplicate
+  tray icons. Existing running older copies are not stopped automatically.
+- Improved Windows/macOS IP-location error handling, HTTPS fallback and
+  approximate-location labeling. Removed decorative progress edits.
+- Preserved an existing protected Windows env file during repeat bootstrap.
+
+### Русский
+
+- Начата X-LEX: шесть стилей текста и тест на неполный словарь.
+- Добавлены главы «О XIDER» и X-LEDGER — просмотр GitHub-выпусков отдельно
+  для агента, Guard Keeper и серверной части.
+- Подготовлена сборка пакетов и список SHA-256 для будущих выпусков. Установка
+  выбранной версии и проверенный откат A/B пока не реализованы.
+- X-LOCK предотвращает запуск двух обновлённых Windows-агентов и дубли
+  значков. Уже работающие старые копии автоматически не останавливаются.
+- Геолокация по IP честно помечена как приблизительная; обработка ошибок
+  улучшена, небезопасный HTTP-запасной источник удалён. Убран декоративный
+  цикл редактирования сообщения при ожидании команды.
+- Повторная установка Windows сохраняет существующий защищённый env-файл.
+
 ## X3.3.8+20260926 — XIDER Guardian supervisor
 
 ### English

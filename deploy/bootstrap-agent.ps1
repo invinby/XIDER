@@ -8,8 +8,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repoUrl = 'https://github.com/invinby/XIDER/archive/refs/heads/main.zip'
-$zip = Join-Path $env:TEMP 'xider-agent-main.zip'
 $extract = Join-Path $env:TEMP ('xider-agent-' + [guid]::NewGuid().ToString('N'))
+$zip = Join-Path $extract 'source.zip'
+$unpack = Join-Path $extract 'unpacked'
 $repo = Join-Path $InstallRoot 'git-ver'
 $agent = Join-Path $repo 'XGENT-WDS'
 
@@ -17,8 +18,8 @@ try {
     Write-Host '[1/5] Скачиваю последнюю версию XIDER...'
     New-Item -ItemType Directory -Path $extract -Force | Out-Null
     Invoke-WebRequest -Uri $repoUrl -OutFile $zip -UseBasicParsing -TimeoutSec 90
-    Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
-    $downloaded = Get-ChildItem -LiteralPath $extract -Directory | Select-Object -First 1
+    Expand-Archive -LiteralPath $zip -DestinationPath $unpack -Force
+    $downloaded = Get-ChildItem -LiteralPath $unpack -Directory | Select-Object -First 1
     if (-not $downloaded) { throw 'GitHub archive is empty.' }
 
     Write-Host '[2/5] Ищу локальный .env...'
@@ -42,17 +43,20 @@ try {
         $envSource = $fetched
     }
 
-    # Предыдущий установщик специально закрыл ACL на .env. Сохраняем его во
-    # временную копию, но старую checkout-папку не удаляем: Windows может не
-    # разрешить удалить защищённый файл даже после попытки сменить ACL.
-    $stagedEnv = Join-Path $extract 'agent-preserved.env'
-    Copy-Item -LiteralPath $envSource -Destination $stagedEnv -Force
-    $envSource = $stagedEnv
-    Write-Host '[3/5] Обновляю файлы агента, защищённый .env сохраняю...'
+    $targetEnv = Join-Path $agent '.env'
+    if (Test-Path -LiteralPath $targetEnv) {
+        # Защищённый ACL файл не копируем во временную папку и не перезаписываем.
+        # Это устраняет отказ в доступе при повторной установке.
+        Write-Host '[3/5] Существующий .env оставляю без изменений.'
+    } else {
+        $stagedEnv = Join-Path $extract 'agent-preserved.env'
+        Copy-Item -LiteralPath $envSource -Destination $stagedEnv -Force
+        $envSource = $stagedEnv
+        Write-Host '[3/5] Новый .env подготовлен.'
+    }
     New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
     New-Item -ItemType Directory -Path $repo -Force | Out-Null
     Copy-Item -Path (Join-Path $downloaded.FullName '*') -Destination $repo -Recurse -Force
-    $targetEnv = Join-Path $agent '.env'
     if (-not (Test-Path -LiteralPath $targetEnv)) {
         Copy-Item -LiteralPath $envSource -Destination $targetEnv -Force
     }
@@ -84,6 +88,5 @@ try {
 }
 finally {
     Pop-Location -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue
 }

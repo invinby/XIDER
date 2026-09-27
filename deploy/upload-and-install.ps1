@@ -67,8 +67,12 @@ try {
     # Keep operational files that may intentionally remain untracked while a
     # release is being prepared. Never include .env or private keys here.
     $extraFiles = @(
+        'TG-BOT-SERVER\info_book.py',
+        'TG-BOT-SERVER\release_catalog.py',
         'TG-BOT-SERVER\server_ops.py',
         'TG-BOT-SERVER\text_store.py',
+        'TG-BOT-SERVER\ui_cards.py',
+        'TG-BOT-SERVER\xlex.py',
         'deploy\update-server.sh',
         'deploy\rotate-runtime-secrets.sh',
         'deploy\bootstrap.ps1',

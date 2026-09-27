@@ -1022,7 +1022,6 @@ class XgentClient:
         providers = (
             ("ipapi.co", "https://ipapi.co/json/"),
             ("ipinfo.io", "https://ipinfo.io/json"),
-            ("ip-api.com", "http://ip-api.com/json/?fields=status,message,country,city,lat,lon,query,isp"),
         )
         data = None
         provider = None
@@ -1030,8 +1029,10 @@ class XgentClient:
         for name, url in providers:
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "XIDER-Agent/3"})
-                with urllib.request.urlopen(req, timeout=8) as response:
-                    candidate = json.loads(response.read().decode("utf-8", "replace"))
+                with urllib.request.urlopen(req, timeout=6) as response:
+                    candidate = json.loads(response.read(16_385).decode("utf-8", "replace"))
+                if not isinstance(candidate, dict):
+                    raise RuntimeError("provider returned invalid data")
                 if candidate.get("error") or candidate.get("status") == "fail":
                     raise RuntimeError(candidate.get("reason") or candidate.get("message") or "provider error")
                 if candidate.get("ip") or candidate.get("query") or candidate.get("city"):
@@ -1040,18 +1041,20 @@ class XgentClient:
             except Exception as exc:
                 errors.append(f"{name}: {exc}")
         if data:
+            def safe(value):
+                return str(value if value not in (None, "") else "?")[:120]
+
             ip = data.get("ip") or data.get("query") or "?"
             country = data.get("country_name") or data.get("country") or "?"
             city = data.get("city") or "?"
             org = data.get("org") or data.get("isp") or "?"
-            lat = data.get("latitude") or data.get("lat") or "?"
-            lon = data.get("longitude") or data.get("lon") or "?"
-            info = ("📍 <b>Приблизительная геолокация по IP:</b>\n"
-                    f"🌍 Страна: {country}\n🏙 Город: {city}\n📡 Провайдер: {org}\n"
-                    f"🗺 Координаты: {lat}, {lon}\n💻 IP: {ip}\n🔎 Источник: {provider}")
+            coordinates = data.get("loc") or f"{data.get('latitude') or '?'}, {data.get('longitude') or '?'}"
+            info = ("Приблизительная локация по публичному IP, не GPS:\n"
+                    f"🌍 Страна: {safe(country)}\n🏙 Город: {safe(city)}\n📡 Провайдер: {safe(org)}\n"
+                    f"🗺 Координаты: {safe(coordinates)}\n💻 IP: {safe(ip)}\n🔎 Источник: {safe(provider)}")
             ok = True
         else:
-            info = "⚠️ Геолокация недоступна: " + "; ".join(errors[:3])
+            info = "Локация по IP недоступна: " + "; ".join(errors[:2])[:300]
             ok = False
             
         self._publish_response("geo_location", {

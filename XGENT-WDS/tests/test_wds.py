@@ -379,6 +379,48 @@ def test_capabilities_does_not_leak_secret(client):
     assert "open_app" in payload["commands"]
 
 
+def test_x_lock_rejects_second_windows_agent(tmp_path, monkeypatch):
+    import msvcrt
+
+    monkeypatch.setattr(wds, "CONFIG_DIR", tmp_path)
+    assert wds.acquire_instance_lock() is True
+    try:
+        assert wds.acquire_instance_lock() is False
+    finally:
+        handle = wds._instance_lock_file
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        handle.close()
+        wds._instance_lock_file = None
+
+
+def test_geoip_uses_https_fallback_and_reports_approximation(client, monkeypatch):
+    import io
+    import urllib.request
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            self.close()
+
+    calls = []
+
+    def fake_urlopen(request, timeout):
+        calls.append(request.full_url)
+        if "ipapi.co" in request.full_url:
+            raise OSError("provider unavailable")
+        return Response(b'{"ip":"203.0.113.10","city":"Test","country":"XX","loc":"1.0,2.0"}')
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    client._do_geo_location({})
+    results = [payload for topic, payload in _publish_calls(client) if topic.endswith("/geo_location")]
+    assert results and results[-1]["ok"] is True
+    assert "не GPS" in results[-1]["text"]
+    assert calls == ["https://ipapi.co/json/", "https://ipinfo.io/json"]
+
+
 def test_config_fails_closed_without_key(tmp_path):
     """Без SHARED_KEY в env и в .env config.py должен вызвать SystemExit(2)."""
     import os as _os

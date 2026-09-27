@@ -39,6 +39,7 @@ known_devices.json
 bot_settings.json
 access_control.json
 admin_audit.jsonl
+.ui_cards.json
 
 # Pytest / Cache
 .pytest_cache/

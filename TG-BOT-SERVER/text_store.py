@@ -6,6 +6,8 @@ import json
 import threading
 from pathlib import Path
 
+import xlex
+
 FILE = Path(__file__).resolve().parent / "bot_texts.json"
 _lock = threading.Lock()
 DEFAULTS = {
@@ -18,6 +20,9 @@ DEFAULTS = {
     "custom_start_owner": "Панель хозяина на месте. Сервер жив, устройства ждут приказов.",
     "custom_blocked": "Стоп-машина: этот аккаунт заблокирован владельцем.",
 }
+for _key in ("start_guest", "start_user", "start_owner", "blocked"):
+    for _style in xlex.STYLES:
+        DEFAULTS[f"{_style}_{_key}"] = xlex.render(_key, _style)
 
 
 def _load() -> dict:
@@ -35,6 +40,20 @@ def all_texts() -> dict:
 
 def get(key: str) -> str:
     return str(all_texts().get(key, DEFAULTS.get(key, "")))
+
+
+def get_for_style(key: str, style: str | None) -> str:
+    """Respect owner edits, including legacy custom copy after migration."""
+    canonical = xlex.normalize_style(style)
+    specific = f"{canonical}_{key}"
+    with _lock:
+        saved = _load()
+    if specific in saved:
+        return str(saved[specific])
+    legacy = f"custom_{key}"
+    if canonical == "xperson" and legacy in saved:
+        return str(saved[legacy])
+    return DEFAULTS[specific]
 
 
 def set_text(key: str, value: str) -> None:

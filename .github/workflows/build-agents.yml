@@ -83,13 +83,42 @@ jobs:
           name: XGENT-MCS-macOS
           path: XGENT-MCS/dist/XGENT-MCS-macos-bundle.zip
 
+  pack-components:
+    name: "Package Guard Keeper and server components"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@v4
+
+      - name: "Create source packages from the tagged tree"
+        run: |
+          mkdir -p artifacts
+          zip -q artifacts/Guard-Keeper-Windows.zip \
+            XGENT-WDS/xider_guardian_wds.py \
+            XGENT-WDS/install_guardian.ps1 \
+            XGENT-WDS/start_guardian.bat \
+            XGENT-WDS/stop_guardian.bat
+          zip -q artifacts/Guard-Keeper-macOS.zip \
+            XGENT-MCS/xider_guardian.py \
+            XGENT-MCS/start_guardian.sh
+          git archive --format=zip --output=artifacts/X-STAB-server.zip HEAD TG-BOT-SERVER deploy
+
+      - name: "Upload component packages"
+        uses: actions/upload-artifact@v4
+        with:
+          name: XIDER-Components
+          path: artifacts/*.zip
+
   create-release:
     name: "Publish GitHub Release"
-    needs: [build-windows, build-macos]
+    needs: [build-windows, build-macos, pack-components]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
 
     steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@v4
+
       - name: "Download Windows Artifact"
         uses: actions/download-artifact@v4
         with:
@@ -102,12 +131,29 @@ jobs:
           name: XGENT-MCS-macOS
           path: artifacts/macos
 
+      - name: "Download Guard Keeper and server packages"
+        uses: actions/download-artifact@v4
+        with:
+          name: XIDER-Components
+          path: artifacts/components
+
+      - name: "Build asset inventory"
+        run: |
+          cp artifacts/windows/XGENT-WDS.exe artifacts/XGENT-WDS.exe
+          cp artifacts/macos/XGENT-MCS-macos-bundle.zip artifacts/XGENT-MCS-macos-bundle.zip
+          cp artifacts/components/*.zip artifacts/
+          python tools/build_release_manifest.py "${GITHUB_REF_NAME}" artifacts
+
       - name: "Create GitHub Release"
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/windows/*
-            artifacts/macos/XGENT-MCS-macos-bundle.zip
+            artifacts/XGENT-WDS.exe
+            artifacts/XGENT-MCS-macos-bundle.zip
+            artifacts/Guard-Keeper-Windows.zip
+            artifacts/Guard-Keeper-macOS.zip
+            artifacts/X-STAB-server.zip
+            artifacts/release-manifest.json
           draft: false
           prerelease: false
           generate_release_notes: true
