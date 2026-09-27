@@ -32,6 +32,15 @@ jobs:
           pip install pytest pytest-asyncio
 
       - name: "Run TG-BOT-SERVER tests"
+        env:
+          SHARED_KEY: test-secret-not-real-0123456789
+          BOT_TOKEN: 123456:TEST-TOKEN-NOT-REAL
+          ADMIN_ID: "0"
+          MQTT_BROKER: localhost
+          MQTT_PORT: "1883"
+          MQTT_PREFIX: xgent/v1
+          MQTT_TLS: "false"
+          ENCRYPT_PAYLOAD: "false"
         run: |
           cd TG-BOT-SERVER
           python -m pytest tests -v
