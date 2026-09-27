@@ -1959,6 +1959,10 @@ async def cmd_start(message: Message, state: FSMContext):
         f"Роль: <b>{html.escape(_role_label(role))}</b>\n"
         f"Устройств онлайн: <b>{online_count}/{total_count}</b>\n\n"
         f"{html.escape(intro)}"
+        # Telegram отвечает `message is not modified`, если /start нажали
+        # повторно до изменения текста. Невидимый nonce заставляет обновить
+        # ту же карточку, не создавая новое сообщение в чате.
+        f"\u2063{uuid.uuid4().hex[:8]}"
     )
     card_id = ui_cards.get(message.chat.id, message.from_user.id)
     if card_id:
