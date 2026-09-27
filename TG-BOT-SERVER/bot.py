@@ -1964,21 +1964,16 @@ async def cmd_start(message: Message, state: FSMContext):
         # ту же карточку, не создавая новое сообщение в чате.
         f"\u2063{uuid.uuid4().hex[:8]}"
     )
-    card_id = ui_cards.get(message.chat.id, message.from_user.id)
-    if card_id:
-        try:
-            await bot.edit_message_text(
-                start_text,
-                chat_id=message.chat.id,
-                message_id=card_id,
-                reply_markup=main_menu(message.from_user.id),
-            )
-            return
-        except Exception as exc:
-            if "not modified" in str(exc).lower():
-                return
-            log.info("Не удалось обновить старую карточку /start; создам новую: %s", exc)
+    # Сначала отправляем новую карточку, а уже потом удаляем старую. Так
+    # очистка чата, устаревший message_id или удалённое Telegram-сообщение не
+    # могут превратить /start в «тихий» обработанный апдейт.
+    old_card_id = ui_cards.get(message.chat.id, message.from_user.id)
     sent = await message.answer(start_text, reply_markup=main_menu(message.from_user.id))
+    if old_card_id and old_card_id != sent.message_id:
+        try:
+            await bot.delete_message(message.chat.id, old_card_id)
+        except Exception:
+            log.debug("Старая карточка /start уже удалена или недоступна", exc_info=True)
     try:
         ui_cards.set_card(sent.chat.id, message.from_user.id, sent.message_id)
     except OSError:
