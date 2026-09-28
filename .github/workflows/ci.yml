@@ -53,3 +53,6 @@ jobs:
         run: |
           cd XGENT-WDS
           python -m pytest tests -v
+
+      - name: "Run X-MAP static audit tests"
+        run: python -m pytest ops/tests -v
