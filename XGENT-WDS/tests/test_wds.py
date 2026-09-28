@@ -286,17 +286,23 @@ def _publish_calls(client):
     ]
 
 
+def _wait_for_topic(client, suffix, timeout=5.0):
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        topics = _publish_calls(client)
+        if any(topic.endswith(suffix) for topic, _ in topics):
+            return topics
+        time.sleep(0.05)
+    return _publish_calls(client)
+
+
 def test_clipboard_routing(client, monkeypatch):
     import pyperclip
     monkeypatch.setattr(pyperclip, "paste", lambda: "hello world")
     client._dispatch({"type": "clipboard", "id": "c1"})
-    import time
-    for _ in range(50):
-        topics = _publish_calls(client)
-        if any(t.endswith("/clipboard") for t, _ in topics):
-            break
-        time.sleep(0.05)
-    topics = _publish_calls(client)
+    topics = _wait_for_topic(client, "/clipboard")
     assert any(t.endswith("/clipboard") for t, _ in topics)
     payload = next(p for t, p in topics if t.endswith("/clipboard"))
     assert payload["text"] == "hello world"
@@ -319,12 +325,7 @@ def test_shell_routing_uses_capture(client, monkeypatch):
 
     monkeypatch.setattr(wds.subprocess, "run", fake_run)
     client._dispatch({"type": "shell", "command": "whoami", "id": "s1"})
-    import time
-    for _ in range(50):
-        topics = _publish_calls(client)
-        if any(t.endswith("/shell") for t, _ in topics):
-            break
-        time.sleep(0.05)
+    topics = _wait_for_topic(client, "/shell")
     assert captured["cmd"] == "whoami"
     assert captured["kwargs"]["shell"] is True
     assert captured["kwargs"]["timeout"] >= 1
@@ -339,12 +340,7 @@ def test_shell_timeout_reports_error(client, monkeypatch):
         raise wds.subprocess.TimeoutExpired(cmd="x", timeout=20)
     monkeypatch.setattr(wds.subprocess, "run", fake_run)
     client._dispatch({"type": "shell", "command": "sleep 999"})
-    import time
-    for _ in range(50):
-        topics = _publish_calls(client)
-        if any(t.endswith("/shell") for t, _ in topics):
-            break
-        time.sleep(0.05)
+    topics = _wait_for_topic(client, "/shell")
     payload = next(p for t, p in topics if t.endswith("/shell"))
     assert "TIMEOUT" in payload["output"]
     assert payload["returncode"] == -1
@@ -363,13 +359,7 @@ def test_open_app_uses_startfile_no_shell(client, monkeypatch):
 
 def test_capabilities_does_not_leak_secret(client):
     client._dispatch({"type": "capabilities", "id": "cap1"})
-    import time
-    for _ in range(50):
-        topics = _publish_calls(client)
-        if any(t.endswith("/capabilities") for t, _ in topics):
-            break
-        time.sleep(0.05)
-    topics = _publish_calls(client)
+    topics = _wait_for_topic(client, "/capabilities")
     payload = next(p for t, p in topics if t.endswith("/capabilities"))
     assert "SHARED_KEY" not in payload
     assert "shared_key" not in payload
