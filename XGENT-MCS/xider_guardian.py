@@ -12,11 +12,15 @@ import json
 import logging
 import os
 import plistlib
+import re
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+import urllib.request
+import zipfile
 from pathlib import Path
 
 import paho.mqtt.client as mqtt
@@ -33,6 +37,7 @@ from config import (
     MQTT_TLS,
     MQTT_USERNAME,
     PLATFORM,
+    XIDER_UPDATE_BRANCH,
     VERSION,
 )
 from crypto import sign_message, verify_message
@@ -42,6 +47,15 @@ log = logging.getLogger("xider.guardian")
 SCRIPT_DIR = Path(__file__).resolve().parent
 STATE_FILE = CONFIG_DIR / "guardian.json"
 GUARDIAN_PLIST = Path.home() / "Library" / "LaunchAgents" / "com.xider.guardian.plist"
+AGENT_FILES = (
+    "xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py",
+    "requirements.txt", "setup_mac.py", "start_agent.sh", "stop_agent.sh",
+    "start_guardian.sh",
+)
+AGENT_ENV_KEYS = (
+    "SHARED_KEY", "MQTT_BROKER", "MQTT_PORT", "MQTT_PREFIX", "MQTT_TLS",
+    "MQTT_USERNAME", "MQTT_PASSWORD", "ENCRYPT_PAYLOAD", "XIDER_UPDATE_BRANCH",
+)
 
 
 def _load_state() -> dict:
@@ -51,7 +65,7 @@ def _load_state() -> dict:
             return data
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         pass
-    return {"auto_restart": False, "desired_running": True}
+    return {"auto_restart": True, "desired_running": True}
 
 
 def _save_state(data: dict) -> None:
@@ -64,7 +78,7 @@ def _save_state(data: dict) -> None:
 class Guardian:
     def __init__(self) -> None:
         self.state = _load_state()
-        self.state.setdefault("auto_restart", False)
+        self.state.setdefault("auto_restart", True)
         self.state.setdefault("desired_running", True)
         _save_state(self.state)
         self.stop_event = threading.Event()
@@ -174,10 +188,79 @@ class Guardian:
         candidate = SCRIPT_DIR / "venv" / "bin" / "python3"
         return str(candidate if candidate.exists() else Path(sys.executable))
 
+    def _restore_missing_agent_files(self) -> list[str]:
+        """Fetch only missing, allow-listed worker files from the pinned branch."""
+        SCRIPT_DIR.mkdir(parents=True, exist_ok=True)
+        missing = [name for name in AGENT_FILES if not (SCRIPT_DIR / name).is_file()]
+        if not (SCRIPT_DIR / ".env").is_file():
+            missing_env = True
+        else:
+            missing_env = False
+        if not missing and not missing_env:
+            return []
+
+        branch = XIDER_UPDATE_BRANCH.strip() or "main"
+        if not re.fullmatch(r"[A-Za-z0-9._/-]+", branch) or ".." in branch.split("/"):
+            raise RuntimeError("Небезопасное имя ветки обновления агента")
+
+        restored: list[str] = []
+        if missing:
+            url = f"https://github.com/invinby/XIDER/archive/refs/heads/{branch}.zip"
+            with tempfile.TemporaryDirectory(prefix="xider-agent-repair-") as temp_dir:
+                archive_path = Path(temp_dir) / "source.zip"
+                urllib.request.urlretrieve(url, archive_path)
+                with zipfile.ZipFile(archive_path) as archive:
+                    entries = archive.namelist()
+                    prefix = next(
+                        (name.split("/XGENT-MCS/", 1)[0] + "/XGENT-MCS/"
+                         for name in entries if "/XGENT-MCS/xgent_mcs.py" in name),
+                        None,
+                    )
+                    if prefix is None:
+                        raise RuntimeError("В архиве не найден каталог XGENT-MCS")
+                    for name in missing:
+                        member = prefix + name
+                        if member not in entries:
+                            raise RuntimeError(f"В архиве отсутствует файл агента: {name}")
+                        data = archive.read(member)
+                        if name.endswith(".py"):
+                            compile(data.decode("utf-8"), name, "exec")
+                        temp_file = SCRIPT_DIR / f".{name}.recovering"
+                        temp_file.write_bytes(data)
+                        if name.endswith(".sh"):
+                            temp_file.chmod(temp_file.stat().st_mode | 0o111)
+                        temp_file.replace(SCRIPT_DIR / name)
+                        restored.append(name)
+
+        if missing_env:
+            values = {key: os.environ.get(key, "") for key in AGENT_ENV_KEYS}
+            required = ("SHARED_KEY", "MQTT_BROKER", "MQTT_PORT", "MQTT_TLS", "ENCRYPT_PAYLOAD")
+            absent = [key for key in required if not values[key]]
+            if absent:
+                raise RuntimeError("Не могу восстановить .env: в процессе Guardian нет " + ", ".join(absent))
+            env_path = SCRIPT_DIR / ".env"
+            env_tmp = SCRIPT_DIR / ".env.recovering"
+            def dotenv_value(value: str) -> str:
+                escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
+                return f'"{escaped}"'
+
+            env_tmp.write_text(
+                "".join(f"{key}={dotenv_value(value)}\n" for key, value in values.items() if value),
+                encoding="utf-8",
+            )
+            env_tmp.chmod(0o600)
+            env_tmp.replace(env_path)
+            restored.append(".env")
+
+        if restored:
+            log.warning("Guardian восстановил отсутствующие файлы агента: %s", ", ".join(restored))
+        return restored
+
     def start_agent(self) -> int | None:
         pid = self.agent_pid()
         if pid:
             return pid
+        self._restore_missing_agent_files()
         env = os.environ.copy()
         env["XIDER_NO_AUTOSTART"] = "1"
         log_path = SCRIPT_DIR / "agent.log"
