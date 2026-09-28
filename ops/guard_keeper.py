@@ -14,6 +14,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -34,11 +35,13 @@ class Keeper:
         self.command = command
         self.max_backoff = max(1, int(max_backoff))
         self.stop_requested = False
+        self._stop_event = threading.Event()
         self.child: subprocess.Popen | None = None
         configure_logging(log_path)
 
     def stop(self, *_args) -> None:
         self.stop_requested = True
+        self._stop_event.set()
         child = self.child
         if child and child.poll() is None:
             logging.info("stop requested; terminating child pid=%s", child.pid)
@@ -71,7 +74,9 @@ class Keeper:
             else:
                 backoff = min(self.max_backoff, backoff * 2)
             logging.info("restart in %ss", backoff)
-            time.sleep(backoff)
+            # Stop signals should interrupt the retry delay immediately rather
+            # than leaving the owner waiting for the full backoff interval.
+            self._stop_event.wait(backoff)
         logging.info("keeper stopped")
         return 0
 
