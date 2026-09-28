@@ -30,6 +30,7 @@ MQTT_PREFIX = os.getenv("MQTT_PREFIX", "xgent/v1")
 MQTT_TLS = os.getenv("MQTT_TLS", "false").strip().lower() in ("1", "true", "yes")
 MQTT_USERNAME = os.getenv("MQTT_USERNAME", "").strip() or None
 MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "").strip() or None
+XIDER_UPDATE_BRANCH = os.getenv("XIDER_UPDATE_BRANCH", "main").strip() or "main"
 
 # Шифрование payload (AES-256-GCM) поверх HMAC-подписи.
 # Должно быть true ОДНОВРЕМЕННО во всех трёх компонентах.

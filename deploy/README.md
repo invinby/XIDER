@@ -58,6 +58,12 @@ For the complete local flow (VPS bot + Windows build + visible agent), run `depl
 curl -fsSL https://raw.githubusercontent.com/invinby/XIDER/main/deploy/bootstrap.sh | bash
 ```
 
+For a test branch, set `XIDER_BRANCH` before running the same installer. The installer stages the archive, preserves the local agent `.env`, keeps the previous install for rollback, and pins agent self-updates to that branch:
+
+```bash
+XIDER_BRANCH='branch-name' bash -c "$(curl -fsSL https://raw.githubusercontent.com/invinby/XIDER/branch-name/deploy/bootstrap.sh)"
+```
+
 The macOS bootstrap downloads the repository and starts the agent. If a local
 sidecar `.env` is absent, it logs in to the configured XIDER VPS
 (`XIDER_SERVER_HOST`, default `141.145.152.174`) over SSH, asks for the VPS

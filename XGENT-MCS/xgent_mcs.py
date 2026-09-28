@@ -1874,7 +1874,8 @@ end tell'''
             self._publish_response("output", {"type": "agent_update", "device_id": DEVICE_ID, "ok": True, "text": text})
             return
 
-        source_url = "https://github.com/invinby/XIDER/archive/refs/heads/main.zip"
+        update_branch = os.getenv("XIDER_UPDATE_BRANCH", "main").strip() or "main"
+        source_url = f"https://github.com/invinby/XIDER/archive/refs/heads/{update_branch}.zip"
         script_dir = Path(__file__).resolve().parent
         backup_dir = CONFIG_DIR / "agent-backups" / time.strftime("%Y%m%d-%H%M%S")
         files = ("xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py", "xider_guardian.py", "requirements.txt", "setup_mac.py", "start_agent.sh", "stop_agent.sh", "start_guardian.sh")
