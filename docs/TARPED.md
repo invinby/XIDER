@@ -20,6 +20,7 @@ The currently published bot version remains defined in
 | X-LEDGER | release list and component compatibility |
 | X-PROBE | post-start and post-update functional health checks |
 | X-TRACE | operation and rollback history without credentials |
+| X-VAULT | authenticated encrypted backups and staging restores |
 | X-LEX | six presentation voices; never changes authorization or command semantics |
 | X-GATE | access checks and explicit confirmations |
 | X-MAP | declared capabilities and required OS permissions |
@@ -88,6 +89,8 @@ voices without deleting owner-edited copy.
       notes, and a component compatibility matrix.
 - [ ] TwinShift installs a chosen release, verifies it on Windows/macOS/VPS,
       and automatically rolls back failed updates, including Guardian updates.
+- [ ] X-VAULT backups are copied to the second VPS, authenticated, and restored
+      into staging successfully before being counted as recovery-ready.
 - [ ] X-DOCK repeat installation preserves secrets and does not delete a
       protected `.env` or leave a half-updated checkout.
 - [ ] Bot pages edit an existing card where possible; duplicate messages and
