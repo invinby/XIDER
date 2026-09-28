@@ -80,6 +80,15 @@ class Guardian:
         self.state = _load_state()
         self.state.setdefault("auto_restart", True)
         self.state.setdefault("desired_running", True)
+        try:
+            state_version = int(self.state.get("state_version", 1))
+        except (TypeError, ValueError):
+            state_version = 1
+        if state_version < 2:
+            # Older Guardians shipped with auto-recovery disabled by default.
+            # Enable the new recovery policy once, but keep an explicit stop.
+            self.state["auto_restart"] = True
+            self.state["state_version"] = 2
         _save_state(self.state)
         self.stop_event = threading.Event()
         self.lock = threading.RLock()

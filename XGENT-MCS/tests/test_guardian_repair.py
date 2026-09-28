@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import sys
 import zipfile
@@ -61,3 +62,21 @@ def test_guardian_rejects_unsafe_update_branch(guardian_module, monkeypatch, tmp
 
     with pytest.raises(RuntimeError, match="Небезопасное имя ветки"):
         guardian._restore_missing_agent_files()
+
+
+def test_old_guardian_state_enables_recovery_but_preserves_explicit_stop(
+    guardian_module, monkeypatch, tmp_path
+):
+    module = guardian_module
+    state_file = tmp_path / "guardian.json"
+    state_file.write_text(
+        json.dumps({"auto_restart": False, "desired_running": False}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(module, "STATE_FILE", state_file)
+
+    guardian = module.Guardian()
+
+    assert guardian.state["auto_restart"] is True
+    assert guardian.state["desired_running"] is False
+    assert guardian.state["state_version"] == 2
