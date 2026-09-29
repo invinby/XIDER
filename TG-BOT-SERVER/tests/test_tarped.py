@@ -19,6 +19,16 @@ def test_six_voices_are_complete_and_keep_confirmations_explicit():
         assert text_store.get_for_style("start_owner", style)
 
 
+def test_pikmi_voice_is_distinct_but_keeps_dangerous_action_clear():
+    assert "🎀" in xlex.render("start_owner", "xpikmi")
+    assert "устройствечки" in xlex.render("devices_button", "xpikmi")
+    text = xlex.render("danger_confirm", "xpikmi", action="выключить ПК")
+    assert "выключить ПК" in text
+    assert "изменит состояние" in text
+    for label in xlex.NAV["xpikmi"].values():
+        assert len(label) <= 64
+
+
 def test_current_and_legacy_style_ids_normalize_to_named_voices():
     assert xlex.STYLES == ("xtech", "xperson", "xpikmi", "xtarped", "xcore", "xadam")
     assert xlex.normalize_style("technical") == "xtech"
@@ -153,3 +163,27 @@ def test_style_switch_previews_saved_copy_and_selected_main_menu(monkeypatch):
     assert "Мой сохранённый текст" in shown["text"]
     labels = [button.text for row in shown["markup"].inline_keyboard for button in row]
     assert xlex.render("devices_button", "xpikmi") in labels
+
+
+def test_server_menu_uses_all_six_voices_without_changing_callbacks(monkeypatch):
+    expected = None
+    monkeypatch.setattr(bot, "get_user_role", lambda user_id: bot.Role.OWNER)
+    for style in xlex.STYLES:
+        monkeypatch.setattr(
+            bot.bot_settings, "get",
+            lambda key, default=None, selected=style: selected if key == "ui_style" else default,
+        )
+        markup = bot.server_menu(123)
+        buttons = {
+            button.callback_data: button.text
+            for row in markup.inline_keyboard for button in row
+        }
+        assert buttons["server:status"] == xlex.render("server_status", style)
+        assert buttons["server:restart"] == xlex.render("server_restart", style)
+        assert "Перезапустить" in buttons["server:restart"]
+        assert "Откатить" in buttons["server:rollback"] or "Вернуть" in buttons["server:rollback"]
+        assert all(len(label) <= 64 for label in buttons.values())
+        if expected is None:
+            expected = set(buttons)
+        else:
+            assert set(buttons) == expected

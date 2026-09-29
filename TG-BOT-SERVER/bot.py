@@ -1457,18 +1457,18 @@ def server_menu(user_id: int | None = None):
     kb = InlineKeyboardBuilder()
     if role == Role.OWNER:
         approval = bool(bot_settings.get("require_device_approval", True))
-        kb.button(text=f"Версии X-STAB / X-CORE · {VERSION}", callback_data="versions:server", style="success")
-        kb.button(text="📊 Статус сервиса", callback_data="server:status", style="primary")
-        kb.button(text="🧰 Характеристики VPS", callback_data="server:specs", style="primary")
-        kb.button(text="📈 Нагрузка сейчас", callback_data="server:metrics", style="primary")
-        kb.button(text="🖼 График нагрузки", callback_data="server:chart", style="primary")
-        kb.button(text="📜 Последние логи", callback_data="server:logs", style="primary")
-        kb.button(text="🧪 SSH-команды", callback_data="server:terminal", style="primary")
-        kb.button(text="🔄 Перезапустить", callback_data="server:restart", style="danger")
-        kb.button(text="⬆️ Обновить из подготовленного пакета", callback_data="server:update", style="primary")
-        kb.button(text="↩️ Откатить последнюю версию", callback_data="server:rollback", style="danger")
+        kb.button(text=_lex("server_versions", version=VERSION), callback_data="versions:server", style="success")
+        kb.button(text=_lex("server_status"), callback_data="server:status", style="primary")
+        kb.button(text=_lex("server_specs"), callback_data="server:specs", style="primary")
+        kb.button(text=_lex("server_metrics"), callback_data="server:metrics", style="primary")
+        kb.button(text=_lex("server_chart"), callback_data="server:chart", style="primary")
+        kb.button(text=_lex("server_logs"), callback_data="server:logs", style="primary")
+        kb.button(text=_lex("server_terminal"), callback_data="server:terminal", style="primary")
+        kb.button(text=_lex("server_restart"), callback_data="server:restart", style="danger")
+        kb.button(text=_lex("server_update"), callback_data="server:update", style="primary")
+        kb.button(text=_lex("server_rollback"), callback_data="server:rollback", style="danger")
         kb.button(
-            text=f"Подтверждение новых устройств: {'включено' if approval else 'выключено'}",
+            text=_lex("server_approval", state='включено' if approval else 'выключено'),
             callback_data="server:approval",
             style="success" if approval else "danger",
         )
