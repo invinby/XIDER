@@ -1,5 +1,8 @@
 """Offline checks for the TARPED catalogue, handbook and text styles."""
 
+import asyncio
+from types import SimpleNamespace
+
 import bot
 import info_book
 import release_catalog as ledger
@@ -92,3 +95,61 @@ def test_book_chapters_fit_telegram_and_device_menu_links_to_versions(monkeypatc
     markup = bot.device_menu("mac1")
     buttons = [button for row in markup.inline_keyboard for button in row]
     assert any(button.callback_data == "versions:device" and "3.3.8" in button.text for button in buttons)
+
+
+def test_all_six_voices_reach_guest_and_user_menus(monkeypatch):
+    for style in xlex.STYLES:
+        monkeypatch.setattr(
+            bot.bot_settings, "get",
+            lambda key, default=None, selected=style: selected if key == "ui_style" else default,
+        )
+        for role, callback, copy_key in (
+            (bot.Role.USER, "menu:devices", "my_devices_button"),
+            (bot.Role.GUEST, "menu:guest_devices", "guest_devices_button"),
+        ):
+            monkeypatch.setattr(bot, "get_user_role", lambda user_id, selected=role: selected)
+            markup = bot.main_menu(123)
+            labels = {
+                button.callback_data: button.text
+                for row in markup.inline_keyboard for button in row
+            }
+            assert labels[callback] == xlex.render(copy_key, style)
+            assert labels["menu:server"] == xlex.render("server_overview_button", style)
+        assert "guest" in xlex.render("role_label", style, role="guest")
+        assert "1/2" in xlex.render("online_label", style, online="1", total="2")
+
+
+def test_style_switch_previews_saved_copy_and_selected_main_menu(monkeypatch):
+    selected = {"style": "xtech"}
+    shown = {}
+
+    monkeypatch.setattr(
+        bot.bot_settings, "get",
+        lambda key, default=None: selected["style"] if key == "ui_style" else default,
+    )
+    monkeypatch.setattr(
+        bot.bot_settings, "set_key",
+        lambda key, value: selected.__setitem__("style", value),
+    )
+    monkeypatch.setattr(bot.access_store, "append_audit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(bot.text_store, "get_for_style", lambda key, style: "Мой сохранённый текст")
+    monkeypatch.setattr(bot, "get_user_role", lambda user_id: bot.Role.OWNER)
+
+    class Message:
+        async def edit_text(self, text, *, reply_markup):
+            shown["text"] = text
+            shown["markup"] = reply_markup
+
+    class Callback:
+        data = "admin:style:set:xpikmi"
+        from_user = SimpleNamespace(id=bot.ADMIN_ID)
+        message = Message()
+
+        async def answer(self, *args, **kwargs):
+            pass
+
+    asyncio.run(bot.on_admin_style_set(Callback()))
+    assert selected["style"] == "xpikmi"
+    assert "Мой сохранённый текст" in shown["text"]
+    labels = [button.text for row in shown["markup"].inline_keyboard for button in row]
+    assert xlex.render("devices_button", "xpikmi") in labels

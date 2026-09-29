@@ -294,6 +294,62 @@ def test_custom_ui_mode_changes_admin_label_and_main_menu(monkeypatch):
     assert "Все устройства · полный состав" in texts
 
 
+def test_start_reuses_existing_card_without_sending_another(monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+
+    class FakeBot:
+        async def edit_message_text(self, *args, **kwargs):
+            calls.append(("edit", kwargs["message_id"]))
+
+        async def delete_message(self, *args, **kwargs):
+            calls.append(("delete", args[1]))
+
+    class FakeMessage:
+        chat = SimpleNamespace(id=10)
+        from_user = SimpleNamespace(id=20)
+
+        async def answer(self, *args, **kwargs):
+            calls.append(("send", None))
+            return SimpleNamespace(chat=self.chat, message_id=31)
+
+    monkeypatch.setattr(bot, "bot", FakeBot())
+    monkeypatch.setattr(bot.ui_cards, "get", lambda *args: 30)
+    monkeypatch.setattr(bot.ui_cards, "set_card", lambda *args: calls.append(("store", args[2])))
+
+    assert asyncio.run(bot._show_start_card(FakeMessage(), "Главное меню", None)) == 30
+    assert calls == [("edit", 30)]
+
+
+def test_start_replaces_deleted_card_and_saves_new_id(monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+
+    class FakeBot:
+        async def edit_message_text(self, *args, **kwargs):
+            raise RuntimeError("message to edit not found")
+
+        async def delete_message(self, *args, **kwargs):
+            calls.append(("delete", args[1]))
+
+    class FakeMessage:
+        chat = SimpleNamespace(id=10)
+        from_user = SimpleNamespace(id=20)
+
+        async def answer(self, *args, **kwargs):
+            calls.append(("send", None))
+            return SimpleNamespace(chat=self.chat, message_id=31)
+
+    monkeypatch.setattr(bot, "bot", FakeBot())
+    monkeypatch.setattr(bot.ui_cards, "get", lambda *args: 30)
+    monkeypatch.setattr(bot.ui_cards, "set_card", lambda *args: calls.append(("store", args[2])))
+
+    assert asyncio.run(bot._show_start_card(FakeMessage(), "Главное меню", None)) == 31
+    assert calls == [("send", None), ("delete", 30), ("store", 31)]
+
+
 def test_server_menu_contains_metrics_chart_and_safe_terminal():
     markup = bot.server_menu(bot.ADMIN_ID)
     callbacks = _callback_data(markup)

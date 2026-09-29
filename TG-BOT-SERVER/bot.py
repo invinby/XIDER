@@ -751,11 +751,11 @@ def main_menu(user_id: int | None = None):
         kb.button(text=_lex("server_button"), callback_data="menu:server", style="primary")
         kb.button(text=_nav("events"), callback_data="ev:menu", style="primary")
     elif role == Role.USER:
-        kb.button(text="Мои устройства", callback_data="menu:devices", style="primary")
-        kb.button(text="Серверная: обзор", callback_data="menu:server", style="primary")
+        kb.button(text=_lex("my_devices_button"), callback_data="menu:devices", style="primary")
+        kb.button(text=_lex("server_overview_button"), callback_data="menu:server", style="primary")
     else:
-        kb.button(text="Обзор устройств", callback_data="menu:guest_devices", style="primary")
-        kb.button(text="Серверная: обзор", callback_data="menu:server", style="primary")
+        kb.button(text=_lex("guest_devices_button"), callback_data="menu:guest_devices", style="primary")
+        kb.button(text=_lex("server_overview_button"), callback_data="menu:server", style="primary")
     kb.button(text=_lex("about_button"), callback_data="menu:about", style="primary")
     if role == Role.OWNER:
         kb.button(text=_nav("admin"), callback_data="menu:admin", style="danger")
@@ -1572,6 +1572,35 @@ async def _replace_callback_message(cq: CallbackQuery, text: str, reply_markup=N
         except OSError:
             log.exception("Не удалось сохранить ID новой карточки")
 
+
+async def _show_start_card(message: Message, text: str, reply_markup) -> int:
+    """Reuse the existing /start card; send a replacement only if editing fails."""
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    old_card_id = ui_cards.get(chat_id, user_id)
+    if old_card_id:
+        try:
+            await bot.edit_message_text(
+                text, chat_id=chat_id, message_id=old_card_id,
+                reply_markup=reply_markup,
+            )
+            return old_card_id
+        except Exception as exc:
+            if "not modified" in str(exc).lower():
+                return old_card_id
+            log.debug("Не удалось обновить карточку /start; создаю новую", exc_info=True)
+    sent = await message.answer(text, reply_markup=reply_markup)
+    if old_card_id and old_card_id != sent.message_id:
+        try:
+            await bot.delete_message(chat_id, old_card_id)
+        except Exception:
+            log.debug("Старая карточка /start уже удалена или недоступна", exc_info=True)
+    try:
+        ui_cards.set_card(sent.chat.id, user_id, sent.message_id)
+    except OSError:
+        log.exception("Не удалось сохранить ID главной карточки")
+    return sent.message_id
+
 # =====================================================================
 #  Глобальные объекты
 # =====================================================================
@@ -1956,28 +1985,15 @@ async def cmd_start(message: Message, state: FSMContext):
     intro = text_store.get_for_style(intro_key, bot_settings.get("ui_style", "technical"))
     start_text = (
         f"<b>XIDER {XIDER_BUILD_CODE}</b>\n"
-        f"Роль: <b>{html.escape(_role_label(role))}</b>\n"
-        f"Устройств онлайн: <b>{online_count}/{total_count}</b>\n\n"
+        f"{html.escape(_lex('role_label', role=_role_label(role)))}\n"
+        f"{html.escape(_lex('online_label', online=str(online_count), total=str(total_count)))}\n\n"
         f"{html.escape(intro)}"
         # Telegram отвечает `message is not modified`, если /start нажали
         # повторно до изменения текста. Невидимый nonce заставляет обновить
         # ту же карточку, не создавая новое сообщение в чате.
         f"\u2063{uuid.uuid4().hex[:8]}"
     )
-    # Сначала отправляем новую карточку, а уже потом удаляем старую. Так
-    # очистка чата, устаревший message_id или удалённое Telegram-сообщение не
-    # могут превратить /start в «тихий» обработанный апдейт.
-    old_card_id = ui_cards.get(message.chat.id, message.from_user.id)
-    sent = await message.answer(start_text, reply_markup=main_menu(message.from_user.id))
-    if old_card_id and old_card_id != sent.message_id:
-        try:
-            await bot.delete_message(message.chat.id, old_card_id)
-        except Exception:
-            log.debug("Старая карточка /start уже удалена или недоступна", exc_info=True)
-    try:
-        ui_cards.set_card(sent.chat.id, message.from_user.id, sent.message_id)
-    except OSError:
-        log.exception("Не удалось сохранить ID главной карточки")
+    await _show_start_card(message, start_text, main_menu(message.from_user.id))
 
 
 @router.message(AdminFilter(), Command("cancel"))
@@ -2533,9 +2549,10 @@ async def on_admin_style_set(cq: CallbackQuery):
     access_store.append_audit("ui_style_set", actor_id=cq.from_user.id, detail=style)
     await cq.message.edit_text(
         f"<b>X-LEX · {html.escape(xlex.STYLE_NAMES[style])}</b>\n"
-        f"{html.escape(xlex.render('start_owner', style))}\n\n"
-        "Приветствие этого стиля можно изменить в разделе «Тексты бота».",
-        reply_markup=admin_menu(),
+        f"{html.escape(text_store.get_for_style('start_owner', style))}\n\n"
+        "Стиль включён. Ниже — главное меню в выбранном стиле. "
+        "Приветствие можно изменить в админ-разделе «Тексты бота».",
+        reply_markup=main_menu(cq.from_user.id),
     )
     await cq.answer("Стиль выбран")
 
@@ -2796,7 +2813,7 @@ async def on_manualadd_input(message: Message, state: FSMContext):
 @router.callback_query(ReadOnlyFilter(), F.data == "menu:main")
 async def on_menu_main(cq: CallbackQuery):
     SESSION["target"] = None
-    await cq.message.edit_text("Главное меню", reply_markup=main_menu(cq.from_user.id))
+    await cq.message.edit_text(html.escape(_lex("main_title")), reply_markup=main_menu(cq.from_user.id))
     await cq.answer()
 
 @router.callback_query(AdminFilter(), F.data == "menu:devices")
@@ -2847,7 +2864,7 @@ async def on_back_to_device(cq: CallbackQuery):
     """Универсальная кнопка «Назад» — возврат в меню устройства."""
     target = SESSION.get("target")
     if not target:
-        await cq.message.edit_text("🎛 <b>Главное меню</b>", reply_markup=main_menu())
+        await cq.message.edit_text(f"<b>{html.escape(_lex('main_title'))}</b>", reply_markup=main_menu())
     else:
         await cq.message.edit_text(
             device_card(target),
