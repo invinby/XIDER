@@ -25,34 +25,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
 
-      - name: "Install dependencies for TG-BOT-SERVER"
+      - name: "Install component dependencies"
         run: |
           python -m pip install --upgrade pip
           pip install -r TG-BOT-SERVER/requirements.txt
+          pip install -r XGENT-WDS/requirements.txt
           pip install pytest pytest-asyncio
 
-      - name: "Run TG-BOT-SERVER tests"
-        env:
-          SHARED_KEY: test-secret-not-real-0123456789
-          BOT_TOKEN: 123456:TEST-TOKEN-NOT-REAL
-          ADMIN_ID: "0"
-          MQTT_BROKER: localhost
-          MQTT_PORT: "1883"
-          MQTT_PREFIX: xgent/v1
-          MQTT_TLS: "false"
-          ENCRYPT_PAYLOAD: "false"
-        run: |
-          cd TG-BOT-SERVER
-          python -m pytest tests -v
-
-      - name: "Install dependencies for XGENT-WDS"
-        run: |
-          pip install -r XGENT-WDS/requirements.txt
-
-      - name: "Run XGENT-WDS tests"
-        run: |
-          cd XGENT-WDS
-          python -m pytest tests -v
-
-      - name: "Run X-MAP static audit tests"
-        run: python -m pytest ops/tests -v
+      - name: "Run every isolated component suite"
+        run: python tools/run_tests.py

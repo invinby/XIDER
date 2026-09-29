@@ -97,6 +97,32 @@ def test_power_menu_exposes_guardian_for_windows_and_mac(monkeypatch):
     assert "cmd:guardian_menu" in mac_cbs
 
 
+def test_guardian_stop_requires_confirmation():
+    cbs = _callback_data(bot.guardian_menu())
+    assert "cfm:guardian_stop" in cbs
+    assert "cmd:guardian_stop" not in cbs
+
+
+def test_guardian_command_includes_dispatch_marker(monkeypatch):
+    captured = {}
+
+    async def fake_simple_command(*args, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(bot, "simple_command", fake_simple_command)
+    asyncio.run(bot._guardian_command(object(), "stop"))
+
+    assert captured["command"] == "stop"
+    assert captured["action"] == "guardian"
+
+
+def test_guardian_broadcast_stop_uses_guardian_protocol():
+    import inspect
+
+    source = inspect.getsource(bot.on_stopall_ok)
+    assert 'publish_command("all", "guardian", action="guardian", command="stop")' in source
+
+
 def test_buttons_have_colored_styles(monkeypatch):
     """Проверяет, что кнопки имеют цветные стили (style: success/primary/danger)."""
     _setup(monkeypatch, {"dev1": {"name": "Dev", "os": "macOS", "last_seen": time.time()}})

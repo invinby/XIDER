@@ -49,7 +49,7 @@ def _load_state() -> dict:
             return data
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         pass
-    return {"auto_restart": False, "desired_running": True}
+    return {"state_version": 2, "auto_restart": True, "desired_running": True}
 
 
 def _save_state(data: dict) -> None:
@@ -70,7 +70,16 @@ def _task_exists(task_name: str) -> bool:
 class Guardian:
     def __init__(self) -> None:
         self.state = _load_state()
-        self.state.setdefault("auto_restart", False)
+        try:
+            state_version = int(self.state.get("state_version", 1))
+        except (TypeError, ValueError):
+            state_version = 1
+        if state_version < 2:
+            # Earlier Windows installs shipped with recovery disabled by default.
+            # Turn it on once, while preserving an explicit stopped-worker state.
+            self.state["auto_restart"] = True
+            self.state["state_version"] = 2
+        self.state.setdefault("auto_restart", True)
         self.state.setdefault("desired_running", True)
         _save_state(self.state)
         self.stop_event = threading.Event()
@@ -195,6 +204,13 @@ class Guardian:
         proc = self.agent_process()
         self.state["desired_running"] = False
         _save_state(self.state)
+        # Stop the scheduled task first so its restart-on-failure policy does not
+        # race the owner's explicit stop command.
+        if _task_exists(AGENT_TASK):
+            subprocess.run(
+                ["schtasks.exe", "/End", "/TN", AGENT_TASK],
+                capture_output=True, text=True, check=False,
+            )
         if not proc:
             return
         try:

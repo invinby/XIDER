@@ -1061,7 +1061,7 @@ def guardian_menu():
     kb = InlineKeyboardBuilder()
     kb.button(text="📊 Статус Guardian", callback_data="cmd:guardian_status", style="primary")
     kb.button(text="▶️ Запустить агента", callback_data="cmd:guardian_start", style="success")
-    kb.button(text="⏹ Остановить агента", callback_data="cmd:guardian_stop", style="danger")
+    kb.button(text="⏹ Остановить агента", callback_data="cfm:guardian_stop", style="danger")
     kb.button(text="🔄 Перезапустить агента", callback_data="cmd:guardian_restart", style="primary")
     kb.button(text="🛡 Вкл. автовосстановление", callback_data="cmd:guardian_auto_on", style="success")
     kb.button(text="⏸ Выкл. автовосстановление", callback_data="cmd:guardian_auto_off", style="danger")
@@ -3277,23 +3277,9 @@ async def on_power_confirm(cq: CallbackQuery):
 
 @router.callback_query(AdminFilter(), F.data == "cmd:stop")
 async def on_cmd_stop(cq: CallbackQuery):
-    target = SESSION.get("target")
-    if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
-        return
-    if publish("stop"):
-        await _replace_callback_message(
-            cq,
-            f"⏹ Клиент остановлен: <b>{target_label(target)}</b>",
-            reply_markup=back_to_device_kb(),
-        )
-    else:
-        await _replace_callback_message(
-            cq,
-            "⚠️ Нет соединения с MQTT-брокером.",
-            reply_markup=back_to_device_kb(),
-        )
-    await cq.answer()
+    # Stop through Guardian so its desired-state is updated too; a raw worker
+    # stop would be interpreted as a crash and immediately undone by Keeper.
+    await _guardian_command(cq, "stop")
 
 
 # =====================================================================
@@ -3968,6 +3954,7 @@ CONFIRM_PROMPTS = {
     "shell": ("💻 Выполнить терминал на устройстве?", "shell:ok"),
     "stop": ("⏹ Остановить клиента на устройстве?", "stop:ok"),
     "stop_all": ("⏹ Остановить клиенты на ВСЕХ устройствах?", "stopall:ok"),
+    "guardian_stop": ("⏹ Остановить рабочий агент? Guardian останется доступен для запуска.", "guardianstop:ok"),
     "open_app": ("🚀 Открыть диалог запуска программы?", "openapp:ok"),
     "sleep": ("😴 Отправить устройство в сон?", "sleep:ok"),
 }
@@ -4009,28 +3996,25 @@ async def on_openapp_ok(cq: CallbackQuery, state: FSMContext):
 
 @router.callback_query(AdminFilter(), F.data == "stop:ok")
 async def on_stop_ok(cq: CallbackQuery):
-    if publish("stop"):
-        await _replace_callback_message(
-            cq,
-            f"⏹ Клиент остановлен: <b>{target_label(SESSION.get('target'))}</b>",
-            reply_markup=back_to_device_kb(),
-        )
-    else:
-        await _replace_callback_message(
-            cq,
-            "⚠️ Нет соединения с MQTT-брокером.",
-            reply_markup=back_to_device_kb(),
-        )
-    await cq.answer()
+    await _guardian_command(cq, "stop")
 
 
 @router.callback_query(AdminFilter(), F.data == "stopall:ok")
 async def on_stopall_ok(cq: CallbackQuery):
-    if transport.publish_command("all", "stop"):
-        await cq.message.answer("⏹ Команда остановки отправлена всем.")
+    if transport.publish_command("all", "guardian", action="guardian", command="stop"):
+        await _replace_callback_message(
+            cq,
+            "⏹ Команда остановки рабочих агентов отправлена всем. Guardian останется доступен.",
+            reply_markup=back_to_device_kb(),
+        )
     else:
-        await cq.message.answer("⚠️ Нет соединения с MQTT-брокером.")
+        await _replace_callback_message(cq, "⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
     await cq.answer()
+
+
+@router.callback_query(AdminFilter(), F.data == "guardianstop:ok")
+async def on_guardian_stop_ok(cq: CallbackQuery):
+    await _guardian_command(cq, "stop")
 
 
 @router.callback_query(AdminFilter(), F.data == "sleep:ok")
@@ -5288,7 +5272,9 @@ async def on_versions_detail(cq: CallbackQuery):
 
 
 async def _guardian_command(cq: CallbackQuery, command: str, *, enabled: bool | None = None):
-    kwargs = {"command": command}
+    # `type=guardian` routes the packet; `action=guardian` is the explicit
+    # marker consumed by the macOS and Windows Guardians.
+    kwargs = {"action": "guardian", "command": command}
     if enabled is not None:
         kwargs["enabled"] = enabled
     await simple_command(cq, "guardian", "🛡", f"Guardian: {command}", timeout=12.0, **kwargs)

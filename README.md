@@ -152,8 +152,20 @@ pip install -r requirements.txt
 ## 🔄 CI/CD & Automated Cloud Builds
 
 This repository includes GitHub Actions workflows:
-* **CI Suite (`ci.yml`)**: Automatically validates all 55+ unit and integration tests across Python 3.11 and 3.12 on every push.
+* **CI Suite (`ci.yml`)**: Runs the bot, Windows-agent, macOS-agent, operations, and release-tool tests in isolated pytest processes across Python 3.11 and 3.12. These are source-level tests, not a live Mac/Windows/Telegram/MQTT test.
 * **Release Builder (`build-agents.yml`)**: On git release tags (`v*`), automatically builds `XGENT-WDS.exe` on Windows runners and `XGENT-MCS` standalone binary on macOS runners, publishing them directly as release assets.
+
+### Полная локальная проверка / Full local test run
+
+After installing the bot and Windows-agent test dependencies, run all component
+suites without module-name collisions (`config.py` exists in multiple components):
+
+```powershell
+python tools/run_tests.py
+```
+
+The runner uses fake credentials and does not connect to Telegram, MQTT, or VPS.
+Passes here do not replace live platform and rollback tests.
 
 ---
 
