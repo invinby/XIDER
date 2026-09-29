@@ -70,6 +70,14 @@ The agent-only Windows bootstrap installs its downloaded Python source explicitl
 even when an older `XGENT-WDS.exe` remains in the existing checkout. A direct
 `install_agent.ps1` run keeps its existing executable-first behavior unless
 `-PreferPython` is specified.
+It now prepares the downloaded source, `.env` copy, virtual environment, and
+dependencies in a separate directory. Only after those checks does it stop
+the old Scheduled Tasks, switch the checkout, register the new tasks, and
+verify both are running from the new Python paths. Failure restores the old
+checkout and task definitions/running state where possible; a failed new
+checkout is retained without its copied `.env`. The previous checkout is kept
+as a recoverable backup after success. This verifies local process state, not
+Telegram/MQTT round-trip or Windows hardware functions.
 
 For an agent-only validation without changing the installed files or Scheduled
 Tasks, run `deploy\bootstrap-agent.ps1 -PreflightOnly` from a checkout. It checks

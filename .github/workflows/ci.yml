@@ -86,5 +86,9 @@ jobs:
         shell: powershell
         run: .\deploy\tests\test_bootstrap_agent_preflight.ps1
 
+      - name: "Exercise Windows staged install and rollback"
+        shell: powershell
+        run: .\deploy\tests\test_bootstrap_agent_swap.ps1
+
       - name: "Run every isolated component suite"
         run: python tools/run_tests.py
