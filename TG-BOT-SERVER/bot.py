@@ -719,7 +719,7 @@ def toggle_server_autostart() -> tuple[bool, str]:
 
 
 def _technical_ui() -> bool:
-    return xlex.normalize_style(bot_settings.get("ui_style", "technical")) == "xtexbo"
+    return xlex.normalize_style(bot_settings.get("ui_style", "technical")) == "xtech"
 
 
 def _custom_ui() -> bool:
@@ -730,7 +730,7 @@ def _ui_phrase(technical: str, conversational: str, custom: str) -> str:
     style = xlex.normalize_style(bot_settings.get("ui_style", "technical"))
     if style == "xperson":
         return custom
-    return technical if style == "xtexbo" else conversational
+    return technical if style == "xtech" else conversational
 
 
 def _lex(key: str, **values: str) -> str:

@@ -16,6 +16,23 @@ def test_six_voices_are_complete_and_keep_confirmations_explicit():
         assert text_store.get_for_style("start_owner", style)
 
 
+def test_current_and_legacy_style_ids_normalize_to_named_voices():
+    assert xlex.STYLES == ("xtech", "xperson", "xpikmi", "xtarped", "xcore", "xadam")
+    assert xlex.normalize_style("technical") == "xtech"
+    assert xlex.normalize_style("xtexbo") == "xtech"
+    assert xlex.normalize_style("conversational") == "xtarped"
+    assert xlex.normalize_style("xplain") == "xtarped"
+    assert xlex.normalize_style("xnoir") == "xcore"
+
+
+def test_saved_copy_from_old_style_id_is_not_lost(tmp_path, monkeypatch):
+    monkeypatch.setattr(text_store, "FILE", tmp_path / "texts.json")
+    (tmp_path / "texts.json").write_text(
+        '{"xplain_start_owner":"Старый сохранённый текст"}', encoding="utf-8"
+    )
+    assert text_store.get_for_style("start_owner", "xtarped") == "Старый сохранённый текст"
+
+
 def test_legacy_voice_and_owner_copy_migration(tmp_path, monkeypatch):
     monkeypatch.setattr(text_store, "FILE", tmp_path / "texts.json")
     text_store.set_text("custom_start_owner", "Мой старый текст")
