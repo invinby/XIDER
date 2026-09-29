@@ -2935,7 +2935,7 @@ async def on_cmd_screenshot(cq: CallbackQuery):
     try:
         img_bytes = base64.b64decode(img_b64)
         photo = BufferedInputFile(img_bytes, filename="screenshot.png")
-        await bot.send_photo(
+        sent_photo = await bot.send_photo(
             cq.from_user.id,
             photo=photo,
             caption=f"📸 <b>{target_label(target)}</b>",
@@ -2947,6 +2947,10 @@ async def on_cmd_screenshot(cq: CallbackQuery):
             await cq.message.delete()
         except Exception:
             pass
+        try:
+            ui_cards.set_card(sent_photo.chat.id, cq.from_user.id, sent_photo.message_id)
+        except OSError:
+            log.exception("Не удалось сохранить ID карточки скриншота")
     except Exception:
         log.exception("Ошибка декодирования скриншота")
         await _replace_callback_message(
@@ -2993,7 +2997,7 @@ async def on_cmd_webcam(cq: CallbackQuery):
     try:
         img_bytes = base64.b64decode(img_b64)
         photo = BufferedInputFile(img_bytes, filename="webcam.jpg")
-        await bot.send_photo(
+        sent_photo = await bot.send_photo(
             cq.from_user.id,
             photo=photo,
             caption=f"📷 <b>{target_label(target)}</b>",
@@ -3003,6 +3007,10 @@ async def on_cmd_webcam(cq: CallbackQuery):
             await cq.message.delete()
         except Exception:
             pass
+        try:
+            ui_cards.set_card(sent_photo.chat.id, cq.from_user.id, sent_photo.message_id)
+        except OSError:
+            log.exception("Не удалось сохранить ID карточки веб-камеры")
     except Exception:
         log.exception("Ошибка декодирования снимка вебки")
         await _replace_callback_message(

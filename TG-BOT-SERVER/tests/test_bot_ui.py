@@ -1,6 +1,7 @@
 """Тесты UI-редизайна бота: device_card и новые категорийные меню (2026-09-05)."""
 
 import asyncio
+import base64
 import time
 
 import pytest
@@ -149,6 +150,42 @@ def test_screenshot_displays_agent_error_without_html_injection(monkeypatch):
     asyncio.run(bot.on_cmd_screenshot(FakeCallback()))
     assert "Screen Recording &lt;denied&gt;" in shown[0]
     assert "<denied>" not in shown[0]
+
+
+@pytest.mark.parametrize("action", ["screenshot", "webcam"])
+def test_photo_response_becomes_current_navigation_card(monkeypatch, action):
+    from types import SimpleNamespace
+
+    class FakeMessage:
+        chat = SimpleNamespace(id=1)
+        message_id = 17
+
+        async def delete(self):
+            pass
+
+    class FakeCallback:
+        from_user = SimpleNamespace(id=1)
+        message = FakeMessage()
+
+        async def answer(self, *args, **kwargs):
+            pass
+
+    class FakeCollector:
+        async def wait_for(self, *args, **kwargs):
+            return {"image": base64.b64encode(b"fixture-image").decode("ascii")}
+
+    async def send_photo(*args, **kwargs):
+        return SimpleNamespace(chat=SimpleNamespace(id=1), message_id=18)
+
+    cards = []
+    monkeypatch.setitem(bot.SESSION, "target", "mac1")
+    monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (True, "cmd-1"))
+    monkeypatch.setattr(bot, f"{action}_collector", FakeCollector())
+    monkeypatch.setattr(bot, "bot", SimpleNamespace(send_photo=send_photo))
+    monkeypatch.setattr(bot.ui_cards, "set_card", lambda *args: cards.append(args))
+
+    asyncio.run(getattr(bot, f"on_cmd_{action}")(FakeCallback()))
+    assert cards == [(1, 1, 18)]
 
 
 def test_buttons_have_colored_styles(monkeypatch):
