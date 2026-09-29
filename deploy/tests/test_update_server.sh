@@ -20,7 +20,8 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "${APP_DIR}/TG-BOT-SERVER" "${APP_DIR}/XGENT-WDS" \
-  "${APP_DIR}/XGENT-MCS" "${APP_DIR}/deploy" "${MOCK_BIN}" "${UNIT_DIR}" "${BACKUP_DIR}"
+  "${APP_DIR}/XGENT-MCS" "${APP_DIR}/deploy" "${MOCK_BIN}" "${UNIT_DIR}" "${BACKUP_DIR}" \
+  "${TEMP_ROOT}/lock"
 chmod 0777 "${BACKUP_DIR}"
 APP_DIR_MODE="$(stat -c '%a' "${APP_DIR}")"
 cp "${FIXTURES}/mock-systemctl.sh" "${MOCK_BIN}/systemctl"
