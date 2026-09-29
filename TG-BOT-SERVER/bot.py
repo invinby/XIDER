@@ -2924,9 +2924,11 @@ async def on_cmd_screenshot(cq: CallbackQuery):
         return
     img_b64 = result.get("image")
     if not img_b64:
+        agent_error = str(result.get("error") or "").strip()
+        detail = f"\n<pre>{html.escape(agent_error[:500])}</pre>" if agent_error else ""
         await _replace_callback_message(
             cq,
-            "⚠️ Устройство ответило, но скриншот пустой.",
+            "⚠️ Устройство ответило, но скриншот не получен." + detail,
             reply_markup=back_to_device_kb(),
         )
         return

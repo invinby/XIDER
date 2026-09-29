@@ -123,6 +123,34 @@ def test_guardian_broadcast_stop_uses_guardian_protocol():
     assert 'publish_command("all", "guardian", action="guardian", command="stop")' in source
 
 
+def test_screenshot_displays_agent_error_without_html_injection(monkeypatch):
+    from types import SimpleNamespace
+
+    class FakeCallback:
+        from_user = SimpleNamespace(id=1)
+
+        async def answer(self, *args, **kwargs):
+            pass
+
+    class FakeCollector:
+        async def wait_for(self, *args, **kwargs):
+            return {"image": None, "error": "Screen Recording <denied>"}
+
+    shown = []
+
+    async def replace(_cq, text, **kwargs):
+        shown.append(text)
+
+    monkeypatch.setitem(bot.SESSION, "target", "mac1")
+    monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (True, "cmd-1"))
+    monkeypatch.setattr(bot, "screenshot_collector", FakeCollector())
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+
+    asyncio.run(bot.on_cmd_screenshot(FakeCallback()))
+    assert "Screen Recording &lt;denied&gt;" in shown[0]
+    assert "<denied>" not in shown[0]
+
+
 def test_buttons_have_colored_styles(monkeypatch):
     """Проверяет, что кнопки имеют цветные стили (style: success/primary/danger)."""
     _setup(monkeypatch, {"dev1": {"name": "Dev", "os": "macOS", "last_seen": time.time()}})
