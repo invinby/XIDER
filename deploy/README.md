@@ -71,6 +71,13 @@ even when an older `XGENT-WDS.exe` remains in the existing checkout. A direct
 `install_agent.ps1` run keeps its existing executable-first behavior unless
 `-PreferPython` is specified.
 
+For an agent-only validation without changing the installed files or Scheduled
+Tasks, run `deploy\bootstrap-agent.ps1 -PreflightOnly` from a checkout. It checks
+the downloaded archive and the required agent configuration keys without
+printing their values. `-SourceArchive` accepts a local ZIP for offline tests;
+normal installation still downloads the selected GitHub branch. An existing
+installed `.env` takes precedence over older Desktop copies.
+
 ## macOS quick install
 
 ```bash

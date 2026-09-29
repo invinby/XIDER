@@ -67,5 +67,9 @@ jobs:
         shell: pwsh
         run: ./deploy/tests/test_install_agent.ps1
 
+      - name: "Exercise Windows bootstrap preflight"
+        shell: pwsh
+        run: ./deploy/tests/test_bootstrap_agent_preflight.ps1
+
       - name: "Run every isolated component suite"
         run: python tools/run_tests.py

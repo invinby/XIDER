@@ -1,10 +1,12 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$InstallRoot = "$env:LOCALAPPDATA\XIDER",
     [string]$EnvRoot = $env:XIDER_ENV_ROOT,
     [string]$ServerHost = '141.145.152.174',
     [string]$ServerUser = 'ubuntu',
-    [string]$Branch = 'main'
+    [string]$Branch = 'main',
+    [switch]$PreflightOnly,
+    [string]$SourceArchive
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,20 +23,38 @@ $agent = Join-Path $repo 'XGENT-WDS'
 $locationPushed = $false
 
 try {
-    Write-Host '[1/5] Скачиваю последнюю версию XIDER...'
+    if ($SourceArchive) { Write-Host '[1/5] Проверяю локальный архив XIDER...' }
+    else { Write-Host "[1/5] Скачиваю XIDER из ветки $Branch..." }
     New-Item -ItemType Directory -Path $extract -Force | Out-Null
-    Invoke-WebRequest -Uri $repoUrl -OutFile $zip -UseBasicParsing -TimeoutSec 90
+    if ($SourceArchive) {
+        Copy-Item -LiteralPath $SourceArchive -Destination $zip -ErrorAction Stop
+    } else {
+        Invoke-WebRequest -Uri $repoUrl -OutFile $zip -UseBasicParsing -TimeoutSec 90
+    }
     Expand-Archive -LiteralPath $zip -DestinationPath $unpack -Force
     $downloaded = Get-ChildItem -LiteralPath $unpack -Directory | Select-Object -First 1
     if (-not $downloaded) { throw 'GitHub archive is empty.' }
+    foreach ($requiredFile in @(
+        'XGENT-WDS\xgent_wds.py',
+        'XGENT-WDS\xider_guardian_wds.py',
+        'XGENT-WDS\install_agent.ps1',
+        'XGENT-WDS\install_guardian.ps1',
+        'XGENT-WDS\requirements.txt'
+    )) {
+        if (-not (Test-Path -LiteralPath (Join-Path $downloaded.FullName $requiredFile) -PathType Leaf)) {
+            throw "В скачанном архиве нет $requiredFile. Рабочая установка не изменена."
+        }
+    }
 
     Write-Host '[2/5] Ищу локальный .env...'
     $envCandidates = @()
+    # The active install is authoritative: an old Desktop checkout may use
+    # different credentials and must not silently replace its configuration.
+    $envCandidates += (Join-Path $agent '.env')
     if ($EnvRoot) { $envCandidates += (Join-Path $EnvRoot 'XGENT-WDS\.env') }
     $envCandidates += @(
         "$env:USERPROFILE\Desktop\XIDER\git-ver\XGENT-WDS\.env",
-        "$env:USERPROFILE\Desktop\XIDER\XGENT-WDS\.env",
-        (Join-Path $agent '.env')
+        "$env:USERPROFILE\Desktop\XIDER\XGENT-WDS\.env"
     )
     $envSource = $envCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 
@@ -62,6 +82,24 @@ try {
         }
         $allowed | Set-Content -LiteralPath $fetched -Encoding utf8
         $envSource = $fetched
+    }
+
+    $requiredSettings = @('SHARED_KEY', 'MQTT_BROKER', 'MQTT_PORT', 'MQTT_TLS', 'ENCRYPT_PAYLOAD')
+    $configLines = @(Get-Content -LiteralPath $envSource -ErrorAction Stop)
+    foreach ($required in $requiredSettings) {
+        $pattern = '^\s*(?:export\s+)?' + [regex]::Escape($required) + '\s*=\s*(.*)$'
+        $matchingLines = @($configLines | Where-Object { $_ -match $pattern })
+        $value = if ($matchingLines.Count) {
+            [regex]::Match($matchingLines[-1], $pattern).Groups[1].Value.Trim().Trim('"', "'").Trim()
+        } else { '' }
+        if (-not $value -or $value.StartsWith('#')) {
+            throw "В конфигурации агента отсутствует $required. Рабочая установка не изменена."
+        }
+    }
+    if ($PreflightOnly) {
+        $sourceLabel = if ($SourceArchive) { 'Локальный архив' } else { "Архив ветки $Branch" }
+        Write-Host "[OK] $sourceLabel и конфигурация агента проверены. Установка не запускалась."
+        return
     }
 
     $targetEnv = Join-Path $agent '.env'
