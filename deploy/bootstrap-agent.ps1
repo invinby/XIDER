@@ -3,11 +3,16 @@ param(
     [string]$InstallRoot = "$env:LOCALAPPDATA\XIDER",
     [string]$EnvRoot = $env:XIDER_ENV_ROOT,
     [string]$ServerHost = '141.145.152.174',
-    [string]$ServerUser = 'ubuntu'
+    [string]$ServerUser = 'ubuntu',
+    [string]$Branch = 'main'
 )
 
 $ErrorActionPreference = 'Stop'
-$repoUrl = 'https://github.com/invinby/XIDER/archive/refs/heads/main.zip'
+if ($Branch -notmatch '^[A-Za-z0-9._/-]+$' -or $Branch.Split('/') -contains '..') {
+    throw 'Недопустимое имя ветки XIDER_BRANCH.'
+}
+$repoUrl = "https://github.com/invinby/XIDER/archive/refs/heads/$Branch.zip"
+$ProgressPreference = 'Continue'
 $extract = Join-Path $env:TEMP ('xider-agent-' + [guid]::NewGuid().ToString('N'))
 $zip = Join-Path $extract 'source.zip'
 $unpack = Join-Path $extract 'unpacked'
@@ -35,11 +40,26 @@ try {
     if (-not $envSource) {
         Write-Host "Локальный .env не найден. Получаю настройки с $ServerUser@$ServerHost; введи пароль SSH, если он будет запрошен."
         $fetched = Join-Path $extract 'agent.env'
-        & ssh.exe -o StrictHostKeyChecking=accept-new -o PreferredAuthentications=password -o PubkeyAuthentication=no `
-            "$ServerUser@$ServerHost" `
-            "sudo -n sh -c 'grep -E \"^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD)=\" /etc/xider/bot.env'" `
-            | Out-File -LiteralPath $fetched -Encoding utf8
-        if ((Get-Item -LiteralPath $fetched).Length -eq 0) { throw 'Не удалось получить настройки агента.' }
+        $remoteCommand = "sudo -n sh -c 'grep -E `"^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD)=`" /etc/xider/bot.env'"
+        & ssh.exe -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 `
+            -o ServerAliveInterval=10 -o ServerAliveCountMax=2 `
+            -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no `
+            "$ServerUser@$ServerHost" $remoteCommand | Set-Content -LiteralPath $fetched -Encoding utf8
+        $sshExit = $LASTEXITCODE
+        if ($sshExit -ne 0) { throw "SSH не смог получить настройки (код $sshExit). VPS и файлы агента не изменены." }
+        $allowed = Get-Content -LiteralPath $fetched | Where-Object {
+            $_ -match '^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD)='
+        }
+        if (-not ($allowed | Where-Object { $_ -match '^MQTT_PREFIX=.+$' })) {
+            $allowed = @($allowed | Where-Object { $_ -notmatch '^MQTT_PREFIX=' })
+            $allowed += 'MQTT_PREFIX=xgent/v1'
+        }
+        foreach ($required in @('SHARED_KEY', 'MQTT_BROKER', 'MQTT_PORT', 'MQTT_TLS', 'ENCRYPT_PAYLOAD')) {
+            if (-not ($allowed | Where-Object { $_ -match "^${required}=.+$" })) {
+                throw "На VPS отсутствует обязательный параметр $required. Файлы агента не изменены."
+            }
+        }
+        $allowed | Set-Content -LiteralPath $fetched -Encoding utf8
         $envSource = $fetched
     }
 
@@ -62,7 +82,6 @@ try {
     }
 
     Push-Location $agent
-    $venvCreated = $false
     if (-not (Test-Path -LiteralPath '.\venv\Scripts\python.exe')) {
         Write-Host '[4/5] Создаю виртуальное окружение и ставлю зависимости...'
         $pythonLauncher = (Get-Command py.exe -ErrorAction SilentlyContinue).Source
@@ -72,14 +91,11 @@ try {
             & (Get-Command python.exe -ErrorAction Stop).Source -m venv venv
         }
         if ($LASTEXITCODE -ne 0) { throw 'Не удалось создать Python venv.' }
-        $venvCreated = $true
     } else {
-        Write-Host '[4/5] Существующее venv найдено, повторную установку пакетов пропускаю.'
+        Write-Host '[4/5] Проверяю и обновляю зависимости в существующем venv...'
     }
-    if ($venvCreated) {
-        & .\venv\Scripts\python.exe -m pip install --disable-pip-version-check --no-input -r requirements.txt
-        if ($LASTEXITCODE -ne 0) { throw 'Не удалось установить зависимости Python.' }
-    }
+    & .\venv\Scripts\python.exe -m pip install --disable-pip-version-check --no-input -r requirements.txt
+    if ($LASTEXITCODE -ne 0) { throw 'Не удалось установить зависимости Python.' }
     Write-Host '[5/5] Регистрирую Agent и Guardian...'
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install_agent.ps1 -AgentDir (Get-Location).Path
     if ($LASTEXITCODE -ne 0) { throw 'Установка Windows-агента/Guardian завершилась ошибкой.' }

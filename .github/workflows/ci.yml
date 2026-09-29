@@ -2,7 +2,7 @@ name: "CI - Test Suite"
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "main", "master", "xider-local-prep-*" ]
   pull_request:
     branches: [ "main", "master" ]
 
@@ -24,6 +24,10 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
+          cache-dependency-path: |
+            TG-BOT-SERVER/requirements.txt
+            XGENT-WDS/requirements.txt
+            XGENT-MCS/requirements.txt
 
       - name: "Install component dependencies"
         run: |
@@ -31,6 +35,17 @@ jobs:
           pip install -r TG-BOT-SERVER/requirements.txt
           pip install -r XGENT-WDS/requirements.txt
           pip install pytest pytest-asyncio
+
+      - name: "Validate PowerShell installer syntax"
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path deploy,XGENT-WDS -Recurse -Filter *.ps1
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count) { $errors | ForEach-Object { Write-Error $_ }; throw "PowerShell syntax error in $($file.FullName)" }
+          }
 
       - name: "Run every isolated component suite"
         run: python tools/run_tests.py
