@@ -30,6 +30,7 @@ SUITES = (
     ("macOS agent", ROOT / "XGENT-MCS", "tests"),
     ("Operations", ROOT, "ops/tests"),
     ("Release tools", ROOT / "tools", "test_build_release_manifest.py"),
+    ("Deployment archive", ROOT / "deploy", "tests/test_safe_extract.py"),
 )
 
 

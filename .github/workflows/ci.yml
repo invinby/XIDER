@@ -7,6 +7,19 @@ on:
     branches: [ "main", "master" ]
 
 jobs:
+  shell:
+    name: "Validate Unix installers"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@v4
+      - name: "Check shell syntax"
+        run: |
+          find deploy XGENT-MCS -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+      - name: "Exercise VPS update and rollback in an isolated fixture"
+        run: |
+          bash deploy/tests/test_update_server.sh
+
   test:
     name: "Run Pytest (Python ${{ matrix.python-version }})"
     runs-on: windows-latest

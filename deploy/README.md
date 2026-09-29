@@ -2,7 +2,7 @@
 
 The paid `xider` VPS is the bot host. The `invinby` Always Free VPS stays available as a standby/monitoring host. The current runtime uses the existing TLS EMQX broker; no plaintext MQTT listener is opened on either VPS.
 
-## One-time install from Windows
+## Windows bootstrap and VPS updates
 
 Короткая команда для скачивания и запуска bootstrap:
 
@@ -10,19 +10,33 @@ The paid `xider` VPS is the bot host. The `invinby` Always Free VPS stays availa
 irm https://raw.githubusercontent.com/invinby/XIDER/main/deploy/bootstrap.ps1 | iex
 ```
 
-Если `.env` лежит не в каталоге XIDER, добавь `-EnvRoot` при обычном запуске
-скрипта. Bootstrap не печатает значения секретов.
+Bootstrap требует существующие локальные `TG-BOT-SERVER\.env` и
+`XGENT-WDS\.env` в checkout XIDER (или `XIDER_ENV_ROOT`, указывающий на его
+родительский каталог). Значения секретов не печатаются.
 
-Run from the repository checkout after fixing the private-key ACL:
+Для обновления уже установленного бота из checkout:
 
 ```powershell
 cd C:\Users\rog\Desktop\XIDER\git-ver
-icacls "$env:USERPROFILE\Downloads\ssh-key-2026-09-24 (2).key" /inheritance:r
-icacls "$env:USERPROFILE\Downloads\ssh-key-2026-09-24 (2).key" /grant:r "$($env:USERNAME):R"
 powershell -ExecutionPolicy Bypass -File .\deploy\upload-and-install.ps1
 ```
 
-The script uploads the ignored `TG-BOT-SERVER\.env` and the current `git-ver` source without printing secrets, creates `/etc/xider/bot.env` with restricted permissions, installs dependencies, and enables `xider-bot.service`. It refuses to start unless MQTT TLS and payload encryption are enabled. A GitHub push is not required for this path.
+Uploader sends source only and never replaces `/etc/xider/bot.env`. The VPS
+must already have an active `xider-bot.service`. It transfers the updater and
+bounded ZIP extractor alongside the source bundle, so the first run does not
+depend on an older updater already installed on the VPS. The updater backs up
+current source and the systemd unit, validates archive paths/symlinks/size,
+compiles Python, then checks the restarted service is active with the same
+`MainPID` for three consecutive checks; failure restores the source and unit.
+This process-level check does not prove Telegram or MQTT round-trip health.
+Dependency changes are rejected until their upgrade/rollback path is
+supported. A GitHub push is not required for checkout-based deployment, but
+the short bootstrap downloads only a branch already published on GitHub.
+
+The updater smoke test runs against temporary directories and mocked
+`systemctl`; it verifies successful update, health-check rollback, `.env`
+preservation, and path-traversal rejection. This is not a live VPS, Telegram,
+MQTT, or full application health check.
 
 ## Verify on the VPS
 

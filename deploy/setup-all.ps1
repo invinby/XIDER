@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$ServerIp = '141.145.152.174',
-    [string]$KeyPath = "$env:USERPROFILE\Downloads\ssh-key-2026-09-24 (2).key"
+    [string]$KeyPath = "$env:USERPROFILE\.ssh\xider.key"
 )
 
 $ErrorActionPreference = 'Stop'
