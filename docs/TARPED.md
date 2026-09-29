@@ -68,12 +68,13 @@ merely because a Git tag exists.
 
 ## Six X-LEX voices
 
-`xtexbo`, `xperson`, `xpikmi`, `xplain`, `xnoir`, and `xadam` (displayed as
-TRUE ADAM). All six must cover navigation, results, errors, confirmations,
-admin, and pranks. Dynamic values must be escaped before HTML rendering.
-The wording of dangerous actions must remain unambiguous in every voice.
-Legacy `technical`, `custom`, and `conversational` settings map to the new
-voices without deleting owner-edited copy.
+`xtech`, `xperson`, `xpikmi`, `xtarped`, `xcore`, and `xadam` (displayed as
+X-TECH, X-PERSON, X-PIKMI, X-TARPED, X-CORE, and X-ADAM · TRUE ADAM).
+All six must cover navigation, results, errors, confirmations, admin, and
+pranks. Dynamic values must be escaped before HTML rendering. The wording of
+dangerous actions must remain unambiguous in every voice. Legacy `technical`,
+`custom`, `conversational`, `xtexbo`, `xplain`, and `xnoir` settings and owner-
+edited per-voice copy remain compatible without being deleted.
 
 ## TARPED acceptance checklist
 
