@@ -128,7 +128,7 @@ restore_snapshot() {
       done < <(find "${APP_DIR}/${component}" -type f -print0)
     fi
   done
-  cp -a "${RESTORE_STAGE}/." "${APP_DIR}/"
+  overlay_contents "${RESTORE_STAGE}"
   rm -rf -- "${RESTORE_STAGE}"
   RESTORE_STAGE=""
   if [[ -f "${unit_backup}" ]]; then
@@ -148,6 +148,13 @@ cleanup() {
   if [[ -n "${RESTORE_STAGE}" && -d "${RESTORE_STAGE}" ]]; then
     rm -rf -- "${RESTORE_STAGE}"
   fi
+}
+
+overlay_contents() {
+  local source_dir="$1" entry
+  while IFS= read -r -d '' entry; do
+    cp -a "${entry}" "${APP_DIR}/"
+  done < <(find "${source_dir}" -mindepth 1 -maxdepth 1 -print0)
 }
 
 on_error() {
@@ -194,7 +201,7 @@ do_update() {
 
   MUTATING=1
   systemctl stop "${SERVICE}"
-  cp -a "${STAGE}/." "${APP_DIR}/"
+  overlay_contents "${STAGE}"
   install -m 0644 "${APP_DIR}/deploy/xider-bot.service" "${UNIT_FILE}"
   chown -R xider:xider "${APP_DIR}/TG-BOT-SERVER" "${APP_DIR}/XGENT-WDS" "${APP_DIR}/XGENT-MCS" "${APP_DIR}/deploy"
   systemctl daemon-reload

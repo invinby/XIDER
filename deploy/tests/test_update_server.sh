@@ -12,6 +12,7 @@ MOCK_BIN="${TEMP_ROOT}/bin"
 STATE_FILE="${TEMP_ROOT}/systemctl.stopped"
 INCOMING="${TEMP_ROOT}/release.zip"
 SERVICE='xider-test.service'
+APP_DIR_MODE=""
 
 cleanup() {
   rm -rf -- "${TEMP_ROOT}"
@@ -21,6 +22,7 @@ trap cleanup EXIT
 mkdir -p "${APP_DIR}/TG-BOT-SERVER" "${APP_DIR}/XGENT-WDS" \
   "${APP_DIR}/XGENT-MCS" "${APP_DIR}/deploy" "${MOCK_BIN}" "${UNIT_DIR}" "${BACKUP_DIR}"
 chmod 0777 "${BACKUP_DIR}"
+APP_DIR_MODE="$(stat -c '%a' "${APP_DIR}")"
 cp "${FIXTURES}/mock-systemctl.sh" "${MOCK_BIN}/systemctl"
 cp "${FIXTURES}/mock-chown.sh" "${MOCK_BIN}/chown"
 cp "${ROOT}/deploy/safe_extract.py" "${APP_DIR}/deploy/safe_extract.py"
@@ -76,6 +78,7 @@ run_update
 [[ ! -e "${APP_DIR}/TG-BOT-SERVER/new-feature.py" ]]
 [[ "$(<"${APP_DIR}/TG-BOT-SERVER/.env")" == keep-runtime-config ]]
 [[ "$(<"${APP_DIR}/TG-BOT-SERVER/.env.production")" == keep-runtime-override ]]
+[[ "$(stat -c '%a' "${APP_DIR}")" == "${APP_DIR_MODE}" ]]
 [[ "$(<"${APP_DIR}/TG-BOT-SERVER/fixture.key")" == private-key-fixture ]]
 grep -q 'ExecStart=/new' "${UNIT_DIR}/${SERVICE}"
 backup_file="$(compgen -G "${BACKUP_DIR}/xider-*.tar.gz")"
@@ -113,5 +116,6 @@ run_updater rollback
 [[ "$(<"${APP_DIR}/TG-BOT-SERVER/bot.py")" == good ]]
 [[ "$(<"${APP_DIR}/TG-BOT-SERVER/.env")" == keep-runtime-config ]]
 [[ "$(<"${APP_DIR}/TG-BOT-SERVER/.env.production")" == keep-runtime-override ]]
+[[ "$(stat -c '%a' "${APP_DIR}")" == "${APP_DIR_MODE}" ]]
 
 echo 'Updater success, automatic/manual rollback, env preservation, and archive validation scenarios passed.'
