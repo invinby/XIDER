@@ -63,6 +63,17 @@ jobs:
             if ($errors.Count) { $errors | ForEach-Object { Write-Error $_ }; throw "PowerShell syntax error in $($file.FullName)" }
           }
 
+      - name: "Validate Windows PowerShell 5 installer syntax"
+        shell: powershell
+        run: |
+          $files = Get-ChildItem -Path deploy,XGENT-WDS -Recurse -Filter *.ps1
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count) { $errors | ForEach-Object { Write-Error $_ }; throw "Windows PowerShell 5 syntax error in $($file.FullName)" }
+          }
+
       - name: "Exercise Windows agent installer selection"
         shell: pwsh
         run: ./deploy/tests/test_install_agent.ps1
@@ -70,6 +81,10 @@ jobs:
       - name: "Exercise Windows bootstrap preflight"
         shell: pwsh
         run: ./deploy/tests/test_bootstrap_agent_preflight.ps1
+
+      - name: "Exercise Windows PowerShell 5 bootstrap preflight"
+        shell: powershell
+        run: .\deploy\tests\test_bootstrap_agent_preflight.ps1
 
       - name: "Run every isolated component suite"
         run: python tools/run_tests.py

@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$ServerIp = '141.145.152.174',
     [string]$KeyPath = "$env:USERPROFILE\.ssh\xider.key",
