@@ -32,6 +32,7 @@ import psutil
 
 from config import (
     CONFIG_DIR,
+    set_guardian_startup_enabled,
     DEVICE_ID,
     DEVICE_NAME,
     ENCRYPT_PAYLOAD,
@@ -1396,7 +1397,13 @@ class XgentClient:
         plist_path = os.path.expanduser("~/Library/LaunchAgents/com.xgent.agent.plist")
         label = "gui/" + str(os.getuid()) + "/com.xgent.agent"
         loaded = subprocess.run(["launchctl", "print", label], capture_output=True, text=True, check=False).returncode == 0
-        enabled = os.path.exists(plist_path) and loaded
+        try:
+            state_path = CONFIG_DIR / "guardian.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            desired = bool(state.get("startup_enabled", True))
+        except Exception:
+            desired = True
+        enabled = os.path.exists(plist_path) and loaded and desired
         text = f"🚀 Автозапуск macOS: {'✅ ВКЛЮЧЕН' if enabled else '❌ ВЫКЛЮЧЕН'}\nФайл: {plist_path}"
         self._publish_response("output", {"type": "autorun_status", "device_id": DEVICE_ID, "ok": True, "text": text, "enabled": enabled})
 
@@ -1411,7 +1418,8 @@ class XgentClient:
                 "ProgramArguments": [sys.executable, os.path.join(script_dir, "xgent_mcs.py")],
                 "WorkingDirectory": script_dir,
                 "RunAtLoad": True,
-                "KeepAlive": True,
+                # Guardian owns recovery; launchd only starts the worker at login.
+                "KeepAlive": False,
                 "ProcessType": "Background",
                 "StandardOutPath": os.path.join(script_dir, "agent.log"),
                 "StandardErrorPath": os.path.join(script_dir, "agent.log"),
@@ -1419,10 +1427,16 @@ class XgentClient:
             with open(plist_path, "wb") as f:
                 f.write(plistlib.dumps(plist))
             domain = f"gui/{os.getuid()}"
-            subprocess.run(["launchctl", "bootout", domain, plist_path], capture_output=True, check=False)
-            loaded = subprocess.run(["launchctl", "bootstrap", domain, plist_path], capture_output=True, text=True, check=False)
-            if loaded.returncode != 0:
-                raise RuntimeError(loaded.stderr.strip() or "launchctl bootstrap failed")
+            subprocess.run(["launchctl", "enable", f"{domain}/com.xgent.agent"], capture_output=True, check=False)
+            current = subprocess.run(
+                ["launchctl", "print", f"{domain}/com.xgent.agent"],
+                capture_output=True, text=True, check=False,
+            )
+            if current.returncode != 0:
+                loaded = subprocess.run(["launchctl", "bootstrap", domain, plist_path], capture_output=True, text=True, check=False)
+                if loaded.returncode != 0:
+                    raise RuntimeError(loaded.stderr.strip() or "launchctl bootstrap failed")
+            set_guardian_startup_enabled(True)
             text = f"✅ Автозапуск macOS включен и загружен.\nФайл: {plist_path}"
             ok = True
         except Exception as exc:
@@ -1433,10 +1447,17 @@ class XgentClient:
     def _do_autorun_disable(self, payload: dict) -> None:
         plist_path = os.path.expanduser("~/Library/LaunchAgents/com.xgent.agent.plist")
         try:
+            set_guardian_startup_enabled(False)
             if os.path.exists(plist_path):
-                subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", plist_path], capture_output=True, check=False)
+                domain = f"gui/{os.getuid()}"
+                disabled = subprocess.run(
+                    ["launchctl", "disable", f"{domain}/com.xgent.agent"],
+                    capture_output=True, text=True, check=False,
+                )
+                if disabled.returncode != 0:
+                    raise RuntimeError(disabled.stderr.strip() or "launchctl disable failed")
                 os.remove(plist_path)
-                text = "🛑 Автозапуск macOS успешно отключен."
+                text = "🛑 Автозапуск macOS отключён. Текущий агент продолжит работать до остановки."
             else:
                 text = "ℹ️ Автозапуск macOS уже был отключен."
             ok = True

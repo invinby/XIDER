@@ -33,6 +33,7 @@ import psutil
 
 from config import (
     CONFIG_DIR,
+    set_guardian_startup_enabled,
     DEFAULT_SHARED_KEY,
     DEVICE_ID,
     DEVICE_NAME,
@@ -2248,7 +2249,10 @@ class XgentClient:
     def _do_autorun_status(self, payload: dict) -> None:
         """Проверка фактического Scheduled Task автозапуска."""
         try:
-            enabled = _scheduled_task_exists()
+            state_path = CONFIG_DIR / "guardian.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            startup_enabled = bool(state.get("startup_enabled", True))
+            enabled = _scheduled_task_exists() and startup_enabled
             text = (
                 f"🚀 Автозапуск Windows: {'✅ ВКЛЮЧЕН' if enabled else '❌ ВЫКЛЮЧЕН'}\n"
                 f"Источник: Scheduled Task «{WINDOWS_TASK_NAME}»"
@@ -2276,6 +2280,7 @@ class XgentClient:
             )
             if result.returncode != 0:
                 raise RuntimeError((result.stderr or result.stdout or "schtasks failed").strip())
+            set_guardian_startup_enabled(True)
             text = f"✅ Автозапуск Windows включён через Scheduled Task «{WINDOWS_TASK_NAME}»."
             ok = True
         except Exception as exc:
@@ -2287,19 +2292,35 @@ class XgentClient:
 
     def _do_autorun_disable(self, payload: dict) -> None:
         """Отключить Scheduled Task и убрать старый Registry-вариант."""
+        startup_state_changed = False
         try:
-            ok, detail = _remove_scheduled_task()
+            set_guardian_startup_enabled(False)
+            startup_state_changed = True
+            if _scheduled_task_exists():
+                disabled = subprocess.run(
+                    ["schtasks.exe", "/Change", "/TN", WINDOWS_TASK_NAME, "/DISABLE"],
+                    capture_output=True, text=True, check=False,
+                )
+                if disabled.returncode != 0:
+                    raise RuntimeError((disabled.stderr or disabled.stdout or "не удалось отключить Scheduled Task").strip())
             key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_ALL_ACCESS) as key:
-                for value_name in ("XGENT", "XGentAgent"):
-                    try:
-                        winreg.DeleteValue(key, value_name)
-                    except FileNotFoundError:
-                        pass
-            text = "🛑 Автозапуск Windows отключён (Scheduled Task и старый реестр очищены)."
-            if detail and not ok:
-                text += f"\n{detail[:500]}"
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_ALL_ACCESS) as key:
+                    for value_name in ("XGENT", "XGentAgent"):
+                        try:
+                            winreg.DeleteValue(key, value_name)
+                        except FileNotFoundError:
+                            pass
+            except FileNotFoundError:
+                pass
+            text = "🛑 Автозапуск Windows отключён. Текущий агент продолжит работать до остановки."
+            ok = True
         except Exception as exc:
+            if startup_state_changed:
+                try:
+                    set_guardian_startup_enabled(True)
+                except Exception:
+                    log.exception("Could not restore Guardian startup state after autorun-disable failure")
             text = f"⚠️ Ошибка отключения автозапуска: {exc}"
             ok = False
         self._publish_response("output", {

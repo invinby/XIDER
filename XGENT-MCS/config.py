@@ -63,6 +63,37 @@ HEARTBEAT_INTERVAL = 60
 CONFIG_DIR = Path.home() / ".xgent"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
+
+def _update_guardian_state(**updates: object) -> None:
+    state_path = CONFIG_DIR / "guardian.json"
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        if not isinstance(state, dict):
+            state = {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        state = {
+            "state_version": 2, "auto_restart": True,
+            "desired_running": True, "startup_enabled": True,
+        }
+    state.update(updates)
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    temp_path = CONFIG_DIR / f"guardian.worker-state.{os.getpid()}.tmp"
+    temp_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temp_path, state_path)
+
+
+def set_guardian_desired_running(enabled: bool) -> None:
+    """Persist the owner's current-session worker start/stop intent."""
+    _update_guardian_state(desired_running=bool(enabled))
+
+
+def set_guardian_startup_enabled(enabled: bool) -> None:
+    """Persist autostart independently from the current worker process state."""
+    updates: dict[str, object] = {"startup_enabled": bool(enabled)}
+    if enabled:
+        updates["desired_running"] = True
+    _update_guardian_state(**updates)
+
 # Версия клиента и строка платформы для статусов.
 VERSION = "4.0.0"
 PLATFORM = f"macOS {platform.mac_ver()[0]}"

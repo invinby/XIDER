@@ -56,12 +56,28 @@ def _agent_inventory(path: Path) -> dict[str, list[str]]:
     }
 
 
+def _guardian_commands(path: Path) -> list[str]:
+    """Collect literal command branches from a Guardian.handle(command) method."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    commands: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare) or not isinstance(node.left, ast.Name):
+            continue
+        if node.left.id != "command":
+            continue
+        for comparator in node.comparators:
+            if isinstance(comparator, ast.Constant) and isinstance(comparator.value, str):
+                if NAME_RE.fullmatch(comparator.value):
+                    commands.add(comparator.value)
+    return sorted(commands)
+
+
 def build_report(root: Path) -> dict:
     bot_path = root / "TG-BOT-SERVER" / "bot.py"
     tree = ast.parse(bot_path.read_text(encoding="utf-8"), filename=str(bot_path))
     callbacks: set[str] = set()
     actions: set[str] = set()
-    dynamic_action_calls = 0
+    dynamic_action_sites: list[dict[str, str | int]] = []
     for node in ast.walk(tree):
         for value in _string_constants(node):
             match = CALLBACK_RE.fullmatch(value)
@@ -77,30 +93,44 @@ def build_report(root: Path) -> dict:
             action_arg = node.args[0] if node.args else None
         elif name == "publish_command":
             action_arg = node.args[1] if len(node.args) > 1 else None
+        elif name == "simple_command":
+            action_arg = node.args[1] if len(node.args) > 1 else None
         else:
             continue
         if isinstance(action_arg, ast.Constant) and isinstance(action_arg.value, str):
             actions.add(CALLBACK_ALIASES.get(action_arg.value, action_arg.value))
         else:
-            dynamic_action_calls += 1
+            dynamic_action_sites.append({"line": node.lineno, "call": name})
 
     platforms = {
         "windows": _agent_inventory(root / "XGENT-WDS" / "xgent_wds.py"),
         "macos": _agent_inventory(root / "XGENT-MCS" / "xgent_mcs.py"),
     }
+    guardians = {
+        "windows": _guardian_commands(root / "XGENT-WDS" / "xider_guardian_wds.py"),
+        "macos": _guardian_commands(root / "XGENT-MCS" / "xider_guardian.py"),
+    }
     windows = set(platforms["windows"]["supported"])
     macos = set(platforms["macos"]["supported"])
+    worker_actions = actions - {"guardian"}
     return {
-        "schema": "x-map-static-audit-v1",
+        "schema": "x-map-static-audit-v2",
         "source_only": True,
         "bot_callbacks": sorted(callbacks),
         "callback_count": len(callbacks),
         "bot_actions": sorted(actions),
-        "dynamic_action_calls_not_classified": dynamic_action_calls,
+        "dynamic_action_calls_not_classified": len(dynamic_action_sites),
+        "dynamic_action_sites": sorted(dynamic_action_sites, key=lambda item: int(item["line"])),
         "action_agent_coverage": {
-            "covered_on_both": sorted(actions & windows & macos),
-            "missing_on_windows": sorted(actions - windows),
-            "missing_on_macos": sorted(actions - macos),
+            "covered_on_both": sorted(worker_actions & windows & macos),
+            "missing_on_windows": sorted(worker_actions - windows),
+            "missing_on_macos": sorted(worker_actions - macos),
+        },
+        "guardian_commands": guardians,
+        "guardian_coverage": {
+            "required": "guardian" in actions,
+            "missing_on_windows": ["guardian"] if "guardian" in actions and not guardians["windows"] else [],
+            "missing_on_macos": ["guardian"] if "guardian" in actions and not guardians["macos"] else [],
         },
         "platforms": platforms,
         "platform_parity": {

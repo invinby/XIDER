@@ -17,7 +17,8 @@ def _project(tmp_path):
         'CALLBACK = "cmd:check_update"\n'
         'OTHER = "cmd:status"\n'
         'publish_tracked("check_update")\n'
-        'transport.publish_command("device", "status")\n',
+        'transport.publish_command("device", "status")\n'
+        'simple_command(cq, "guardian", "shield", "Keeper")\n',
         encoding="utf-8",
     )
     (tmp_path / "XGENT-WDS" / "xgent_wds.py").write_text(
@@ -30,6 +31,15 @@ def _project(tmp_path):
         'handlers = {"agent_update": self._do_update, "status": self._do_status}\n',
         encoding="utf-8",
     )
+    guardian_source = (
+        'def handle(self, payload):\n'
+        '    command = payload["command"]\n'
+        '    if command == "status": pass\n'
+        '    elif command == "start": pass\n'
+        '    elif command == "stop": pass\n'
+    )
+    (tmp_path / "XGENT-WDS" / "xider_guardian_wds.py").write_text(guardian_source, encoding="utf-8")
+    (tmp_path / "XGENT-MCS" / "xider_guardian.py").write_text(guardian_source, encoding="utf-8")
 
 
 def test_report_maps_alias_and_exposes_platform_gaps(tmp_path):
@@ -44,6 +54,12 @@ def test_report_maps_alias_and_exposes_platform_gaps(tmp_path):
         "windows_only": ["windows_only"],
         "macos_only": ["mac_only"],
         "shared_count": 2,
+    }
+    assert report["guardian_commands"]["windows"] == ["start", "status", "stop"]
+    assert report["guardian_coverage"] == {
+        "required": True,
+        "missing_on_windows": [],
+        "missing_on_macos": [],
     }
     assert report["source_only"] is True
 
@@ -66,4 +82,4 @@ def test_cli_writes_json_report(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["x-map-audit", "--root", str(tmp_path), "--output", str(output)])
 
     assert main() == 0
-    assert json.loads(output.read_text(encoding="utf-8"))["schema"] == "x-map-static-audit-v1"
+    assert json.loads(output.read_text(encoding="utf-8"))["schema"] == "x-map-static-audit-v2"

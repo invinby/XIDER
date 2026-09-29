@@ -24,6 +24,7 @@ import zipfile
 from pathlib import Path
 
 import paho.mqtt.client as mqtt
+import psutil
 
 from config import (
     CONFIG_DIR,
@@ -39,6 +40,8 @@ from config import (
     PLATFORM,
     XIDER_UPDATE_BRANCH,
     VERSION,
+    set_guardian_desired_running,
+    set_guardian_startup_enabled,
 )
 from crypto import sign_message, verify_message
 from xgencrypto import decrypt_payload, encrypt_payload
@@ -65,7 +68,7 @@ def _load_state() -> dict:
             return data
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         pass
-    return {"auto_restart": True, "desired_running": True}
+    return {"state_version": 2, "auto_restart": True, "desired_running": True, "startup_enabled": True}
 
 
 def _save_state(data: dict) -> None:
@@ -80,6 +83,7 @@ class Guardian:
         self.state = _load_state()
         self.state.setdefault("auto_restart", True)
         self.state.setdefault("desired_running", True)
+        self.state.setdefault("startup_enabled", True)
         try:
             state_version = int(self.state.get("state_version", 1))
         except (TypeError, ValueError):
@@ -89,6 +93,16 @@ class Guardian:
             # Enable the new recovery policy once, but keep an explicit stop.
             self.state["auto_restart"] = True
             self.state["state_version"] = 2
+        current_boot = int(psutil.boot_time())
+        try:
+            previous_boot = int(self.state.get("boot_time", current_boot))
+        except (TypeError, ValueError):
+            previous_boot = current_boot
+        if previous_boot != current_boot:
+            # Apply boot-autostart policy only on a new OS boot, not whenever
+            # Guardian itself is restarted during the current session.
+            self.state["desired_running"] = bool(self.state["startup_enabled"])
+        self.state["boot_time"] = current_boot
         _save_state(self.state)
         self.stop_event = threading.Event()
         self.lock = threading.RLock()
@@ -340,7 +354,6 @@ class Guardian:
         elif command == "auto_restart":
             enabled = bool(payload.get("enabled"))
             self.state["auto_restart"] = enabled
-            self.state["desired_running"] = True
             _save_state(self.state)
             result = self.status_payload()
             result["text"] = f"🛡 Автовосстановление: {'ВКЛ' if enabled else 'ВЫКЛ'}"
