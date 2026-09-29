@@ -1574,21 +1574,12 @@ async def _replace_callback_message(cq: CallbackQuery, text: str, reply_markup=N
 
 
 async def _show_start_card(message: Message, text: str, reply_markup) -> int:
-    """Reuse the existing /start card; send a replacement only if editing fails."""
+    """Always send a visible /start card, even after the user clears chat history."""
     chat_id = message.chat.id
     user_id = message.from_user.id
     old_card_id = ui_cards.get(chat_id, user_id)
-    if old_card_id:
-        try:
-            await bot.edit_message_text(
-                text, chat_id=chat_id, message_id=old_card_id,
-                reply_markup=reply_markup,
-            )
-            return old_card_id
-        except Exception as exc:
-            if "not modified" in str(exc).lower():
-                return old_card_id
-            log.debug("Не удалось обновить карточку /start; создаю новую", exc_info=True)
+    # Telegram can still edit an old card that the user has deleted locally.
+    # Sending first is the only reliable way to make /start visible again.
     sent = await message.answer(text, reply_markup=reply_markup)
     if old_card_id and old_card_id != sent.message_id:
         try:

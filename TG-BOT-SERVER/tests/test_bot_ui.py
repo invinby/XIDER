@@ -294,7 +294,7 @@ def test_custom_ui_mode_changes_admin_label_and_main_menu(monkeypatch):
     assert "Все устройства · полный состав" in texts
 
 
-def test_start_reuses_existing_card_without_sending_another(monkeypatch):
+def test_start_sends_visible_card_before_deleting_old_one(monkeypatch):
     from types import SimpleNamespace
 
     calls = []
@@ -318,11 +318,11 @@ def test_start_reuses_existing_card_without_sending_another(monkeypatch):
     monkeypatch.setattr(bot.ui_cards, "get", lambda *args: 30)
     monkeypatch.setattr(bot.ui_cards, "set_card", lambda *args: calls.append(("store", args[2])))
 
-    assert asyncio.run(bot._show_start_card(FakeMessage(), "Главное меню", None)) == 30
-    assert calls == [("edit", 30)]
+    assert asyncio.run(bot._show_start_card(FakeMessage(), "Главное меню", None)) == 31
+    assert calls == [("send", None), ("delete", 30), ("store", 31)]
 
 
-def test_start_replaces_deleted_card_and_saves_new_id(monkeypatch):
+def test_start_saves_new_id_when_old_card_was_already_deleted(monkeypatch):
     from types import SimpleNamespace
 
     calls = []
@@ -332,7 +332,7 @@ def test_start_replaces_deleted_card_and_saves_new_id(monkeypatch):
             raise RuntimeError("message to edit not found")
 
         async def delete_message(self, *args, **kwargs):
-            calls.append(("delete", args[1]))
+            raise RuntimeError("message to delete not found")
 
     class FakeMessage:
         chat = SimpleNamespace(id=10)
@@ -347,7 +347,7 @@ def test_start_replaces_deleted_card_and_saves_new_id(monkeypatch):
     monkeypatch.setattr(bot.ui_cards, "set_card", lambda *args: calls.append(("store", args[2])))
 
     assert asyncio.run(bot._show_start_card(FakeMessage(), "Главное меню", None)) == 31
-    assert calls == [("send", None), ("delete", 30), ("store", 31)]
+    assert calls == [("send", None), ("store", 31)]
 
 
 def test_server_menu_contains_metrics_chart_and_safe_terminal():
