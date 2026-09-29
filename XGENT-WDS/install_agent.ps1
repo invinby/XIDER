@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$AgentDir = $PSScriptRoot,
-    [string]$TaskName = 'XIDER Agent'
+    [string]$TaskName = 'XIDER Agent',
+    [switch]$PreferPython
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,7 +16,12 @@ if (-not (Test-Path -LiteralPath $envPath)) {
     throw "Missing $envPath. Copy .env.example to .env and fill the MQTT credentials first."
 }
 
-if (Test-Path -LiteralPath $exePath) {
+if ($PreferPython) {
+    if (-not ((Test-Path -LiteralPath $pythonw) -and (Test-Path -LiteralPath $scriptPath))) {
+        throw 'Python agent requested, but venv\Scripts\pythonw.exe or xgent_wds.py is missing.'
+    }
+    $action = New-ScheduledTaskAction -Execute $pythonw -Argument ('"{0}"' -f $scriptPath) -WorkingDirectory $AgentDir
+} elseif (Test-Path -LiteralPath $exePath) {
     $action = New-ScheduledTaskAction -Execute $exePath -WorkingDirectory $AgentDir
 } elseif ((Test-Path -LiteralPath $pythonw) -and (Test-Path -LiteralPath $scriptPath)) {
     $action = New-ScheduledTaskAction -Execute $pythonw -Argument ('"{0}"' -f $scriptPath) -WorkingDirectory $AgentDir

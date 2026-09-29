@@ -60,5 +60,9 @@ jobs:
             if ($errors.Count) { $errors | ForEach-Object { Write-Error $_ }; throw "PowerShell syntax error in $($file.FullName)" }
           }
 
+      - name: "Exercise Windows agent installer selection"
+        shell: pwsh
+        run: ./deploy/tests/test_install_agent.ps1
+
       - name: "Run every isolated component suite"
         run: python tools/run_tests.py

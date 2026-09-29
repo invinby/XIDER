@@ -18,6 +18,7 @@ $zip = Join-Path $extract 'source.zip'
 $unpack = Join-Path $extract 'unpacked'
 $repo = Join-Path $InstallRoot 'git-ver'
 $agent = Join-Path $repo 'XGENT-WDS'
+$locationPushed = $false
 
 try {
     Write-Host '[1/5] Скачиваю последнюю версию XIDER...'
@@ -82,6 +83,7 @@ try {
     }
 
     Push-Location $agent
+    $locationPushed = $true
     if (-not (Test-Path -LiteralPath '.\venv\Scripts\python.exe')) {
         Write-Host '[4/5] Создаю виртуальное окружение и ставлю зависимости...'
         $pythonLauncher = (Get-Command py.exe -ErrorAction SilentlyContinue).Source
@@ -97,12 +99,11 @@ try {
     & .\venv\Scripts\python.exe -m pip install --disable-pip-version-check --no-input -r requirements.txt
     if ($LASTEXITCODE -ne 0) { throw 'Не удалось установить зависимости Python.' }
     Write-Host '[5/5] Регистрирую Agent и Guardian...'
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install_agent.ps1 -AgentDir (Get-Location).Path
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install_agent.ps1 -AgentDir (Get-Location).Path -PreferPython
     if ($LASTEXITCODE -ne 0) { throw 'Установка Windows-агента/Guardian завершилась ошибкой.' }
-    Pop-Location
     Write-Host '[OK] XIDER Windows Agent + Guardian установлены и запущены.'
 }
 finally {
-    Pop-Location -ErrorAction SilentlyContinue
+    if ($locationPushed) { Pop-Location }
     Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue
 }

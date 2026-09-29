@@ -66,6 +66,11 @@ The installer registers a per-user Scheduled Task named `XIDER Agent`, starts it
 
 For the complete local flow (VPS bot + Windows build + visible agent), run `deploy\setup-all.ps1`. It uses the ignored root `XGENT-WDS\.env` as the sidecar source and never prints its values.
 
+The agent-only Windows bootstrap installs its downloaded Python source explicitly,
+even when an older `XGENT-WDS.exe` remains in the existing checkout. A direct
+`install_agent.ps1` run keeps its existing executable-first behavior unless
+`-PreferPython` is specified.
+
 ## macOS quick install
 
 ```bash
