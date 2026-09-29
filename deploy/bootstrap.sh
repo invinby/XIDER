@@ -87,7 +87,8 @@ if ! mv "$stage/new" "$TARGET"; then
   exit 5
 fi
 
-if ! (cd "$TARGET/XGENT-MCS" && bash ./start_agent.sh && bash ./start_guardian.sh); then
+if ! (cd "$TARGET/XGENT-MCS" && bash ./start_agent.sh && bash ./start_guardian.sh &&
+      bash ./start_agent.sh --status && bash ./start_guardian.sh --status); then
   echo "Запуск не прошёл; возвращаю предыдущую версию." >&2
   launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.xgent.agent.plist" >/dev/null 2>&1 || true
   launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.xider.guardian.plist" >/dev/null 2>&1 || true

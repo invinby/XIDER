@@ -19,6 +19,9 @@ jobs:
       - name: "Exercise VPS update and rollback in an isolated fixture"
         run: |
           bash deploy/tests/test_update_server.sh
+      - name: "Exercise macOS LaunchAgent status in an isolated fixture"
+        run: |
+          bash deploy/tests/test_macos_launch_status.sh
 
   test:
     name: "Run Pytest (Python ${{ matrix.python-version }})"
