@@ -332,3 +332,33 @@ def test_device_and_command_grants_follow_voice_without_changing_callbacks(monke
             assert current_device_callbacks == device_callbacks
             assert current_permission_callbacks == permission_callbacks
             assert current_guest_callbacks == guest_callbacks
+
+
+def test_common_navigation_controls_follow_voice_without_changing_callbacks(monkeypatch):
+    monkeypatch.setattr(bot.devices, "all", lambda: {})
+    for style in xlex.STYLES:
+        monkeypatch.setattr(
+            bot.bot_settings, "get",
+            lambda key, default=None, selected=style: selected if key == "ui_style" else default,
+        )
+        back_buttons = {
+            button.callback_data: button.text
+            for row in bot.back_to_device_kb().inline_keyboard for button in row
+        }
+        confirm_buttons = {
+            button.callback_data: button.text
+            for row in bot.confirm_power_menu("shutdown").inline_keyboard for button in row
+        }
+        devices_buttons = {
+            button.callback_data: button.text
+            for row in bot.devices_menu().inline_keyboard for button in row
+        }
+        assert back_buttons["back:device"] == xlex.nav("back_device", style)
+        assert back_buttons["menu:main"] == xlex.nav("home", style)
+        assert confirm_buttons["back:device"] == xlex.nav("cancel", style)
+        assert devices_buttons["menu:devices"] == xlex.nav("refresh", style)
+        assert devices_buttons["menu:main"] == xlex.nav("home", style)
+        assert all(
+            len(label) <= 64
+            for label in [*back_buttons.values(), *confirm_buttons.values(), *devices_buttons.values()]
+        )

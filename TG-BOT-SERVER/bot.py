@@ -787,8 +787,8 @@ def devices_menu():
     kb.button(text="➕ Добавить", callback_data="devmg:manualadd", style="primary")
     kb.button(text="🚫 Чёрный список", callback_data="devmg:blocked", style="danger")
     kb.button(text="🧹 Очистить список", callback_data="devmg:clear_all", style="danger")
-    kb.button(text="🔄 Обновить", callback_data="menu:devices", style="success")
-    kb.button(text="🏠 Главное меню", callback_data="menu:main", style="primary")
+    kb.button(text=_nav("refresh"), callback_data="menu:devices", style="success")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     dev_count = len(devs)
     adjust_pattern = [1] * dev_count + [2, 1, 2]
     kb.adjust(*adjust_pattern)
@@ -856,7 +856,7 @@ def all_menu():
     kb.button(text="🔇 Mute/Unmute звук", callback_data="cmd:volume", style="primary")
     kb.button(text="⏹ Остановить все клиенты", callback_data="cfm:stop_all", style="danger")
     kb.button(text="🔙 К списку устройств", callback_data="menu:target", style="primary")
-    kb.button(text="🏠 Главное меню", callback_data="menu:main", style="primary")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 1, 2)
     return kb.as_markup()
 
@@ -864,8 +864,8 @@ def all_menu():
 def back_to_device_kb():
     """Маленькая клавиатура «Назад» — появляется после каждой команды."""
     kb = InlineKeyboardBuilder()
-    kb.button(text="⬅️ К устройству", callback_data="back:device", style="primary")
-    kb.button(text="🏠 Главное меню", callback_data="menu:main", style="primary")
+    kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2)
     return kb.as_markup()
 
@@ -890,7 +890,7 @@ def confirm_power_menu(action: str):
     label = labels.get(action, action.upper())
     kb = InlineKeyboardBuilder()
     kb.button(text=f"✅ Да, {label}!", callback_data=f"power_confirm:{action}", style="danger")
-    kb.button(text="❌ Отмена", callback_data="back:device", style="primary")
+    kb.button(text=_nav("cancel"), callback_data="back:device", style="primary")
     kb.adjust(1, 1)
     return kb.as_markup()
 
@@ -902,7 +902,7 @@ def rotate_menu():
     kb.button(text="⬇️ 180° (Вверх дном)", callback_data="rotate:180", style="primary")
     kb.button(text="⬅️ 270° (Влево)", callback_data="rotate:270", style="primary")
     kb.button(text="⬅️ К дисплею", callback_data="cat:screen", style="danger")
-    kb.button(text="🏠 Главное меню", callback_data="menu:main", style="primary")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 2)
     return kb.as_markup()
 
@@ -916,8 +916,8 @@ def media_menu():
     kb.button(text="🔊 Озвучить текст", callback_data="cmd:sound", style="primary")
     kb.button(text="🎚 Уровень громкости", callback_data="vol:opts", style="primary")
     kb.button(text="🔇 Mute / Unmute", callback_data="cmd:volume", style="primary")
-    kb.button(text="⬅️ Назад к ПК", callback_data="back:device", style="danger")
-    kb.button(text="🏠 Главное меню", callback_data="menu:main", style="primary")
+    kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 2, 2)
     return kb.as_markup()
 
@@ -935,8 +935,8 @@ def screen_menu(target: str | None = None):
     else:
         kb.button(text="🌙 Ночной свет", callback_data="cmd:nightlight", style="primary")
     kb.button(text="🔄 Переворот экрана", callback_data="cmd:rotate", style="primary")
-    kb.button(text="⬅️ Назад к ПК", callback_data="back:device", style="danger")
-    kb.button(text="🏠 Главное меню", callback_data="menu:main", style="primary")
+    kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 2, 2)
     return kb.as_markup()
 
@@ -948,7 +948,7 @@ def wallpaper_menu():
     kb.button(text="🌐 Ввести ссылку (URL)", callback_data="fun:wallpaper", style="primary")
     kb.button(text="🔄 Восстановить прежние обои", callback_data="cmd:prank_restore_wallpaper", style="danger")
     kb.button(text="⬅️ К дисплею", callback_data="cat:screen", style="primary")
-    kb.button(text="🏠 Главное меню", callback_data="menu:main", style="primary")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(1, 1, 1, 1, 2)
     return kb.as_markup()
 
@@ -961,8 +961,8 @@ def input_menu():
     kb.button(text="⌘ Нажать клавиши", callback_data="fun:hotkey", style="primary")
     kb.button(text="🖱 Инверсия мыши", callback_data="prank:swapmouse", style="primary")
     kb.button(text="🌀 Пьяный курсор", callback_data="prank:crazycursor", style="primary")
-    kb.button(text="⬅️ Назад к ПК", callback_data="back:device", style="danger")
-    kb.button(text="🏠 Главное меню", callback_data="menu:main", style="primary")
+    kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 2, 2)
     return kb.as_markup()
 
@@ -978,7 +978,7 @@ def system_menu():
     kb.button(text="📦 Установленный софт", callback_data="cmd:apps", style="primary")
     kb.button(text="📊 Возможности", callback_data="cmd:capabilities", style="primary")
     kb.button(text="🔄 Обновить статус", callback_data="cmd:status", style="success")
-    kb.button(text="⬅️ Назад к ПК", callback_data="back:device", style="danger")
+    kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.adjust(2, 2, 2, 2, 1, 1)
     return kb.as_markup()
 
@@ -992,8 +992,8 @@ def network_menu():
     kb.button(text="🔌 USB-устройства", callback_data="cmd:usb", style="primary")
     kb.button(text="🔵 Bluetooth устройства", callback_data="cmd:bluetooth", style="primary")
     kb.button(text="🔗 Порты (Netstat)", callback_data="cmd:netstat", style="primary")
-    kb.button(text="⬅️ Назад к ПК", callback_data="back:device", style="danger")
-    kb.button(text="🏠 Главное меню", callback_data="menu:main", style="primary")
+    kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 2, 1, 2)
     return kb.as_markup()
 
@@ -1006,8 +1006,8 @@ def files_menu():
     kb.button(text="📤 Загрузить на ПК", callback_data="files:put", style="success")
     kb.button(text="🖥 Открыть путь на ПК", callback_data="files:open", style="primary")
     kb.button(text="🗑 Удалить файл", callback_data="files:del", style="danger")
-    kb.button(text="⬅️ Назад к ПК", callback_data="back:device", style="danger")
-    kb.button(text="🏠 Главное меню", callback_data="menu:main", style="primary")
+    kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 2, 2)
     return kb.as_markup()
 
@@ -1021,7 +1021,7 @@ def terminal_menu():
     kb.button(text="🚀 Список автозагрузки", callback_data="cmd:startup", style="primary")
     kb.button(text="🛠 Фоновые службы", callback_data="cmd:services", style="primary")
     kb.button(text="🕘 История консоли", callback_data="cmd:cmdhistory", style="primary")
-    kb.button(text="⬅️ Назад к ПК", callback_data="back:device", style="danger")
+    kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.adjust(2, 2, 2, 1, 1)
     return kb.as_markup()
 
@@ -1051,8 +1051,8 @@ def power_menu_new():
     kb.button(text="🛡 Guardian", callback_data="cmd:guardian_menu", style="primary")
     kb.button(text="🌐 Wake-on-LAN", callback_data="cmd:wol", style="primary")
     kb.button(text="⏹ Стоп процесса агента", callback_data="cfm:stop", style="danger")
-    kb.button(text="⬅️ Назад к ПК", callback_data="back:device", style="primary")
-    kb.button(text="🏠 Главное меню", callback_data="menu:main", style="primary")
+    kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(1, 2, 2, 1, 2, 2, 2, 1)
     return kb.as_markup()
 
@@ -1153,8 +1153,8 @@ def pranks_menu(page: int = 1, target: str | None = None):
     kb.button(text="💣 Хаос" if page != 4 else "🔘 [Хаос]", callback_data="prankpage:4", style="primary")
     kb.button(text="🐱 Мемы" if page != 5 else "🔘 [Мемы]", callback_data="prankpage:5", style="primary")
 
-    kb.button(text="⬅️ Назад к ПК", callback_data="back:device", style="danger")
-    kb.button(text="🏠 Главное меню", callback_data="menu:main", style="primary")
+    kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
 
     kb.adjust(1, 2, 2, 2, 2, 2, 5, 2)
     return kb.as_markup()
@@ -1173,8 +1173,8 @@ def device_settings_menu():
     kb.button(text="🗑 Удалить из списка", callback_data=f"devmg:delete:{device_id}", style="danger")
     kb.button(text="⛔ Заблокировать устройство", callback_data=f"devmg:block:{device_id}", style="danger")
     kb.button(text="🛑 Полное удаление агента с ПК", callback_data=f"devmg:uninstall:{device_id}", style="danger")
-    kb.button(text="⬅️ К устройству", callback_data="back:device", style="primary")
-    kb.button(text="🏠 Главное меню", callback_data="menu:main", style="primary")
+    kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 1, 2, 2, 1, 2)
     return kb.as_markup()
 
@@ -1201,7 +1201,7 @@ def vol_options_menu():
 def confirm_kb(yes_cb: str, yes_text: str = "✅ Да, выполнить!", no_cb: str = "back:device"):
     kb = InlineKeyboardBuilder()
     kb.button(text=yes_text, callback_data=yes_cb, style="danger")
-    kb.button(text="❌ Отмена", callback_data=no_cb, style="primary")
+    kb.button(text=_nav("cancel"), callback_data=no_cb, style="primary")
     kb.adjust(1, 1)
     return kb.as_markup()
 
@@ -1233,7 +1233,7 @@ def events_menu():
         callback_data="ev:server_autostart:toggle",
         style="success" if auto_on else "danger",
     )
-    kb.button(text="🏠 Главное меню", callback_data="menu:main", style="primary")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -1490,7 +1490,7 @@ def server_confirm_menu(action: str):
     }
     kb = InlineKeyboardBuilder()
     kb.button(text=f"✅ Подтвердить: {labels.get(action, action)}", callback_data=f"server_confirm:{action}", style="danger")
-    kb.button(text="Отмена", callback_data="menu:server", style="primary")
+    kb.button(text=_nav("cancel"), callback_data="menu:server", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -1515,7 +1515,7 @@ def _favorites_kb(device_id: str, favs: list):
             callback_data=f"fav:toggle:{action}",
             style="success" if is_fav else "primary",
         )
-    kb.button(text="⬅️ К устройству", callback_data="back:device", style="primary")
+    kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -2011,7 +2011,7 @@ async def on_menu_about(cq: CallbackQuery):
     kb = InlineKeyboardBuilder()
     for slug, title, _ in info_book.CHAPTERS:
         kb.button(text=title, callback_data=f"about:chapter:{slug}", style="primary")
-    kb.button(text="🏠 Главное меню", callback_data="menu:main", style="primary")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(1)
     await _replace_callback_message(
         cq,
@@ -2602,7 +2602,7 @@ async def on_devmg_delete(cq: CallbackQuery):
     device_id = cq.data.split(":", 2)[2]
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Да, удалить!", callback_data=f"devmg:delok:{device_id}", style="danger")
-    kb.button(text="❌ Отмена", callback_data="back:device", style="primary")
+    kb.button(text=_nav("cancel"), callback_data="back:device", style="primary")
     kb.adjust(1)
     await cq.message.answer(
         f"🗑 Удалить <b>{target_label(device_id)}</b> из списка устройств? "
@@ -2636,7 +2636,7 @@ async def on_devmg_uninstall(cq: CallbackQuery):
     device_id = cq.data.split(":", 2)[2]
     kb = InlineKeyboardBuilder()
     kb.button(text="🛑 Да, полностью удалить агент!", callback_data=f"devmg:uninstok:{device_id}", style="danger")
-    kb.button(text="❌ Отмена", callback_data="back:device", style="primary")
+    kb.button(text=_nav("cancel"), callback_data="back:device", style="primary")
     kb.adjust(1)
     await cq.message.answer(
         f"🛑 <b>Полное удаление агента с ПК {target_label(device_id)}!</b>\n\n"
@@ -2691,7 +2691,7 @@ async def on_devmg_block(cq: CallbackQuery):
     device_id = cq.data.split(":", 2)[2]
     kb = InlineKeyboardBuilder()
     kb.button(text="⛔ Да, заблокировать!", callback_data=f"devmg:blockok:{device_id}", style="danger")
-    kb.button(text="❌ Отмена", callback_data="back:device", style="primary")
+    kb.button(text=_nav("cancel"), callback_data="back:device", style="primary")
     kb.adjust(1)
     await cq.message.answer(
         f"⛔ Заблокировать <b>{html.escape(target_label(device_id))}</b>? "
@@ -2748,7 +2748,7 @@ async def on_devmg_blocked(cq: CallbackQuery):
 async def on_devmg_clear_all(cq: CallbackQuery):
     kb = InlineKeyboardBuilder()
     kb.button(text="🧹 Да, очистить всё!", callback_data="devmg:clear_all_confirm", style="danger")
-    kb.button(text="⬅️ Отмена", callback_data="menu:devices", style="primary")
+    kb.button(text=_nav("cancel"), callback_data="menu:devices", style="primary")
     kb.adjust(1, 1)
     await cq.message.answer(
         "⚠️ <b>Внимание!</b> Вы действительно хотите очистить всю базу сохранённых устройств?\n"
@@ -2834,7 +2834,7 @@ async def on_menu_devices(cq: CallbackQuery):
 async def on_menu_target(cq: CallbackQuery):
     if not devices.all():
         kb = InlineKeyboardBuilder()
-        kb.button(text="🏠 Главное меню", callback_data="menu:main", style="primary")
+        kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
         await cq.message.edit_text(
             "Устройств пока нет.\nЗапустите клиент — оно появится здесь.",
             reply_markup=kb.as_markup(),
@@ -3501,8 +3501,8 @@ async def on_proc_page(cq: CallbackQuery):
         kb.button(text=f"{page + 1}/{pages}", callback_data="noop", style="primary")
         if page < pages - 1:
             kb.button(text="▶️", callback_data=f"proc:{page + 1}", style="primary")
-    kb.button(text="🔄 Обновить", callback_data="proc:refresh", style="success")
-    kb.button(text="⬅️ К устройству", callback_data="back:device", style="primary")
+    kb.button(text=_nav("refresh"), callback_data="proc:refresh", style="success")
+    kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
     kb.adjust(1)
     text = f"⚙️ <b>Процессы</b> · {html.escape(target_label(target))} (топ-{len(items)})"
     try:
@@ -3941,7 +3941,7 @@ async def on_history(cq: CallbackQuery):
                 callback_data=f"rep:{i}",
                 style="primary",
             )
-    kb.button(text="⬅️ К устройству", callback_data="back:device", style="primary")
+    kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
     kb.adjust(1)
     await cq.message.answer(text, reply_markup=kb.as_markup())
     await cq.answer()

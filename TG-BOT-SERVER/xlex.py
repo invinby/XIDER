@@ -332,7 +332,8 @@ NAV_KEYS = (
     "text_start_owner", "text_blocked", "make_user", "make_guest", "block_user",
     "unblock_user", "grant_devices", "grant_buttons", "message_user",
     "back_to_user", "guest_home", "perm_status", "perm_sysinfo", "perm_battery",
-    "perm_screenshot", "perm_lock", "perm_full_device",
+    "perm_screenshot", "perm_lock", "perm_full_device", "back_device",
+    "cancel", "refresh",
 )
 NAV = {
     "xtech": {
@@ -376,6 +377,9 @@ NAV = {
         "perm_screenshot": "Скриншот",
         "perm_lock": "Блокировка экрана",
         "perm_full_device": "Полное управление выданными устройствами",
+        "back_device": "К устройству",
+        "cancel": "Отмена",
+        "refresh": "Обновить",
     },
     "xperson": {
         "all_devices": "Все устройства · полный состав",
@@ -418,6 +422,9 @@ NAV = {
         "perm_screenshot": "Скриншот",
         "perm_lock": "Заблокировать экран",
         "perm_full_device": "Полное управление выданными устройствами",
+        "back_device": "К компьютеру",
+        "cancel": "Не делать",
+        "refresh": "Проверить ещё раз",
     },
     "xpikmi": {
         "all_devices": "💻 Все устройствечки",
@@ -460,6 +467,9 @@ NAV = {
         "perm_screenshot": "Скриншот экрана",
         "perm_lock": "Заблокировать экранчик",
         "perm_full_device": "Полное управление устройствами",
+        "back_device": "⬅️ К компьютерику",
+        "cancel": "💗 Отменить",
+        "refresh": "🔄 Проверить ещё",
     },
     "xtarped": {
         "all_devices": "Все устройства",
@@ -502,6 +512,9 @@ NAV = {
         "perm_screenshot": "Скриншот",
         "perm_lock": "Блокировка экрана",
         "perm_full_device": "Полное управление выданными устройствами",
+        "back_device": "К устройству",
+        "cancel": "Отмена",
+        "refresh": "Обновить",
     },
     "xcore": {
         "all_devices": "Все узлы",
@@ -544,6 +557,9 @@ NAV = {
         "perm_screenshot": "Снимок экрана",
         "perm_lock": "Блокировка экрана",
         "perm_full_device": "Полное управление узлами",
+        "back_device": "К узлу",
+        "cancel": "Отмена",
+        "refresh": "Обновить",
     },
     "xadam": {
         "all_devices": "Все устройства",
@@ -586,6 +602,9 @@ NAV = {
         "perm_screenshot": "Скриншот экрана",
         "perm_lock": "Блокировка экрана",
         "perm_full_device": "Полное управление устройствами",
+        "back_device": "К устройству",
+        "cancel": "Отмена",
+        "refresh": "Обновить",
     },
 }
 
