@@ -23,6 +23,12 @@ Guardian выполняется в режиме без изменений: ACL, 
 трогаются. Установленные Agent и Guardian регистрируются как видимые задачи
 Task Scheduler; скрытого режима установки нет.
 
+При обновлении bootstrap сначала сохраняет конфигурацию и старый checkout.
+Если общая установка не проходит, новая папка изолируется без её копии `.env`
+и прежняя версия возвращается. Первый неудачный запуск не выдаётся за готовую
+установку. Этот путь проверяется локальным фикстурным ZIP в PowerShell 5 и 7;
+проверка не равна установке на реальном ноутбуке.
+
 Для обновления уже установленного бота из checkout:
 
 ```powershell
@@ -110,6 +116,13 @@ For a test branch, set `XIDER_BRANCH` before running the same installer. The ins
 ```bash
 XIDER_BRANCH='branch-name' bash -c "$(curl -fsSL https://raw.githubusercontent.com/invinby/XIDER/branch-name/deploy/bootstrap.sh)"
 ```
+
+`XIDER_SOURCE_ARCHIVE=/path/to/xider.zip` may be set for an offline test.
+The installer still validates the expected agent files and exercises the same
+activation/rollback path. A failed activation restores the prior checkout and
+removes the copied `.env` from the quarantined failed directory. The automated
+fixture uses a stub `launchctl`; only a real Mac can validate permissions,
+TCC prompts, sleep/wake, and actual LaunchAgent behavior.
 
 The macOS bootstrap downloads the repository and starts the agent. If a local
 sidecar `.env` is absent, it logs in to the configured XIDER VPS

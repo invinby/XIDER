@@ -7,6 +7,7 @@ BRANCH="${XIDER_BRANCH:-main}"
 SERVER_HOST="${XIDER_SERVER_HOST:-141.145.152.174}"
 SERVER_USER="${XIDER_SERVER_USER:-ubuntu}"
 TARGET="${INSTALL_ROOT}/git-ver"
+SOURCE_ARCHIVE="${XIDER_SOURCE_ARCHIVE:-}"
 
 if [[ ! "$BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]; then
   echo "Invalid XIDER_BRANCH" >&2
@@ -19,7 +20,13 @@ stage="$(mktemp -d "${INSTALL_ROOT}/.xider-install.XXXXXX")"
 trap 'rm -rf "$stage"' EXIT
 
 echo "Получаю XIDER, branch=$BRANCH"
-curl -fsSL "https://github.com/invinby/XIDER/archive/refs/heads/${BRANCH}.zip" -o "$stage/source.zip"
+if [[ -n "$SOURCE_ARCHIVE" ]]; then
+  [[ -f "$SOURCE_ARCHIVE" ]] || { echo "XIDER_SOURCE_ARCHIVE не найден" >&2; exit 2; }
+  cp "$SOURCE_ARCHIVE" "$stage/source.zip"
+else
+  curl --fail --silent --show-error --location --max-time 90 \
+    "https://github.com/invinby/XIDER/archive/refs/heads/${BRANCH}.zip" -o "$stage/source.zip"
+fi
 unzip -q "$stage/source.zip" -d "$stage"
 downloaded="$(find "$stage" -mindepth 1 -maxdepth 1 -type d ! -name '.xider-install.*' | head -n1)"
 [[ -n "$downloaded" && -f "$downloaded/XGENT-MCS/start_agent.sh" ]] || {
@@ -92,11 +99,21 @@ if ! (cd "$TARGET/XGENT-MCS" && bash ./start_agent.sh && bash ./start_guardian.s
   echo "Запуск не прошёл; возвращаю предыдущую версию." >&2
   launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.xgent.agent.plist" >/dev/null 2>&1 || true
   launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.xider.guardian.plist" >/dev/null 2>&1 || true
-  mv "$TARGET" "${TARGET}.failed.$(date +%Y%m%d%H%M%S)"
-  [[ ! -e "$backup" ]] || mv "$backup" "$TARGET"
+  failed="${TARGET}.failed.$(date +%Y%m%d%H%M%S)"
+  if mv "$TARGET" "$failed"; then
+    rm -f "$failed/XGENT-MCS/.env" || echo "Предупреждение: не удалось убрать .env из $failed" >&2
+  else
+    echo "Не удалось изолировать неисправную версию $TARGET; автоматический откат может быть неполным." >&2
+  fi
+  if [[ -e "$backup" && ! -e "$TARGET" ]]; then
+    if ! mv "$backup" "$TARGET"; then
+      echo "КРИТИЧНО: не удалось вернуть резервную версию из $backup" >&2
+    fi
+  fi
   if [[ -x "$TARGET/XGENT-MCS/start_agent.sh" ]]; then
     (cd "$TARGET/XGENT-MCS" && bash ./start_agent.sh || true; bash ./start_guardian.sh || true)
   fi
+  [[ ! -e "$backup" ]] || echo "Предыдущая версия возвращена: $TARGET"
   exit 6
 fi
 

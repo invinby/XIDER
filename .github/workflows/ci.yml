@@ -22,6 +22,9 @@ jobs:
       - name: "Exercise macOS LaunchAgent status in an isolated fixture"
         run: |
           bash deploy/tests/test_macos_launch_status.sh
+      - name: "Exercise macOS bootstrap activation and rollback"
+        run: |
+          bash deploy/tests/test_bootstrap_macos_transaction.sh
 
   test:
     name: "Run Pytest (Python ${{ matrix.python-version }})"
@@ -97,6 +100,14 @@ jobs:
       - name: "Exercise Windows staged install and rollback"
         shell: powershell
         run: .\deploy\tests\test_bootstrap_agent_swap.ps1
+
+      - name: "Exercise full Windows bootstrap transaction"
+        shell: pwsh
+        run: ./deploy/tests/test_bootstrap_transaction.ps1
+
+      - name: "Exercise full Windows bootstrap transaction with Windows PowerShell 5"
+        shell: powershell
+        run: .\deploy\tests\test_bootstrap_transaction.ps1
 
       - name: "Run every isolated component suite"
         run: python tools/run_tests.py
