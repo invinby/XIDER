@@ -235,3 +235,100 @@ def test_admin_copy_keeps_owner_protection_clear_in_every_voice():
         assert "блок" in intro
         assert any(fragment in intro for fragment in ("пониз", "пониж"))
         assert "удал" in intro
+
+
+def test_admin_user_actions_follow_voice_without_changing_permissions_callbacks(monkeypatch):
+    monkeypatch.setattr(bot.access_store, "get_user", lambda user_id: {"id": user_id})
+    callbacks = None
+    for style in xlex.STYLES:
+        monkeypatch.setattr(
+            bot.bot_settings, "get",
+            lambda key, default=None, selected=style: selected if key == "ui_style" else default,
+        )
+        monkeypatch.setattr(bot.access_store, "get_role", lambda user_id, owner_id: bot.Role.GUEST)
+        markup = bot.admin_user_menu(123)
+        buttons = {
+            button.callback_data: button.text
+            for row in markup.inline_keyboard for button in row
+        }
+        assert buttons["admin:role:123:user"] == xlex.nav("make_user", style)
+        assert buttons["admin:role:123:guest"] == xlex.nav("make_guest", style)
+        assert buttons["admin:devices:123"] == xlex.nav("grant_devices", style)
+        assert buttons["admin:perms:123"] == xlex.nav("grant_buttons", style)
+        assert buttons["admin:message:123"] == xlex.nav("message_user", style)
+        assert buttons["admin:block:123"] == xlex.nav("block_user", style)
+        current_callbacks = set(buttons)
+        if callbacks is None:
+            callbacks = current_callbacks
+        else:
+            assert current_callbacks == callbacks
+        assert all(len(label) <= 64 for label in buttons.values())
+        monkeypatch.setattr(bot.access_store, "get_role", lambda user_id, owner_id: bot.Role.BLOCKED)
+        blocked_buttons = {
+            button.callback_data: button.text
+            for row in bot.admin_user_menu(123).inline_keyboard for button in row
+        }
+        assert blocked_buttons["admin:block:123"] == xlex.nav("unblock_user", style)
+
+
+def test_device_and_command_grants_follow_voice_without_changing_callbacks(monkeypatch):
+    devices = {
+        "mac-1": {"name": "MacBook Air"},
+        "win-1": {"name": "Windows PC"},
+    }
+    enabled = {"devices": ["mac-1"], "callbacks": ["cmd:status", "full_device"]}
+    monkeypatch.setattr(bot.devices, "all", lambda: devices)
+    monkeypatch.setattr(
+        bot.access_store, "get_user",
+        lambda user_id: {"id": user_id, "permissions": enabled},
+    )
+    device_callbacks = None
+    permission_callbacks = None
+    guest_callbacks = None
+    for style in xlex.STYLES:
+        monkeypatch.setattr(
+            bot.bot_settings, "get",
+            lambda key, default=None, selected=style: selected if key == "ui_style" else default,
+        )
+        device_buttons = {
+            button.callback_data: button.text
+            for row in bot.admin_devices_menu(123).inline_keyboard for button in row
+        }
+        permission_buttons = {
+            button.callback_data: button.text
+            for row in bot.admin_permissions_menu(123).inline_keyboard for button in row
+        }
+        guest_buttons = {
+            button.callback_data: button.text
+            for row in bot.guest_devices_menu().inline_keyboard for button in row
+        }
+
+        assert device_buttons["admin:device:123:mac-1"] == xlex.render(
+            "permission_enabled", style, item="MacBook Air"
+        )
+        assert device_buttons["admin:device:123:win-1"] == xlex.render(
+            "permission_disabled", style, item="Windows PC"
+        )
+        for callback, label_key in bot.USER_PERMISSION_CHOICES.items():
+            state = "permission_enabled" if callback in enabled["callbacks"] else "permission_disabled"
+            encoded = callback.replace(":", "_")
+            assert permission_buttons[f"admin:perm:123:{encoded}"] == xlex.render(
+                state, style, item=xlex.nav(label_key, style)
+            )
+        assert guest_buttons["menu:main"] == xlex.nav("guest_home", style)
+        assert all(
+            len(label) <= 64
+            for label in [*device_buttons.values(), *permission_buttons.values(), *guest_buttons.values()]
+        )
+
+        current_device_callbacks = set(device_buttons)
+        current_permission_callbacks = set(permission_buttons)
+        current_guest_callbacks = set(guest_buttons)
+        if device_callbacks is None:
+            device_callbacks = current_device_callbacks
+            permission_callbacks = current_permission_callbacks
+            guest_callbacks = current_guest_callbacks
+        else:
+            assert current_device_callbacks == device_callbacks
+            assert current_permission_callbacks == permission_callbacks
+            assert current_guest_callbacks == guest_callbacks

@@ -1303,12 +1303,12 @@ ROLE_LABELS = {
 }
 
 USER_PERMISSION_CHOICES = {
-    "cmd:status": "Статус устройства",
-    "cmd:sysinfo": "Сведения о системе",
-    "cmd:battery": "Батарея",
-    "cmd:screenshot": "Скриншот",
-    "cmd:lock": "Блокировка экрана",
-    "full_device": "Полное управление выданными устройствами",
+    "cmd:status": "perm_status",
+    "cmd:sysinfo": "perm_sysinfo",
+    "cmd:battery": "perm_battery",
+    "cmd:screenshot": "perm_screenshot",
+    "cmd:lock": "perm_lock",
+    "full_device": "perm_full_device",
 }
 
 
@@ -1398,16 +1398,16 @@ def admin_user_menu(user_id: int):
     blocked = role == Role.BLOCKED
     kb = InlineKeyboardBuilder()
     if user_id != ADMIN_ID:
-        kb.button(text="Сделать пользователем", callback_data=f"admin:role:{user_id}:user", style="success")
-        kb.button(text="Сделать гостем", callback_data=f"admin:role:{user_id}:guest", style="primary")
+        kb.button(text=_nav("make_user"), callback_data=f"admin:role:{user_id}:user", style="success")
+        kb.button(text=_nav("make_guest"), callback_data=f"admin:role:{user_id}:guest", style="primary")
         kb.button(
-            text="Разблокировать" if blocked else "Заблокировать",
+            text=_nav("unblock_user" if blocked else "block_user"),
             callback_data=f"admin:block:{user_id}",
             style="success" if blocked else "danger",
         )
-        kb.button(text="Выдать устройства", callback_data=f"admin:devices:{user_id}", style="primary")
-        kb.button(text="Выдать кнопки", callback_data=f"admin:perms:{user_id}", style="primary")
-        kb.button(text="Написать пользователю", callback_data=f"admin:message:{user_id}", style="primary")
+        kb.button(text=_nav("grant_devices"), callback_data=f"admin:devices:{user_id}", style="primary")
+        kb.button(text=_nav("grant_buttons"), callback_data=f"admin:perms:{user_id}", style="primary")
+        kb.button(text=_nav("message_user"), callback_data=f"admin:message:{user_id}", style="primary")
     kb.button(text=_nav("back_users"), callback_data="admin:users", style="primary")
     kb.adjust(1)
     return kb.as_markup()
@@ -1418,14 +1418,13 @@ def admin_devices_menu(user_id: int):
     granted = set((record.get("permissions") or {}).get("devices") or [])
     kb = InlineKeyboardBuilder()
     for device_id, info in sorted(devices.all().items()):
-        mark = "Выдано: " if device_id in granted else "Выдать: "
         name = str(info.get("name") or device_id)
         kb.button(
-            text=f"{mark}{name}"[:62],
+            text=_lex("permission_enabled" if device_id in granted else "permission_disabled", item=name)[:62],
             callback_data=f"admin:device:{user_id}:{device_id}",
             style="success" if device_id in granted else "primary",
         )
-    kb.button(text="К пользователю", callback_data=f"admin:user:{user_id}", style="primary")
+    kb.button(text=_nav("back_to_user"), callback_data=f"admin:user:{user_id}", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -1434,14 +1433,14 @@ def admin_permissions_menu(user_id: int):
     record = access_store.get_user(user_id) or {}
     granted = set((record.get("permissions") or {}).get("callbacks") or [])
     kb = InlineKeyboardBuilder()
-    for callback, label in USER_PERMISSION_CHOICES.items():
+    for callback, label_key in USER_PERMISSION_CHOICES.items():
         enabled = callback in granted
         kb.button(
-            text=("Выдано: " if enabled else "Выдать: ") + label,
+            text=_lex("permission_enabled" if enabled else "permission_disabled", item=_nav(label_key))[:62],
             callback_data=f"admin:perm:{user_id}:{callback.replace(':', '_')}",
             style="success" if enabled else "primary",
         )
-    kb.button(text="К пользователю", callback_data=f"admin:user:{user_id}", style="primary")
+    kb.button(text=_nav("back_to_user"), callback_data=f"admin:user:{user_id}", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -1452,7 +1451,7 @@ def guest_devices_menu():
         name = str(info.get("name") or "Устройство")
         status = "онлайн" if _status_dot(info) in ("🟢", "🟡") else "офлайн"
         kb.button(text=f"{name}: {status}"[:62], callback_data="guest:readonly", style="primary")
-    kb.button(text="Главное меню", callback_data="menu:main", style="primary")
+    kb.button(text=_nav("guest_home"), callback_data="menu:main", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
