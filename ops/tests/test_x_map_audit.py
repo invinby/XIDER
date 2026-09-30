@@ -83,3 +83,18 @@ def test_cli_writes_json_report(tmp_path, monkeypatch):
 
     assert main() == 0
     assert json.loads(output.read_text(encoding="utf-8"))["schema"] == "x-map-static-audit-v2"
+
+
+def test_current_repo_has_no_declared_worker_action_gaps():
+    report = build_report(ROOT)
+
+    assert report["action_agent_coverage"]["missing_on_windows"] == []
+    assert report["action_agent_coverage"]["missing_on_macos"] == []
+    for platform in ("windows", "macos"):
+        assert report["platforms"][platform]["declared_without_handler"] == []
+        assert report["platforms"][platform]["handler_without_declaration"] == []
+    assert report["guardian_coverage"] == {
+        "required": True,
+        "missing_on_windows": [],
+        "missing_on_macos": [],
+    }

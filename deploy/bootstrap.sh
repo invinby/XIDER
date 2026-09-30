@@ -60,7 +60,6 @@ else
     cat "$stage/ssh.err" >&2
     exit 4
   fi
-  if ! grep -q '^MQTT_PREFIX=' "$fetched_env"; then printf 'MQTT_PREFIX=xgent/v1\n' >> "$fetched_env"; fi
   for required in SHARED_KEY MQTT_BROKER MQTT_PORT MQTT_TLS ENCRYPT_PAYLOAD; do
     if ! grep -q "^${required}=..*" "$fetched_env"; then
       echo "В настройках VPS отсутствует ${required}; ничего не устанавливал." >&2
@@ -69,6 +68,32 @@ else
   done
   cp "$fetched_env" "$agent_env"
 fi
+
+# Match the same topic-prefix default as bot/config.py and both agents. An
+# explicit empty or duplicated value is rejected instead of silently routing
+# the client to a different MQTT namespace.
+prefix_count="$(grep -c '^MQTT_PREFIX=' "$agent_env" || true)"
+if [[ "$prefix_count" -eq 0 ]]; then
+  printf 'MQTT_PREFIX=xgent/v1\n' >> "$agent_env"
+elif [[ "$prefix_count" -ne 1 ]]; then
+  echo "MQTT_PREFIX указан несколько раз; установку не менял." >&2
+  exit 4
+else
+  prefix_value="$(sed -n 's/^MQTT_PREFIX=//p' "$agent_env" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+  if [[ "$prefix_value" == \"*\" || "$prefix_value" == \'*\' ]]; then
+    prefix_value="${prefix_value:1:${#prefix_value}-2}"
+  fi
+  if [[ ! "$prefix_value" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+    echo "MQTT_PREFIX пустой или имеет неподдерживаемый формат; установку не менял." >&2
+    exit 4
+  fi
+fi
+for required in SHARED_KEY MQTT_BROKER MQTT_PORT MQTT_PREFIX MQTT_TLS ENCRYPT_PAYLOAD; do
+  if ! grep -q "^${required}=..*" "$agent_env"; then
+    echo "В конфигурации агента отсутствует ${required}; ничего не устанавливал." >&2
+    exit 4
+  fi
+done
 
 # Пин обновлений этого Mac на ту же ветку, откуда сейчас ставится агент.
 awk -v branch="$BRANCH" '

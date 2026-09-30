@@ -31,6 +31,19 @@ try {
         throw 'Preflight changed the target installation.'
     }
 
+    [IO.File]::WriteAllLines($envPath, @($complete) + 'MQTT_PREFIX=xgent/v1', $utf8)
+    & $bootstrap -InstallRoot $installRoot -EnvRoot $envRoot -SourceArchive $archive -PreflightOnly
+    [IO.File]::WriteAllLines($envPath, @($complete) + 'MQTT_PREFIX=', $utf8)
+    $blankPrefixRejected = $false
+    try { & $bootstrap -InstallRoot $installRoot -EnvRoot $envRoot -SourceArchive $archive -PreflightOnly }
+    catch { $blankPrefixRejected = $_.Exception.Message -match 'MQTT_PREFIX' }
+    if (-not $blankPrefixRejected) { throw 'Preflight accepted an explicitly blank MQTT_PREFIX.' }
+    [IO.File]::WriteAllLines($envPath, @($complete) + 'MQTT_PREFIX=xgent/v1' + 'MQTT_PREFIX=duplicate', $utf8)
+    $duplicatePrefixRejected = $false
+    try { & $bootstrap -InstallRoot $installRoot -EnvRoot $envRoot -SourceArchive $archive -PreflightOnly }
+    catch { $duplicatePrefixRejected = $_.Exception.Message -match 'MQTT_PREFIX' }
+    if (-not $duplicatePrefixRejected) { throw 'Preflight accepted duplicate MQTT_PREFIX values.' }
+
     [IO.File]::WriteAllLines($envPath, @($complete | Where-Object { $_ -notmatch '^SHARED_KEY=' }), $utf8)
     $missingConfigRejected = $false
     try { & $bootstrap -InstallRoot $installRoot -EnvRoot $envRoot -SourceArchive $archive -PreflightOnly }

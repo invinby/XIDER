@@ -56,10 +56,12 @@ try {
     # Parse values only in memory. Never echo .env contents or include them in
     # exception text, build output, source archives, or remote deploy bundles.
     $settings = @{}
+    $mqttPrefixCount = 0
     foreach ($line in [IO.File]::ReadAllLines($sourceEnv)) {
         if ($line -match '^\s*(?:export\s+)?(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?<value>.*)$') {
             $name = $Matches['name']
             $value = $Matches['value'].Trim()
+            if ($name -eq 'MQTT_PREFIX') { $mqttPrefixCount++ }
             if ($value.Length -ge 2 -and
                 (($value.StartsWith('"') -and $value.EndsWith('"')) -or
                  ($value.StartsWith("'") -and $value.EndsWith("'")))) {
@@ -67,6 +69,22 @@ try {
             }
             $settings[$name] = $value
         }
+    }
+    if ($mqttPrefixCount -gt 1) {
+        throw 'В конфигурации MQTT_PREFIX указан несколько раз. VPS не изменён.'
+    }
+
+    # Keep the installer aligned with config.py on all three components.
+    # Missing means the shared default; an explicitly blank value still fails
+    # the required-setting check below instead of silently misrouting MQTT.
+    if (-not $settings.ContainsKey('MQTT_PREFIX')) {
+        $normalizedLines = @([IO.File]::ReadAllLines($sourceEnv)) + 'MQTT_PREFIX=xgent/v1'
+        if (-not $fetchedEnv) {
+            $fetchedEnv = Join-Path $env:TEMP ('xider-agent-env-' + [guid]::NewGuid().ToString('N') + '.env')
+        }
+        [IO.File]::WriteAllLines($fetchedEnv, [string[]]$normalizedLines, [System.Text.UTF8Encoding]::new($false))
+        $sourceEnv = $fetchedEnv
+        $settings['MQTT_PREFIX'] = 'xgent/v1'
     }
 
     foreach ($required in @(
@@ -85,6 +103,9 @@ try {
     }
     if ($settings['ENCRYPT_PAYLOAD'].ToLowerInvariant() -notin @('true', '1', 'yes')) {
         throw 'Для установки требуется ENCRYPT_PAYLOAD=true. VPS не изменён.'
+    }
+    if ($settings['MQTT_PREFIX'] -notmatch '^[A-Za-z0-9._/-]+$') {
+        throw 'MQTT_PREFIX имеет неподдерживаемый формат. VPS не изменён.'
     }
     $mqttPort = 0
     if (-not [int]::TryParse([string]$settings['MQTT_PORT'], [ref]$mqttPort) -or $mqttPort -lt 1 -or $mqttPort -gt 65535) {

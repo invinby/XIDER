@@ -77,8 +77,11 @@ try {
         $allowed = Get-Content -LiteralPath $fetched | Where-Object {
             $_ -match '^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD)='
         }
-        if (-not ($allowed | Where-Object { $_ -match '^MQTT_PREFIX=.+$' })) {
-            $allowed = @($allowed | Where-Object { $_ -notmatch '^MQTT_PREFIX=' })
+        $prefixEntries = @($allowed | Where-Object { $_ -match '^MQTT_PREFIX=' })
+        if ($prefixEntries.Count -gt 1) {
+            throw 'На VPS параметр MQTT_PREFIX указан несколько раз. Файлы агента не изменены.'
+        }
+        if ($prefixEntries.Count -eq 0) {
             $allowed += 'MQTT_PREFIX=xgent/v1'
         }
         foreach ($required in @('SHARED_KEY', 'MQTT_BROKER', 'MQTT_PORT', 'MQTT_TLS', 'ENCRYPT_PAYLOAD')) {
@@ -90,8 +93,24 @@ try {
         $envSource = $fetched
     }
 
-    $requiredSettings = @('SHARED_KEY', 'MQTT_BROKER', 'MQTT_PORT', 'MQTT_TLS', 'ENCRYPT_PAYLOAD')
+    $requiredSettings = @('SHARED_KEY', 'MQTT_BROKER', 'MQTT_PORT', 'MQTT_PREFIX', 'MQTT_TLS', 'ENCRYPT_PAYLOAD')
     $configLines = @(Get-Content -LiteralPath $envSource -ErrorAction Stop)
+    $prefixPattern = '^\s*(?:export\s+)?MQTT_PREFIX\s*=\s*(.*)$'
+    $prefixLines = @($configLines | Where-Object { $_ -match $prefixPattern })
+    if ($prefixLines.Count -gt 1) {
+        throw 'В конфигурации MQTT_PREFIX указан несколько раз. Рабочая установка не изменена.'
+    }
+    if ($prefixLines.Count -eq 0) {
+        $configLines += 'MQTT_PREFIX=xgent/v1'
+        $normalizedEnv = Join-Path $extract 'agent.normalized.env'
+        [IO.File]::WriteAllLines($normalizedEnv, [string[]]$configLines, [System.Text.UTF8Encoding]::new($false))
+        $envSource = $normalizedEnv
+    } else {
+        $prefixValue = [regex]::Match([string]$prefixLines[0], $prefixPattern).Groups[1].Value.Trim().Trim('"', "'").Trim()
+        if ($prefixValue -notmatch '^[A-Za-z0-9._/-]+$') {
+            throw 'В конфигурации MQTT_PREFIX пустой или имеет неподдерживаемый формат. Рабочая установка не изменена.'
+        }
+    }
     foreach ($required in $requiredSettings) {
         $pattern = '^\s*(?:export\s+)?' + [regex]::Escape($required) + '\s*=\s*(.*)$'
         $matchingLines = @($configLines | Where-Object { $_ -match $pattern })
