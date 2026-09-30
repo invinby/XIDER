@@ -17,7 +17,7 @@ from typing import Callable
 
 
 RELEASES_URL = "https://api.github.com/repos/invinby/XIDER/releases"
-_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+_TAG = re.compile(r"^v([0-9]{1,6})\.([0-9]{1,6})\.([0-9]{1,6})$")
 _ASSET_NAMES = {
     "windows_agent": {"XGENT-WDS.exe", "XGENT-WDS-Windows.zip"},
     "mac_agent": {"XGENT-MCS-macos-bundle.zip"},

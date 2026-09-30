@@ -90,6 +90,18 @@ macOS-агент, Guard Keeper и система релизов.
   `/etc/xider/bot.env` не менялся, права `640 root:xider`. GitHub `main` не обновлён:
   запись всё ещё закрыта; Telegram/MQTT round-trip и живой экран стилей остаются
   последним live-тестом.
+- X-LEDGER продолжен до **4.0.3 · X-LEDGER**: экраны устройства/сервера,
+  список выпусков и заметки оформлены шестью голосами; callback-ID сохранены,
+  пакеты явно отделены от релизов без артефактов. GitHub release-tag ограничен
+  безопасным форматом, длинные заметки разбиваются по длине уже HTML-экранированного
+  текста без потери символов. Тесты проверяют все шесть вариантов, длину Telegram
+  карточки и сохранность заметок; общий набор — **146 passed, 1 skipped**.
+  `4.0.3` развернут на основном VPS updater-ом; снимок
+  `/var/backups/xider/xider-20260930T145226Z-204520.tar.gz`. SHA-256 `bot.py`,
+  `xlex.py`, `release_catalog.py` и `version.py` совпали с локальными; systemd
+  `active/running`, `NRestarts=0`, недавних ошибок `Traceback/CRITICAL/ERROR` — 0,
+  `.env` не менялся (`640 root:xider`). GitHub и резервный VPS не обновлялись;
+  живой Telegram/MQTT-тест отложен до последнего этапа.
 - Публикация в GitHub пока не прошла: HTTPS `git push` не имеет интерактивных
   credentials, а GitHub connector подтвердил push-permission репозитория, но
   вернул 403 `Resource not accessible by integration` на создание Git blob.

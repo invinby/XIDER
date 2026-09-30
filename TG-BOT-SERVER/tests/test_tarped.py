@@ -59,6 +59,7 @@ def test_release_catalog_requires_a_real_component_asset():
         {"tag_name": "v4.0.0", "name": "TARPED", "body": "Changes", "assets": [{"name": "XGENT-WDS.exe"}]},
         {"tag_name": "v3.3.8", "name": "Old", "assets": [{"name": "XGENT-MCS-macos-bundle.zip"}]},
         {"tag_name": "v4.1.0", "draft": True, "assets": [{"name": "Guard-Keeper-Windows.zip"}]},
+        {"tag_name": "v" + ("9" * 5000) + ".0.0", "assets": [{"name": "X-STAB-server.zip"}]},
         {"tag_name": "random", "assets": []},
     ]
     releases = ledger.parse_releases(rows)
@@ -84,6 +85,109 @@ def test_release_catalog_cache_does_not_fetch_on_every_open():
     assert catalog.list()[0].tag == "v3.3.8"
     assert catalog.list()[0].tag == "v3.3.8"
     assert len(calls) == 1
+
+
+def test_release_notes_split_by_escaped_html_size_without_losing_text():
+    notes = "<&' \n" * 1000
+    chunks = bot._split_html_escaped_text(notes)
+    assert len(chunks) > 1
+    assert "".join(chunks) == notes
+    assert all(len(bot.html.escape(chunk)) <= 2500 for chunk in chunks)
+
+
+def test_version_screens_follow_six_voices_and_keep_release_callbacks(monkeypatch):
+    selected = bot.SessionRegistry()
+    selected["target"] = "mac-1"
+    monkeypatch.setattr(bot, "SESSION", selected)
+
+    class FakeDevices:
+        def get(self, device_id):
+            return {"os": "macOS", "version": "3.3.8", "guardian": {"version": "1.2.0"}}
+
+    monkeypatch.setattr(bot, "devices", FakeDevices())
+    release = ledger.Release(
+        tag="v4.0.2",
+        version=(4, 0, 2),
+        name="<release & notes>",
+        published_at="2026-09-30T12:00:00Z",
+        notes="<&' \n" * 1000,
+        asset_names=frozenset({"XGENT-MCS-macos-bundle.zip"}),
+    )
+    monkeypatch.setattr(bot.release_catalog.catalog, "list", lambda: [release])
+    shown = {}
+
+    async def replace_card(_cq, text, reply_markup=None):
+        shown["text"] = text
+        shown["markup"] = reply_markup
+
+    monkeypatch.setattr(bot, "_replace_callback_message", replace_card)
+
+    class Callback:
+        from_user = SimpleNamespace(id=123)
+
+        def __init__(self, data):
+            self.data = data
+
+        async def answer(self, *args, **kwargs):
+            pass
+
+    expected_callbacks = None
+    rendered_lists = set()
+    rendered_details = set()
+    for style in xlex.STYLES:
+        monkeypatch.setattr(
+            bot.bot_settings, "get",
+            lambda key, default=None, selected=style: selected if key == "ui_style" else default,
+        )
+        root = {
+            button.callback_data: button.text
+            for row in bot._version_root_menu().inline_keyboard for button in row
+        }
+        assert root["versions:list:agent:0"] == xlex.render("versions_agent_button", style, version="3.3.8")
+        assert root["versions:list:keeper:0"] == xlex.render("versions_keeper_button", style, version="1.2.0")
+        assert set(root) == {"versions:list:agent:0", "versions:list:keeper:0", "back:device"}
+        assert all(len(label) <= 64 for label in root.values())
+        server_root = {
+            button.callback_data: button.text
+            for row in bot._version_root_menu(server=True).inline_keyboard for button in row
+        }
+        assert server_root["versions:list:server:0"] == xlex.render(
+            "versions_server_root_button", style, version=bot.VERSION
+        )
+        assert set(server_root) == {"versions:list:server:0", "menu:server"}
+
+        asyncio.run(bot.on_versions_list(Callback("versions:list:agent:0")))
+        assert "&lt;release &amp; notes&gt;" in shown["text"]
+        assert xlex.render("versions_list_title", style, title="X-EDGE-M") in shown["text"]
+        rendered_lists.add(shown["text"])
+        list_callbacks = {
+            button.callback_data
+            for row in shown["markup"].inline_keyboard for button in row
+        }
+        assert "versions:detail:agent:v4.0.2" in list_callbacks
+        assert "versions:device" in list_callbacks
+        if expected_callbacks is None:
+            expected_callbacks = list_callbacks
+        else:
+            assert list_callbacks == expected_callbacks
+
+        asyncio.run(bot.on_versions_detail(Callback("versions:detail:agent:v4.0.2:0")))
+        escaped_note = shown["text"].split("<pre>", 1)[1].split("</pre>", 1)[0]
+        assert len(escaped_note) <= 2500
+        assert len(shown["text"]) < 4096
+        assert xlex.render(
+            "versions_detail_title", style, title="X-EDGE-M", tag="v4.0.2"
+        ) in shown["text"]
+        rendered_details.add(shown["text"])
+        detail_callbacks = {
+            button.callback_data
+            for row in shown["markup"].inline_keyboard for button in row
+        }
+        assert "versions:detail:agent:v4.0.2:1" in detail_callbacks
+        assert "versions:list:agent:0" in detail_callbacks
+
+    assert len(rendered_lists) > 1
+    assert len(rendered_details) > 1
 
 
 def test_book_chapters_fit_telegram_and_device_menu_links_to_versions(monkeypatch):

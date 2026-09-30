@@ -737,6 +737,11 @@ def _lex(key: str, **values: str) -> str:
     return xlex.render(key, bot_settings.get("ui_style", "technical"), **values)
 
 
+def _lex_html(key: str, **values: str) -> str:
+    safe_values = {name: html.escape(str(value)) for name, value in values.items()}
+    return _lex(key, **safe_values)
+
+
 def _nav(key: str) -> str:
     return xlex.nav(key, bot_settings.get("ui_style", "technical"))
 
@@ -5257,16 +5262,16 @@ def _version_context(kind: str) -> tuple[str, str, str] | None:
 def _version_root_menu(server: bool = False):
     kb = InlineKeyboardBuilder()
     if server:
-        kb.button(text=f"X-STAB / X-CORE · {VERSION}", callback_data="versions:list:server:0", style="primary")
-        kb.button(text="Назад в серверную", callback_data="menu:server", style="primary")
+        kb.button(text=_lex("versions_server_root_button", version=VERSION)[:64], callback_data="versions:list:server:0", style="primary")
+        kb.button(text=_lex("versions_back_server"), callback_data="menu:server", style="primary")
     else:
         target = SESSION.get("target") or ""
         info = devices.get(target) or {}
         agent = str(info.get("version") or "?")
         keeper = str((info.get("guardian") or {}).get("version") or "?")
-        kb.button(text=f"Агент · {agent}", callback_data="versions:list:agent:0", style="primary")
-        kb.button(text=f"Guard Keeper · {keeper}", callback_data="versions:list:keeper:0", style="primary")
-        kb.button(text="К устройству", callback_data="back:device", style="primary")
+        kb.button(text=_lex("versions_agent_button", version=agent)[:64], callback_data="versions:list:agent:0", style="primary")
+        kb.button(text=_lex("versions_keeper_button", version=keeper)[:64], callback_data="versions:list:keeper:0", style="primary")
+        kb.button(text=_lex("versions_back_device"), callback_data="back:device", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -5275,13 +5280,12 @@ def _version_root_menu(server: bool = False):
 async def on_versions_device(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target or not devices.get(target):
-        await cq.answer("Сначала выбери устройство", show_alert=True)
+        await cq.answer(_lex("versions_missing_device"), show_alert=True)
         return
     await _replace_callback_message(
         cq,
-        f"<b>Версии · {html.escape(target_label(target))}</b>\n"
-        "У агента и Guard Keeper отдельные версии. Ниже — история опубликованных "
-        "выпусков GitHub; наличие тега ещё не означает наличие установочного пакета.",
+        f"<b>{_lex_html('versions_device_title', device=target_label(target))}</b>\n"
+        f"{_lex('versions_device_intro')}",
         reply_markup=_version_root_menu(),
     )
     await cq.answer()
@@ -5291,9 +5295,9 @@ async def on_versions_device(cq: CallbackQuery):
 async def on_versions_server(cq: CallbackQuery):
     await _replace_callback_message(
         cq,
-        f"<b>Версии сервера</b>\nТекущая сборка: <code>{html.escape(XIDER_BUILD_CODE)}</code>\n"
-        "X-STAB и X-CORE пока выпускаются одним серверным пакетом. История GitHub "
-        "показывается отдельно от кнопки установки подготовленного пакета.",
+        f"<b>{_lex('versions_server_title')}</b>\n"
+        f"{_lex_html('versions_server_current', build=XIDER_BUILD_CODE)}\n"
+        f"{_lex('versions_server_shared')}",
         reply_markup=_version_root_menu(server=True),
     )
     await cq.answer()
@@ -5303,15 +5307,15 @@ async def on_versions_server(cq: CallbackQuery):
 async def on_versions_list(cq: CallbackQuery):
     parts = cq.data.split(":")
     if len(parts) != 4 or parts[2] not in {"agent", "keeper", "server"} or not parts[3].isdigit():
-        await cq.answer("Некорректный запрос", show_alert=True)
+        await cq.answer(_lex("versions_bad_request"), show_alert=True)
         return
     kind, page = parts[2], min(int(parts[3]), 100)
     if kind == "server" and get_user_role(cq.from_user.id) != Role.OWNER:
-        await cq.answer("Только для владельца", show_alert=True)
+        await cq.answer(_lex("versions_owner_only"), show_alert=True)
         return
     context = _version_context(kind)
     if context is None:
-        await cq.answer("Нет данных об ОС устройства", show_alert=True)
+        await cq.answer(_lex("versions_missing_os"), show_alert=True)
         return
     title, component, current = context
     try:
@@ -5319,12 +5323,10 @@ async def on_versions_list(cq: CallbackQuery):
     except (OSError, ValueError) as exc:
         await _replace_callback_message(
             cq,
-            f"<b>X-LEDGER · {html.escape(title)}</b>\n"
-            "Не удалось получить GitHub Releases. Локальная версия не изменена.\n"
-            f"Причина: <code>{html.escape(str(exc)[:180])}</code>",
+            _lex_html("versions_catalog_error", title=title, reason=str(exc)[:180]),
             reply_markup=_version_root_menu(server=kind == "server"),
         )
-        await cq.answer("Каталог временно недоступен")
+        await cq.answer(_lex("versions_catalog_unavailable"))
         return
     page_size = 8
     start = page * page_size
@@ -5333,78 +5335,113 @@ async def on_versions_list(cq: CallbackQuery):
         start = 0
     shown = releases[start:start + page_size]
     lines = [
-        f"<b>X-LEDGER · {html.escape(title)}</b>",
-        f"Установлено: <code>{html.escape(current)}</code>",
-        "✅ — пакет для этой части найден; ○ — только описание выпуска.",
+        f"<b>{_lex_html('versions_list_title', title=title)}</b>",
+        _lex_html("versions_installed", version=current),
+        _lex("versions_asset_legend"),
     ]
     kb = InlineKeyboardBuilder()
     for release in shown:
         available = release.has_package(component)
-        lines.append(f"{'✅' if available else '○'} <code>{release.tag}</code> · {html.escape(release.name[:55])}")
-        kb.button(text=f"{'✅' if available else '○'} {release.tag} · Что нового", callback_data=f"versions:detail:{kind}:{release.tag}", style="success" if available else "primary")
+        phrase_key = "versions_release_available" if available else "versions_release_missing"
+        lines.append(_lex_html(phrase_key, tag=release.tag, name=release.name[:55]))
+        icon = "✅" if available else "○"
+        kb.button(
+            text=_lex("versions_release_button", icon=icon, tag=release.tag)[:64],
+            callback_data=f"versions:detail:{kind}:{release.tag}",
+            style="success" if available else "primary",
+        )
     if not releases:
-        lines.append("Опубликованных выпусков пока не найдено.")
+        lines.append(_lex("versions_empty"))
     if page:
-        kb.button(text="⬅️ Ранее", callback_data=f"versions:list:{kind}:{page - 1}", style="primary")
+        kb.button(text=_lex("versions_previous"), callback_data=f"versions:list:{kind}:{page - 1}", style="primary")
     if start + page_size < len(releases):
-        kb.button(text="Дальше ➡️", callback_data=f"versions:list:{kind}:{page + 1}", style="primary")
-    kb.button(text="К разделам версий", callback_data="versions:server" if kind == "server" else "versions:device", style="primary")
+        kb.button(text=_lex("versions_next"), callback_data=f"versions:list:{kind}:{page + 1}", style="primary")
+    kb.button(text=_lex("versions_sections"), callback_data="versions:server" if kind == "server" else "versions:device", style="primary")
     kb.adjust(1)
     await _replace_callback_message(cq, "\n".join(lines), reply_markup=kb.as_markup())
     await cq.answer()
+
+
+def _split_html_escaped_text(text: str, limit: int = 2500) -> list[str]:
+    """Split source text into chunks whose escaped HTML stays under limit."""
+    if limit < 6:
+        raise ValueError("HTML chunk limit is too small")
+    if not text:
+        return [""]
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start
+        escaped_size = 0
+        last_space = None
+        while end < len(text):
+            next_size = len(html.escape(text[end]))
+            if escaped_size + next_size > limit:
+                break
+            escaped_size += next_size
+            end += 1
+            if text[end - 1].isspace():
+                last_space = end
+        if end == start:
+            end += 1
+        elif end < len(text) and last_space is not None and last_space > start + (end - start) // 2:
+            end = last_space
+        chunks.append(text[start:end])
+        start = end
+    return chunks
 
 
 @router.callback_query(AdminFilter(), F.data.startswith("versions:detail:"))
 async def on_versions_detail(cq: CallbackQuery):
     parts = cq.data.split(":")
     if len(parts) not in (4, 5) or parts[2] not in {"agent", "keeper", "server"}:
-        await cq.answer("Некорректный запрос", show_alert=True)
+        await cq.answer(_lex("versions_bad_request"), show_alert=True)
         return
     kind, tag = parts[2], parts[3]
     if len(parts) == 5 and not parts[4].isdigit():
-        await cq.answer("Некорректная страница", show_alert=True)
+        await cq.answer(_lex("versions_bad_request"), show_alert=True)
         return
-    notes_page = min(int(parts[4]), 10) if len(parts) == 5 else 0
+    notes_page = min(int(parts[4]), 20) if len(parts) == 5 else 0
     if kind == "server" and get_user_role(cq.from_user.id) != Role.OWNER:
-        await cq.answer("Только для владельца", show_alert=True)
+        await cq.answer(_lex("versions_owner_only"), show_alert=True)
         return
     context = _version_context(kind)
     if context is None:
-        await cq.answer("Нет данных об ОС устройства", show_alert=True)
+        await cq.answer(_lex("versions_missing_os"), show_alert=True)
         return
     title, component, current = context
     try:
         releases = await asyncio.to_thread(release_catalog.catalog.list)
     except (OSError, ValueError):
-        await cq.answer("Каталог временно недоступен", show_alert=True)
+        await cq.answer(_lex("versions_catalog_unavailable"), show_alert=True)
         return
     release = next((item for item in releases if item.tag == tag), None)
     if not release:
-        await cq.answer("Выпуск не найден", show_alert=True)
+        await cq.answer(_lex("versions_not_found"), show_alert=True)
         return
     available = release.has_package(component)
-    status = "Готовый пакет этого компонента есть" if available else "Установочного пакета этого компонента нет"
-    notes = release.notes.strip() or "Описание выпуска отсутствует."
-    note_size = 2500
-    note_count = max(1, (len(notes) + note_size - 1) // note_size)
+    status = _lex("versions_package_found" if available else "versions_package_missing")
+    notes = release.notes.strip() or _lex("versions_notes_empty")
+    note_chunks = _split_html_escaped_text(notes)
+    note_count = len(note_chunks)
     notes_page = min(notes_page, note_count - 1)
-    note_chunk = notes[notes_page * note_size:(notes_page + 1) * note_size]
+    note_chunk = note_chunks[notes_page]
     kb = InlineKeyboardBuilder()
     if notes_page:
-        kb.button(text="⬅️ Предыдущая часть", callback_data=f"versions:detail:{kind}:{tag}:{notes_page - 1}", style="primary")
+        kb.button(text=_lex("versions_notes_previous"), callback_data=f"versions:detail:{kind}:{tag}:{notes_page - 1}", style="primary")
     if notes_page + 1 < note_count:
-        kb.button(text="Следующая часть ➡️", callback_data=f"versions:detail:{kind}:{tag}:{notes_page + 1}", style="primary")
-    kb.button(text="К списку выпусков", callback_data=f"versions:list:{kind}:0", style="primary")
+        kb.button(text=_lex("versions_notes_next"), callback_data=f"versions:detail:{kind}:{tag}:{notes_page + 1}", style="primary")
+    kb.button(text=_lex("versions_release_list"), callback_data=f"versions:list:{kind}:0", style="primary")
     kb.adjust(1)
     await _replace_callback_message(
         cq,
-        f"<b>{html.escape(title)} · {html.escape(release.tag)}</b>\n"
-        f"Установлено: <code>{html.escape(current)}</code>\n"
-        f"Опубликовано: {html.escape(release.published_at[:10] or 'неизвестно')}\n"
-        f"{html.escape(status)}.\n\n"
-        f"<b>Что нового · часть {notes_page + 1}/{note_count}</b>\n<pre>{html.escape(note_chunk)}</pre>\n\n"
-        "Установка из каталога появится после проверки TwinShift и совместимости; "
-        "эта карточка ничего не меняет на устройстве.",
+        f"<b>{_lex_html('versions_detail_title', title=title, tag=release.tag)}</b>\n"
+        f"{_lex_html('versions_installed', version=current)}\n"
+        f"{_lex_html('versions_published', date=release.published_at[:10] or '—')}\n"
+        f"{html.escape(status)}\n\n"
+        f"<b>{_lex('versions_notes_title', page=str(notes_page + 1), count=str(note_count))}</b>\n"
+        f"<pre>{html.escape(note_chunk)}</pre>\n\n"
+        f"{_lex('versions_install_notice')}",
         reply_markup=kb.as_markup(),
     )
     await cq.answer()
