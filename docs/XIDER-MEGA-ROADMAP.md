@@ -69,6 +69,13 @@ macOS-агент, Guard Keeper и система релизов.
   осталась нетронутой; отдельно подтверждены `MQTT_TLS=true`,
   `ENCRYPT_PAYLOAD=true` и права `/etc/xider/bot.env` `640 root:xider`. Это не
   live round-trip Telegram/MQTT.
+- После X-ACCESS commit `9a11beb` основной VPS обновлён повторно штатным updater.
+  Новый снимок: `/var/backups/xider/xider-20260930T141920Z-202752.tar.gz`;
+  установленная версия `4.0.1`, SHA-256 `bot.py` совпал с локальным. `systemd`
+  сообщает `active/running`, `NRestarts=0`; за первые 5 минут не найдено
+  `Traceback/CRITICAL/ERROR`. Серверный `.env` не загружался и не изменялся,
+  права остались `640 root:xider`. Это подтверждает обновление процесса/файла,
+  но не живой ответ Telegram или межпользовательский сценарий.
 - Публикация в GitHub пока не прошла: HTTPS `git push` не имеет интерактивных
   credentials, а GitHub connector подтвердил push-permission репозитория, но
   вернул 403 `Resource not accessible by integration` на создание Git blob.
