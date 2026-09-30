@@ -1476,22 +1476,76 @@ def server_menu(user_id: int | None = None):
             callback_data="server:approval",
             style="success" if approval else "danger",
         )
-    kb.button(text="Главное меню", callback_data="menu:main", style="primary")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(1)
     return kb.as_markup()
+
+
+def server_overview_text(*, approval: bool, connected: bool) -> str:
+    approval_state = "включено" if approval else "выключено"
+    broker_state = "подключён" if connected else "ожидает подключения"
+    return (
+        f"<b>{html.escape(_lex('server_overview_title'))}</b>\n"
+        f"{html.escape(_lex('server_build_line', build=XIDER_BUILD_CODE))}\n"
+        f"{html.escape(_lex('server_mqtt_line', state=broker_state))}\n"
+        f"{html.escape(_lex('server_approval_line', state=approval_state))}\n"
+        f"{html.escape(_lex('server_secret_notice'))}"
+    )
+
+
+def server_confirmation_text(action: str) -> str:
+    action_keys = {
+        "restart": "server_action_restart",
+        "update": "server_action_update",
+        "rollback": "server_action_rollback",
+    }
+    action_key = action_keys.get(action)
+    if action_key is None:
+        return f"<b>{html.escape(_lex('server_unknown_action'))}</b>"
+    return (
+        f"<b>{html.escape(_lex('server_confirm_title'))}</b>\n"
+        f"{html.escape(_lex('server_confirm_warning'))}\n"
+        f"{html.escape(_lex(action_key))}"
+    )
 
 
 def server_confirm_menu(action: str):
-    labels = {
-        "restart": "перезапустить сервис",
-        "update": "установить подготовленный пакет и проверить здоровье",
-        "rollback": "откатить последнюю резервную копию",
+    label_keys = {
+        "restart": "server_action_short_restart",
+        "update": "server_action_short_update",
+        "rollback": "server_action_short_rollback",
     }
     kb = InlineKeyboardBuilder()
-    kb.button(text=f"✅ Подтвердить: {labels.get(action, action)}", callback_data=f"server_confirm:{action}", style="danger")
+    if action in label_keys:
+        label = _lex("server_confirm_button", action=_lex(label_keys[action]))
+        kb.button(text=label[:64], callback_data=f"server_confirm:{action}", style="danger")
     kb.button(text=_nav("cancel"), callback_data="menu:server", style="primary")
     kb.adjust(1)
     return kb.as_markup()
+
+
+def server_metrics_text(snapshot: dict) -> str:
+    return (
+        f"<b>{html.escape(_lex('server_metrics_title'))}</b>\n"
+        f"{html.escape(_lex('server_cpu'))}: <b>{float(snapshot['load']):.1f}%</b>\n"
+        f"{html.escape(_lex('server_ram'))}: <b>{float(snapshot['memory']):.1f}%</b>\n"
+        f"{html.escape(_lex('server_disk'))}: <b>{float(snapshot['disk']):.1f}%</b>\n\n"
+        f"{html.escape(_lex('server_metrics_hint'))}"
+    )
+
+
+def server_terminal_text() -> str:
+    commands = (
+        "<code>uptime</code>, <code>memory</code>, <code>disk</code>, "
+        "<code>processes</code>, <code>service</code>, <code>logs</code>, "
+        "<code>specs</code> / <code>fastfetch</code>"
+    )
+    return (
+        f"<b>{html.escape(_lex('server_terminal_title'))}</b>\n"
+        f"{html.escape(_lex('server_terminal_intro'))}\n"
+        f"{html.escape(_lex('server_terminal_allowlist'))}\n{commands}\n\n"
+        f"{html.escape(_lex('server_terminal_prompt'))}"
+    )
 
 
 def blocked_menu():
@@ -2125,14 +2179,11 @@ async def on_denied(message: Message):
 
 @router.callback_query(ReadOnlyFilter(), F.data == "menu:server")
 async def on_menu_server(cq: CallbackQuery):
-    broker = "подключён" if transport.connected.is_set() else "ожидает подключения"
-    approval = "включено" if bot_settings.get("require_device_approval", True) else "выключено"
     await cq.message.edit_text(
-        "<b>Серверная</b>\n"
-        f"Сборка: <code>{XIDER_BUILD_CODE}</code>\n"
-        f"MQTT: <b>{broker}</b>\n"
-        f"Новые устройства: подтверждение {approval}\n"
-        "Секреты, токены и ключи никогда не показываются в этом разделе.",
+        server_overview_text(
+            approval=bool(bot_settings.get("require_device_approval", True)),
+            connected=transport.connected.is_set(),
+        ),
         reply_markup=server_menu(cq.from_user.id),
     )
     await cq.answer()
@@ -2142,25 +2193,18 @@ async def on_menu_server(cq: CallbackQuery):
 async def on_server_approval(cq: CallbackQuery):
     value = bot_settings.toggle("require_device_approval")
     access_store.append_audit("device_approval_policy", actor_id=cq.from_user.id, detail=str(value))
-    broker = "подключён" if transport.connected.is_set() else "ожидает подключения"
     await cq.message.edit_text(
-        "<b>Серверная</b>\n"
-        f"Сборка: <code>{XIDER_BUILD_CODE}</code>\n"
-        f"MQTT: <b>{broker}</b>\n"
-        f"Новые устройства: подтверждение {'включено' if value else 'выключено'}\n"
-        "Секреты, токены и ключи никогда не показываются в этом разделе.",
+        server_overview_text(approval=bool(value), connected=transport.connected.is_set()),
         reply_markup=server_menu(cq.from_user.id),
     )
-    await cq.answer("Подтверждение включено" if value else "Автодобавление включено")
+    await cq.answer(_lex("server_approval_on_answer" if value else "server_approval_off_answer"))
 
 
 @router.callback_query(OwnerFilter(), F.data.in_({"server:restart", "server:update", "server:rollback"}))
 async def on_server_dangerous_request(cq: CallbackQuery):
     action = cq.data.split(":", 1)[1]
     await cq.message.edit_text(
-        "<b>Подтверждение серверной операции</b>\n"
-        "Операция затрагивает работающий VPS и может временно прервать бота.\n"
-        f"Действие: <code>{html.escape(action)}</code>",
+        server_confirmation_text(action),
         reply_markup=server_confirm_menu(action),
     )
     await cq.answer()
@@ -2171,10 +2215,10 @@ async def on_server_status(cq: CallbackQuery):
     result = await asyncio.to_thread(server_ops.status)
     access_store.append_audit("server_status", actor_id=cq.from_user.id, detail=f"ok={result.ok}")
     await cq.message.edit_text(
-        f"<b>Статус сервиса</b>\n<pre>{html.escape(result.text)}</pre>",
+        f"<b>{html.escape(_lex('server_status_title'))}</b>\n<pre>{html.escape(result.text)}</pre>",
         reply_markup=server_menu(cq.from_user.id),
     )
-    await cq.answer("Готово" if result.ok else "Сервис ответил с ошибкой", show_alert=not result.ok)
+    await cq.answer(_lex("server_done" if result.ok else "server_failed"), show_alert=not result.ok)
 
 
 @router.callback_query(OwnerFilter(), F.data == "server:logs")
@@ -2182,10 +2226,10 @@ async def on_server_logs(cq: CallbackQuery):
     result = await asyncio.to_thread(server_ops.logs, 45)
     access_store.append_audit("server_logs", actor_id=cq.from_user.id, detail=f"ok={result.ok}")
     await cq.message.edit_text(
-        f"<b>Последние логи xider-bot</b>\n<pre>{html.escape(result.text[-3600:])}</pre>",
+        f"<b>{html.escape(_lex('server_logs_title'))}</b>\n<pre>{html.escape(result.text[-3600:])}</pre>",
         reply_markup=server_menu(cq.from_user.id),
     )
-    await cq.answer("Готово" if result.ok else "Не удалось получить логи", show_alert=not result.ok)
+    await cq.answer(_lex("server_done" if result.ok else "server_failed"), show_alert=not result.ok)
 
 
 @router.callback_query(OwnerFilter(), F.data == "server:metrics")
@@ -2193,14 +2237,10 @@ async def on_server_metrics(cq: CallbackQuery):
     snapshot = await asyncio.to_thread(server_ops.metrics)
     access_store.append_audit("server_metrics", actor_id=cq.from_user.id, detail="snapshot")
     await cq.message.edit_text(
-        "<b>Нагрузка VPS</b>\n"
-        f"CPU: <b>{snapshot['load']:.1f}%</b>\n"
-        f"RAM: <b>{snapshot['memory']:.1f}%</b>\n"
-        f"Диск /: <b>{snapshot['disk']:.1f}%</b>\n\n"
-        "Нажми «График нагрузки», чтобы увидеть историю последних замеров.",
+        server_metrics_text(snapshot),
         reply_markup=server_menu(cq.from_user.id),
     )
-    await cq.answer("Снял показатели")
+    await cq.answer(_lex("server_done"))
 
 
 @router.callback_query(OwnerFilter(), F.data == "server:specs")
@@ -2208,10 +2248,10 @@ async def on_server_specs(cq: CallbackQuery):
     result = await asyncio.to_thread(server_ops.specs)
     access_store.append_audit("server_specs", actor_id=cq.from_user.id, detail=f"ok={result.ok}")
     await cq.message.edit_text(
-        f"<b>Характеристики VPS</b>\n<pre>{html.escape(result.text[-3600:])}</pre>",
+        f"<b>{html.escape(_lex('server_specs_title'))}</b>\n<pre>{html.escape(result.text[-3600:])}</pre>",
         reply_markup=server_menu(cq.from_user.id),
     )
-    await cq.answer("Готово" if result.ok else "Не удалось получить характеристики", show_alert=not result.ok)
+    await cq.answer(_lex("server_done" if result.ok else "server_failed"), show_alert=not result.ok)
 
 
 @router.callback_query(OwnerFilter(), F.data == "server:chart")
@@ -2220,27 +2260,22 @@ async def on_server_chart(cq: CallbackQuery):
     image = await asyncio.to_thread(server_ops.render_metrics_chart, snapshot)
     access_store.append_audit("server_chart", actor_id=cq.from_user.id, detail="snapshot")
     await cq.message.edit_text(
-        "<b>График нагрузки VPS</b>\nЗамер сохранён. Кнопки ниже возвращают в серверную.",
+        f"<b>{html.escape(_lex('server_chart_title'))}</b>\n"
+        f"{html.escape(_lex('server_metrics_hint'))}",
         reply_markup=server_menu(cq.from_user.id),
     )
     await cq.message.answer_photo(
         BufferedInputFile(image, filename="xider-server-load.png"),
-        caption="CPU / RAM / диск за последние замеры",
+        caption=_lex("server_chart_caption"),
     )
-    await cq.answer("График готов")
+    await cq.answer(_lex("server_done"))
 
 
 @router.callback_query(OwnerFilter(), F.data == "server:terminal")
 async def on_server_terminal(cq: CallbackQuery, state: FSMContext):
     await state.set_state(Form.wait_server_command)
     await cq.message.edit_text(
-        "<b>SSH-команды сервера</b>\n"
-        "Бот работает на этом VPS, поэтому отдельный SSH-ключ здесь не нужен.\n"
-        "Разрешены только безопасные диагностические команды:\n"
-        "<code>uptime</code>, <code>memory</code>, <code>disk</code>, "
-        "<code>processes</code>, <code>service</code>, <code>logs</code>, "
-        "<code>specs</code> / <code>fastfetch</code>\n\n"
-        "Пришли одно слово или нажми /cancel.",
+        server_terminal_text(),
         reply_markup=server_menu(cq.from_user.id),
     )
     await cq.answer()
@@ -2256,7 +2291,8 @@ async def on_server_terminal_command(message: Message, state: FSMContext):
         detail=f"command={command[:32]!r}; ok={result.ok}",
     )
     await message.answer(
-        f"<b>Результат серверной команды</b>\n<pre>{html.escape(result.text[-3600:])}</pre>",
+        f"<b>{html.escape(_lex('server_terminal_result'))}</b>\n"
+        f"<pre>{html.escape(result.text[-3600:])}</pre>",
         reply_markup=server_menu(message.from_user.id),
     )
 
@@ -2267,18 +2303,18 @@ async def on_server_confirm(cq: CallbackQuery):
     operations = {"restart": server_ops.restart, "update": server_ops.update, "rollback": server_ops.rollback}
     operation = operations.get(action)
     if operation is None:
-        await cq.answer("Неизвестная операция", show_alert=True)
+        await cq.answer(_lex("server_unknown_action"), show_alert=True)
         return
-    await cq.message.edit_text("⏳ Выполняю операцию. Это может занять до нескольких минут…")
+    await cq.message.edit_text(_lex("server_operation_pending"))
     result = await asyncio.to_thread(operation)
     access_store.append_audit("server_operation", actor_id=cq.from_user.id, detail=f"action={action}; ok={result.ok}; code={result.code}")
     await cq.message.edit_text(
-        f"<b>Серверная операция: {html.escape(action)}</b>\n"
-        f"Результат: {'успешно' if result.ok else 'ошибка'}\n"
+        f"<b>{html.escape(_lex('server_operation_title', action=_lex(f'server_action_short_{action}')))}</b>\n"
+        f"{html.escape(_lex('server_result_line', state=_lex('server_result_success' if result.ok else 'server_result_error')))}\n"
         f"<pre>{html.escape(result.text[-3500:])}</pre>",
         reply_markup=server_menu(cq.from_user.id),
     )
-    await cq.answer("Готово" if result.ok else "Операция завершилась ошибкой", show_alert=not result.ok)
+    await cq.answer(_lex("server_done" if result.ok else "server_failed"), show_alert=not result.ok)
 
 
 @router.callback_query(ReadOnlyFilter(), F.data == "menu:guest_devices")

@@ -189,6 +189,51 @@ def test_server_menu_uses_all_six_voices_without_changing_callbacks(monkeypatch)
             assert set(buttons) == expected
 
 
+def test_server_cards_follow_all_six_voices_and_escape_runtime_values(monkeypatch):
+    overview_cards = set()
+    confirmation_cards = set()
+    metrics_cards = set()
+    terminal_cards = set()
+    monkeypatch.setattr(bot, "XIDER_BUILD_CODE", "<fixture&build>")
+    for style in xlex.STYLES:
+        monkeypatch.setattr(
+            bot.bot_settings, "get",
+            lambda key, default=None, selected=style: selected if key == "ui_style" else default,
+        )
+        overview = bot.server_overview_text(approval=True, connected=False)
+        assert "&lt;fixture&amp;build&gt;" in overview
+        assert "&lt;fixture&build&gt;" not in overview
+        assert xlex.render("server_mqtt_line", style, state="ожидает подключения") in overview
+        assert xlex.render("server_approval_line", style, state="включено") in overview
+        overview_cards.add(overview)
+
+        confirmation = bot.server_confirmation_text("rollback")
+        assert xlex.render("server_action_rollback", style) in confirmation
+        assert xlex.render("server_confirm_warning", style) in confirmation
+        confirmation_cards.add(confirmation)
+
+        metrics = bot.server_metrics_text({"load": 12.3, "memory": 45.6, "disk": 78.9})
+        assert "12.3%" in metrics and "45.6%" in metrics and "78.9%" in metrics
+        metrics_cards.add(metrics)
+
+        terminal = bot.server_terminal_text()
+        assert "<code>uptime</code>" in terminal
+        assert "/cancel" in terminal
+        terminal_cards.add(terminal)
+
+        confirm_buttons = {
+            button.callback_data: button.text
+            for row in bot.server_confirm_menu("update").inline_keyboard
+            for button in row
+        }
+        assert set(confirm_buttons) == {"server_confirm:update", "menu:server"}
+        assert all(len(label) <= 64 for label in confirm_buttons.values())
+    assert len(overview_cards) > 1
+    assert len(confirmation_cards) > 1
+    assert len(metrics_cards) > 1
+    assert len(terminal_cards) > 1
+
+
 def test_admin_navigation_and_text_editor_follow_selected_voice(monkeypatch):
     expected_admin_callbacks = None
     expected_text_callbacks = None
