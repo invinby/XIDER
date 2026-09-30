@@ -23,12 +23,17 @@ _LOCK = threading.RLock()
 
 class Role:
     OWNER = "owner"
+    # Read-only migration marker for older installations. `get_role` downgrades
+    # it to USER; it must never continue to grant owner-level access.
     COOWNER = "coowner"
     USER = "user"
     GUEST = "guest"
     BLOCKED = "blocked"
 
     ALL = (OWNER, COOWNER, USER, GUEST, BLOCKED)
+
+
+OWNER_ONLY_CALLBACKS = frozenset({"cmd:shell"})
 
 
 def _load() -> dict[str, Any]:
@@ -194,6 +199,8 @@ def get_role(user_id: int, owner_id: int) -> str:
     if record.get("blocked") or record.get("role") == Role.BLOCKED:
         return Role.BLOCKED
     role = str(record.get("role") or Role.GUEST)
+    if role == Role.COOWNER:
+        return Role.USER
     return role if role in Role.ALL else Role.GUEST
 
 
@@ -210,7 +217,7 @@ def _update(user_id: int, mutator) -> dict[str, Any]:
 
 
 def set_role(actor_id: int, target_id: int, role: str, owner_id: int) -> bool:
-    if int(target_id) == int(owner_id) or role not in (Role.COOWNER, Role.USER, Role.GUEST):
+    if int(target_id) == int(owner_id) or role not in (Role.USER, Role.GUEST):
         return False
     _update(target_id, lambda record: record.update(role=role, blocked=False))
     append_audit("role_set", actor_id=actor_id, target_id=target_id, detail=role)
@@ -267,20 +274,26 @@ def toggle_device(actor_id: int, target_id: int, device_id: str, owner_id: int) 
 def can_use_callback(user_id: int, callback: str | None, owner_id: int,
                      selected_device: str | None = None) -> bool:
     role = get_role(user_id, owner_id)
-    if role in (Role.OWNER, Role.COOWNER):
+    if role == Role.OWNER:
         return True
+    data = str(callback or "")
+    if data in OWNER_ONLY_CALLBACKS:
+        return False
     if role != Role.USER:
         return False
     record = get_user(user_id) or {}
     perms = record.get("permissions") or {}
     callbacks = set(perms.get("callbacks") or [])
     device_ids = set(perms.get("devices") or [])
-    data = str(callback or "")
     if data in {"menu:main", "menu:about", "menu:devices", "back:device"}:
         return True
     if data.startswith("dev:"):
         device_id = data.split(":", 1)[1]
         return device_id in device_ids
-    if selected_device and selected_device in device_ids and "full_device" in callbacks:
+    # A button grant never grants a device, and a device grant never grants
+    # every button. Both scopes must match the current target.
+    if not selected_device or selected_device not in device_ids:
+        return False
+    if "full_device" in callbacks:
         return True
     return data in callbacks

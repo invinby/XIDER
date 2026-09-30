@@ -25,7 +25,9 @@ def get_user_role(user_id: int) -> str:
         try:
             legacy_admins = {int(item) for item in bot_settings.get("admins", []) if str(item).isdigit()}
             if int(user_id) in legacy_admins:
-                return Role.COOWNER
+                # Legacy notification/admin lists are not an authorization
+                # source. The owner must grant new user permissions explicitly.
+                return Role.USER
             if int(user_id) in set(GUEST_IDS):
                 return Role.GUEST
         except (TypeError, ValueError):
@@ -45,14 +47,14 @@ class OwnerFilter(BaseFilter):
 
 
 class AdminFilter(BaseFilter):
-    """Owner/co-owner full access; user gets explicitly granted actions."""
+    """Owner full access; user gets only explicitly granted actions."""
 
     async def __call__(self, obj: Message | CallbackQuery) -> bool:
         if not obj.from_user:
             return False
         user_id = int(obj.from_user.id)
         role = get_user_role(user_id)
-        if role in (Role.OWNER, Role.COOWNER):
+        if role == Role.OWNER:
             return True
         if role != Role.USER:
             return False
@@ -70,7 +72,7 @@ class AdminFilter(BaseFilter):
 
 
 class ReadOnlyFilter(BaseFilter):
-    """Navigation and information for owner, co-owner, user and guest."""
+    """Navigation and information for owner, user and guest."""
 
     async def __call__(self, obj: Message | CallbackQuery) -> bool:
         return bool(obj.from_user and get_user_role(int(obj.from_user.id)) != Role.BLOCKED)

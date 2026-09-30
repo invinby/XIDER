@@ -331,7 +331,7 @@ async def on_cmd_mic(cq: CallbackQuery):
         )
 
 
-@router.callback_query(AdminFilter(), F.data == "cmd:shell")
+@router.callback_query(OwnerFilter(), F.data == "cmd:shell")
 async def on_cmd_shell(cq: CallbackQuery, state: FSMContext):
     if not SESSION.get("target"):
         await cq.answer("Сначала выберите цель", show_alert=True)
@@ -345,7 +345,7 @@ async def on_cmd_shell(cq: CallbackQuery, state: FSMContext):
     await cq.answer()
 
 
-@router.message(AdminFilter(), Form.wait_shell)
+@router.message(OwnerFilter(), Form.wait_shell)
 async def on_shell_input(message: Message, state: FSMContext):
     await state.clear()
     cmd = (message.text or "").strip()
@@ -745,7 +745,7 @@ def main_menu(user_id: int | None = None):
     user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
     role = get_user_role(user_id)
     kb = InlineKeyboardBuilder()
-    if role in (Role.OWNER, Role.COOWNER):
+    if role == Role.OWNER:
         kb.button(text=_lex("devices_button"), callback_data="menu:devices", style="primary")
         kb.button(text=_nav("all_devices"), callback_data="dev:all", style="primary")
         kb.button(text=_lex("server_button"), callback_data="menu:server", style="primary")
@@ -1296,7 +1296,6 @@ def admins_menu():
 
 ROLE_LABELS = {
     Role.OWNER: "Владелец",
-    Role.COOWNER: "Со-владелец",
     Role.USER: "Пользователь",
     Role.GUEST: "Гость",
     Role.BLOCKED: "Заблокирован",
@@ -4078,7 +4077,7 @@ async def on_confirm_action(cq: CallbackQuery):
     await cq.answer()
 
 
-@router.callback_query(AdminFilter(), F.data == "shell:ok")
+@router.callback_query(OwnerFilter(), F.data == "shell:ok")
 async def on_shell_ok(cq: CallbackQuery, state: FSMContext):
     await state.set_state(Form.wait_shell)
     await cq.message.answer(
