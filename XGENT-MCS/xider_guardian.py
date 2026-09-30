@@ -11,16 +11,11 @@ from __future__ import annotations
 import json
 import logging
 import os
-import plistlib
-import re
 import signal
 import subprocess
 import sys
-import tempfile
 import threading
 import time
-import urllib.request
-import zipfile
 from pathlib import Path
 
 import paho.mqtt.client as mqtt
@@ -37,8 +32,6 @@ from config import (
     MQTT_PREFIX,
     MQTT_TLS,
     MQTT_USERNAME,
-    PLATFORM,
-    XIDER_UPDATE_BRANCH,
     VERSION,
     set_guardian_desired_running,
     set_guardian_startup_enabled,
@@ -49,16 +42,6 @@ from xgencrypto import decrypt_payload, encrypt_payload
 log = logging.getLogger("xider.guardian")
 SCRIPT_DIR = Path(__file__).resolve().parent
 STATE_FILE = CONFIG_DIR / "guardian.json"
-GUARDIAN_PLIST = Path.home() / "Library" / "LaunchAgents" / "com.xider.guardian.plist"
-AGENT_FILES = (
-    "xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py",
-    "requirements.txt", "setup_mac.py", "start_agent.sh", "stop_agent.sh",
-    "start_guardian.sh",
-)
-AGENT_ENV_KEYS = (
-    "SHARED_KEY", "MQTT_BROKER", "MQTT_PORT", "MQTT_PREFIX", "MQTT_TLS",
-    "MQTT_USERNAME", "MQTT_PASSWORD", "ENCRYPT_PAYLOAD", "XIDER_UPDATE_BRANCH",
-)
 
 
 def _load_state() -> dict:
@@ -106,6 +89,9 @@ class Guardian:
         _save_state(self.state)
         self.stop_event = threading.Event()
         self.lock = threading.RLock()
+        self._restart_backoff_seconds = 5.0
+        self._next_restart_at = 0.0
+        self._last_recovery_error: str | None = None
         self.client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
             client_id=f"xider-guardian-{DEVICE_ID}",
@@ -212,72 +198,20 @@ class Guardian:
         return str(candidate if candidate.exists() else Path(sys.executable))
 
     def _restore_missing_agent_files(self) -> list[str]:
-        """Fetch only missing, allow-listed worker files from the pinned branch."""
-        SCRIPT_DIR.mkdir(parents=True, exist_ok=True)
-        missing = [name for name in AGENT_FILES if not (SCRIPT_DIR / name).is_file()]
-        if not (SCRIPT_DIR / ".env").is_file():
-            missing_env = True
-        else:
-            missing_env = False
-        if not missing and not missing_env:
+        """Fail closed until a signed, immutable recovery package is installed."""
+        missing = [name for name in ("xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py")
+                   if not (SCRIPT_DIR / name).is_file()]
+        required_env = ("SHARED_KEY", "MQTT_BROKER", "MQTT_PORT", "MQTT_PREFIX", "MQTT_TLS", "ENCRYPT_PAYLOAD")
+        missing_env = [key for key in required_env if not os.environ.get(key, "").strip()]
+        if not (SCRIPT_DIR / ".env").is_file() and missing_env:
+            missing.append(".env (нет параметров: " + ", ".join(missing_env) + ")")
+        if not missing:
             return []
-
-        branch = XIDER_UPDATE_BRANCH.strip() or "main"
-        if not re.fullmatch(r"[A-Za-z0-9._/-]+", branch) or ".." in branch.split("/"):
-            raise RuntimeError("Небезопасное имя ветки обновления агента")
-
-        restored: list[str] = []
-        if missing:
-            url = f"https://github.com/invinby/XIDER/archive/refs/heads/{branch}.zip"
-            with tempfile.TemporaryDirectory(prefix="xider-agent-repair-") as temp_dir:
-                archive_path = Path(temp_dir) / "source.zip"
-                urllib.request.urlretrieve(url, archive_path)
-                with zipfile.ZipFile(archive_path) as archive:
-                    entries = archive.namelist()
-                    prefix = next(
-                        (name.split("/XGENT-MCS/", 1)[0] + "/XGENT-MCS/"
-                         for name in entries if "/XGENT-MCS/xgent_mcs.py" in name),
-                        None,
-                    )
-                    if prefix is None:
-                        raise RuntimeError("В архиве не найден каталог XGENT-MCS")
-                    for name in missing:
-                        member = prefix + name
-                        if member not in entries:
-                            raise RuntimeError(f"В архиве отсутствует файл агента: {name}")
-                        data = archive.read(member)
-                        if name.endswith(".py"):
-                            compile(data.decode("utf-8"), name, "exec")
-                        temp_file = SCRIPT_DIR / f".{name}.recovering"
-                        temp_file.write_bytes(data)
-                        if name.endswith(".sh"):
-                            temp_file.chmod(temp_file.stat().st_mode | 0o111)
-                        temp_file.replace(SCRIPT_DIR / name)
-                        restored.append(name)
-
-        if missing_env:
-            values = {key: os.environ.get(key, "") for key in AGENT_ENV_KEYS}
-            required = ("SHARED_KEY", "MQTT_BROKER", "MQTT_PORT", "MQTT_TLS", "ENCRYPT_PAYLOAD")
-            absent = [key for key in required if not values[key]]
-            if absent:
-                raise RuntimeError("Не могу восстановить .env: в процессе Guardian нет " + ", ".join(absent))
-            env_path = SCRIPT_DIR / ".env"
-            env_tmp = SCRIPT_DIR / ".env.recovering"
-            def dotenv_value(value: str) -> str:
-                escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
-                return f'"{escaped}"'
-
-            env_tmp.write_text(
-                "".join(f"{key}={dotenv_value(value)}\n" for key, value in values.items() if value),
-                encoding="utf-8",
-            )
-            env_tmp.chmod(0o600)
-            env_tmp.replace(env_path)
-            restored.append(".env")
-
-        if restored:
-            log.warning("Guardian восстановил отсутствующие файлы агента: %s", ", ".join(restored))
-        return restored
+        raise RuntimeError(
+            "Автовосстановление остановлено: отсутствуют " + ", ".join(missing) +
+            ". Подписанный recovery-пакет ещё не установлен; .env из памяти не пересоздаётся. "
+            "Нужна проверенная повторная установка X-DOCK."
+        )
 
     def start_agent(self) -> int | None:
         pid = self.agent_pid()
@@ -297,6 +231,21 @@ class Guardian:
         self.state["desired_running"] = True
         _save_state(self.state)
         return proc.pid
+
+    def _reset_recovery_backoff(self) -> None:
+        self._restart_backoff_seconds = 5.0
+        self._next_restart_at = 0.0
+        self._last_recovery_error = None
+
+    def _record_recovery_failure(self, exc: Exception) -> None:
+        message = str(exc)
+        delay = self._restart_backoff_seconds
+        self._next_restart_at = time.monotonic() + delay
+        self._restart_backoff_seconds = min(delay * 2, 300.0)
+        if message != self._last_recovery_error:
+            self._publish({"ok": False, "text": f"⚠️ Guardian не смог запустить агент: {message}"})
+            self._last_recovery_error = message
+        log.warning("Guardian restart failed; retry in %.0f seconds: %s", delay, message)
 
     def stop_agent(self) -> None:
         # Перед остановкой выгружаем старый LaunchAgent, иначе его KeepAlive
@@ -332,33 +281,39 @@ class Guardian:
 
     def handle(self, payload: dict) -> None:
         command = str(payload.get("command") or "status").lower()
-        if command == "status":
-            result = self.status_payload()
-        elif command == "start":
-            self.state["desired_running"] = True
-            _save_state(self.state)
-            pid = self.start_agent()
-            result = self.status_payload()
-            result["text"] = f"✅ Агент запущен Guardian (PID {pid or '?'})"
-        elif command == "stop":
-            self.stop_agent()
-            result = self.status_payload()
-            result["text"] = "⏹ Рабочий агент остановлен. Guardian остаётся доступен."
-        elif command == "restart":
-            self.stop_agent()
-            self.state["desired_running"] = True
-            _save_state(self.state)
-            pid = self.start_agent()
-            result = self.status_payload()
-            result["text"] = f"🔄 Агент перезапущен Guardian (PID {pid or '?'})"
-        elif command == "auto_restart":
-            enabled = bool(payload.get("enabled"))
-            self.state["auto_restart"] = enabled
-            _save_state(self.state)
-            result = self.status_payload()
-            result["text"] = f"🛡 Автовосстановление: {'ВКЛ' if enabled else 'ВЫКЛ'}"
-        else:
-            result = {"ok": False, "text": f"Неизвестная команда Guardian: {command}"}
+        try:
+            if command == "status":
+                result = self.status_payload()
+            elif command == "start":
+                self._reset_recovery_backoff()
+                self.state["desired_running"] = True
+                _save_state(self.state)
+                pid = self.start_agent()
+                result = self.status_payload()
+                result["text"] = f"✅ Агент запущен Guardian (PID {pid or '?'})"
+            elif command == "stop":
+                self.stop_agent()
+                result = self.status_payload()
+                result["text"] = "⏹ Рабочий агент остановлен. Guardian остаётся доступен."
+            elif command == "restart":
+                self._reset_recovery_backoff()
+                self.stop_agent()
+                self.state["desired_running"] = True
+                _save_state(self.state)
+                pid = self.start_agent()
+                result = self.status_payload()
+                result["text"] = f"🔄 Агент перезапущен Guardian (PID {pid or '?'})"
+            elif command == "auto_restart":
+                enabled = bool(payload.get("enabled"))
+                self.state["auto_restart"] = enabled
+                _save_state(self.state)
+                result = self.status_payload()
+                result["text"] = f"🛡 Автовосстановление: {'ВКЛ' if enabled else 'ВЫКЛ'}"
+            else:
+                result = {"ok": False, "text": f"Неизвестная команда Guardian: {command}"}
+        except Exception as exc:
+            log.exception("Guardian command failed: %s", command)
+            result = {"ok": False, "text": f"⚠️ Guardian не выполнил команду: {exc}"}
         if payload.get("id"):
             result["id"] = payload["id"]
         self._publish(result)
@@ -366,13 +321,15 @@ class Guardian:
     def monitor(self) -> None:
         while not self.stop_event.wait(5):
             if self.state.get("auto_restart") and self.state.get("desired_running"):
+                if time.monotonic() < self._next_restart_at:
+                    continue
                 if not self.agent_pid():
                     try:
                         pid = self.start_agent()
+                        self._reset_recovery_backoff()
                         self._publish({"ok": True, "text": f"🛡 Guardian восстановил агент (PID {pid or '?'})"})
                     except Exception as exc:
-                        log.exception("Guardian restart failed")
-                        self._publish({"ok": False, "text": f"⚠️ Guardian не смог запустить агент: {exc}"})
+                        self._record_recovery_failure(exc)
 
     def run(self) -> None:
         self.client.connect_async(MQTT_BROKER, MQTT_PORT, keepalive=60)

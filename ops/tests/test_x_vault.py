@@ -9,7 +9,15 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from ops.x_vault import VaultError, _derive_key, _encrypt, create_backup, restore_to_stage, verify_backup
+from ops.x_vault import (
+    VaultError,
+    _derive_key,
+    _encrypt,
+    create_backup,
+    main,
+    restore_to_stage,
+    verify_backup,
+)
 
 
 PASSPHRASE = "test-only-vault-passphrase-0123456789"
@@ -50,6 +58,24 @@ def test_wrong_passphrase_is_rejected(tmp_path):
 def test_short_passphrase_is_rejected():
     with pytest.raises(VaultError, match="at least 16 characters"):
         _derive_key("too-short", b"0123456789abcdef")
+
+
+def test_cli_reads_passphrase_from_stdin_without_environment(monkeypatch, tmp_path, capsys):
+    archive = create_backup(_source(tmp_path / "source"), tmp_path / "vault", PASSPHRASE)
+    monkeypatch.delenv("XIDER_VAULT_PASSPHRASE", raising=False)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(PASSPHRASE + "\n"))
+
+    assert main(["verify", "--archive", str(archive), "--passphrase-stdin"]) == 0
+    output = capsys.readouterr().out
+    assert '"files": 2' in output
+    assert PASSPHRASE not in output
+
+
+def test_cli_rejects_missing_stdin_passphrase(monkeypatch, tmp_path):
+    archive = create_backup(_source(tmp_path / "source"), tmp_path / "vault", PASSPHRASE)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+
+    assert main(["verify", "--archive", str(archive), "--passphrase-stdin"]) == 1
 
 
 def test_external_secret_file_is_encrypted_and_restored_under_external(tmp_path):

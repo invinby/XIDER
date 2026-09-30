@@ -1,8 +1,5 @@
-import io
 import json
-import os
 import sys
-import zipfile
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -27,42 +24,94 @@ def guardian_module(monkeypatch):
     return xider_guardian
 
 
-def test_guardian_downloads_missing_allowlisted_agent_and_recreates_env(
+def test_guardian_fails_closed_when_worker_or_env_is_missing(
     guardian_module, monkeypatch, tmp_path
 ):
     module = guardian_module
     monkeypatch.setattr(module, "SCRIPT_DIR", tmp_path)
-    payload = io.BytesIO()
-    with zipfile.ZipFile(payload, "w") as archive:
-        for name in module.AGENT_FILES:
-            content = b"# recovered test file\n"
-            archive.writestr(f"XIDER-test/XGENT-MCS/{name}", content)
-
-    def fake_download(_url, destination):
-        Path(destination).write_bytes(payload.getvalue())
-
-    monkeypatch.setattr(module.urllib.request, "urlretrieve", fake_download)
     guardian = object.__new__(module.Guardian)
 
-    restored = guardian._restore_missing_agent_files()
+    with pytest.raises(RuntimeError, match="Подписанный recovery-пакет ещё не установлен"):
+        guardian._restore_missing_agent_files()
 
-    assert set(restored) == set(module.AGENT_FILES) | {".env"}
-    assert (tmp_path / "xgent_mcs.py").read_text(encoding="utf-8").startswith("# recovered")
-    env = (tmp_path / ".env").read_text(encoding="utf-8")
-    assert 'SHARED_KEY="test-only-shared-key-guard-0123456789"' in env
-    assert "MQTT_BROKER=localhost" not in env
-    if os.name != "nt":
-        assert (tmp_path / ".env").stat().st_mode & 0o777 == 0o600
+    assert list(tmp_path.iterdir()) == []
 
 
-def test_guardian_rejects_unsafe_update_branch(guardian_module, monkeypatch, tmp_path):
+def test_guardian_uses_inherited_config_without_recreating_missing_env(
+    guardian_module, monkeypatch, tmp_path
+):
     module = guardian_module
     monkeypatch.setattr(module, "SCRIPT_DIR", tmp_path)
-    monkeypatch.setattr(module, "XIDER_UPDATE_BRANCH", "../main")
+    for name in ("xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py"):
+        (tmp_path / name).write_text("# test payload\n", encoding="utf-8")
     guardian = object.__new__(module.Guardian)
 
-    with pytest.raises(RuntimeError, match="Небезопасное имя ветки"):
+    assert guardian._restore_missing_agent_files() == []
+    assert not (tmp_path / ".env").exists()
+
+
+def test_guardian_does_not_recreate_env_when_required_settings_are_unavailable(
+    guardian_module, monkeypatch, tmp_path
+):
+    module = guardian_module
+    monkeypatch.setattr(module, "SCRIPT_DIR", tmp_path)
+    for name in ("xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py"):
+        (tmp_path / name).write_text("# test payload\n", encoding="utf-8")
+    for key in ("SHARED_KEY", "MQTT_BROKER", "MQTT_PORT", "MQTT_PREFIX", "MQTT_TLS", "ENCRYPT_PAYLOAD"):
+        monkeypatch.delenv(key, raising=False)
+    guardian = object.__new__(module.Guardian)
+
+    with pytest.raises(RuntimeError, match=r"\.env \(нет параметров:"):
         guardian._restore_missing_agent_files()
+
+    assert not (tmp_path / ".env").exists()
+
+
+def test_guardian_reports_missing_agent_on_remote_start(guardian_module, monkeypatch, tmp_path):
+    module = guardian_module
+    monkeypatch.setattr(module, "SCRIPT_DIR", tmp_path)
+    guardian = object.__new__(module.Guardian)
+    guardian.state = {"desired_running": False}
+    replies = []
+    monkeypatch.setattr(module, "_save_state", lambda _state: None)
+    monkeypatch.setattr(guardian, "agent_pid", lambda: None)
+    monkeypatch.setattr(guardian, "_publish", replies.append)
+
+    guardian.handle({"command": "start", "id": "repair-check"})
+
+    assert replies and replies[0]["ok"] is False
+    assert replies[0]["id"] == "repair-check"
+    assert "Подписанный recovery-пакет ещё не установлен" in replies[0]["text"]
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_guardian_backoff_limits_duplicate_recovery_notifications(guardian_module, monkeypatch):
+    module = guardian_module
+    guardian = object.__new__(module.Guardian)
+    guardian._reset_recovery_backoff()
+    published = []
+    monkeypatch.setattr(module.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(guardian, "_publish", published.append)
+
+    guardian._record_recovery_failure(RuntimeError("worker files are missing"))
+    assert guardian._next_restart_at == 105.0
+    assert guardian._restart_backoff_seconds == 10.0
+    assert len(published) == 1
+
+    guardian._record_recovery_failure(RuntimeError("worker files are missing"))
+    assert guardian._next_restart_at == 110.0
+    assert guardian._restart_backoff_seconds == 20.0
+    assert len(published) == 1
+
+    guardian._record_recovery_failure(RuntimeError("signed package is invalid"))
+    assert guardian._next_restart_at == 120.0
+    assert guardian._restart_backoff_seconds == 40.0
+    assert len(published) == 2
+
+    guardian._reset_recovery_backoff()
+    assert guardian._next_restart_at == 0.0
+    assert guardian._restart_backoff_seconds == 5.0
+    assert guardian._last_recovery_error is None
 
 
 def test_old_guardian_state_enables_recovery_but_preserves_explicit_stop(

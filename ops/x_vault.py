@@ -52,6 +52,13 @@ def _passphrase() -> str:
     return value
 
 
+def _passphrase_from_stdin() -> str:
+    value = sys.stdin.readline()
+    if value == "":
+        raise VaultError("No passphrase was provided on standard input.")
+    return value.rstrip("\r\n")
+
+
 def _safe_member(name: str) -> PurePosixPath:
     path = PurePosixPath(name)
     normalized_name = name[:-1] if name.endswith("/") else name
@@ -274,9 +281,15 @@ def main(argv: list[str] | None = None) -> int:
     restore = subparsers.add_parser("restore-stage")
     restore.add_argument("--archive", type=Path, required=True)
     restore.add_argument("--stage", type=Path, required=True)
+    for action_parser in (backup, verify, restore):
+        action_parser.add_argument(
+            "--passphrase-stdin",
+            action="store_true",
+            help="read the passphrase from one line of standard input instead of the environment",
+        )
     args = parser.parse_args(argv)
     try:
-        secret = _passphrase()
+        secret = _passphrase_from_stdin() if args.passphrase_stdin else _passphrase()
         if args.action == "backup":
             result = create_backup(
                 args.source, args.vault, secret, tuple(args.include_file),

@@ -511,3 +511,178 @@ def test_common_navigation_controls_follow_voice_without_changing_callbacks(monk
             len(label) <= 64
             for label in [*back_buttons.values(), *confirm_buttons.values(), *devices_buttons.values()]
         )
+
+
+def test_device_action_menus_follow_all_six_voices_without_changing_callbacks(monkeypatch):
+    monkeypatch.setattr(bot, "SESSION", {})
+    expected = {
+        "all": {
+            "all:status": "all_status_button",
+            "all:screenshot": "all_screenshot_button",
+            "cmd:lock": "all_lock_button",
+            "cmd:volume": "all_mute_button",
+            "cfm:stop_all": "all_stop_button",
+        },
+        "power": {
+            "power:reboot": "power_reboot_button",
+            "power:shutdown": "power_shutdown_button",
+        },
+        "confirm": {"power_confirm:shutdown": "power_confirm_button"},
+        "rotate": {
+            "rotate:0": "rotate_standard_button",
+            "rotate:90": "rotate_right_button",
+            "rotate:180": "rotate_inverted_button",
+            "rotate:270": "rotate_left_button",
+            "cat:screen": "rotate_screen_button",
+        },
+        "media": {
+            "cmd:screenshot": "media_screenshot_button",
+            "cmd:webcam": "media_webcam_button",
+            "mic:opts": "media_mic_button",
+            "cmd:sound": "media_speak_button",
+            "vol:opts": "media_volume_button",
+            "cmd:volume": "media_mute_button",
+        },
+        "screen": {
+            "fun:screenoff": "screen_off_button",
+            "fun:screensaver": "screen_saver_button",
+            "menu:wallpaper": "screen_wallpaper_button",
+            "cmd:brightness": "screen_brightness_button",
+            "cmd:rotate": "screen_rotate_button",
+        },
+    }
+    action_values = {"power_confirm:shutdown": {"action": "ВЫКЛЮЧИТЬ"}}
+    first_callbacks = {}
+    voice_fingerprints = set()
+
+    for style in xlex.STYLES:
+        monkeypatch.setattr(
+            bot.bot_settings, "get",
+            lambda key, default=None, selected=style: selected if key == "ui_style" else default,
+        )
+        menus = {
+            "all": bot.all_menu(),
+            "power": bot.power_menu(),
+            "confirm": bot.confirm_power_menu("shutdown"),
+            "rotate": bot.rotate_menu(),
+            "media": bot.media_menu(),
+            "screen": bot.screen_menu("test-device"),
+        }
+        fingerprint = []
+        for name, markup in menus.items():
+            buttons = {
+                button.callback_data: button.text
+                for row in markup.inline_keyboard for button in row
+            }
+            if name not in first_callbacks:
+                first_callbacks[name] = set(buttons)
+            else:
+                assert set(buttons) == first_callbacks[name]
+            for callback, key in expected[name].items():
+                assert buttons[callback] == xlex.render(
+                    key, style, **action_values.get(callback, {})
+                )
+            assert all(len(label) <= 64 for label in buttons.values())
+            fingerprint.extend((name, callback, buttons[callback]) for callback in sorted(expected[name]))
+        voice_fingerprints.add(tuple(fingerprint))
+
+    assert len(voice_fingerprints) == len(xlex.STYLES)
+
+
+def test_nightlight_button_labels_describe_the_action_for_each_voice(monkeypatch):
+    for style in xlex.STYLES:
+        monkeypatch.setattr(
+            bot.bot_settings, "get",
+            lambda key, default=None, selected=style: selected if key == "ui_style" else default,
+        )
+        monkeypatch.setattr(bot, "SESSION", {"nightlight_test-device": True})
+        enabled = {
+            button.callback_data: button.text
+            for row in bot.screen_menu("test-device").inline_keyboard for button in row
+        }
+        assert enabled["cmd:nightlight"] == xlex.render("screen_nightlight_enabled_button", style)
+        monkeypatch.setattr(bot, "SESSION", {"nightlight_test-device": False})
+        disabled = {
+            button.callback_data: button.text
+            for row in bot.screen_menu("test-device").inline_keyboard for button in row
+        }
+        assert disabled["cmd:nightlight"] == xlex.render("screen_nightlight_disabled_button", style)
+
+
+def test_power_and_guardian_menus_use_all_six_voices_without_changing_callbacks(monkeypatch):
+    device_info = {"standby": False}
+    monkeypatch.setattr(bot, "SESSION", {"target": "demo"})
+    monkeypatch.setattr(bot, "devices", SimpleNamespace(get=lambda _device_id: device_info))
+
+    power_keys = {
+        "cmd:lock": "power_lock_screen_button",
+        "power:sleep": "power_sleep_device_button",
+        "power:reboot": "power_reboot_device_button",
+        "power:shutdown": "power_shutdown_device_button",
+        "cmd:autorun_status": "power_autorun_status_button",
+        "cmd:autorun_enable": "power_autorun_enable_button",
+        "cmd:autorun_disable": "power_autorun_disable_button",
+        "cmd:guardian_menu": "power_guardian_menu_button",
+        "cmd:wol": "power_wol_button",
+        "cfm:stop": "power_stop_agent_button",
+        "back:device": None,
+        "menu:main": None,
+    }
+    guardian_keys = {
+        "cmd:guardian_status": "guardian_status_button",
+        "cmd:guardian_start": "guardian_start_agent_button",
+        "cfm:guardian_stop": "guardian_stop_agent_button",
+        "cmd:guardian_restart": "guardian_restart_agent_button",
+        "cmd:guardian_auto_on": "guardian_auto_enable_button",
+        "cmd:guardian_auto_off": "guardian_auto_disable_button",
+        "cat:power": "guardian_back_power_button",
+    }
+    callback_sets = {}
+    fingerprints = set()
+
+    for style in xlex.STYLES:
+        monkeypatch.setattr(
+            bot.bot_settings, "get",
+            lambda key, default=None, selected=style: selected if key == "ui_style" else default,
+        )
+        fingerprint = []
+
+        for standby in (False, True):
+            device_info["standby"] = standby
+            power_buttons = {
+                button.callback_data: button.text
+                for row in bot.power_menu_new().inline_keyboard for button in row
+            }
+            dynamic_callback = "cmd:wake" if standby else "cmd:standby_sleep"
+            expected_power = {
+                **power_keys,
+                dynamic_callback: "power_wake_agent_button" if standby else "power_standby_agent_button",
+            }
+            assert set(power_buttons) == set(expected_power)
+            power_state = f"power:{standby}"
+            if power_state not in callback_sets:
+                callback_sets[power_state] = set(power_buttons)
+            else:
+                assert set(power_buttons) == callback_sets[power_state]
+            for callback, key in expected_power.items():
+                if key is not None:
+                    assert power_buttons[callback] == xlex.render(key, style)
+            assert all(len(label) <= 64 for label in power_buttons.values())
+            fingerprint.extend(("power", callback, power_buttons[callback]) for callback in sorted(power_buttons))
+
+        guardian_buttons = {
+            button.callback_data: button.text
+            for row in bot.guardian_menu().inline_keyboard for button in row
+        }
+        assert set(guardian_buttons) == set(guardian_keys)
+        if "guardian" not in callback_sets:
+            callback_sets["guardian"] = set(guardian_buttons)
+        else:
+            assert set(guardian_buttons) == callback_sets["guardian"]
+        for callback, key in guardian_keys.items():
+            assert guardian_buttons[callback] == xlex.render(key, style)
+        assert all(len(label) <= 64 for label in guardian_buttons.values())
+        fingerprint.extend(("guardian", callback, guardian_buttons[callback]) for callback in sorted(guardian_buttons))
+        fingerprints.add(tuple(fingerprint))
+
+    assert len(fingerprints) == len(xlex.STYLES)

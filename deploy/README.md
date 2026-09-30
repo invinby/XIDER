@@ -145,4 +145,10 @@ permissions. If the Mac is powered off, the VPS reports the last heartbeat.
 
 `update-server.sh` performs backup → package validation/compile → install → restart → health check; a failed health check restores the backup. For an owner-approved update, place a trusted source archive at `/opt/xider/incoming/xider-source.zip` and use the Server panel. The panel never downloads arbitrary URLs and refuses an absent package.
 
+Tagged GitHub Releases also include `XIDER-source.zip`; `release-manifest.json`
+records its exact size and SHA-256 alongside the platform packages. The manifest
+is an integrity inventory, not a digital signature. Current branch-based
+bootstraps and agent self-updaters do not consume this asset yet; do not treat
+the existence of the asset or hash as authenticated installation.
+
 `rotate-runtime-secrets.sh` rotates `BOT_TOKEN`, `SHARED_KEY`, or `MQTT_PASSWORD` from environment variables, backs up `/etc/xider/bot.env`, restarts the service, and restores the backup on failure. It never prints secret values. Keep private keys outside the source tree; deployment temporary files are removed in the PowerShell `finally` block.

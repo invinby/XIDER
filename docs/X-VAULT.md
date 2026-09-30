@@ -6,11 +6,11 @@ the manifest—is encrypted with AES-256-GCM. A key is derived from
 `XIDER_VAULT_PASSPHRASE` using Scrypt. The passphrase is never accepted as a
 command-line option or written into the archive.
 
-This is an implementation of the X-VAULT component named in `TARPED.md`; it
-does not yet sync to the second VPS or prove disaster recovery. The archive is
-created locally on whichever host runs the command. Until a backup is copied
-to the second VPS and a restore rehearsal passes there, it is only a local
-snapshot.
+This is an implementation of the X-VAULT component named in `TARPED.md`. A
+manual production snapshot has been copied to the standby VPS and successfully
+authenticated there. This proves that this archive can be decrypted and its
+payload validated; it is not a full service failover or a scheduled backup
+system.
 
 The archive excludes virtual environments, Git internals, Python caches, and
 the `incoming` update directory. Symlinks are skipped. Optional files are
@@ -46,6 +46,10 @@ python3 ops/x_vault.py verify --archive /var/backups/xider-vault/xvault-....xvlt
 Verification checks the passphrase and the authenticated archive contents; it
 does not change the running bot.
 
+For an SSH automation, use `--passphrase-stdin` and send the key through the
+process's standard input. This keeps it out of shell history and command-line
+arguments. Do not enable shell tracing or print the input stream.
+
 ## Restore rehearsal
 
 Restore only into a new or empty staging directory:
@@ -61,10 +65,16 @@ staging directory. Inspect and test the staged files before any separately
 approved production restore. A wrong or lost passphrase makes the backup
 unrecoverable, so keep it outside both VPS instances.
 
-The tool currently creates, verifies, and stage-restores local archives.
-Copying backups to the second VPS, automatic retention, and a full failover
-rehearsal are separate steps and are not claimed as complete by this
-implementation.
+The tool creates, verifies, and stage-restores archives. The first production
+archive is stored on the primary and standby VPS with `root:root` ownership and
+mode `0600`; matching SHA-256 values and a full authenticated archive check on
+the standby were confirmed. A third encrypted copy is kept under
+`%LOCALAPPDATA%\XIDER\backups`. The recovery key is not on either server or in
+the repository and must be saved separately by the owner.
+
+This was a one-time manual copy. Scheduled backups, retention, alerting, and a
+full service failover rehearsal remain separate work and are not claimed as
+complete.
 
 ## Current verification
 

@@ -93,6 +93,8 @@ jobs:
       - name: "Create source packages from the tagged tree"
         run: |
           mkdir -p artifacts
+          git archive --format=zip --prefix=XIDER-source/ \
+            --output=artifacts/XIDER-source.zip HEAD
           zip -q artifacts/Guard-Keeper-Windows.zip \
             XGENT-WDS/xider_guardian_wds.py \
             XGENT-WDS/install_guardian.ps1 \
@@ -153,6 +155,7 @@ jobs:
             artifacts/Guard-Keeper-Windows.zip
             artifacts/Guard-Keeper-macOS.zip
             artifacts/X-STAB-server.zip
+            artifacts/XIDER-source.zip
             artifacts/release-manifest.json
           draft: false
           prerelease: false

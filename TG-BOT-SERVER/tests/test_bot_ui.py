@@ -278,12 +278,12 @@ def test_screen_menu_nightlight_toggle(monkeypatch):
     monkeypatch.setitem(bot.SESSION, f"nightlight_{target}", False)
     m_off = bot.screen_menu(target=target)
     texts_off = [b.text for row in m_off.inline_keyboard for b in row]
-    assert "🌙 Ночной свет" in texts_off
+    assert any("Включить ночной свет" in text for text in texts_off)
 
     monkeypatch.setitem(bot.SESSION, f"nightlight_{target}", True)
     m_on = bot.screen_menu(target=target)
     texts_on = [b.text for row in m_on.inline_keyboard for b in row]
-    assert any("[ВКЛ] Ночной свет" in t for t in texts_on)
+    assert any("Выключить ночной свет" in text for text in texts_on)
 
 
 def test_response_collector_wait_for_and_race_safety():
