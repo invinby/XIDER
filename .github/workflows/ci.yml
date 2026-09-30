@@ -86,6 +86,14 @@ jobs:
         shell: powershell
         run: .\deploy\tests\test_bootstrap_agent_preflight.ps1
 
+      - name: "Exercise full-setup security preflight"
+        shell: pwsh
+        run: ./deploy/tests/test_setup_all_preflight.ps1
+
+      - name: "Exercise full-setup security preflight with Windows PowerShell 5"
+        shell: powershell
+        run: .\deploy\tests\test_setup_all_preflight.ps1
+
       - name: "Exercise Windows staged install and rollback"
         shell: powershell
         run: .\deploy\tests\test_bootstrap_agent_swap.ps1

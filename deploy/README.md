@@ -10,9 +10,18 @@ The paid `xider` VPS is the bot host. The `invinby` Always Free VPS stays availa
 irm https://raw.githubusercontent.com/invinby/XIDER/main/deploy/bootstrap.ps1 | iex
 ```
 
-Bootstrap требует существующие локальные `TG-BOT-SERVER\.env` и
-`XGENT-WDS\.env` в checkout XIDER (или `XIDER_ENV_ROOT`, указывающий на его
-родительский каталог). Значения секретов не печатаются.
+Bootstrap не переносит `TG-BOT-SERVER\.env` и BOT_TOKEN на Windows. Для агента
+он использует `XGENT-WDS\.env` из `XIDER_ENV_ROOT`, если он есть; иначе
+`setup-all.ps1` получает только настройки агента с активного VPS по SSH-ключу
+`%USERPROFILE%\.ssh\xider` (путь можно переопределить параметром `-KeyPath`).
+Настройки остаются в защищённом sidecar `.env`; секреты не печатаются и не
+включаются в EXE. Перед SSH-записью локальный preflight требует MQTT TLS,
+шифрование payload и непустые broker credentials, затем собирает EXE. Если
+preflight, сборка или проверка наличия Windows Task Scheduler/Guardian не
+проходят, uploader не вызывается и VPS не меняется. Проверка установки
+Guardian выполняется в режиме без изменений: ACL, задачи и процессы не
+трогаются. Установленные Agent и Guardian регистрируются как видимые задачи
+Task Scheduler; скрытого режима установки нет.
 
 Для обновления уже установленного бота из checkout:
 

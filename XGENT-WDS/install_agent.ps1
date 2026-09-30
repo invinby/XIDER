@@ -2,7 +2,8 @@
 param(
     [string]$AgentDir = $PSScriptRoot,
     [string]$TaskName = 'XIDER Agent',
-    [switch]$PreferPython
+    [switch]$PreferPython,
+    [switch]$PreflightOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -29,12 +30,24 @@ if ($PreferPython) {
     throw 'Neither XGENT-WDS.exe nor venv\Scripts\pythonw.exe + xgent_wds.py was found.'
 }
 
+$guardianInstaller = Join-Path $AgentDir 'install_guardian.ps1'
+if (-not (Test-Path -LiteralPath $guardianInstaller -PathType Leaf)) {
+    throw 'Windows Guardian installer is missing.'
+}
+if ($PreflightOnly) {
+    # Validate both scheduled-task payloads before setup-all is allowed to
+    # mutate the remote VPS. The installer in preflight mode must be read-only.
+    & $guardianInstaller -AgentDir $AgentDir -PreflightOnly
+    Write-Host '[OK] Agent and Guardian payloads are present. No task or ACL was changed.'
+    return
+}
+
 # Keep the sidecar env readable only by the account that runs this agent.
 icacls $envPath /inheritance:r | Out-Null
 icacls $envPath /grant:r "$($env:USERNAME):R" | Out-Null
 
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-$settings = New-ScheduledTaskSettingsSet -Hidden -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'XIDER device agent (MQTT/TLS)' -Force | Out-Null
 Start-ScheduledTask -TaskName $TaskName
@@ -42,8 +55,6 @@ Start-ScheduledTask -TaskName $TaskName
 Write-Host "[OK] $TaskName installed and started in the background."
 Write-Host "[OK] To stop it: schtasks /End /TN `"$TaskName`""
 
-$guardianInstaller = Join-Path $AgentDir 'install_guardian.ps1'
 if (Test-Path -LiteralPath $guardianInstaller) {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $guardianInstaller -AgentDir $AgentDir
-    if ($LASTEXITCODE -ne 0) { throw 'Windows Guardian installation failed.' }
+    & $guardianInstaller -AgentDir $AgentDir -TaskName 'XIDER Guardian'
 }

@@ -1,7 +1,7 @@
 ﻿[CmdletBinding()]
 param(
     [string]$ServerIp = '141.145.152.174',
-    [string]$KeyPath = "$env:USERPROFILE\.ssh\xider.key",
+    [string]$KeyPath = "$env:USERPROFILE\.ssh\xider",
     [string]$EnvRoot = $env:XIDER_ENV_ROOT,
     [string]$InstallRoot = "$env:LOCALAPPDATA\XIDER",
     [string]$Branch = 'main'
@@ -28,21 +28,13 @@ try {
 
     if (-not $EnvRoot) {
         foreach ($candidateRoot in @((Split-Path $repo -Parent), "$env:USERPROFILE\Desktop\XIDER")) {
-            if ((Test-Path -LiteralPath (Join-Path $candidateRoot 'TG-BOT-SERVER\.env')) -and
-                (Test-Path -LiteralPath (Join-Path $candidateRoot 'XGENT-WDS\.env'))) {
+            if (Test-Path -LiteralPath (Join-Path $candidateRoot 'XGENT-WDS\.env')) {
                 $EnvRoot = $candidateRoot
                 break
             }
         }
     }
-    if (-not $EnvRoot) {
-        throw 'Нужен каталог XIDER с TG-BOT-SERVER\.env и XGENT-WDS\.env. Укажи его через XIDER_ENV_ROOT.'
-    }
-    $envSource = Join-Path (Join-Path $EnvRoot 'TG-BOT-SERVER') '.env'
-    $agentEnvSource = Join-Path (Join-Path $EnvRoot 'XGENT-WDS') '.env'
-    if (-not (Test-Path -LiteralPath $envSource) -or -not (Test-Path -LiteralPath $agentEnvSource)) {
-        throw "Не найдены оба файла конфигурации в $EnvRoot. Установка не изменена."
-    }
+    $agentEnvSource = if ($EnvRoot) { Join-Path (Join-Path $EnvRoot 'XGENT-WDS') '.env' } else { $null }
 
     New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
     if (Test-Path -LiteralPath $repo) {
@@ -59,16 +51,11 @@ try {
     }
 
     $installRoot = Split-Path $repo -Parent
-    $installBotDir = Join-Path $installRoot 'TG-BOT-SERVER'
     $installAgentDir = Join-Path $installRoot 'XGENT-WDS'
-    New-Item -ItemType Directory -Path $installBotDir -Force | Out-Null
     New-Item -ItemType Directory -Path $installAgentDir -Force | Out-Null
-    $installBotEnv = Join-Path $installBotDir '.env'
     $installAgentEnv = Join-Path $installAgentDir '.env'
-    if (-not (Test-Path -LiteralPath $installBotEnv)) {
-        Copy-Item -LiteralPath $envSource -Destination $installBotEnv
-    }
-    if (-not (Test-Path -LiteralPath $installAgentEnv)) {
+    if ($agentEnvSource -and (Test-Path -LiteralPath $agentEnvSource) -and
+        -not (Test-Path -LiteralPath $installAgentEnv)) {
         Copy-Item -LiteralPath $agentEnvSource -Destination $installAgentEnv
     }
     # OpenSSH rejects keys that inherit the CodexSandboxUsers ACL. Stage a
