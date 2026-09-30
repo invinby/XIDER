@@ -68,6 +68,45 @@ def test_device_card_offline_and_unknown_os(monkeypatch):
     assert "missing" in unknown  # нет записи — имя = device_id
 
 
+def test_capabilities_text_separates_support_from_live_health():
+    text = bot._format_capabilities({
+        "hostname": "<Mac & PC>",
+        "platform": "macOS",
+        "version": "3.4.0",
+        "feature_status": {
+            "screenshot": "permission_unverified",
+            "geolocation": "approximate",
+        },
+        "commands": ["screenshot", "geo_location", "DROP TABLE"],
+    })
+
+    assert "&lt;Mac &amp; PC&gt;" in text
+    assert "разрешение ОС ещё не проверено" in text
+    assert "не GPS" in text
+    assert "DROP TABLE" not in text
+    assert "это не тест реального действия" in text
+
+
+def test_capabilities_text_marks_legacy_data_unverified():
+    text = bot._format_capabilities({
+        "features": {"mic": True, "clipboard": False},
+        "commands": ["mic"],
+    })
+
+    assert "заявлено старым агентом; реальная проверка не выполнена" in text
+    assert "нет свежего статуса" in text
+
+
+def test_capabilities_text_stays_within_telegram_message_limit():
+    commands = [f"cmd{i:03d}_" + "x" * 57 for i in range(256)]
+
+    text = bot._format_capabilities({"commands": commands})
+
+    assert len(text) < 4096
+    assert "Заявлено команд:</b> 256" in text
+    assert "ещё 224" in text
+
+
 def test_device_menu_has_nine_category_buttons(monkeypatch):
     _setup(monkeypatch, {"dev1": {"name": "Dev"}})
     cbs = _callback_data(bot.device_menu("dev1"))

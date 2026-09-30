@@ -1878,8 +1878,24 @@ def on_mqtt_message(topic: str, data: dict) -> None:
                 if isinstance(key, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key)
                 and isinstance(value, bool)
             } if isinstance(features, dict) else {}
+            allowed_states = {
+                "supported", "dependency_missing", "permission_unverified",
+                "device_unverified", "unavailable", "approximate", "unknown",
+            }
+            raw_status = payload.get("feature_status")
+            clean_status = {
+                key: state for key, state in raw_status.items()
+                if isinstance(key, str)
+                and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key)
+                and isinstance(state, str)
+                and state in allowed_states
+            } if isinstance(raw_status, dict) else {}
             devices.upsert(device_id, {
-                "capabilities": {"commands": clean_commands, "features": clean_features},
+                "capabilities": {
+                    "commands": clean_commands,
+                    "features": clean_features,
+                    "feature_status": clean_status,
+                },
                 "capabilities_seen": time.time(),
             })
         capabilities_collector.submit(device_id, payload)
@@ -3111,8 +3127,74 @@ async def on_cmd_capabilities(cq: CallbackQuery):
     if not res:
         await _replace_callback_message(cq, "⏳ Нет ответа.", reply_markup=back_to_device_kb())
         return
-    cmds = res.get("commands", [])
-    await _replace_callback_message(cq, f"📊 <b>Поддерживаемые команды:</b>\n" + ", ".join(cmds), reply_markup=back_to_device_kb())
+    await _replace_callback_message(cq, _format_capabilities(res), reply_markup=back_to_device_kb())
+
+
+_CAPABILITY_LABELS = {
+    "screenshot": "Снимок экрана",
+    "webcam": "Камера",
+    "microphone": "Микрофон",
+    "geolocation": "Локация",
+    "battery": "Батарея",
+    "clipboard": "Буфер обмена",
+    "shell": "Командная строка",
+    "open_app": "Запуск приложений",
+}
+_CAPABILITY_STATES = {
+    "supported": "базовая поддержка заявлена; live-проверки не было",
+    "dependency_missing": "не найдена нужная библиотека",
+    "permission_unverified": "разрешение ОС ещё не проверено",
+    "device_unverified": "устройство или активный пользовательский сеанс не проверен",
+    "unavailable": "не обнаружено или недоступно на этой машине",
+    "approximate": "только приблизительно по публичному IP, не GPS",
+    "unknown": "агент не смог определить состояние",
+}
+
+
+def _format_capabilities(result: dict) -> str:
+    """Render bounded capability data without treating declarations as health checks."""
+    def safe(value, limit=100):
+        return html.escape(str(value or "?")[:limit], quote=False)
+
+    lines = ["📊 <b>Проверка возможностей</b>"]
+    lines.append(f"Устройство: <b>{safe(result.get('hostname'))}</b>")
+    lines.append(f"ОС: {safe(result.get('platform'))} · агент: {safe(result.get('version'), 40)}")
+
+    raw_statuses = result.get("feature_status")
+    raw_features = result.get("features")
+    statuses = raw_statuses if isinstance(raw_statuses, dict) else {}
+    legacy = raw_features if isinstance(raw_features, dict) else {}
+    lines.append("\n<b>Функции</b> <i>(это не тест реального действия)</i>")
+    for key, label in _CAPABILITY_LABELS.items():
+        state = statuses.get(key)
+        if isinstance(state, dict):
+            state = state.get("state")
+        if not isinstance(state, str) or state not in _CAPABILITY_STATES:
+            old_key = {"microphone": "mic", "webcam": "camera_api"}.get(key, key)
+            old_value = legacy.get(old_key)
+            state_text = (
+                "заявлено старым агентом; реальная проверка не выполнена"
+                if old_value is True
+                else "нет свежего статуса"
+            )
+        else:
+            state_text = _CAPABILITY_STATES[state]
+        lines.append(f"• {label}: {state_text}")
+
+    commands = result.get("commands")
+    if isinstance(commands, list):
+        clean = sorted({
+            command for command in commands[:256]
+            if isinstance(command, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", command)
+        })
+        shown = clean[:32]
+        suffix = f"\n… ещё {len(clean) - len(shown)}" if len(clean) > len(shown) else ""
+        lines.append(f"\n<b>Заявлено команд:</b> {len(clean)}")
+        if shown:
+            lines.append(html.escape(", ".join(shown), quote=False) + suffix)
+    else:
+        lines.append("\nСписок команд не получен.")
+    return "\n".join(lines)
 
 @router.callback_query(AdminFilter(), F.data == "cmd:sysinfo")
 async def on_cmd_sysinfo(cq: CallbackQuery):

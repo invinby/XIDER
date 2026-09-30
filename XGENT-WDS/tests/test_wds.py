@@ -367,6 +367,25 @@ def test_capabilities_does_not_leak_secret(client):
     assert "mic" in payload["commands"]
     assert "shell" in payload["commands"]
     assert "open_app" in payload["commands"]
+    assert payload["feature_status"]["geolocation"] == "approximate"
+    assert payload["feature_status"]["screenshot"] in {
+        "device_unverified", "dependency_missing",
+    }
+
+
+def test_feature_status_does_not_claim_camera_permission(monkeypatch):
+    monkeypatch.setattr(wds, "_detect_features", lambda: {
+        "screenshot": True, "clipboard": True, "battery": True,
+    })
+    monkeypatch.setattr(wds, "_module_available", lambda _name: True)
+
+    status = wds._detect_feature_status()
+
+    assert status["webcam"] == "permission_unverified"
+    assert status["microphone"] == "permission_unverified"
+    assert status["screenshot"] == "device_unverified"
+    assert status["geolocation"] == "approximate"
+    assert status["battery"] == "supported"
 
 
 def test_x_lock_rejects_second_windows_agent(tmp_path, monkeypatch):

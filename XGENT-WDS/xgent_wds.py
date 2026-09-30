@@ -8,6 +8,7 @@
 import base64
 import ctypes
 import html
+import importlib.util
 import io
 import json
 import logging
@@ -1301,6 +1302,7 @@ class XgentClient:
             "hostname": socket.gethostname(),
             "commands": sorted(SUPPORTED_COMMANDS),
             "features": _detect_features(),
+            "feature_status": _detect_feature_status(),
         })
         log.info("Отчёт о возможностях отправлен")
 
@@ -3384,6 +3386,32 @@ def _detect_features() -> dict:
     except Exception:
         pass
     return features
+
+
+def _module_available(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _detect_feature_status() -> dict[str, str]:
+    """Report detected prerequisites; hardware and privacy settings stay unverified."""
+    features = _detect_features()
+    return {
+        "shell": "supported",
+        "open_app": "supported",
+        "geolocation": "approximate",
+        "screenshot": "device_unverified" if features["screenshot"] else "dependency_missing",
+        "webcam": "permission_unverified" if _module_available("cv2") else "dependency_missing",
+        "microphone": (
+            "permission_unverified"
+            if _module_available("sounddevice") and _module_available("soundfile")
+            else "dependency_missing"
+        ),
+        "clipboard": "device_unverified" if features["clipboard"] else "dependency_missing",
+        "battery": "supported" if features["battery"] else "unavailable",
+    }
 
 
 def ctypes_windll_user32_message_box(text: str) -> None:
