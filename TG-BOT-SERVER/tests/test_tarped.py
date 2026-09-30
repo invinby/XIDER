@@ -187,3 +187,51 @@ def test_server_menu_uses_all_six_voices_without_changing_callbacks(monkeypatch)
             expected = set(buttons)
         else:
             assert set(buttons) == expected
+
+
+def test_admin_navigation_and_text_editor_follow_selected_voice(monkeypatch):
+    expected_admin_callbacks = None
+    expected_text_callbacks = None
+    for style in xlex.STYLES:
+        monkeypatch.setattr(
+            bot.bot_settings, "get",
+            lambda key, default=None, selected=style: selected if key == "ui_style" else default,
+        )
+        monkeypatch.setattr(bot.text_store, "get", lambda key: "fixture preview")
+        admin_buttons = {
+            button.callback_data: button.text
+            for row in bot.admin_menu().inline_keyboard for button in row
+        }
+        text_buttons = {
+            button.callback_data: button.text
+            for row in bot.admin_texts_menu().inline_keyboard for button in row
+        }
+        assert admin_buttons["admin:users"] == xlex.nav("admin_users", style)
+        assert admin_buttons["admin:audit"] == xlex.nav("admin_audit", style)
+        assert admin_buttons["admin:texts"] == xlex.nav("admin_texts", style)
+        assert admin_buttons["menu:server"] == xlex.nav("admin_server", style)
+        assert admin_buttons["menu:main"] == xlex.nav("home", style)
+        assert text_buttons["admin:style"] == xlex.nav("change_style", style)
+        assert text_buttons["menu:admin"] == xlex.nav("back", style)
+        assert all(len(label) <= 64 for label in [*admin_buttons.values(), *text_buttons.values()])
+        admin_callbacks = set(admin_buttons)
+        text_callbacks = {
+            callback.removeprefix(f"admin:text:{style}_")
+            if callback.startswith("admin:text:") else callback
+            for callback in text_buttons
+        }
+        if expected_admin_callbacks is None:
+            expected_admin_callbacks = admin_callbacks
+            expected_text_callbacks = text_callbacks
+        else:
+            assert admin_callbacks == expected_admin_callbacks
+            assert text_callbacks == expected_text_callbacks
+
+
+def test_admin_copy_keeps_owner_protection_clear_in_every_voice():
+    for style in xlex.STYLES:
+        intro = xlex.render("admin_intro", style).lower()
+        assert "владел" in intro
+        assert "блок" in intro
+        assert any(fragment in intro for fragment in ("пониз", "пониж"))
+        assert "удал" in intro

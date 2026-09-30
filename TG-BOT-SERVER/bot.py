@@ -1328,17 +1328,17 @@ def _role_label(role: str) -> str:
 
 def admin_menu():
     kb = InlineKeyboardBuilder()
-    kb.button(text="Пользователи", callback_data="admin:users", style="primary")
-    kb.button(text="Журнал действий", callback_data="admin:audit", style="primary")
-    kb.button(text="Тексты бота", callback_data="admin:texts", style="primary")
+    kb.button(text=_nav("admin_users"), callback_data="admin:users", style="primary")
+    kb.button(text=_nav("admin_audit"), callback_data="admin:audit", style="primary")
+    kb.button(text=_nav("admin_texts"), callback_data="admin:texts", style="primary")
     mode = xlex.normalize_style(bot_settings.get("ui_style", "technical"))
     kb.button(
         text=f"X-LEX: {xlex.STYLE_NAMES[mode]}",
         callback_data="admin:style",
         style="success",
     )
-    kb.button(text="Серверная", callback_data="menu:server", style="primary")
-    kb.button(text="Главное меню", callback_data="menu:main", style="primary")
+    kb.button(text=_nav("admin_server"), callback_data="menu:server", style="primary")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -1348,6 +1348,12 @@ _TEXT_TYPES = {
     "start_user": "Приветствие пользователя",
     "start_owner": "Приветствие владельца",
     "blocked": "Сообщение заблокированному",
+}
+_TEXT_NAV_KEYS = {
+    "start_guest": "text_start_guest",
+    "start_user": "text_start_user",
+    "start_owner": "text_start_owner",
+    "blocked": "text_blocked",
 }
 TEXT_LABELS = {
     f"{style}_{key}": f"{xlex.STYLE_NAMES[style]} · {label}"
@@ -1361,11 +1367,11 @@ def admin_texts_menu():
     mode = xlex.normalize_style(bot_settings.get("ui_style", "technical"))
     for suffix in _TEXT_TYPES:
         key = f"{mode}_{suffix}"
-        label = _TEXT_TYPES[suffix]
+        label = _nav(_TEXT_NAV_KEYS[suffix])
         preview = text_store.get(key).replace("\n", " ")[:34]
         kb.button(text=f"{label}: {preview}", callback_data=f"admin:text:{key}", style="primary")
-    kb.button(text="Сменить стиль", callback_data="admin:style", style="primary")
-    kb.button(text="Назад", callback_data="menu:admin", style="primary")
+    kb.button(text=_nav("change_style"), callback_data="admin:style", style="primary")
+    kb.button(text=_nav("back"), callback_data="menu:admin", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -1374,14 +1380,14 @@ def admin_users_menu():
     kb = InlineKeyboardBuilder()
     users = access_store.list_users()
     if not users:
-        kb.button(text="Пока никто не запускал бота", callback_data="noop", style="primary")
+        kb.button(text=_lex("no_users"), callback_data="noop", style="primary")
     for record in users[:30]:
         uid = int(record.get("id") or 0)
         role = access_store.get_role(uid, ADMIN_ID)
         blocked = role == Role.BLOCKED
         text = f"{'Заблокирован: ' if blocked else ''}{_user_label(record)} — {_role_label(role)}"
         kb.button(text=text[:62], callback_data=f"admin:user:{uid}", style="danger" if blocked else "primary")
-    kb.button(text="Назад", callback_data="menu:admin", style="primary")
+    kb.button(text=_nav("back"), callback_data="menu:admin", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -1402,7 +1408,7 @@ def admin_user_menu(user_id: int):
         kb.button(text="Выдать устройства", callback_data=f"admin:devices:{user_id}", style="primary")
         kb.button(text="Выдать кнопки", callback_data=f"admin:perms:{user_id}", style="primary")
         kb.button(text="Написать пользователю", callback_data=f"admin:message:{user_id}", style="primary")
-    kb.button(text="К пользователям", callback_data="admin:users", style="primary")
+    kb.button(text=_nav("back_users"), callback_data="admin:users", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -2281,9 +2287,8 @@ async def on_guest_readonly(cq: CallbackQuery):
 @router.callback_query(OwnerFilter(), F.data == "menu:admin")
 async def on_menu_admin(cq: CallbackQuery):
     await cq.message.edit_text(
-        "<b>Администрирование</b>\n"
-        "Пользователи, роли, выданные права и журнал действий.\n"
-        "Владелец защищён: его нельзя заблокировать, понизить или удалить.",
+        f"<b>{html.escape(_lex('admin_title'))}</b>\n"
+        f"{html.escape(_lex('admin_intro'))}",
         reply_markup=admin_menu(),
     )
     await cq.answer()
@@ -2293,8 +2298,8 @@ async def on_menu_admin(cq: CallbackQuery):
 async def on_admin_users(cq: CallbackQuery):
     users = access_store.list_users()
     await cq.message.edit_text(
-        f"<b>Пользователи</b>\nВсего запусков: <b>{len(users)}</b>\n"
-        "Открой пользователя, чтобы изменить роль, блокировку или разрешения.",
+        f"<b>{html.escape(_nav('admin_users'))}</b>\n"
+        f"{html.escape(_lex('users_intro', total=str(len(users))))}",
         reply_markup=admin_users_menu(),
     )
     await cq.answer()
@@ -2305,7 +2310,7 @@ async def on_admin_texts(cq: CallbackQuery):
     mode = xlex.normalize_style(bot_settings.get("ui_style", "technical"))
     await cq.message.edit_text(
         f"<b>X-LEX · {html.escape(xlex.STYLE_NAMES[mode])}</b>\n"
-        "Выбери сообщение для изменения. Секреты сюда не сохраняются.",
+        f"{html.escape(_lex('texts_intro'))}",
         reply_markup=admin_texts_menu(),
     )
     await cq.answer()
