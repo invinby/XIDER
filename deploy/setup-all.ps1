@@ -12,6 +12,8 @@ $root = (Resolve-Path (Join-Path $repo '..')).Path
 $agentDir = Join-Path $repo 'XGENT-WDS'
 $fetchedEnv = $null
 $stagedKey = $null
+$serverUpdated = $false
+$serverBackupPath = $null
 
 try {
     # Prefer an explicitly selected XIDER config root, then the historical
@@ -117,14 +119,37 @@ try {
     & (Join-Path $agentDir 'install_agent.ps1') -AgentDir $agentDir -PreflightOnly
 
     Write-Host '=== 3/4: обновить XIDER bot на VPS ==='
-    & (Join-Path $PSScriptRoot 'upload-and-install.ps1') -ServerIp $ServerIp -KeyPath $effectiveKey
-    if ($LASTEXITCODE -ne 0) { throw 'VPS deployment failed.' }
+    $deployOutput = @(& (Join-Path $PSScriptRoot 'upload-and-install.ps1') -ServerIp $ServerIp -KeyPath $effectiveKey)
+    $deployExit = $LASTEXITCODE
+    $deployOutput | ForEach-Object { Write-Host $_ }
+    if ($deployExit -ne 0) { throw 'VPS deployment failed.' }
+    $serverUpdated = $true
+    $backupLine = $deployOutput | Where-Object { [string]$_ -match '^XIDER_SERVER_BACKUP=' } | Select-Object -First 1
+    if ($backupLine -and ([string]$backupLine -match '^XIDER_SERVER_BACKUP=(?<path>/var/backups/xider/xider-[A-Za-z0-9._-]+\.tar\.gz)$')) {
+        $serverBackupPath = $Matches['path']
+    } else {
+        throw 'VPS update succeeded but did not return its rollback snapshot path.'
+    }
 
     Write-Host '=== 4/4: зарегистрировать Windows agent + Guard Keeper ==='
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $agentDir 'install_agent.ps1') -AgentDir $agentDir
     if ($LASTEXITCODE -ne 0) { throw 'Windows agent installation failed.' }
 
     Write-Host '[OK] Bot VPS and Windows background agent setup finished.'
+} catch {
+    $setupFailure = $_.Exception.Message
+    if ($serverUpdated -and $serverBackupPath) {
+        Write-Warning 'Windows Agent/Guardian setup failed after the VPS update; restoring the exact previous server snapshot.'
+        try {
+            & (Join-Path $PSScriptRoot 'upload-and-install.ps1') -ServerIp $ServerIp `
+                -KeyPath $effectiveKey -RollbackOnly -BackupPath $serverBackupPath
+            if ($LASTEXITCODE -ne 0) { throw 'Rollback command returned a failure code.' }
+            Write-Warning '[OK] VPS source and service were returned to the pre-deploy snapshot.'
+        } catch {
+            Write-Warning ("Automatic VPS rollback did not complete: {0}" -f $_.Exception.Message)
+        }
+    }
+    throw $setupFailure
 } finally {
     if ($fetchedEnv -and (Test-Path -LiteralPath $fetchedEnv)) {
         Remove-Item -LiteralPath $fetchedEnv -Force -ErrorAction SilentlyContinue

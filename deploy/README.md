@@ -39,7 +39,11 @@ compiles Python, then checks the restarted service is active with the same
 `MainPID` for three consecutive checks; failure restores the source and unit.
 This process-level check does not prove Telegram or MQTT round-trip health.
 Dependency changes are rejected until their upgrade/rollback path is
-supported. A GitHub push is not required for checkout-based deployment, but
+supported. The complete Windows setup records the exact server backup path; if
+subsequent local Agent/Guardian registration fails, it asks the updater to
+restore that same snapshot. Manual `rollback` without a path still selects the
+newest snapshot; a supplied path is checked to remain under
+`/var/backups/xider/`. A GitHub push is not required for checkout-based deployment, but
 the short bootstrap downloads only a branch already published on GitHub.
 
 The updater smoke test runs against temporary directories and mocked

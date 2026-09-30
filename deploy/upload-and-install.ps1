@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [string]$ServerIp = '141.145.152.174',
-    [string]$KeyPath = "$env:USERPROFILE\.ssh\xider.key"
+    [string]$KeyPath = "$env:USERPROFILE\.ssh\xider",
+    [switch]$RollbackOnly,
+    [string]$BackupPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,6 +20,18 @@ $sshOpts = @('-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new', '-
 
 try {
     if (-not (Test-Path -LiteralPath $KeyPath)) { throw "SSH key not found: $KeyPath" }
+
+    if ($RollbackOnly) {
+        if (-not $BackupPath -or $BackupPath -notmatch '^/var/backups/xider/xider-[A-Za-z0-9._-]+\.tar\.gz$') {
+            throw 'RollbackOnly requires a verified /var/backups/xider/xider-*.tar.gz path.'
+        }
+        Write-Host "[rollback] Restoring the requested server snapshot on $ServerIp..."
+        $rollbackCommand = "sudo /usr/local/sbin/xider-server-ops rollback '$BackupPath'"
+        & ssh @sshOpts "ubuntu@$ServerIp" $rollbackCommand | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw 'Server rollback failed; inspect the XIDER service and preserved backup.' }
+        Write-Host '[OK] Server rollback completed.'
+        return
+    }
 
     # Archive the current working tree files. A normal checkout uses git ls-files;
     # the one-line bootstrap downloads a ZIP without .git, so fall back to a
@@ -125,8 +139,14 @@ sudo env XIDER_UPDATE_BUNDLE="$incoming" XIDER_EXTRACT_HELPER="$active_extractor
     $remote = $remote.Replace('__REMOTE_EXTRACTOR__', $remoteExtractor)
     $remote = $remote.Replace('__ACTIVE_UPDATER__', $activeUpdater)
     $remote = $remote.Replace('__ACTIVE_EXTRACTOR__', $activeExtractor)
-    & ssh @sshOpts "ubuntu@$ServerIp" $remote | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw 'Safe server update failed; the updater should have restored the previous source. Inspect journalctl -u xider-bot.' }
+    $updateOutput = @(& ssh @sshOpts "ubuntu@$ServerIp" $remote 2>&1)
+    $updateExit = $LASTEXITCODE
+    $updateOutput | Out-Host
+    if ($updateExit -ne 0) { throw 'Safe server update failed; the updater should have restored the previous source. Inspect journalctl -u xider-bot.' }
+    $updateText = ($updateOutput | ForEach-Object { [string]$_ }) -join "`n"
+    $backupMatch = [regex]::Match($updateText, 'Backup:\s*(?<path>/var/backups/xider/xider-[A-Za-z0-9._-]+\.tar\.gz)')
+    if (-not $backupMatch.Success) { throw 'Server update succeeded, but its rollback snapshot path was not reported.' }
+    Write-Output ("XIDER_SERVER_BACKUP={0}" -f $backupMatch.Groups['path'].Value)
 
     Write-Host 'Done. The live .env was not uploaded or modified.'
     Write-Host "Logs: ssh -i `"$KeyPath`" ubuntu@$ServerIp 'sudo journalctl -u xider-bot -f'"

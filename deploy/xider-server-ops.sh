@@ -15,11 +15,15 @@ case "${1:-}" in
   restart)
     exec /bin/systemctl restart "$SERVICE"
     ;;
-  update|rollback)
+  update)
     exec /bin/bash "$APP_DIR/deploy/update-server.sh" "$1"
     ;;
+  rollback)
+    shift
+    exec /bin/bash "$APP_DIR/deploy/update-server.sh" rollback "$@"
+    ;;
   *)
-    echo "Usage: xider-server-ops {status|logs|restart|update|rollback}" >&2
+    echo "Usage: xider-server-ops {status|logs|restart|update|rollback [backup-archive]}" >&2
     exit 2
     ;;
 esac

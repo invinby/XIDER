@@ -217,8 +217,17 @@ do_update() {
 }
 
 do_rollback() {
-  local archive unit_backup
-  archive="$(latest_backup)"
+  local archive unit_backup backup_root
+  if [[ -n "${2:-}" ]]; then
+    backup_root="$(readlink -f "${BACKUP_DIR}")"
+    archive="$(readlink -f "$2" 2>/dev/null || true)"
+    if [[ -z "${archive}" || "${archive}" != "${backup_root}"/xider-*.tar.gz ]]; then
+      echo "Refusing rollback archive outside ${backup_root}." >&2
+      return 8
+    fi
+  else
+    archive="$(latest_backup)"
+  fi
   [[ -n "${archive}" && -f "${archive}" ]] || { echo "No XIDER backup found." >&2; return 8; }
   BACKUP="$(backup_current)"
   unit_backup="${BACKUP%.tar.gz}.service"
@@ -237,7 +246,7 @@ do_rollback() {
 
 case "${1:-}" in
   update) do_update ;;
-  rollback) do_rollback ;;
+  rollback) do_rollback "$@" ;;
   backup) backup_current ;;
-  *) echo "Usage: $0 {update|rollback|backup}" >&2; exit 2 ;;
+  *) echo "Usage: $0 {update|rollback [backup-archive]|backup}" >&2; exit 2 ;;
 esac

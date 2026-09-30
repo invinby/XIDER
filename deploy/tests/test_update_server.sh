@@ -56,6 +56,7 @@ PY
 
 run_updater() {
   local operation="${1:-update}"
+  shift || true
   sudo -n env \
     "PATH=${MOCK_BIN}:${PATH}" \
     "XIDER_APP_DIR=${APP_DIR}" \
@@ -68,13 +69,15 @@ run_updater() {
     "XIDER_HEALTH_STABLE_CHECKS=1" \
     "XIDER_TEST_SYSTEMCTL_STATE=${STATE_FILE}" \
     "XIDER_TEST_FAIL_HEALTH=${XIDER_TEST_FAIL_HEALTH:-0}" \
-    bash "${SCRIPT}" "${operation}"
+    bash "${SCRIPT}" "${operation}" "$@"
 }
 
 run_update() { run_updater update; }
 
 make_bundle good
 run_update
+old_backup="$(find "${BACKUP_DIR}" -maxdepth 1 -type f -name 'xider-*.tar.gz' -print -quit)"
+[[ -n "${old_backup}" ]]
 [[ "$(<"${APP_DIR}/TG-BOT-SERVER/bot.py")" == good ]]
 [[ ! -e "${APP_DIR}/TG-BOT-SERVER/new-feature.py" ]]
 [[ "$(<"${APP_DIR}/TG-BOT-SERVER/.env")" == keep-runtime-config ]]
@@ -115,8 +118,18 @@ run_update
 [[ "$(<"${APP_DIR}/TG-BOT-SERVER/bot.py")" == manual-new ]]
 run_updater rollback
 [[ "$(<"${APP_DIR}/TG-BOT-SERVER/bot.py")" == good ]]
+
+make_bundle selected-backup-test
+run_update
+if run_updater rollback "${APP_DIR}/TG-BOT-SERVER/bot.py"; then
+  echo 'Expected rollback to reject a path outside the backup directory.' >&2
+  exit 1
+fi
+[[ "$(<"${APP_DIR}/TG-BOT-SERVER/bot.py")" == selected-backup-test ]]
+run_updater rollback "${old_backup}"
+[[ "$(<"${APP_DIR}/TG-BOT-SERVER/bot.py")" == old ]]
 [[ "$(<"${APP_DIR}/TG-BOT-SERVER/.env")" == keep-runtime-config ]]
 [[ "$(<"${APP_DIR}/TG-BOT-SERVER/.env.production")" == keep-runtime-override ]]
 [[ "$(stat -c '%a' "${APP_DIR}")" == "${APP_DIR_MODE}" ]]
 
-echo 'Updater success, automatic/manual rollback, env preservation, and archive validation scenarios passed.'
+echo 'Updater success, automatic/latest/selected rollback, env preservation, and archive validation scenarios passed.'
