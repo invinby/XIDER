@@ -4,12 +4,14 @@
 и выполняет их на этой машине.
 """
 import base64
+import binascii
 import io
 import importlib.util
 import json
 import logging
 import os
 import plistlib
+import platform
 import random
 import shutil
 import socket
@@ -19,20 +21,118 @@ import tempfile
 import threading
 import time
 import urllib.request
-import zipfile
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
+
+MAX_FILE_PUT_BYTES = 30 * 1024 * 1024
+MAX_FILE_PUT_B64_CHARS = 4 * ((MAX_FILE_PUT_BYTES + 2) // 3)
+
+
+def _decode_file_put_payload(payload: dict) -> bytes:
+    """Decode a bounded, canonical base64 file payload before touching disk."""
+    if "b64" in payload:
+        encoded = payload["b64"]
+    elif "data" in payload:
+        encoded = payload["data"]
+    else:
+        raise ValueError("В запросе отсутствуют данные файла.")
+    if not isinstance(encoded, str):
+        raise ValueError("Данные файла должны быть строкой base64.")
+    if len(encoded) > MAX_FILE_PUT_B64_CHARS:
+        raise ValueError("Файл превышает лимит 30 МиБ.")
+    try:
+        content = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("Повреждены данные base64.") from exc
+    if len(content) > MAX_FILE_PUT_BYTES:
+        raise ValueError("Файл превышает лимит 30 МиБ.")
+    return content
+
+
+def _write_file_put_atomic(path: str, content: bytes) -> None:
+    """Replace the destination only after the complete temporary file is written."""
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, temporary_path = tempfile.mkstemp(prefix=".xider-upload-", dir=directory)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(content)
+        os.replace(temporary_path, path)
+        temporary_path = ""
+    finally:
+        if temporary_path:
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
 
 try:
     import fcntl
 except ImportError:
     fcntl = None  # type: ignore
 
+# Claim the normal process lock before examining a crash journal. A manual
+# second launch must never roll back files while the live updater is replacing
+# them. This prelude intentionally uses only the Python standard library.
+_bootstrap_lock_file = None
+
+
+def _claim_bootstrap_lock() -> bool:
+    """Гарантирует, что запущен ровно один экземпляр агента на этой машине."""
+    global _bootstrap_lock_file
+    lock_path = os.path.join(tempfile.gettempdir(), "xgent_mcs.lock")
+    try:
+        _bootstrap_lock_file = open(lock_path, "a+")
+        if fcntl:
+            fcntl.flock(_bootstrap_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _bootstrap_lock_file.seek(0)
+        _bootstrap_lock_file.truncate()
+        _bootstrap_lock_file.write(str(os.getpid()) + "\n")
+        _bootstrap_lock_file.flush()
+        return True
+    except (IOError, OSError):
+        if _bootstrap_lock_file is not None:
+            _bootstrap_lock_file.close()
+        _bootstrap_lock_file = None
+        return False
+
+
+if __name__ == "__main__" and not _claim_bootstrap_lock():
+    sys.stderr.write("FATAL: XGENT-MCS уже запущен на этой машине! Второй экземпляр остановлен.\n")
+    raise SystemExit(1)
+
+from update_package import (
+    UPDATE_STATE_NAME,
+    download_verified_source_archive,
+    extract_agent_files,
+    install_agent_files,
+    mark_agent_update_healthy,
+    prepare_agent_update_start,
+    rollback_unhealthy_agent,
+)
+from release_signature import trusted_release_keys_ready
+
+EARLY_UPDATE_STATE = "none"
+if __name__ == "__main__" and not getattr(sys, "frozen", False):
+    EARLY_UPDATE_STATE = prepare_agent_update_start(
+        Path.home() / ".xgent" / UPDATE_STATE_NAME,
+        Path(__file__).resolve().parent,
+    )
+    if EARLY_UPDATE_STATE in {"recovered", "rolled_back"}:
+        message = (
+            "XIDER: прерванная установка восстановлена; перезапускаю предыдущую версию.\n"
+            if EARLY_UPDATE_STATE == "recovered"
+            else "XIDER: новая версия не прошла стартовую попытку; восстановлены предыдущие файлы.\n"
+        )
+        sys.stderr.write(message)
+        os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]])
+
 import paho.mqtt.client as mqtt
 import psutil
 
 from config import (
     CONFIG_DIR,
+    set_guardian_desired_running,
     set_guardian_startup_enabled,
     DEVICE_ID,
     DEVICE_NAME,
@@ -49,7 +149,6 @@ from config import (
 )
 from crypto import sign_message, verify_message
 from xgencrypto import decrypt_payload, encrypt_payload
-
 log = logging.getLogger("xgent.mcs")
 
 _lock_file = None
@@ -58,6 +157,9 @@ _lock_file = None
 def acquire_instance_lock() -> bool:
     """Гарантирует, что запущен ровно один экземпляр агента на машине."""
     global _lock_file
+    if _bootstrap_lock_file is not None:
+        _lock_file = _bootstrap_lock_file
+        return True
     lock_path = os.path.join(tempfile.gettempdir(), "xgent_mcs.lock")
     try:
         _lock_file = open(lock_path, "a+")
@@ -264,6 +366,7 @@ class XgentClient:
         self.on_stop_requested = on_stop_requested
         self._running = threading.Event()
         self._running.set()
+        self._update_health = threading.Event()
         self._client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
             client_id=f"xgent-mcs-{DEVICE_ID}",
@@ -441,6 +544,10 @@ class XgentClient:
         log.info("Клиент остановлен")
 
     def request_stop(self) -> None:
+        try:
+            set_guardian_desired_running(False)
+        except Exception:
+            log.exception("Could not persist explicit stop intent for Guardian")
         self._running.clear()
         if self.on_stop_requested: self.on_stop_requested()
 
@@ -450,6 +557,15 @@ class XgentClient:
             client.subscribe(f"{MQTT_PREFIX}/all/cmd", qos=0)
             log.info("Подключено к %s:%s", MQTT_BROKER, MQTT_PORT)
             self._publish_status()
+            try:
+                if mark_agent_update_healthy(
+                    CONFIG_DIR / UPDATE_STATE_NAME,
+                    Path(__file__).resolve().parent,
+                ):
+                    self._update_health.set()
+                    log.info("Проверка здоровья обновлённого агента прошла: MQTT доступен.")
+            except Exception:
+                log.exception("Не удалось подтвердить здоровье установленного обновления")
         else:
             log.warning("Не удалось подключиться к брокеру: %s", reason_code)
 
@@ -525,7 +641,10 @@ class XgentClient:
         status = "standby" if getattr(self, "_standby", False) else "online"
         payload = {
             "type": "status", "device_id": DEVICE_ID, "name": DEVICE_NAME,
-            "os": PLATFORM, "version": VERSION, "status": status,
+            "os": PLATFORM, "version": VERSION,
+            "update_mode": "frozen" if getattr(sys, "frozen", False) else "source",
+            "release_update_ready": trusted_release_keys_ready() and not getattr(sys, "frozen", False),
+            "status": status,
         }
         body = encrypt_payload(payload) if ENCRYPT_PAYLOAD else payload
         envelope = sign_message(body)
@@ -1014,17 +1133,16 @@ class XgentClient:
             self._publish_response("file_get", {"type": "file_get", "device_id": DEVICE_ID, "ok": False, "error": str(exc)})
 
     def _do_file_put(self, payload: dict) -> None:
-        path = os.path.expanduser((payload.get("path") or "").strip())
-        if not path:
-            name = os.path.basename((payload.get("name") or "file.bin").strip())
-            base = os.path.expanduser((payload.get("dir") or "~").strip())
-            path = os.path.join(base, name)
         try:
-            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-            with open(path, "wb") as f:
-                f.write(base64.b64decode(payload.get("data") or payload.get("b64") or ""))
+            content = _decode_file_put_payload(payload)
+            path = os.path.expanduser((payload.get("path") or "").strip())
+            if not path:
+                name = os.path.basename((payload.get("name") or "file.bin").strip())
+                base = os.path.expanduser((payload.get("dir") or "~").strip())
+                path = os.path.join(base, name)
+            _write_file_put_atomic(path, content)
             self._publish_response("file_put", {"type": "file_put", "device_id": DEVICE_ID, "ok": True, "path": path})
-        except Exception as exc:
+        except (OSError, TypeError, ValueError) as exc:
             self._publish_response("file_put", {"type": "file_put", "device_id": DEVICE_ID, "ok": False, "error": str(exc)})
 
     def _do_file_del(self, payload: dict) -> None:
@@ -1938,7 +2056,6 @@ end tell'''
     def _do_agent_update(self, payload: dict) -> None:
         """Обновление агента с GitHub по команде из бота, без запуска команды на Mac."""
         pid = os.getpid()
-        exe_path = sys.executable
         if not payload.get("update", True):
             text = (f"🔄 <b>Агент XGENT {VERSION}</b>\n"
                     f"• Платформа: macOS ({platform.mac_ver()[0]})\n"
@@ -1948,37 +2065,61 @@ end tell'''
             self._publish_response("output", {"type": "agent_update", "device_id": DEVICE_ID, "ok": True, "text": text})
             return
 
-        update_branch = os.getenv("XIDER_UPDATE_BRANCH", "main").strip() or "main"
-        source_url = f"https://github.com/invinby/XIDER/archive/refs/heads/{update_branch}.zip"
+        if getattr(sys, "frozen", False):
+            self._publish_response("output", {
+                "type": "agent_update",
+                "device_id": DEVICE_ID,
+                "ok": False,
+                "state": "unsupported_package",
+                "text": (
+                    "⚠️ Автообнова этой сборки XGENT пока не поддерживается. "
+                    "Ничего не менял: нужен проверенный установщик PyInstaller-пакета."
+                ),
+            })
+            return
+
         script_dir = Path(__file__).resolve().parent
-        backup_dir = CONFIG_DIR / "agent-backups" / time.strftime("%Y%m%d-%H%M%S")
-        files = ("xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py", "xider_guardian.py", "requirements.txt", "setup_mac.py", "start_agent.sh", "stop_agent.sh", "start_guardian.sh")
+        backup_dir = CONFIG_DIR / "agent-backups" / f"{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns()}"
+        # Replace the recovery helper and launcher first. If power is lost after
+        # that point, the next launch can restore the journal before loading the
+        # remaining files.
+        files = (
+            "release_signature.py", "update_package.py", "start_agent.sh",
+            "xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py",
+            "xider_guardian.py", "requirements.txt", "setup_mac.py",
+            "stop_agent.sh", "start_guardian.sh",
+        )
         try:
             with tempfile.TemporaryDirectory(prefix="xgent-update-") as tmp:
-                archive = Path(tmp) / "xider.zip"
-                urllib.request.urlretrieve(source_url, archive)
-                with zipfile.ZipFile(archive) as zf:
-                    zf.extractall(tmp)
-                roots = [p for p in Path(tmp).iterdir() if p.is_dir() and (p / "XGENT-MCS").is_dir()]
-                if not roots:
-                    raise RuntimeError("в архиве нет XGENT-MCS")
-                source = roots[0] / "XGENT-MCS"
+                archive = Path(tmp) / "XIDER-source.zip"
+                manifest = Path(tmp) / "release-manifest.json"
+                release_tag = download_verified_source_archive(
+                    manifest,
+                    archive,
+                    release_tag=payload.get("release_tag"),
+                )
+                source = extract_agent_files(archive, Path(tmp) / "agent-stage", files)
                 for name in files:
                     candidate = source / name
-                    if candidate.exists() and candidate.suffix == ".py":
+                    if candidate.suffix == ".py":
                         compile(candidate.read_text(encoding="utf-8"), str(candidate), "exec")
-                backup_dir.mkdir(parents=True, exist_ok=True)
-                for name in files:
-                    current = script_dir / name
-                    candidate = source / name
-                    if candidate.exists():
-                        if current.exists():
-                            shutil.copy2(current, backup_dir / name)
-                        shutil.copy2(candidate, current)
-                        if name.endswith(".sh"):
-                            current.chmod(current.stat().st_mode | 0o111)
-            text = f"✅ Агент обновлён из GitHub. Резервная копия: {backup_dir.name}. Перезапускаю..."
-            self._publish_response("output", {"type": "agent_update", "device_id": DEVICE_ID, "ok": True, "text": text})
+                backup_dir = install_agent_files(
+                    source,
+                    script_dir,
+                    backup_dir,
+                    files,
+                    transaction_path=CONFIG_DIR / UPDATE_STATE_NAME,
+                )
+            text = (
+                f"📦 Файлы агента из релиза {release_tag} установлены после сверки размера и SHA-256 "
+                f"с release manifest. Резервная копия: {backup_dir.name}. Перезапускаю; "
+                "здоровье нового процесса ещё не подтверждено."
+            )
+            self._publish_response("output", {
+                "type": "agent_update", "device_id": DEVICE_ID, "ok": True,
+                "state": "restarting", "release_tag": release_tag,
+                "health_check": "pending", "text": text,
+            })
 
             def _reboot_agent():
                 time.sleep(1.5)
@@ -1995,30 +2136,51 @@ end tell'''
                 os._exit(0)
             threading.Thread(target=_reboot_agent, daemon=True).start()
         except Exception as exc:
-            # Если копирование успело начаться и сорвалось, возвращаем каждый
-            # уже сохранённый файл из резервной копии.
-            try:
-                if backup_dir.exists():
-                    for saved in backup_dir.iterdir():
-                        shutil.copy2(saved, script_dir / saved.name)
-            except Exception:
-                log.exception("Agent self-update rollback failed")
             log.exception("Agent self-update failed")
             self._publish_response("output", {"type": "agent_update", "device_id": DEVICE_ID, "ok": False,
-                                               "text": f"❌ Обновление не применено: {exc}. Текущий агент оставлен без изменений."})
+                                               "text": f"❌ Не удалось завершить обновление: {exc}. Проверьте состояние файлов и каталог резервной копии."})
 
     def _do_uninstall_agent(self, payload: dict) -> None:
         """Полное удаление агента с Mac: LaunchAgents, конфиги, логи и завершение."""
         log.warning("Получена команда полного удаления агента с Mac!")
-        # Удалить LaunchAgent plist
+        try:
+            set_guardian_desired_running(False)
+        except Exception:
+            log.exception("Could not persist Guardian stop intent before uninstall")
+        # Unload the visible Guardian first: removing only the worker plist
+        # leaves Guardian alive and able to relaunch the worker being removed.
         try:
             la_dir = Path.home() / "Library" / "LaunchAgents"
-            for plist in la_dir.glob("*xgent*"):
-                plist.unlink(missing_ok=True)
-            for plist in la_dir.glob("*XGENT*"):
-                plist.unlink(missing_ok=True)
-        except Exception:
-            pass
+            domain = f"gui/{os.getuid()}"
+            guardian_plist = la_dir / "com.xider.guardian.plist"
+            bootout = subprocess.run(
+                ["launchctl", "bootout", domain, str(guardian_plist)],
+                capture_output=True, text=True, check=False,
+            )
+            if bootout.returncode != 0:
+                still_loaded = subprocess.run(
+                    ["launchctl", "print", f"{domain}/com.xider.guardian"],
+                    capture_output=True, text=True, check=False,
+                )
+                if still_loaded.returncode == 0:
+                    raise RuntimeError(
+                        bootout.stderr.strip() or "Guardian is still loaded in launchd"
+                    )
+            guardian_plist.unlink(missing_ok=True)
+            # Do not bootout the worker job from inside its own callback: launchd
+            # may terminate this process before it can acknowledge the removal.
+            (la_dir / "com.xgent.agent.plist").unlink(missing_ok=True)
+        except Exception as exc:
+            log.exception("Could not fully unload XIDER Guardian before uninstall")
+            try:
+                set_guardian_desired_running(True)
+            except Exception:
+                log.exception("Could not restore Guardian intent after failed uninstall")
+            self._publish_response("output", {
+                "type": "uninstall_agent", "device_id": DEVICE_ID, "ok": False,
+                "text": f"❌ Guardian остался загружен; удаление отменено, настройки сохранены: {exc}",
+            })
+            return
 
         # Удалить конфиг директорию
         try:
@@ -2049,16 +2211,33 @@ def setup_logging() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", handlers=[handler])
 
 def main() -> None:
-    setup_logging()
     if not acquire_instance_lock():
         sys.stderr.write("FATAL: XGENT-MCS уже запущен на этой машине! Второй экземпляр остановлен.\n")
-        log.error("XGENT-MCS уже запущен на этой машине. Остановка второго экземпляра.")
         raise SystemExit(1)
+    update_state = EARLY_UPDATE_STATE
+    setup_logging()
     client = XgentClient()
     client.start()
+    if update_state == "pending":
+        def _rollback_if_unhealthy() -> None:
+            if client._update_health.wait(120):
+                return
+            try:
+                rollback_unhealthy_agent(
+                    CONFIG_DIR / UPDATE_STATE_NAME,
+                    Path(__file__).resolve().parent,
+                )
+            except Exception:
+                log.exception("Критическая ошибка: автоматический откат обновления не завершён")
+                return
+            log.error("Новая версия не подключилась к MQTT за 120 секунд; возвращаю предыдущую.")
+            os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]])
+
+        threading.Thread(target=_rollback_if_unhealthy, name="xgent-update-health", daemon=True).start()
     try:
         while client.is_running: time.sleep(1)
-    except KeyboardInterrupt: pass
+    except KeyboardInterrupt:
+        client.request_stop()
     finally: client.stop()
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 import io
+import os
 import sys
 import zipfile
 from pathlib import Path
@@ -14,6 +15,7 @@ from ops.x_vault import (
     _derive_key,
     _encrypt,
     create_backup,
+    create_recipient_keypair,
     main,
     restore_to_stage,
     verify_backup,
@@ -137,3 +139,89 @@ def test_symlink_is_not_included(tmp_path):
     archive = create_backup(source, tmp_path / "vault", PASSPHRASE)
 
     assert verify_backup(archive, PASSPHRASE)["files"] == 2
+
+
+def test_recipient_encryption_needs_no_secret_on_backup_host_and_restores(tmp_path):
+    keys = create_recipient_keypair(tmp_path / "offline-vault-key")
+    source = _source(tmp_path / "source")
+    archive = create_backup(
+        source,
+        tmp_path / "vault",
+        recipient_public_key_path=Path(keys["public_key_path"]),
+    )
+
+    encrypted = archive.read_bytes()
+    assert encrypted.startswith(b"XVAULT2\0")
+    assert b"secret-test-marker" not in encrypted
+    verified = verify_backup(
+        archive,
+        recipient_private_key_path=Path(keys["private_key_path"]),
+    )
+    assert verified["files"] == 2
+    assert verified["manifest"]["format"] == "X-VAULT/2"
+    assert verified["manifest"]["encryption"] == "X25519 + HKDF-SHA256 + AES-256-GCM"
+
+    stage = tmp_path / "stage"
+    result = restore_to_stage(
+        archive,
+        stage,
+        recipient_private_key_path=Path(keys["private_key_path"]),
+    )
+    assert result["restored_files"] == 2
+    assert (stage / ".env").read_text(encoding="utf-8") == "BOT_TOKEN=secret-test-marker\n"
+
+
+def test_recipient_archive_refuses_a_different_private_key(tmp_path):
+    first = create_recipient_keypair(tmp_path / "offline-key-1")
+    second = create_recipient_keypair(tmp_path / "offline-key-2")
+    archive = create_backup(
+        _source(tmp_path / "source"),
+        tmp_path / "vault",
+        recipient_public_key_path=Path(first["public_key_path"]),
+    )
+
+    with pytest.raises(VaultError, match="wrong recovery key"):
+        verify_backup(archive, recipient_private_key_path=Path(second["private_key_path"]))
+
+
+def test_recipient_keygen_refuses_repository_path_and_never_prints_private_material(tmp_path, capsys):
+    with pytest.raises(VaultError, match="outside the repository"):
+        create_recipient_keypair(ROOT / "ops" / "tests" / "should-not-exist")
+
+    destination = tmp_path / "owner-only-vault-key"
+    assert main(["keygen", "--directory", str(destination)]) == 0
+    output = capsys.readouterr().out
+    assert "fingerprint=" in output
+    assert "private_key_file=" in output
+    assert "PRIVATE KEY" not in output
+    private_key = (destination / "vault-recipient-private.pem").read_text(encoding="ascii")
+    assert "PRIVATE KEY" in private_key
+    if os.name != "nt":
+        assert destination.stat().st_mode & 0o077 == 0
+        assert (destination / "vault-recipient-private.pem").stat().st_mode & 0o077 == 0
+
+
+def test_recipient_backup_verify_and_restore_cli(tmp_path, monkeypatch, capsys):
+    keys = create_recipient_keypair(tmp_path / "offline-key")
+    source = _source(tmp_path / "source")
+    vault = tmp_path / "vault"
+    monkeypatch.delenv("XIDER_VAULT_PASSPHRASE", raising=False)
+
+    assert main([
+        "backup", "--source", str(source), "--vault", str(vault),
+        "--recipient-public-key", keys["public_key_path"],
+    ]) == 0
+    backup_output = capsys.readouterr().out
+    archive = Path(backup_output.strip().split(": ", 1)[1])
+
+    assert main([
+        "verify", "--archive", str(archive), "--private-key", keys["private_key_path"],
+    ]) == 0
+    assert '"format": "X-VAULT/2"' in capsys.readouterr().out
+
+    stage = tmp_path / "cli-stage"
+    assert main([
+        "restore-stage", "--archive", str(archive), "--stage", str(stage),
+        "--private-key", keys["private_key_path"],
+    ]) == 0
+    assert (stage / "bot.py").read_text(encoding="utf-8") == "safe source\n"

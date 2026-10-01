@@ -11,7 +11,10 @@ os.environ.setdefault("SHARED_KEY", "test-secret-not-real-0123456789")
 os.environ.setdefault("BOT_TOKEN", "123456:TEST-TOKEN-NOT-REAL")
 os.environ.setdefault("ADMIN_ID", "0")
 os.environ.setdefault("MQTT_BROKER", "localhost")
-os.environ.setdefault("MQTT_PORT", "1883")
+os.environ.setdefault("MQTT_PORT", "8883")
+os.environ.setdefault("MQTT_TLS", "true")
+os.environ.setdefault("MQTT_USERNAME", "xider-test-user")
+os.environ.setdefault("MQTT_PASSWORD", "xider-test-password-not-real")
 os.environ.setdefault("MQTT_PREFIX", "xgent/v1")
 
 # Добавляем папку TG-BOT-SERVER в sys.path, чтобы `import crypto` работал.

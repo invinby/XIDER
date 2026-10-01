@@ -42,7 +42,7 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y --no-install-recommends git python3 python3-venv python3-pip ca-certificates
+apt-get install -y --no-install-recommends git python3 python3-venv python3-pip python3-cryptography ca-certificates
 
 install -d -m 0750 /etc/xider
 if ! id -u xider >/dev/null 2>&1; then
@@ -68,12 +68,18 @@ python3 -m venv "${APP_DIR}/TG-BOT-SERVER/venv"
 
 install -m 0644 "${APP_DIR}/deploy/xider-bot.service" /etc/systemd/system/xider-bot.service
 install -m 0755 "${APP_DIR}/deploy/xider-server-ops.sh" /usr/local/sbin/xider-server-ops
+install -d -o root -g root -m 0750 /usr/local/libexec/xider
+install -o root -g root -m 0750 "${APP_DIR}/deploy/update-server.sh" /usr/local/libexec/xider/update-server.sh
+install -o root -g root -m 0640 "${APP_DIR}/deploy/safe_extract.py" /usr/local/libexec/xider/safe_extract.py
+install -o root -g root -m 0640 "${APP_DIR}/deploy/verify_server_bundle.py" /usr/local/libexec/xider/verify_server_bundle.py
+install -o root -g root -m 0640 "${APP_DIR}/XGENT-MCS/release_signature.py" /usr/local/libexec/xider/release_signature.py
 cat > /etc/sudoers.d/xider-server-ops <<EOF
 xider ALL=(root) NOPASSWD: /usr/local/sbin/xider-server-ops
 EOF
 chmod 0440 /etc/sudoers.d/xider-server-ops
 visudo -cf /etc/sudoers.d/xider-server-ops
 chown -R xider:xider "${APP_DIR}"
+install -d -o root -g xider -m 0750 "${APP_DIR}/incoming"
 chown root:xider "${ENV_FILE}"
 chmod 0640 "${ENV_FILE}"
 

@@ -157,15 +157,20 @@ This repository includes GitHub Actions workflows:
 
 ### Полная локальная проверка / Full local test run
 
-After installing the bot and Windows-agent test dependencies, run all component
-suites without module-name collisions (`config.py` exists in multiple components):
+After installing the bot and Windows-agent test dependencies, run the component
+suites and the current OS's installer/rollback fixtures without module-name
+collisions (`config.py` exists in multiple components):
 
 ```powershell
 python tools/run_tests.py
 ```
 
-The runner uses fake credentials and does not connect to Telegram, MQTT, or VPS.
-Passes here do not replace live platform and rollback tests.
+The runner uses fake credentials and does not connect to Telegram, MQTT, or a
+VPS. On Windows it also exercises PowerShell bootstrap/install/rollback fixtures;
+on Linux it exercises the shell bootstrap and VPS-updater fixtures. GitHub CI
+additionally checks PowerShell 7 and Windows PowerShell 5, plus Linux shell
+syntax. These offline fixtures do not replace live Mac/Windows hardware,
+Telegram/MQTT, or production VPS validation.
 
 ---
 
@@ -196,6 +201,12 @@ Guardian — отдельный видимый supervisor для macOS. Он:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/invinby/XIDER/main/deploy/bootstrap.sh | bash
 ```
+
+Прямая команда выше запускает bootstrap из подвижной ветки `main` и остаётся
+dev-установкой. В локальном кандидате release quickstart закрепляет полный
+commit ID и SHA-256 bootstrap; сами bootstrap-скрипты и quickstart входят в
+подписанный manifest. Однако команда не проверяет подпись manifest до запуска
+bootstrap и пока не является проверенным production-установщиком.
 
 Затем открой в боте: **Устройство → Питание & Защита → Guardian**.
 

@@ -1,0 +1,22 @@
+[Unit]
+Description=Promote uploaded X-VAULT archives to root-owned standby storage
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+EnvironmentFile=-/etc/xider/x-vault-standby.env
+ExecStart=/usr/local/sbin/xider-vault-promote
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ReadWritePaths=/srv/xider-vault/incoming /srv/xider-vault/archives /run/xider-vault-upload.lock
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native

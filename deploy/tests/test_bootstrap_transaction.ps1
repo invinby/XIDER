@@ -7,10 +7,22 @@ $archive = Join-Path $fixture 'source.zip'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $global:XiderBootstrapSetupResult = 8
 $global:XiderBootstrapSetupCalls = 0
+$global:XiderBootstrapSetupArgs = @()
+$global:XiderBootstrapDownloadSource = $archive
+$global:XiderBootstrapObservedUri = $null
+$originalXiderSshKey = $env:XIDER_SSH_KEY
+$originalXiderRef = $env:XIDER_REF
 
 function powershell.exe {
     $global:XiderBootstrapSetupCalls++
+    $global:XiderBootstrapSetupArgs = @($args)
     $global:LASTEXITCODE = $global:XiderBootstrapSetupResult
+}
+
+function Invoke-WebRequest {
+    param([string]$Uri, [string]$OutFile, [switch]$UseBasicParsing, [int]$TimeoutSec)
+    $global:XiderBootstrapObservedUri = $Uri
+    Copy-Item -LiteralPath $global:XiderBootstrapDownloadSource -Destination $OutFile -Force
 }
 
 function New-OldCheckout($installRoot) {
@@ -50,7 +62,13 @@ try {
     $successRoot = Join-Path $fixture 'success-install'
     New-OldCheckout $successRoot
     $global:XiderBootstrapSetupResult = 0
-    & $bootstrap -InstallRoot $successRoot -KeyPath (Join-Path $fixture 'missing.key') -SourceArchive $archive
+    $env:XIDER_SSH_KEY = Join-Path $fixture 'selected-key.key'
+    & $bootstrap -InstallRoot $successRoot -SourceArchive $archive
+    $env:XIDER_SSH_KEY = $originalXiderSshKey
+    if ($global:XiderBootstrapSetupArgs -notcontains '-KeyPath' -or
+        $global:XiderBootstrapSetupArgs -notcontains (Join-Path $fixture 'selected-key.key')) {
+        throw 'The short Windows bootstrap did not forward XIDER_SSH_KEY to setup-all.'
+    }
     $activeRepo = Join-Path $successRoot 'git-ver'
     if (-not (Test-Path -LiteralPath (Join-Path $activeRepo 'new-marker.txt'))) {
         throw 'The new checkout was not activated.'
@@ -61,6 +79,28 @@ try {
     $backups = @(Get-ChildItem -LiteralPath $successRoot -Directory -Filter 'git-ver.previous.*')
     if ($backups.Count -ne 1 -or -not (Test-Path -LiteralPath (Join-Path $backups[0].FullName 'old-marker.txt'))) {
         throw 'The previous checkout was not retained as a recoverable backup.'
+    }
+
+    $pinnedRoot = Join-Path $fixture 'pinned-install'
+    New-OldCheckout $pinnedRoot
+    $env:XIDER_REF = 'b' * 40
+    $global:XiderBootstrapSetupResult = 0
+    & $bootstrap -InstallRoot $pinnedRoot
+    $expectedPinnedUri = "https://github.com/invinby/XIDER/archive/{0}.zip" -f $env:XIDER_REF
+    if ($global:XiderBootstrapObservedUri -ne $expectedPinnedUri) {
+        throw 'Windows full bootstrap did not download the archive for the pinned commit.'
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $pinnedRoot 'git-ver/new-marker.txt'))) {
+        throw 'The pinned Windows bootstrap did not activate the downloaded checkout.'
+    }
+    $env:XIDER_REF = ''
+    $invalidRefRoot = Join-Path $fixture 'invalid-ref-install'
+    New-OldCheckout $invalidRefRoot
+    $invalidRefRejected = $false
+    try { & $bootstrap -InstallRoot $invalidRefRoot -Ref main }
+    catch { $invalidRefRejected = $_.Exception.Message -match 'XIDER_REF' }
+    if (-not $invalidRefRejected -or -not (Test-Path -LiteralPath (Join-Path $invalidRefRoot 'git-ver/old-marker.txt'))) {
+        throw 'An invalid pinned reference was accepted or changed the current checkout.'
     }
 
     $firstInstallRoot = Join-Path $fixture 'first-install'
@@ -78,10 +118,12 @@ try {
     Write-Host 'Windows full bootstrap transaction and rollback fixture passed.'
 }
 finally {
+    $env:XIDER_SSH_KEY = $originalXiderSshKey
+    $env:XIDER_REF = $originalXiderRef
     if ((Test-Path -LiteralPath $fixture) -and
         $fixture.StartsWith([IO.Path]::GetFullPath($env:TEMP), [StringComparison]::OrdinalIgnoreCase) -and
         (Split-Path $fixture -Leaf) -like 'xider-bootstrap-transaction-*') {
         Remove-Item -LiteralPath $fixture -Recurse -Force
     }
-    Remove-Variable XiderBootstrapSetupResult,XiderBootstrapSetupCalls -Scope Global -ErrorAction SilentlyContinue
+    Remove-Variable XiderBootstrapSetupResult,XiderBootstrapSetupCalls,XiderBootstrapSetupArgs,XiderBootstrapDownloadSource,XiderBootstrapObservedUri -Scope Global -ErrorAction SilentlyContinue
 }

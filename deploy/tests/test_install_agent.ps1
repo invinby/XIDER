@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $installer = (Resolve-Path (Join-Path $PSScriptRoot '..\..\XGENT-WDS\install_agent.ps1')).Path
 $fixture = Join-Path $env:TEMP ('xider-install-agent-test-' + [guid]::NewGuid().ToString('N'))
+$utf8 = New-Object System.Text.UTF8Encoding($false)
 
 function icacls { $global:XiderAclCallCount++; $global:LASTEXITCODE = 0 }
 function New-ScheduledTaskAction {
@@ -26,6 +27,17 @@ try {
     )) {
         Set-Content -LiteralPath (Join-Path $fixture $file) -Value 'fixture'
     }
+    $secureEnv = @(
+        'SHARED_KEY=test-secret-not-real-0123456789',
+        'MQTT_BROKER=example.invalid',
+        'MQTT_PORT=8883',
+        'MQTT_PREFIX=xgent/v1',
+        'MQTT_TLS=true',
+        'MQTT_USERNAME=test-user',
+        'MQTT_PASSWORD=test-password-not-real',
+        'ENCRYPT_PAYLOAD=true'
+    )
+    [IO.File]::WriteAllLines((Join-Path $fixture '.env'), [string[]]$secureEnv, $utf8)
     Copy-Item -LiteralPath (Join-Path (Split-Path $installer -Parent) 'install_guardian.ps1') `
         -Destination (Join-Path $fixture 'install_guardian.ps1')
 
@@ -54,6 +66,21 @@ try {
     if ($global:XiderRegisterCount -ne 4 -or $global:XiderStartCount -ne 4) {
         throw 'Repeat installation did not register and start both tasks.'
     }
+
+    $registerBeforeSecurityCheck = $global:XiderRegisterCount
+    foreach ($case in @(
+        @{ Name = 'MQTT_TLS'; Lines = @($secureEnv | Where-Object { $_ -notmatch '^MQTT_TLS=' }) + 'MQTT_TLS=false' },
+        @{ Name = 'MQTT_PASSWORD'; Lines = @($secureEnv | Where-Object { $_ -notmatch '^MQTT_PASSWORD=' }) + 'MQTT_PASSWORD=' }
+    )) {
+        [IO.File]::WriteAllLines((Join-Path $fixture '.env'), [string[]]$case.Lines, $utf8)
+        $rejected = $false
+        try { & $installer -AgentDir $fixture -TaskName 'XIDER Fixture' -PreflightOnly }
+        catch { $rejected = $_.Exception.Message -match [regex]::Escape($case.Name) }
+        if (-not $rejected -or $global:XiderRegisterCount -ne $registerBeforeSecurityCheck) {
+            throw "Installer accepted unsafe $($case.Name) or changed a Scheduled Task."
+        }
+    }
+    [IO.File]::WriteAllLines((Join-Path $fixture '.env'), [string[]]$secureEnv, $utf8)
 
     Remove-Item -LiteralPath (Join-Path $venv 'pythonw.exe') -Force
     $missingPythonRejected = $false

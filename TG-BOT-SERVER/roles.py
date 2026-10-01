@@ -64,11 +64,21 @@ class AdminFilter(BaseFilter):
             return True
         callback = obj.data or ""
         try:
-            from bot import SESSION  # avoids bot/roles import cycle at import time
+            from bot import SESSION, devices  # avoids bot/roles import cycle at import time
             selected_device = SESSION.get("target")
         except Exception:
+            devices = None
             selected_device = None
-        return access_store.can_use_callback(user_id, callback, ADMIN_ID, selected_device)
+        if not access_store.can_use_callback(user_id, callback, ADMIN_ID, selected_device):
+            return False
+        if callback in access_store.USER_NAVIGATION_CALLBACKS:
+            return True
+        if callback.startswith("dev:"):
+            device_id = callback.split(":", 1)[1]
+            return bool(device_id and devices and devices.get(device_id) is not None)
+        # A grant must still refer to a device that exists. This closes stale
+        # grants left behind by old databases or a concurrent remove/block.
+        return bool(selected_device and devices and devices.get(selected_device) is not None)
 
 
 class ReadOnlyFilter(BaseFilter):

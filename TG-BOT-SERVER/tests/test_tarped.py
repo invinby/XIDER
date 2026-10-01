@@ -38,6 +38,67 @@ def test_current_and_legacy_style_ids_normalize_to_named_voices():
     assert xlex.normalize_style("xnoir") == "xcore"
 
 
+def test_common_command_feedback_has_six_distinct_xlex_voices():
+    keys = (
+        "target_required",
+        "device_required",
+        "device_no_response",
+        "device_timeout",
+        "single_device_only",
+        "mqtt_disconnected",
+        "mqtt_publish_failed",
+        "send_failed",
+        "empty_text",
+        "target_and_text_required",
+        "mqtt_photo_failed",
+    )
+    for key in keys:
+        values = {"seconds": "15"} if key == "device_timeout" else {}
+        phrases = [xlex.render(key, style, **values) for style in xlex.STYLES]
+        assert len(set(phrases)) == len(xlex.STYLES), key
+
+    assert all("MQTT" in xlex.render("mqtt_disconnected", style) for style in xlex.STYLES)
+    assert all("MQTT" in xlex.render("mqtt_publish_failed", style) for style in xlex.STYLES)
+    assert all("MQTT" in xlex.render("mqtt_photo_failed", style) for style in xlex.STYLES)
+    assert "одно" in xlex.render("single_device_only", "xcore")
+    assert all("15" in xlex.render("device_timeout", style, seconds="15") for style in xlex.STYLES)
+
+
+def test_file_workflow_copy_has_six_complete_distinct_voices(monkeypatch):
+    keys = (
+        "files_menu_title", "files_menu_description", "files_prompt_list",
+        "files_prompt_find", "files_prompt_get", "files_prompt_put",
+        "files_prompt_delete", "files_prompt_open", "files_document_required",
+        "files_size_limit", "files_upload_saved", "files_upload_failed",
+        "files_empty_path", "files_list_result", "files_download_timeout",
+        "files_download_failed", "files_download_corrupt", "files_download_caption",
+        "files_delete_done", "files_delete_failed", "files_open_done",
+        "files_open_failed", "files_find_empty", "files_find_no_response",
+        "files_find_result",
+    )
+    arguments = {
+        "device": "Test device",
+        "limit": "30",
+        "path": "/tmp/report.txt",
+        "error": "permission denied",
+        "text": "report.txt",
+    }
+
+    xlex.validate()
+    for key in keys:
+        phrases = [xlex.render(key, style, **arguments) for style in xlex.STYLES]
+        assert len(set(phrases)) == len(xlex.STYLES), key
+
+    monkeypatch.setattr(
+        bot.bot_settings,
+        "get",
+        lambda key, default=None: "xtech" if key == "ui_style" else default,
+    )
+    escaped = bot._lex_html("files_upload_saved", path="<script>alert('x')</script>")
+    assert "&lt;script&gt;" in escaped
+    assert "<script>" not in escaped
+
+
 def test_saved_copy_from_old_style_id_is_not_lost(tmp_path, monkeypatch):
     monkeypatch.setattr(text_store, "FILE", tmp_path / "texts.json")
     (tmp_path / "texts.json").write_text(
@@ -67,9 +128,32 @@ def test_release_catalog_requires_a_real_component_asset():
     assert releases[0].has_package("windows_agent")
     assert not releases[0].has_package("mac_agent")
     assert not releases[0].has_package("windows_keeper")
+    assert not releases[0].has_source_update_payload("windows_agent")
     assert ledger.newest_with_package(releases, "mac_agent").tag == "v3.3.8"
     assert ledger.is_older("3.3.8", releases[0])
     assert not ledger.is_older("4.0.0", releases[0])
+
+
+def test_release_source_update_requires_platform_bundle_archive_and_manifest():
+    release = ledger.Release(
+        tag="v4.1.0", version=(4, 1, 0), name="release", published_at="", notes="",
+        asset_names=frozenset({
+            "XGENT-WDS-Windows.zip", "XIDER-source.zip", "release-manifest.json",
+        }),
+    )
+    assert release.has_package("windows_agent")
+    assert release.has_source_update_payload("windows_agent")
+    assert not release.has_source_update_payload("mac_agent")
+
+
+def test_release_manifest_updater_requires_a_known_supported_agent_version():
+    assert ledger.supports_release_manifest_update("4.0.1")
+    assert ledger.supports_release_manifest_update("v4.0.1")
+    assert ledger.supports_release_manifest_update("4.1.0")
+    assert not ledger.supports_release_manifest_update("4.0.0")
+    assert not ledger.supports_release_manifest_update("3.3.8")
+    assert not ledger.supports_release_manifest_update("")
+    assert not ledger.supports_release_manifest_update("unknown")
 
 
 def test_release_catalog_cache_does_not_fetch_on_every_open():
@@ -185,6 +269,8 @@ def test_version_screens_follow_six_voices_and_keep_release_callbacks(monkeypatc
         }
         assert "versions:detail:agent:v4.0.2:1" in detail_callbacks
         assert "versions:list:agent:0" in detail_callbacks
+        assert not any(callback.startswith("versions:install:") for callback in detail_callbacks)
+        assert xlex.render("versions_install_payload_missing", style) in shown["text"]
 
     assert len(rendered_lists) > 1
     assert len(rendered_details) > 1
@@ -209,6 +295,16 @@ def test_book_chapters_fit_telegram_and_device_menu_links_to_versions(monkeypatc
     markup = bot.device_menu("mac1")
     buttons = [button for row in markup.inline_keyboard for button in row]
     assert any(button.callback_data == "versions:device" and "3.3.8" in button.text for button in buttons)
+
+
+def test_handbook_distinguishes_transactional_updater_from_future_twinshift():
+    _, _, versions = info_book.chapter("versions")
+    _, _, updates = info_book.chapter("updates")
+    assert "Закреплённый в исходниках ключ ещё не означает" in versions
+    assert "Кнопка появляется только для устройства" in versions
+    assert "транзакционный file-update" in updates
+    assert "не настоящее A/B" in updates
+    assert "TwinShift" in updates
 
 
 def test_all_six_voices_reach_guest_and_user_menus(monkeypatch):

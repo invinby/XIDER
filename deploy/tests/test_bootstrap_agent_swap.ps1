@@ -6,6 +6,7 @@ $agentSource = Join-Path $sourceRoot 'XIDER-fixture\XGENT-WDS'
 $archive = Join-Path $fixture 'source.zip'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $global:XiderMockInstallerResult = 'fail'
+$global:XiderMockInstallerCalls = 0
 $global:XiderMockTasksRunning = $false
 $global:XiderMockAgentDir = $null
 $global:XiderMockOldTasks = $true
@@ -42,6 +43,7 @@ function Start-ScheduledTask {
     $global:XiderMockOldRunning[$TaskName] = $true
 }
 function powershell.exe {
+    $global:XiderMockInstallerCalls++
     if ($global:XiderMockInstallerResult -eq 'success') {
         $agentIndex = [Array]::IndexOf($args, '-AgentDir')
         $global:XiderMockAgentDir = $args[$agentIndex + 1]
@@ -60,7 +62,10 @@ function New-OldInstall($installRoot) {
         'SHARED_KEY=test-secret-not-real-0123456789',
         'MQTT_BROKER=example.invalid',
         'MQTT_PORT=8883',
+        'MQTT_PREFIX=xgent/test',
         'MQTT_TLS=true',
+        'MQTT_USERNAME=test-user',
+        'MQTT_PASSWORD=test-password-not-real',
         'ENCRYPT_PAYLOAD=true'
     ), $utf8)
 }
@@ -80,12 +85,19 @@ try {
     try { & $bootstrap -InstallRoot $rollbackRoot -SourceArchive $archive }
     catch { $failedAsExpected = $_.Exception.Message -match 'Windows-' }
     if (-not $failedAsExpected) { throw 'Simulated installer failure did not fail the bootstrap.' }
+    if ($global:XiderMockInstallerCalls -ne 1) {
+        throw 'The failure did not reach the simulated installer; rollback was not exercised.'
+    }
     if (-not (Test-Path -LiteralPath (Join-Path $rollbackRoot 'git-ver\XGENT-WDS\old-marker.txt'))) {
         throw 'The previous checkout was not restored after installer failure.'
     }
     $failedDirs = @(Get-ChildItem -LiteralPath $rollbackRoot -Directory -Filter 'git-ver.failed.*')
-    if ($failedDirs.Count -ne 1 -or (Test-Path -LiteralPath (Join-Path $failedDirs[0].FullName 'XGENT-WDS\.env'))) {
-        throw 'Failed checkout was not retained without its copied secret.'
+    if ($failedDirs.Count -ne 1) {
+        throw "Expected one quarantined failed checkout, found $($failedDirs.Count)."
+    }
+    $failedEnv = Join-Path $failedDirs[0].FullName 'XGENT-WDS\.env'
+    if (Test-Path -LiteralPath $failedEnv) {
+        throw "Failed checkout retained its copied secret: $failedEnv"
     }
     if ($global:XiderMockRestored.Count -ne 2 -or $global:XiderMockRestarted.Count -ne 2) {
         throw 'Previous Scheduled Tasks or their running state were not restored.'
@@ -111,5 +123,5 @@ finally {
         (Split-Path $fixture -Leaf) -like 'xider-bootstrap-swap-*') {
         Remove-Item -LiteralPath $fixture -Recurse -Force
     }
-    Remove-Variable XiderMockInstallerResult,XiderMockTasksRunning,XiderMockAgentDir,XiderMockOldTasks,XiderMockOldRunning,XiderMockRestored,XiderMockRestarted -Scope Global -ErrorAction SilentlyContinue
+    Remove-Variable XiderMockInstallerResult,XiderMockInstallerCalls,XiderMockTasksRunning,XiderMockAgentDir,XiderMockOldTasks,XiderMockOldRunning,XiderMockRestored,XiderMockRestarted -Scope Global -ErrorAction SilentlyContinue
 }

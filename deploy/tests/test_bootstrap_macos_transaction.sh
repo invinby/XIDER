@@ -16,11 +16,15 @@ chmod +x "$FAKE_BIN/launchctl"
 cat > "$FAKE_BIN/ssh" <<'SSH'
 #!/usr/bin/env bash
 set -euo pipefail
+printf '%s\n' "$@" >> "${XIDER_TEST_SSH_LOG:-/dev/null}"
 printf 'SHARED_KEY=remote-fixture-secret\n'
 printf 'MQTT_BROKER=broker.example.invalid\n'
-printf 'MQTT_PORT=8883\n'
-printf 'MQTT_TLS=true\n'
-printf 'ENCRYPT_PAYLOAD=true\n'
+printf 'MQTT_PORT=%s\n' "${XIDER_TEST_MQTT_PORT:-8883}"
+printf 'MQTT_TLS=%s\n' "${XIDER_TEST_MQTT_TLS:-true}"
+if [[ "${XIDER_TEST_EMPTY_MQTT_USERNAME:-0}" == 1 ]]; then printf 'MQTT_USERNAME=\n'; else printf 'MQTT_USERNAME=test-user\n'; fi
+if [[ "${XIDER_TEST_EMPTY_MQTT_PASSWORD:-0}" == 1 ]]; then printf 'MQTT_PASSWORD=\n'; else printf 'MQTT_PASSWORD=test-password-not-real\n'; fi
+printf 'ENCRYPT_PAYLOAD=%s\n' "${XIDER_TEST_ENCRYPT_PAYLOAD:-true}"
+if [[ "${XIDER_TEST_DUPLICATE_MQTT_TLS:-0}" == 1 ]]; then printf 'MQTT_TLS=true\nMQTT_TLS=false\n'; fi
 if [[ "${XIDER_TEST_BLANK_PREFIX:-0}" == 1 ]]; then
   printf 'MQTT_PREFIX=\n'
 fi
@@ -45,6 +49,23 @@ with ZipFile(archive) as bundle:
     bundle.extractall(Path(destination))
 UNZIP
 chmod +x "$FAKE_BIN/unzip"
+
+cat > "$FAKE_BIN/curl" <<'CURL'
+#!/usr/bin/env bash
+set -euo pipefail
+destination=''
+url=''
+while (($#)); do
+  case "$1" in
+    -o) shift; destination="$1" ;;
+    https://*) url="$1" ;;
+  esac
+  shift
+done
+printf '%s\n' "$url" >> "${XIDER_TEST_CURL_LOG:-/dev/null}"
+cp "${XIDER_TEST_ARCHIVE_PATH:?}" "$destination"
+CURL
+chmod +x "$FAKE_BIN/curl"
 
 cat > "$SOURCE_ROOT/XGENT-MCS/start_agent.sh" <<'AGENT'
 #!/usr/bin/env bash
@@ -81,7 +102,7 @@ make_old_install() {
   printf '#!/usr/bin/env bash\n[[ "${1:-}" == --status ]] && exit 0\nexit 0\n' > "$install_root/git-ver/XGENT-MCS/start_agent.sh"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$install_root/git-ver/XGENT-MCS/start_guardian.sh"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$install_root/git-ver/XGENT-MCS/stop_agent.sh"
-  printf 'SHARED_KEY=old-local-secret\nMQTT_BROKER=broker.example.invalid\nMQTT_PORT=8883\nMQTT_PREFIX=xgent/v1\nMQTT_TLS=true\nENCRYPT_PAYLOAD=true\n' > "$install_root/git-ver/XGENT-MCS/.env"
+  printf 'SHARED_KEY=old-local-secret\nMQTT_BROKER=broker.example.invalid\nMQTT_PORT=8883\nMQTT_PREFIX=xgent/v1\nMQTT_TLS=true\nMQTT_USERNAME=test-user\nMQTT_PASSWORD=test-password-not-real\nENCRYPT_PAYLOAD=true\nXIDER_UPDATE_BRANCH=main\n' > "$install_root/git-ver/XGENT-MCS/.env"
   chmod +x "$install_root/git-ver/XGENT-MCS/start_agent.sh" \
     "$install_root/git-ver/XGENT-MCS/start_guardian.sh" \
     "$install_root/git-ver/XGENT-MCS/stop_agent.sh"
@@ -94,8 +115,41 @@ run_bootstrap() {
   XIDER_INSTALL_ROOT="$install_root" \
   XIDER_ENV_ROOT="$env_root" \
   XIDER_SOURCE_ARCHIVE="$ARCHIVE" \
+  XIDER_SSH_KEY="${XIDER_TEST_SSH_KEY:-}" \
+  XIDER_TEST_SSH_LOG="$FIXTURE/ssh-args.log" \
   XIDER_FAIL_NEW_AGENT="$fail_new" \
     bash "$BOOTSTRAP"
+}
+
+run_network_bootstrap() {
+  local install_root="$1" ref="$2"
+  HOME="$FIXTURE/home" \
+  PATH="$FAKE_BIN:$PATH" \
+  XIDER_INSTALL_ROOT="$install_root" \
+  XIDER_ENV_ROOT="$FIXTURE/home/XIDER" \
+  XIDER_SOURCE_ARCHIVE='' \
+  XIDER_REF="$ref" \
+  XIDER_TEST_ARCHIVE_PATH="$ARCHIVE" \
+  XIDER_TEST_CURL_LOG="$FIXTURE/curl-urls.log" \
+    bash "$BOOTSTRAP"
+}
+
+reject_remote_config() {
+  local label="$1" root="$FIXTURE/reject-$1"
+  shift
+  mkdir -p "$root/git-ver"
+  printf 'old-checkout\n' > "$root/git-ver/old-marker.txt"
+  if (
+    export "$@"
+    run_bootstrap "$root" 0 "$FIXTURE/no-local-env" > "$FIXTURE/reject-$label.log" 2>&1
+  ); then
+    echo "Unsafe MQTT configuration unexpectedly passed: $label" >&2
+    exit 1
+  fi
+  [[ -f "$root/git-ver/old-marker.txt" ]] || {
+    echo "Unsafe MQTT configuration changed the active checkout: $label" >&2
+    exit 1
+  }
 }
 
 ROLLBACK_ROOT="$FIXTURE/rollback-install"
@@ -128,18 +182,42 @@ run_bootstrap "$SUCCESS_ROOT" 0 > "$FIXTURE/success.log" 2>&1
 grep -qx 'SHARED_KEY=old-local-secret' "$SUCCESS_ROOT/git-ver/XGENT-MCS/.env" || {
   echo 'The current macOS configuration was not carried forward.' >&2; exit 1;
 }
-grep -qx 'XIDER_UPDATE_BRANCH=main' "$SUCCESS_ROOT/git-ver/XGENT-MCS/.env" || {
-  echo 'The macOS update branch was not recorded in the active configuration.' >&2; exit 1;
-}
+if grep -q '^XIDER_UPDATE_BRANCH=' "$SUCCESS_ROOT/git-ver/XGENT-MCS/.env"; then
+  echo 'The obsolete mutable update-branch setting was recorded in the active configuration.' >&2; exit 1;
+fi
 backups=("$SUCCESS_ROOT"/git-ver.previous.*)
 [[ -d "${backups[0]}" && -f "${backups[0]}/XGENT-MCS/old-version.marker" ]] || {
   echo 'The previous macOS version was not kept as a rollback copy.' >&2; exit 1;
 }
 
+PINNED_ROOT="$FIXTURE/pinned-install"
+PINNED_REF="$(printf 'c%.0s' {1..40})"
+make_old_install "$PINNED_ROOT"
+: > "$FIXTURE/curl-urls.log"
+run_network_bootstrap "$PINNED_ROOT" "$PINNED_REF" > "$FIXTURE/pinned.log" 2>&1
+grep -Fx "https://github.com/invinby/XIDER/archive/${PINNED_REF}.zip" "$FIXTURE/curl-urls.log" >/dev/null || {
+  echo 'macOS bootstrap did not request the exact pinned commit archive.' >&2
+  cat "$FIXTURE/pinned.log" >&2
+  exit 1
+}
+[[ -f "$PINNED_ROOT/git-ver/XGENT-MCS/new-version.marker" ]] || {
+  echo 'The pinned macOS archive was not activated.' >&2; exit 1;
+}
+
+INVALID_REF_ROOT="$FIXTURE/invalid-ref-install"
+make_old_install "$INVALID_REF_ROOT"
+if run_network_bootstrap "$INVALID_REF_ROOT" main > "$FIXTURE/invalid-ref.log" 2>&1; then
+  echo 'A mutable branch was unexpectedly accepted as XIDER_REF.' >&2
+  exit 1
+fi
+[[ -f "$INVALID_REF_ROOT/git-ver/XGENT-MCS/old-version.marker" ]] || {
+  echo 'An invalid XIDER_REF changed the active macOS checkout.' >&2; exit 1;
+}
+
 FIRST_ROOT="$FIXTURE/first-install"
 CONFIG_ROOT="$FIXTURE/config"
 mkdir -p "$CONFIG_ROOT/XGENT-MCS"
-printf 'SHARED_KEY=first-install-secret\nMQTT_BROKER=broker.example.invalid\nMQTT_PORT=8883\nMQTT_PREFIX=xgent/v1\nMQTT_TLS=true\nENCRYPT_PAYLOAD=true\n' > "$CONFIG_ROOT/XGENT-MCS/.env"
+printf 'SHARED_KEY=first-install-secret\nMQTT_BROKER=broker.example.invalid\nMQTT_PORT=8883\nMQTT_PREFIX=xgent/v1\nMQTT_TLS=true\nMQTT_USERNAME=test-user\nMQTT_PASSWORD=test-password-not-real\nENCRYPT_PAYLOAD=true\n' > "$CONFIG_ROOT/XGENT-MCS/.env"
 if run_bootstrap "$FIRST_ROOT" 1 "$CONFIG_ROOT" > "$FIXTURE/first-install.log" 2>&1; then
   echo 'The simulated failed first Mac install unexpectedly succeeded.' >&2
   exit 1
@@ -150,7 +228,9 @@ partial=("$FIRST_ROOT"/git-ver.failed.*)
 }
 
 REMOTE_ROOT="$FIXTURE/remote-config-install"
-run_bootstrap "$REMOTE_ROOT" 0 "$FIXTURE/no-local-env" > "$FIXTURE/remote-config.log" 2>&1
+mkdir -p "$FIXTURE/home/.ssh"
+printf 'not-a-real-private-key\n' > "$FIXTURE/home/.ssh/xider"
+XIDER_TEST_SSH_KEY="$FIXTURE/home/.ssh/xider" run_bootstrap "$REMOTE_ROOT" 0 "$FIXTURE/no-local-env" > "$FIXTURE/remote-config.log" 2>&1
 remote_env="$REMOTE_ROOT/git-ver/XGENT-MCS/.env"
 grep -qx 'MQTT_PREFIX=xgent/v1' "$remote_env" || {
   echo 'Missing server prefix was not normalized to the shared default.' >&2
@@ -160,6 +240,29 @@ grep -qx 'MQTT_PREFIX=xgent/v1' "$remote_env" || {
 [[ "$(stat -c '%a' "$remote_env")" == 600 ]] || {
   echo 'Fetched macOS .env is not private (0600).' >&2; exit 1;
 }
+grep -Fx -- '-i' "$FIXTURE/ssh-args.log" >/dev/null &&
+grep -Fx -- "$FIXTURE/home/.ssh/xider" "$FIXTURE/ssh-args.log" >/dev/null &&
+grep -Fx -- 'IdentitiesOnly=yes' "$FIXTURE/ssh-args.log" >/dev/null || {
+  echo 'macOS bootstrap did not pass the configured SSH key to OpenSSH.' >&2; exit 1;
+}
+if grep -Eq '^(PubkeyAuthentication=no|PreferredAuthentications=password)$' "$FIXTURE/ssh-args.log"; then
+  echo 'macOS bootstrap disabled SSH public-key authentication.' >&2; exit 1;
+fi
+
+DEFAULT_KEY_ROOT="$FIXTURE/default-key-install"
+: > "$FIXTURE/ssh-args.log"
+run_bootstrap "$DEFAULT_KEY_ROOT" 0 "$FIXTURE/no-local-env" > "$FIXTURE/default-key.log" 2>&1
+grep -Fx -- '-i' "$FIXTURE/ssh-args.log" >/dev/null &&
+grep -Fx -- "$FIXTURE/home/.ssh/xider" "$FIXTURE/ssh-args.log" >/dev/null || {
+  echo 'macOS bootstrap did not discover ~/.ssh/xider by default.' >&2; exit 1;
+}
+
+reject_remote_config insecure-tls XIDER_TEST_MQTT_TLS=false
+reject_remote_config clear-payload XIDER_TEST_ENCRYPT_PAYLOAD=false
+reject_remote_config no-mqtt-user XIDER_TEST_EMPTY_MQTT_USERNAME=1
+reject_remote_config no-mqtt-password XIDER_TEST_EMPTY_MQTT_PASSWORD=1
+reject_remote_config duplicate-tls XIDER_TEST_DUPLICATE_MQTT_TLS=1
+reject_remote_config invalid-port XIDER_TEST_MQTT_PORT=70000
 
 BLANK_ROOT="$FIXTURE/blank-prefix-install"
 mkdir -p "$BLANK_ROOT/git-ver/XGENT-MCS"

@@ -4,6 +4,7 @@ set -Eeuo pipefail
 INSTALL_ROOT="${XIDER_INSTALL_ROOT:-$HOME/XIDER}"
 ENV_ROOT="${XIDER_ENV_ROOT:-$HOME/XIDER}"
 BRANCH="${XIDER_BRANCH:-main}"
+REF="${XIDER_REF:-}"
 SERVER_HOST="${XIDER_SERVER_HOST:-141.145.152.174}"
 SERVER_USER="${XIDER_SERVER_USER:-ubuntu}"
 TARGET="${INSTALL_ROOT}/git-ver"
@@ -13,19 +14,32 @@ if [[ ! "$BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]; then
   echo "Invalid XIDER_BRANCH" >&2
   exit 2
 fi
+if [[ -n "$REF" && ! "$REF" =~ ^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$ ]]; then
+  echo "XIDER_REF must be a full 40- or 64-character commit ID" >&2
+  exit 2
+fi
 command -v curl >/dev/null || { echo "curl is required" >&2; exit 2; }
 command -v unzip >/dev/null || { echo "unzip is required" >&2; exit 2; }
 mkdir -p "$INSTALL_ROOT"
 stage="$(mktemp -d "${INSTALL_ROOT}/.xider-install.XXXXXX")"
 trap 'rm -rf "$stage"' EXIT
 
-echo "Получаю XIDER, branch=$BRANCH"
+if [[ -n "$REF" ]]; then
+  echo "Получаю XIDER из зафиксированного commit=$REF"
+else
+  echo "Получаю XIDER, branch=$BRANCH"
+fi
 if [[ -n "$SOURCE_ARCHIVE" ]]; then
   [[ -f "$SOURCE_ARCHIVE" ]] || { echo "XIDER_SOURCE_ARCHIVE не найден" >&2; exit 2; }
   cp "$SOURCE_ARCHIVE" "$stage/source.zip"
 else
+  if [[ -n "$REF" ]]; then
+    archive_url="https://github.com/invinby/XIDER/archive/${REF}.zip"
+  else
+    archive_url="https://github.com/invinby/XIDER/archive/refs/heads/${BRANCH}.zip"
+  fi
   curl --fail --silent --show-error --location --max-time 90 \
-    "https://github.com/invinby/XIDER/archive/refs/heads/${BRANCH}.zip" -o "$stage/source.zip"
+    "$archive_url" -o "$stage/source.zip"
 fi
 unzip -q "$stage/source.zip" -d "$stage"
 downloaded="$(find "$stage" -mindepth 1 -maxdepth 1 -type d ! -name '.xider-install.*' | head -n1)"
@@ -50,9 +64,17 @@ if [[ -f "$preserved_env" ]]; then
 else
   fetched_env="$stage/fetched.env"
   echo "Локального .env нет; читаю только настройки агента с ${SERVER_USER}@${SERVER_HOST}."
-  echo "Если спросит пароль SSH — введи пароль учётной записи VPS."
-  if ! ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 \
-      -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+  echo "Сначала пробую SSH-ключ или ssh-agent; если их нет — введи пароль VPS при запросе."
+  ssh_args=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15)
+  ssh_key="${XIDER_SSH_KEY:-}"
+  if [[ -z "$ssh_key" && -r "$HOME/.ssh/xider" ]]; then
+    ssh_key="$HOME/.ssh/xider"
+  fi
+  if [[ -n "$ssh_key" ]]; then
+    [[ -r "$ssh_key" ]] || { echo "SSH-ключ не найден или недоступен: $ssh_key" >&2; exit 4; }
+    ssh_args+=(-i "$ssh_key" -o IdentitiesOnly=yes)
+  fi
+  if ! ssh "${ssh_args[@]}" \
       "${SERVER_USER}@${SERVER_HOST}" \
       "sudo -n sh -c 'grep -E \"^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD)=\" /etc/xider/bot.env'" \
       2>"$stage/ssh.err" | tr -d '\r' | awk '/^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD)=/ { print }' > "$fetched_env"; then
@@ -67,6 +89,56 @@ else
     fi
   done
   cp "$fetched_env" "$agent_env"
+fi
+
+read_env_value() {
+  local name="$1" line value='' count=0 first last
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ "$line" == "$name="* ]] || continue
+    count=$((count + 1))
+    value="${line#*=}"
+  done < "$agent_env"
+  [[ "$count" -eq 1 ]] || return 1
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  if [[ ${#value} -ge 2 ]]; then
+    first="${value:0:1}"
+    last="${value: -1}"
+    if [[ ( "$first" == '"' && "$last" == '"' ) || ( "$first" == "'" && "$last" == "'" ) ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+  fi
+  [[ -n "${value//[[:space:]]/}" ]] || return 1
+  printf '%s' "$value"
+}
+
+for required in SHARED_KEY MQTT_BROKER MQTT_PORT MQTT_TLS MQTT_USERNAME MQTT_PASSWORD ENCRYPT_PAYLOAD; do
+  if ! value="$(read_env_value "$required")"; then
+    echo "В конфигурации агента параметр ${required} отсутствует, пустой или указан несколько раз; ничего не устанавливал." >&2
+    exit 4
+  fi
+done
+
+mqtt_tls="$(read_env_value MQTT_TLS | tr '[:upper:]' '[:lower:]')"
+if [[ "$mqtt_tls" != true && "$mqtt_tls" != 1 && "$mqtt_tls" != yes ]]; then
+  echo "Для установки агента требуется MQTT_TLS=true; ничего не устанавливал." >&2
+  exit 4
+fi
+encrypt_payload="$(read_env_value ENCRYPT_PAYLOAD | tr '[:upper:]' '[:lower:]')"
+if [[ "$encrypt_payload" != true && "$encrypt_payload" != 1 && "$encrypt_payload" != yes ]]; then
+  echo "Для установки агента требуется ENCRYPT_PAYLOAD=true; ничего не устанавливал." >&2
+  exit 4
+fi
+mqtt_port="$(read_env_value MQTT_PORT)"
+if [[ ! "$mqtt_port" =~ ^[0-9]{1,5}$ ]] || (( mqtt_port < 1 || mqtt_port > 65535 )); then
+  echo "MQTT_PORT должен быть числом от 1 до 65535; ничего не устанавливал." >&2
+  exit 4
+fi
+shared_key="$(read_env_value SHARED_KEY)"
+if [[ "$shared_key" == XGENT-2026-shared-secret ]]; then
+  echo "В конфигурации указан публичный тестовый SHARED_KEY; ничего не устанавливал." >&2
+  exit 4
 fi
 
 # Match the same topic-prefix default as bot/config.py and both agents. An
@@ -95,13 +167,8 @@ for required in SHARED_KEY MQTT_BROKER MQTT_PORT MQTT_PREFIX MQTT_TLS ENCRYPT_PA
   fi
 done
 
-# Пин обновлений этого Mac на ту же ветку, откуда сейчас ставится агент.
-awk -v branch="$BRANCH" '
-  BEGIN { written=0 }
-  /^XIDER_UPDATE_BRANCH=/ { if (!written) print "XIDER_UPDATE_BRANCH=" branch; written=1; next }
-  { print }
-  END { if (!written) print "XIDER_UPDATE_BRANCH=" branch }
-' "$agent_env" > "$stage/env.updated"
+# Remove the retired mutable-branch updater setting from carried-forward envs.
+awk '!/^XIDER_UPDATE_BRANCH=/' "$agent_env" > "$stage/env.updated"
 mv "$stage/env.updated" "$agent_env"
 chmod 600 "$agent_env"
 

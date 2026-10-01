@@ -8,6 +8,8 @@ $envDir = Join-Path $fixture 'XGENT-WDS'
 $envPath = Join-Path $envDir '.env'
 $marker = Join-Path $fixture 'deploy-called.marker'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
+$originalXiderSshKey = $env:XIDER_SSH_KEY
+$originalXiderEnvRoot = $env:XIDER_ENV_ROOT
 
 try {
     New-Item -ItemType Directory -Path $deploy,$agentDir,$envDir -Force | Out-Null
@@ -69,9 +71,31 @@ try {
         if (Test-Path -LiteralPath $marker) { throw "Invalid $($case.Name) reached the VPS uploader." }
         if (Test-Path -LiteralPath (Join-Path $agentDir '.env')) { throw "Invalid $($case.Name) changed the local installation." }
     }
+
+    $env:XIDER_SSH_KEY = Join-Path $fixture 'selected-key.key'
+    $env:XIDER_ENV_ROOT = ''
+    Remove-Item -LiteralPath $envPath -Force
+    $setupKeyRejected = $false
+    try { & (Join-Path $deploy 'setup-all.ps1') -PreflightOnly }
+    catch { $setupKeyRejected = $_.Exception.Message.Contains($env:XIDER_SSH_KEY) }
+    if (-not $setupKeyRejected) { throw 'setup-all did not honor XIDER_SSH_KEY when its .env was absent.' }
+
+    $uploadScript = (Resolve-Path (Join-Path $PSScriptRoot '..\upload-and-install.ps1')).Path
+    $uploadSource = Get-Content -LiteralPath $uploadScript -Raw
+    if ($uploadSource -notmatch 'StrictHostKeyChecking=yes' -or
+        $uploadSource -notmatch '\.ssh\\known_hosts') {
+        throw 'The VPS uploader must require a previously pinned SSH host key.'
+    }
+    $uploadKeyRejected = $false
+    try { & $uploadScript }
+    catch { $uploadKeyRejected = $_.Exception.Message.Contains($env:XIDER_SSH_KEY) }
+    if (-not $uploadKeyRejected) { throw 'The VPS uploader did not honor XIDER_SSH_KEY.' }
+
     Write-Host 'Windows full-setup preflight fixture passed.'
 }
 finally {
+    $env:XIDER_SSH_KEY = $originalXiderSshKey
+    $env:XIDER_ENV_ROOT = $originalXiderEnvRoot
     if ((Test-Path -LiteralPath $fixture) -and
         $fixture.StartsWith([IO.Path]::GetFullPath($env:TEMP), [StringComparison]::OrdinalIgnoreCase) -and
         (Split-Path $fixture -Leaf) -like 'xider-setup-preflight-*') {

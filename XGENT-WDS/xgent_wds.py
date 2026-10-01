@@ -6,6 +6,7 @@
 """
 
 import base64
+import binascii
 import ctypes
 import html
 import importlib.util
@@ -29,11 +30,122 @@ import winreg
 import winsound
 from logging.handlers import RotatingFileHandler
 
+MAX_FILE_PUT_BYTES = 30 * 1024 * 1024
+MAX_FILE_PUT_B64_CHARS = 4 * ((MAX_FILE_PUT_BYTES + 2) // 3)
+
+
+def _decode_file_put_payload(payload: dict) -> bytes:
+    """Decode a bounded, canonical base64 file payload before touching disk."""
+    if "b64" in payload:
+        encoded = payload["b64"]
+    elif "data" in payload:
+        encoded = payload["data"]
+    else:
+        raise ValueError("В запросе отсутствуют данные файла.")
+    if not isinstance(encoded, str):
+        raise ValueError("Данные файла должны быть строкой base64.")
+    if len(encoded) > MAX_FILE_PUT_B64_CHARS:
+        raise ValueError("Файл превышает лимит 30 МиБ.")
+    try:
+        content = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("Повреждены данные base64.") from exc
+    if len(content) > MAX_FILE_PUT_BYTES:
+        raise ValueError("Файл превышает лимит 30 МиБ.")
+    return content
+
+
+def _write_file_put_atomic(path: str, content: bytes) -> None:
+    """Replace the destination only after the complete temporary file is written."""
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, temporary_path = tempfile.mkstemp(prefix=".xider-upload-", dir=directory)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(content)
+        os.replace(temporary_path, path)
+        temporary_path = ""
+    finally:
+        if temporary_path:
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
+
+_bootstrap_lock_file = None
+EARLY_UPDATE_STATE = "none"
+
+
+def _claim_bootstrap_lock() -> bool:
+    """Hold the shared per-user lock before loading replaceable agent modules."""
+    global _bootstrap_lock_file
+    try:
+        lock_path = Path.home() / ".xgent" / "agent.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(lock_path, "a+b")
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        try:
+            handle.close()
+        except (NameError, OSError):
+            pass
+        return False
+    _bootstrap_lock_file = handle
+    return True
+
+
+if __name__ == "__main__" and not getattr(sys, "frozen", False):
+    if not _claim_bootstrap_lock():
+        sys.stderr.write("FATAL: XGENT-WDS уже запущен; второй экземпляр остановлен.\n")
+        raise SystemExit(1)
+    _repo_root = Path(__file__).resolve().parent.parent
+    _release_module_dir = str(_repo_root / "XGENT-MCS")
+    if _release_module_dir not in sys.path:
+        sys.path.append(_release_module_dir)
+
 import paho.mqtt.client as mqtt
 import psutil
 
+if not getattr(sys, "frozen", False):
+    _repo_root = Path(__file__).resolve().parent.parent
+    _release_module_dir = str(_repo_root / "XGENT-MCS")
+    if _release_module_dir not in sys.path:
+        # Newer signed helpers staged beside this worker must take precedence.
+        sys.path.append(_release_module_dir)
+from release_signature import trusted_release_keys_ready, verify_manifest_signature
+if not getattr(sys, "frozen", False):
+    from update_package import (
+        UPDATE_STATE_NAME,
+        download_verified_source_archive,
+        extract_agent_files,
+        install_agent_files,
+        mark_agent_update_healthy,
+        prepare_agent_update_start,
+        rollback_unhealthy_agent,
+    )
+
+    if __name__ == "__main__":
+        EARLY_UPDATE_STATE = prepare_agent_update_start(
+            Path.home() / ".xgent" / UPDATE_STATE_NAME,
+            Path(__file__).resolve().parent,
+        )
+        if EARLY_UPDATE_STATE in {"recovered", "rolled_back"}:
+            message = (
+                "XIDER-WDS: установка прервалась; восстановлены прежние файлы.\n"
+                if EARLY_UPDATE_STATE == "recovered"
+                else "XIDER-WDS: новая версия не прошла проверку; возвращена прежняя.\n"
+            )
+            sys.stderr.write(message)
+            os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]])
+
 from config import (
     CONFIG_DIR,
+    set_guardian_desired_running,
     set_guardian_startup_enabled,
     DEFAULT_SHARED_KEY,
     DEVICE_ID,
@@ -67,6 +179,9 @@ def acquire_instance_lock() -> bool:
     copy and a new LocalAppData copy cannot both own the tray once updated.
     """
     global _instance_lock_file
+    if _bootstrap_lock_file is not None:
+        _instance_lock_file = _bootstrap_lock_file
+        return True
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     lock_path = CONFIG_DIR / "agent.lock"
     handle = open(lock_path, "a+b")
@@ -712,6 +827,7 @@ class XgentClient:
         self.on_stop_requested = on_stop_requested
         self._running = threading.Event()
         self._running.set()
+        self._update_health = threading.Event()
         self._client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
             client_id=f"xgent-wds-{DEVICE_ID}",
@@ -893,6 +1009,10 @@ class XgentClient:
 
     def request_stop(self) -> None:
         """Остановка по команде из Telegram или из меню значка."""
+        try:
+            set_guardian_desired_running(False)
+        except Exception:
+            log.exception("Could not persist explicit stop intent for Guardian")
         self._running.clear()
         if self.on_stop_requested:
             self.on_stop_requested()
@@ -906,6 +1026,16 @@ class XgentClient:
             log.info("Подключено к %s:%s", MQTT_BROKER, MQTT_PORT)
             # Подписки восстанавливаются при каждом переподключении.
             self._publish_status()
+            if not getattr(sys, "frozen", False):
+                try:
+                    if mark_agent_update_healthy(
+                        CONFIG_DIR / UPDATE_STATE_NAME,
+                        Path(__file__).resolve().parent,
+                    ):
+                        self._update_health.set()
+                        log.info("Обновлённый Windows-агент прошёл проверку: MQTT доступен.")
+                except Exception:
+                    log.exception("Не удалось подтвердить здоровье обновлённого Windows-агента")
         else:
             log.warning("Не удалось подключиться к брокеру: %s", reason_code)
 
@@ -998,6 +1128,8 @@ class XgentClient:
             "name": DEVICE_NAME,
             "os": PLATFORM,
             "version": VERSION,
+            "update_mode": "frozen" if getattr(sys, "frozen", False) else "source",
+            "release_update_ready": trusted_release_keys_ready() and not getattr(sys, "frozen", False),
             "status": status,
         }
         body = encrypt_payload(payload) if ENCRYPT_PAYLOAD else payload
@@ -1400,26 +1532,21 @@ class XgentClient:
                                                 "ok": False, "error": str(exc)})
 
     def _do_file_put(self, payload: dict) -> None:
-        name = os.path.basename(payload.get("name") or "file.bin")
-        data = payload.get("b64") or ""
-        if not data:
-            return
-        raw_path = (payload.get("path") or "").strip()
-        if raw_path:
-            target = os.path.expanduser(os.path.expandvars(raw_path))
-            base = os.path.dirname(target) or "."
-        else:
-            target_dir = (payload.get("dir") or "~").strip()
-            base = os.path.expanduser(os.path.expandvars(target_dir))
-            target = os.path.join(base, name)
-        os.makedirs(base, exist_ok=True)
         try:
-            with open(target, "wb") as fh:
-                fh.write(base64.b64decode(data))
+            content = _decode_file_put_payload(payload)
+            name = os.path.basename(payload.get("name") or "file.bin")
+            raw_path = (payload.get("path") or "").strip()
+            if raw_path:
+                target = os.path.expanduser(os.path.expandvars(raw_path))
+            else:
+                target_dir = (payload.get("dir") or "~").strip()
+                base = os.path.expanduser(os.path.expandvars(target_dir))
+                target = os.path.join(base, name)
+            _write_file_put_atomic(target, content)
             self._publish_response("file_put", {"type": "file_put", "device_id": DEVICE_ID,
                                                 "ok": True, "path": target})
             log.info("file_put: %s", target)
-        except OSError as exc:
+        except (OSError, TypeError, ValueError) as exc:
             self._publish_response("file_put", {"type": "file_put", "device_id": DEVICE_ID,
                                                 "ok": False, "error": str(exc)})
 
@@ -3267,7 +3394,112 @@ setTimeout(()=>window.close(),15000);
 
 
     def _do_agent_update(self, payload: dict) -> None:
-        """Проверка статуса обновления и перезапуск агента при необходимости."""
+        """Install a signed source release transactionally; frozen bundles fail closed."""
+        if payload.get("update") and getattr(sys, "frozen", False):
+            self._publish_response("output", {
+                "type": "agent_update",
+                "device_id": DEVICE_ID,
+                "ok": False,
+                "state": "unsupported_package",
+                "text": (
+                    "⚠️ Эта сборка Windows EXE пока не поддерживает транзакционное "
+                    "обновление. Ничего не менял; файлы пакета не тронуты."
+                ),
+            })
+            return
+
+        if payload.get("update"):
+            script_dir = Path(__file__).resolve().parent
+            files = (
+                "xgent_wds.py",
+                "config.py",
+                "crypto.py",
+                "xgencrypto.py",
+                "release_signature.py",
+                "update_package.py",
+            )
+            backup_dir = CONFIG_DIR / "agent-backups" / (
+                f"{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns()}"
+            )
+            try:
+                with tempfile.TemporaryDirectory(prefix="xgent-wds-update-") as tmp:
+                    archive = Path(tmp) / "XIDER-source.zip"
+                    manifest = Path(tmp) / "release-manifest.json"
+                    release_tag = download_verified_source_archive(
+                        manifest,
+                        archive,
+                        release_tag=payload.get("release_tag"),
+                    )
+                    source = extract_agent_files(
+                        archive,
+                        Path(tmp) / "agent-stage",
+                        files,
+                        component_dir="XGENT-WDS",
+                    )
+                    for name in files:
+                        candidate = source / name
+                        compile(candidate.read_text(encoding="utf-8"), str(candidate), "exec")
+                    backup_dir = install_agent_files(
+                        source,
+                        script_dir,
+                        backup_dir,
+                        files,
+                        transaction_path=CONFIG_DIR / UPDATE_STATE_NAME,
+                    )
+
+                self._publish_response("output", {
+                    "type": "agent_update",
+                    "device_id": DEVICE_ID,
+                    "ok": True,
+                    "state": "restarting",
+                    "release_tag": release_tag,
+                    "health_check": "pending",
+                    "text": (
+                        f"📦 Подписанный релиз {release_tag} проверен; исходники Windows-агента "
+                        f"установлены. Копия прежних файлов: {backup_dir.name}. Перезапускаюсь; "
+                        "подтверждение MQTT-здоровья ещё ожидается."
+                    ),
+                })
+
+                def _reboot_agent() -> None:
+                    time.sleep(1.5)
+                    try:
+                        os.execv(
+                            sys.executable,
+                            [sys.executable, str(script_dir / "xgent_wds.py"), *sys.argv[1:]],
+                        )
+                    except Exception as restart_error:
+                        log.exception("Не удалось перезапустить Windows-агент после обновления")
+                        try:
+                            rollback_unhealthy_agent(
+                                CONFIG_DIR / UPDATE_STATE_NAME,
+                                script_dir,
+                            )
+                        except Exception:
+                            log.exception("Не удалось вернуть прежние файлы после ошибки перезапуска")
+                        self._publish_response("output", {
+                            "type": "agent_update",
+                            "device_id": DEVICE_ID,
+                            "ok": False,
+                            "state": "rolled_back",
+                            "text": f"❌ Перезапуск не удался; выполнен откат. Причина: {restart_error}",
+                        })
+
+                threading.Thread(target=_reboot_agent, name="xgent-wds-update-restart", daemon=True).start()
+            except Exception as exc:
+                log.exception("Windows agent self-update failed")
+                self._publish_response("output", {
+                    "type": "agent_update",
+                    "device_id": DEVICE_ID,
+                    "ok": False,
+                    "state": "failed",
+                    "text": (
+                        f"❌ Обновление не подтверждено: {exc}. "
+                        "Перед новой попыткой проверь журнал агента и резервную копию."
+                    ),
+                })
+            return
+
         restart = payload.get("restart", False)
         pid = os.getpid()
         exe_path = sys.executable
@@ -3292,6 +3524,10 @@ setTimeout(()=>window.close(),15000);
     def _do_uninstall_agent(self, payload: dict) -> None:
         """Полное удаление агента с ПК: автозапуск, конфиги, логи и завершение процесса."""
         log.warning("Получена команда полного удаления агента с ПК!")
+        try:
+            set_guardian_desired_running(False)
+        except Exception:
+            log.exception("Could not persist Guardian stop intent before uninstall")
         # Установщик Windows создаёт Scheduled Task; удаляем его первым,
         # иначе задача сможет запустить агент снова после удаления файлов.
         _remove_scheduled_task()
@@ -3445,12 +3681,35 @@ def main() -> None:
         log.info("X-LOCK: другой экземпляр Windows-агента уже запущен; второй не стартует")
         return
     client = XgentClient()
+    if EARLY_UPDATE_STATE == "pending":
+        def _rollback_if_unhealthy() -> None:
+            if client._update_health.wait(120):
+                return
+            state_path = CONFIG_DIR / UPDATE_STATE_NAME
+            if not state_path.exists():
+                log.error("Нет журнала обновления и нет MQTT health подтверждения; откат невозможен")
+                return
+            try:
+                rollback_unhealthy_agent(state_path, Path(__file__).resolve().parent)
+            except Exception:
+                log.exception("Критическая ошибка: откат обновления Windows-агента не завершён")
+                return
+            log.error("Новая версия не подключилась к MQTT за 120 секунд; возвращаю предыдущие файлы")
+            os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]])
+
+        threading.Thread(
+            target=_rollback_if_unhealthy,
+            name="xgent-wds-update-health",
+            daemon=True,
+        ).start()
     if "--console" in sys.argv or "--no-tray" in sys.argv:
         log.info("Запуск XGENT в консольном режиме")
         client.start()
         try:
             while client.is_running:
                 time.sleep(1)
+        except KeyboardInterrupt:
+            client.request_stop()
         finally:
             client.stop()
         return
@@ -3464,6 +3723,8 @@ def main() -> None:
         try:
             while client.is_running:
                 time.sleep(1)
+        except KeyboardInterrupt:
+            client.request_stop()
         finally:
             client.stop()
         return

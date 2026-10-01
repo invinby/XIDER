@@ -1,4 +1,5 @@
 import json
+import threading
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -21,7 +22,8 @@ def guardian_module(monkeypatch):
 def _use_temp_state(monkeypatch, module, tmp_path):
     import config
 
-    monkeypatch.setattr(module, "STATE_FILE", tmp_path / "guardian-windows.json")
+    monkeypatch.setattr(module, "STATE_FILE", tmp_path / "guardian.json")
+    monkeypatch.setattr(module, "LEGACY_STATE_FILE", tmp_path / "guardian-windows.json")
     monkeypatch.setattr(module, "CONFIG_DIR", tmp_path)
     monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
 
@@ -56,6 +58,23 @@ def test_legacy_state_migrates_recovery_but_preserves_explicit_stop(
     assert guardian.state["desired_running"] is False
 
 
+def test_windows_specific_state_file_migrates_to_shared_guardian_state(
+    guardian_module, monkeypatch, tmp_path
+):
+    module = guardian_module
+    _use_temp_state(monkeypatch, module, tmp_path)
+    module.LEGACY_STATE_FILE.write_text(
+        json.dumps({"state_version": 2, "auto_restart": False, "desired_running": False}),
+        encoding="utf-8",
+    )
+
+    guardian = module.Guardian()
+
+    assert guardian.state["auto_restart"] is False
+    assert guardian.state["desired_running"] is False
+    assert module.STATE_FILE.exists()
+
+
 def test_explicit_recovery_opt_out_in_current_state_is_preserved(
     guardian_module, monkeypatch, tmp_path
 ):
@@ -82,6 +101,67 @@ def test_worker_autorun_controls_guardian_desired_state(
 
     module.set_guardian_desired_running(True)
     assert json.loads((tmp_path / "guardian.json").read_text(encoding="utf-8"))["desired_running"] is True
+
+
+def test_concurrent_guardian_state_updates_merge_without_losing_fields(
+    guardian_module, monkeypatch, tmp_path
+):
+    from concurrent.futures import ThreadPoolExecutor
+    import config
+
+    module = guardian_module
+    _use_temp_state(monkeypatch, module, tmp_path)
+
+    def write_field(key, value):
+        for _ in range(30):
+            config.update_guardian_state(**{key: value})
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = [
+            pool.submit(write_field, "desired_running", False),
+            pool.submit(write_field, "auto_restart", False),
+            pool.submit(write_field, "startup_enabled", False),
+        ]
+        for future in futures:
+            future.result(timeout=10)
+
+    state = json.loads((tmp_path / "guardian.json").read_text(encoding="utf-8"))
+    assert state["desired_running"] is False
+    assert state["auto_restart"] is False
+    assert state["startup_enabled"] is False
+    assert not list(tmp_path.glob("guardian-state.*.tmp"))
+
+
+def test_guardian_observes_worker_stop_intent(guardian_module, monkeypatch, tmp_path):
+    module = guardian_module
+    _use_temp_state(monkeypatch, module, tmp_path)
+    module.STATE_FILE.write_text(
+        json.dumps({"state_version": 2, "desired_running": False, "startup_enabled": True}),
+        encoding="utf-8",
+    )
+    guardian = object.__new__(module.Guardian)
+    guardian.state = {"desired_running": True, "startup_enabled": True}
+
+    guardian._refresh_worker_intent()
+
+    assert guardian.state["desired_running"] is False
+    assert guardian.state["startup_enabled"] is True
+
+
+def test_explicit_worker_stop_persists_guardian_intent(guardian_module, monkeypatch):
+    import xgent_wds as wds
+
+    saved = []
+    monkeypatch.setattr(wds, "set_guardian_desired_running", saved.append)
+    client = object.__new__(wds.XgentClient)
+    client._running = threading.Event()
+    client._running.set()
+    client.on_stop_requested = None
+
+    client.request_stop()
+
+    assert saved == [False]
+    assert not client._running.is_set()
 
 
 def test_autorun_toggle_is_separate_from_current_worker_state(

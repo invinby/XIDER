@@ -1,19 +1,30 @@
 ﻿[CmdletBinding()]
 param(
     [string]$ServerIp = '141.145.152.174',
-    [string]$KeyPath = "$env:USERPROFILE\.ssh\xider",
+    [string]$KeyPath,
     [string]$EnvRoot = $env:XIDER_ENV_ROOT,
     [string]$InstallRoot = "$env:LOCALAPPDATA\XIDER",
     [string]$Branch = 'main',
+    [string]$Ref = $env:XIDER_REF,
     [string]$SourceArchive
 )
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+if (-not $KeyPath) {
+    $KeyPath = if ($env:XIDER_SSH_KEY) { $env:XIDER_SSH_KEY } else { Join-Path $env:USERPROFILE '.ssh\xider' }
+}
 if ($Branch -notmatch '^[A-Za-z0-9._/-]+$' -or $Branch.Split('/') -contains '..') {
     throw 'Недопустимое имя ветки XIDER_BRANCH.'
 }
-$repoUrl = "https://github.com/invinby/XIDER/archive/refs/heads/$Branch.zip"
+if ($Ref -and $Ref -notmatch '^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$') {
+    throw 'XIDER_REF должен быть полным 40- или 64-символьным commit ID.'
+}
+$repoUrl = if ($Ref) {
+    "https://github.com/invinby/XIDER/archive/$Ref.zip"
+} else {
+    "https://github.com/invinby/XIDER/archive/refs/heads/$Branch.zip"
+}
 $zip = Join-Path $env:TEMP ('xider-main-' + [guid]::NewGuid().ToString('N') + '.zip')
 $extract = Join-Path $env:TEMP ('xider-bootstrap-' + [guid]::NewGuid().ToString('N'))
 $repo = Join-Path $InstallRoot 'git-ver'
@@ -29,7 +40,8 @@ try {
         Write-Host '[1/5] Проверяю локальный архив XIDER...'
         Copy-Item -LiteralPath $SourceArchive -Destination $zip -ErrorAction Stop
     } else {
-        Write-Host "[1/5] Скачиваю архив XIDER из ветки $Branch..."
+        if ($Ref) { Write-Host "[1/5] Скачиваю архив XIDER из закреплённого commit $Ref..." }
+        else { Write-Host "[1/5] Скачиваю архив XIDER из ветки $Branch..." }
         Invoke-WebRequest -Uri $repoUrl -OutFile $zip -UseBasicParsing -TimeoutSec 90
     }
     Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force

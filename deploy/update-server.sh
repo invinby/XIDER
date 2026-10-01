@@ -5,12 +5,15 @@ APP_DIR="${XIDER_APP_DIR:-/opt/xider}"
 SERVICE="${XIDER_SERVICE:-xider-bot.service}"
 BACKUP_DIR="${XIDER_BACKUP_DIR:-/var/backups/xider}"
 INCOMING="${XIDER_UPDATE_BUNDLE:-${APP_DIR}/incoming/xider-source.zip}"
+MANIFEST="${XIDER_UPDATE_MANIFEST:-${APP_DIR}/incoming/release-manifest.json}"
 UNIT_DIR="${XIDER_UNIT_DIR:-/etc/systemd/system}"
-LOCK_FILE="${XIDER_LOCK_FILE:-/run/lock/xider-update.lock}"
+LOCK_FILE="${XIDER_LOCK_FILE:-/run/xider/update.lock}"
+ROOT_HELPER_DIR="${XIDER_ROOT_HELPER_DIR:-/usr/local/libexec/xider}"
 HEALTH_ATTEMPTS="${XIDER_HEALTH_ATTEMPTS:-15}"
 HEALTH_STABLE_CHECKS="${XIDER_HEALTH_STABLE_CHECKS:-3}"
 UNIT_FILE="${UNIT_DIR}/${SERVICE}"
-EXTRACT_HELPER="${XIDER_EXTRACT_HELPER:-${APP_DIR}/deploy/safe_extract.py}"
+EXTRACT_HELPER="${XIDER_EXTRACT_HELPER:-${ROOT_HELPER_DIR}/safe_extract.py}"
+VERIFY_HELPER="${XIDER_VERIFY_HELPER:-${ROOT_HELPER_DIR}/verify_server_bundle.py}"
 COMPONENTS=(TG-BOT-SERVER XGENT-WDS XGENT-MCS deploy)
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 STAGE=""
@@ -37,8 +40,20 @@ fi
 
 install -d -m 0750 "${BACKUP_DIR}"
 install -d -m 0755 "${UNIT_DIR}"
-install -d -m 0755 "$(dirname "${LOCK_FILE}")"
-exec 9>"${LOCK_FILE}"
+LOCK_DIR="$(dirname "${LOCK_FILE}")"
+if [[ "${LOCK_FILE}" == "/run/xider/update.lock" ]]; then
+  install -d -o root -g root -m 0700 "${LOCK_DIR}"
+else
+  [[ -d "${LOCK_DIR}" && ! -L "${LOCK_DIR}" ]] || {
+    echo "Unsafe or missing custom update-lock directory: ${LOCK_DIR}" >&2
+    exit 2
+  }
+fi
+if [[ -L "${LOCK_FILE}" || ( -e "${LOCK_FILE}" && ! -f "${LOCK_FILE}" ) ]]; then
+  echo "Unsafe update-lock path: ${LOCK_FILE}" >&2
+  exit 2
+fi
+exec 9>>"${LOCK_FILE}"
 if ! flock -n 9; then
   echo "Another XIDER update is already running." >&2
   exit 2
@@ -174,10 +189,16 @@ trap cleanup EXIT
 do_update() {
   local component unit_backup
   [[ -f "${INCOMING}" ]] || { echo "No release bundle at ${INCOMING}; upload a bundle first." >&2; return 3; }
+  [[ -f "${MANIFEST}" ]] || { echo "No signed release manifest at ${MANIFEST}; refusing unsigned update." >&2; return 3; }
   [[ -r "${EXTRACT_HELPER}" ]] || { echo "Missing safe archive extractor: ${EXTRACT_HELPER}" >&2; return 3; }
+  [[ -r "${VERIFY_HELPER}" ]] || { echo "Missing root-owned signed-bundle verifier: ${VERIFY_HELPER}" >&2; return 3; }
   systemctl is-enabled --quiet "${SERVICE}" || { echo "${SERVICE} is not enabled." >&2; return 4; }
   systemctl is-active --quiet "${SERVICE}" || { echo "${SERVICE} is not active; refusing unattended update." >&2; return 4; }
   [[ -f "${APP_DIR}/TG-BOT-SERVER/requirements.txt" ]] || { echo "Current install is incomplete." >&2; return 4; }
+
+  # The verifier and trust ring live under /usr/local/libexec, outside the
+  # xider-owned checkout. Verify before backup, extraction, or service changes.
+  python3 "${VERIFY_HELPER}" "${MANIFEST}" "${INCOMING}"
 
   BACKUP="$(backup_current)"
   unit_backup="${BACKUP%.tar.gz}.service"
@@ -192,6 +213,11 @@ do_update() {
   }
   for component in "${COMPONENTS[@]}"; do
     [[ -d "${STAGE}/${component}" ]] || { echo "Release bundle is missing ${component}." >&2; return 5; }
+  done
+  for helper in update-server.sh safe_extract.py xider-server-ops.sh; do
+    [[ -f "${STAGE}/deploy/${helper}" ]] || {
+      echo "Release bundle is missing the server helper deploy/${helper}." >&2; return 5;
+    }
   done
   if ! cmp -s "${APP_DIR}/TG-BOT-SERVER/requirements.txt" "${STAGE}/TG-BOT-SERVER/requirements.txt"; then
     echo "Dependency changes are not yet supported by this in-place updater; current install is unchanged." >&2
@@ -212,8 +238,26 @@ do_update() {
     MUTATING=0
     return 7
   fi
+  promote_root_helpers "${STAGE}"
+  rm -f -- "${INCOMING}" "${MANIFEST}"
   MUTATING=0
   echo "Update installed; service is enabled, active, and has a MainPID. Backup: ${BACKUP}"
+}
+
+promote_root_helpers() {
+  local source_dir="$1" helper destination temp
+  [[ -d "${ROOT_HELPER_DIR}" ]] || { echo "Missing root helper directory: ${ROOT_HELPER_DIR}" >&2; return 10; }
+  for helper in update-server.sh safe_extract.py xider-server-ops.sh; do
+    source_dir="${1}/deploy/${helper}"
+    destination="${ROOT_HELPER_DIR}/${helper}"
+    temp="${ROOT_HELPER_DIR}/.${helper}.${STAMP}.new"
+    case "${helper}" in
+      update-server.sh|xider-server-ops.sh) install -m 0750 "${source_dir}" "${temp}" ;;
+      safe_extract.py) install -m 0640 "${source_dir}" "${temp}" ;;
+    esac
+    chown root:root "${temp}"
+    mv -f -- "${temp}" "${destination}"
+  done
 }
 
 do_rollback() {

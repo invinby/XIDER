@@ -5,6 +5,7 @@ param(
     [string]$ServerHost = '141.145.152.174',
     [string]$ServerUser = 'ubuntu',
     [string]$Branch = 'main',
+    [string]$Ref = $env:XIDER_REF,
     [switch]$PreflightOnly,
     [string]$SourceArchive
 )
@@ -13,8 +14,15 @@ $ErrorActionPreference = 'Stop'
 if ($Branch -notmatch '^[A-Za-z0-9._/-]+$' -or $Branch.Split('/') -contains '..') {
     throw 'Недопустимое имя ветки XIDER_BRANCH.'
 }
-$repoUrl = "https://github.com/invinby/XIDER/archive/refs/heads/$Branch.zip"
-$ProgressPreference = 'Continue'
+if ($Ref -and $Ref -notmatch '^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$') {
+    throw 'XIDER_REF должен быть полным 40- или 64-символьным commit ID.'
+}
+$repoUrl = if ($Ref) {
+    "https://github.com/invinby/XIDER/archive/$Ref.zip"
+} else {
+    "https://github.com/invinby/XIDER/archive/refs/heads/$Branch.zip"
+}
+$ProgressPreference = 'SilentlyContinue'
 $extract = Join-Path $env:TEMP ('xider-agent-' + [guid]::NewGuid().ToString('N'))
 $zip = Join-Path $extract 'source.zip'
 $unpack = Join-Path $extract 'unpacked'
@@ -30,7 +38,8 @@ $taskInstallAttempted = $false
 
 try {
     if ($SourceArchive) { Write-Host '[1/5] Проверяю локальный архив XIDER...' }
-    else { Write-Host "[1/5] Скачиваю XIDER из ветки $Branch..." }
+    elseif ($Ref) { Write-Host "[1/5] Скачиваю XIDER из закреплённого commit $Ref (тайм-аут 90 секунд)..." }
+    else { Write-Host "[1/5] Скачиваю XIDER из ветки $Branch (тайм-аут 90 секунд)..." }
     New-Item -ItemType Directory -Path $extract -Force | Out-Null
     if ($SourceArchive) {
         Copy-Item -LiteralPath $SourceArchive -Destination $zip -ErrorAction Stop
@@ -65,12 +74,27 @@ try {
     $envSource = $envCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 
     if (-not $envSource) {
-        Write-Host "Локальный .env не найден. Получаю настройки с $ServerUser@$ServerHost; введи пароль SSH, если он будет запрошен."
+        Write-Host "Локальный .env не найден. Пробую SSH-ключ/ssh-agent, затем пароль VPS при запросе: $ServerUser@$ServerHost."
         $fetched = Join-Path $extract 'agent.env'
         $remoteCommand = "sudo -n sh -c 'grep -E `"^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD)=`" /etc/xider/bot.env'"
-        & ssh.exe -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 `
-            -o ServerAliveInterval=10 -o ServerAliveCountMax=2 `
-            -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no `
+        $sshArguments = @(
+            '-o', 'StrictHostKeyChecking=accept-new',
+            '-o', 'ConnectTimeout=15',
+            '-o', 'ServerAliveInterval=10',
+            '-o', 'ServerAliveCountMax=2'
+        )
+        $sshKey = $env:XIDER_SSH_KEY
+        if (-not $sshKey) {
+            $defaultSshKey = Join-Path $env:USERPROFILE '.ssh\xider'
+            if (Test-Path -LiteralPath $defaultSshKey -PathType Leaf) { $sshKey = $defaultSshKey }
+        }
+        if ($sshKey) {
+            if (-not (Test-Path -LiteralPath $sshKey -PathType Leaf)) {
+                throw "SSH-ключ не найден: $sshKey. VPS и файлы агента не изменены."
+            }
+            $sshArguments += @('-i', $sshKey, '-o', 'IdentitiesOnly=yes')
+        }
+        & ssh.exe @sshArguments `
             "$ServerUser@$ServerHost" $remoteCommand | Set-Content -LiteralPath $fetched -Encoding utf8
         $sshExit = $LASTEXITCODE
         if ($sshExit -ne 0) { throw "SSH не смог получить настройки (код $sshExit). VPS и файлы агента не изменены." }
@@ -93,7 +117,10 @@ try {
         $envSource = $fetched
     }
 
-    $requiredSettings = @('SHARED_KEY', 'MQTT_BROKER', 'MQTT_PORT', 'MQTT_PREFIX', 'MQTT_TLS', 'ENCRYPT_PAYLOAD')
+    $requiredSettings = @(
+        'SHARED_KEY', 'MQTT_BROKER', 'MQTT_PORT', 'MQTT_PREFIX',
+        'MQTT_TLS', 'MQTT_USERNAME', 'MQTT_PASSWORD', 'ENCRYPT_PAYLOAD'
+    )
     $configLines = @(Get-Content -LiteralPath $envSource -ErrorAction Stop)
     $prefixPattern = '^\s*(?:export\s+)?MQTT_PREFIX\s*=\s*(.*)$'
     $prefixLines = @($configLines | Where-Object { $_ -match $prefixPattern })
@@ -111,18 +138,35 @@ try {
             throw 'В конфигурации MQTT_PREFIX пустой или имеет неподдерживаемый формат. Рабочая установка не изменена.'
         }
     }
+    $settings = @{}
     foreach ($required in $requiredSettings) {
         $pattern = '^\s*(?:export\s+)?' + [regex]::Escape($required) + '\s*=\s*(.*)$'
         $matchingLines = @($configLines | Where-Object { $_ -match $pattern })
+        if ($matchingLines.Count -ne 1) {
+            throw "Параметр $required отсутствует или указан несколько раз. Рабочая установка не изменена."
+        }
         $value = if ($matchingLines.Count) {
             [regex]::Match($matchingLines[-1], $pattern).Groups[1].Value.Trim().Trim('"', "'").Trim()
         } else { '' }
         if (-not $value -or $value.StartsWith('#')) {
             throw "В конфигурации агента отсутствует $required. Рабочая установка не изменена."
         }
+        $settings[$required] = $value
+    }
+    if ($settings['MQTT_TLS'].ToLowerInvariant() -notin @('true', '1', 'yes')) {
+        throw 'Для установки агента требуется MQTT_TLS=true. Рабочая установка не изменена.'
+    }
+    if ($settings['ENCRYPT_PAYLOAD'].ToLowerInvariant() -notin @('true', '1', 'yes')) {
+        throw 'Для установки агента требуется ENCRYPT_PAYLOAD=true. Рабочая установка не изменена.'
+    }
+    $mqttPort = 0
+    if (-not [int]::TryParse($settings['MQTT_PORT'], [ref]$mqttPort) -or $mqttPort -lt 1 -or $mqttPort -gt 65535) {
+        throw 'MQTT_PORT должен быть числом от 1 до 65535. Рабочая установка не изменена.'
     }
     if ($PreflightOnly) {
-        $sourceLabel = if ($SourceArchive) { 'Локальный архив' } else { "Архив ветки $Branch" }
+        if ($SourceArchive) { $sourceLabel = 'Локальный архив' }
+        elseif ($Ref) { $sourceLabel = "Архив commit $Ref" }
+        else { $sourceLabel = "Архив ветки $Branch" }
         Write-Host "[OK] $sourceLabel и конфигурация агента проверены. Установка не запускалась."
         return
     }

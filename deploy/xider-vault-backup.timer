@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily XIDER encrypted backup transfer
+
+[Timer]
+OnCalendar=*-*-* 03:17:00 UTC
+Persistent=true
+RandomizedDelaySec=20m
+Unit=xider-vault-backup.service
+
+[Install]
+WantedBy=timers.target

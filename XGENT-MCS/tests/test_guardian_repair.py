@@ -18,7 +18,6 @@ def guardian_module(monkeypatch):
     monkeypatch.setenv("MQTT_TLS", "true")
     monkeypatch.setenv("ENCRYPT_PAYLOAD", "true")
     monkeypatch.setenv("MQTT_PREFIX", "xgent/test")
-    monkeypatch.setenv("XIDER_UPDATE_BRANCH", "test-repair")
     import xider_guardian
 
     return xider_guardian
@@ -42,7 +41,7 @@ def test_guardian_uses_inherited_config_without_recreating_missing_env(
 ):
     module = guardian_module
     monkeypatch.setattr(module, "SCRIPT_DIR", tmp_path)
-    for name in ("xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py"):
+    for name in ("xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py", "release_signature.py", "update_package.py"):
         (tmp_path / name).write_text("# test payload\n", encoding="utf-8")
     guardian = object.__new__(module.Guardian)
 
@@ -55,7 +54,7 @@ def test_guardian_does_not_recreate_env_when_required_settings_are_unavailable(
 ):
     module = guardian_module
     monkeypatch.setattr(module, "SCRIPT_DIR", tmp_path)
-    for name in ("xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py"):
+    for name in ("xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py", "release_signature.py", "update_package.py"):
         (tmp_path / name).write_text("# test payload\n", encoding="utf-8")
     for key in ("SHARED_KEY", "MQTT_BROKER", "MQTT_PORT", "MQTT_PREFIX", "MQTT_TLS", "ENCRYPT_PAYLOAD"):
         monkeypatch.delenv(key, raising=False)
@@ -73,7 +72,7 @@ def test_guardian_reports_missing_agent_on_remote_start(guardian_module, monkeyp
     guardian = object.__new__(module.Guardian)
     guardian.state = {"desired_running": False}
     replies = []
-    monkeypatch.setattr(module, "_save_state", lambda _state: None)
+    monkeypatch.setattr(module, "_save_state", lambda _state, *_fields: None)
     monkeypatch.setattr(guardian, "agent_pid", lambda: None)
     monkeypatch.setattr(guardian, "_publish", replies.append)
 
@@ -147,6 +146,144 @@ def test_worker_autorun_controls_guardian_desired_state(
 
     module.set_guardian_desired_running(True)
     assert json.loads(module.STATE_FILE.read_text(encoding="utf-8"))["desired_running"] is True
+
+
+def test_concurrent_guardian_state_updates_merge_without_losing_fields(
+    guardian_module, monkeypatch, tmp_path
+):
+    from concurrent.futures import ThreadPoolExecutor
+    import config
+
+    module = guardian_module
+    monkeypatch.setattr(module, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
+
+    def write_field(key, value):
+        for _ in range(30):
+            config.update_guardian_state(**{key: value})
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = [
+            pool.submit(write_field, "desired_running", False),
+            pool.submit(write_field, "auto_restart", False),
+            pool.submit(write_field, "startup_enabled", False),
+        ]
+        for future in futures:
+            future.result(timeout=10)
+
+    state = json.loads((tmp_path / "guardian.json").read_text(encoding="utf-8"))
+    assert state["desired_running"] is False
+    assert state["auto_restart"] is False
+    assert state["startup_enabled"] is False
+    assert not list(tmp_path.glob("guardian-state.*.tmp"))
+
+
+def test_guardian_observes_worker_stop_intent(guardian_module, monkeypatch, tmp_path):
+    module = guardian_module
+    state_file = tmp_path / "guardian.json"
+    monkeypatch.setattr(module, "STATE_FILE", state_file)
+    state_file.write_text(
+        json.dumps({"state_version": 2, "desired_running": False, "startup_enabled": True}),
+        encoding="utf-8",
+    )
+    guardian = object.__new__(module.Guardian)
+    guardian.state = {"desired_running": True, "startup_enabled": True}
+
+    guardian._refresh_worker_intent()
+
+    assert guardian.state["desired_running"] is False
+    assert guardian.state["startup_enabled"] is True
+
+
+def test_explicit_worker_stop_persists_guardian_intent(guardian_module, monkeypatch):
+    import threading
+    import xgent_mcs as mcs
+
+    saved = []
+    monkeypatch.setattr(mcs, "set_guardian_desired_running", saved.append)
+    client = object.__new__(mcs.XgentClient)
+    client._running = threading.Event()
+    client._running.set()
+    client.on_stop_requested = None
+
+    client.request_stop()
+
+    assert saved == [False]
+    assert not client._running.is_set()
+
+
+def test_uninstall_unloads_guardian_before_removing_worker_and_config(
+    guardian_module, monkeypatch, tmp_path
+):
+    import xgent_mcs as mcs
+
+    monkeypatch.setattr(mcs, "CONFIG_DIR", tmp_path / "config")
+    mcs.CONFIG_DIR.mkdir()
+    monkeypatch.setattr(mcs.Path, "home", classmethod(lambda _cls: tmp_path))
+    monkeypatch.setattr(mcs.os, "getuid", lambda: 501, raising=False)
+    launch_agents = tmp_path / "Library" / "LaunchAgents"
+    launch_agents.mkdir(parents=True)
+    for name in ("com.xgent.agent.plist", "com.xider.guardian.plist"):
+        (launch_agents / name).write_text("fixture", encoding="utf-8")
+    monkeypatch.setattr(mcs, "set_guardian_desired_running", lambda enabled: None)
+    calls = []
+    monkeypatch.setattr(
+        mcs.subprocess,
+        "run",
+        lambda args, **kwargs: calls.append(list(args)) or Mock(returncode=0, stderr=""),
+    )
+
+    class DeferredThread:
+        def __init__(self, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(mcs.threading, "Thread", DeferredThread)
+    client = object.__new__(mcs.XgentClient)
+    published = []
+    client._publish_response = lambda _topic, payload: published.append(payload)
+
+    client._do_uninstall_agent({})
+
+    bootouts = [call for call in calls if call[:2] == ["launchctl", "bootout"]]
+    assert len(bootouts) == 1
+    assert bootouts[0][-1].endswith("com.xider.guardian.plist")
+    assert not (launch_agents / "com.xgent.agent.plist").exists()
+    assert not (launch_agents / "com.xider.guardian.plist").exists()
+    assert not mcs.CONFIG_DIR.exists()
+    assert published[0]["type"] == "uninstall_agent"
+
+
+def test_uninstall_preserves_config_if_guardian_cannot_be_unloaded(
+    guardian_module, monkeypatch, tmp_path
+):
+    import xgent_mcs as mcs
+
+    monkeypatch.setattr(mcs, "CONFIG_DIR", tmp_path / "config")
+    mcs.CONFIG_DIR.mkdir()
+    marker = mcs.CONFIG_DIR / "preserve-me"
+    marker.write_text("fixture", encoding="utf-8")
+    monkeypatch.setattr(mcs.Path, "home", classmethod(lambda _cls: tmp_path))
+    monkeypatch.setattr(mcs.os, "getuid", lambda: 501, raising=False)
+    launch_agents = tmp_path / "Library" / "LaunchAgents"
+    launch_agents.mkdir(parents=True)
+    guardian_plist = launch_agents / "com.xider.guardian.plist"
+    guardian_plist.write_text("fixture", encoding="utf-8")
+    monkeypatch.setattr(mcs, "set_guardian_desired_running", lambda enabled: None)
+    results = iter((Mock(returncode=1, stderr="permission denied"), Mock(returncode=0, stderr="")))
+    monkeypatch.setattr(mcs.subprocess, "run", lambda *_args, **_kwargs: next(results))
+    client = object.__new__(mcs.XgentClient)
+    published = []
+    client._publish_response = lambda _topic, payload: published.append(payload)
+
+    client._do_uninstall_agent({})
+
+    assert marker.exists()
+    assert guardian_plist.exists()
+    assert published[0]["ok"] is False
+    assert "удаление отменено" in published[0]["text"]
 
 
 def test_autorun_toggle_is_separate_from_current_worker_state(

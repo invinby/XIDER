@@ -8,6 +8,7 @@ Separate pytest processes prevent imports from one component contaminating anoth
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -19,9 +20,11 @@ TEST_ENV = {
     "BOT_TOKEN": "123456:TEST-TOKEN-NOT-REAL",
     "ADMIN_ID": "0",
     "MQTT_BROKER": "localhost",
-    "MQTT_PORT": "1883",
+    "MQTT_PORT": "8883",
     "MQTT_PREFIX": "xgent/test",
-    "MQTT_TLS": "false",
+    "MQTT_TLS": "true",
+    "MQTT_USERNAME": "xider-test-user",
+    "MQTT_PASSWORD": "xider-test-password-not-real",
     "ENCRYPT_PAYLOAD": "false",
 }
 SUITES = (
@@ -29,9 +32,55 @@ SUITES = (
     ("Windows agent", ROOT / "XGENT-WDS", "tests"),
     ("macOS agent", ROOT / "XGENT-MCS", "tests"),
     ("Operations", ROOT, "ops/tests"),
-    ("Release tools", ROOT / "tools", "test_build_release_manifest.py"),
-    ("Deployment archive", ROOT / "deploy", "tests/test_safe_extract.py"),
+    ("Release tools", ROOT / "tools", "."),
+    ("Deployment archive and server signatures", ROOT / "deploy", "tests"),
 )
+WINDOWS_FIXTURES = (
+    ("Windows bootstrap preflight", "test_bootstrap_agent_preflight.ps1"),
+    ("Windows full-setup preflight", "test_setup_all_preflight.ps1"),
+    ("Windows installer selection", "test_install_agent.ps1"),
+    ("Windows staged install and rollback", "test_bootstrap_agent_swap.ps1"),
+    ("Windows full bootstrap transaction", "test_bootstrap_transaction.ps1"),
+)
+LINUX_FIXTURES = (
+    ("Linux VPS update and rollback", "test_update_server.sh"),
+    ("X-VAULT encrypted backup pipeline", "test_x_vault_pipeline.sh"),
+    ("macOS LaunchAgent status", "test_macos_launch_status.sh"),
+    ("macOS bootstrap transaction", "test_bootstrap_macos_transaction.sh"),
+)
+
+
+def run_platform_fixtures(env: dict[str, str]) -> list[str]:
+    """Run platform-specific installer/rollback fixtures in isolated processes."""
+    if os.name == "nt":
+        shell = shutil.which("powershell.exe") or shutil.which("powershell") or shutil.which("pwsh")
+        fixtures = WINDOWS_FIXTURES
+        prefix = [shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"] if shell else []
+    elif sys.platform.startswith("linux"):
+        shell = shutil.which("bash")
+        fixtures = LINUX_FIXTURES
+        prefix = [shell] if shell else []
+    else:
+        print("SKIP: deploy shell fixtures require Linux coreutils; run them in the Linux CI job.")
+        return []
+
+    if not shell:
+        print("ERROR: required platform test runner is unavailable.")
+        return ["deployment fixtures (runner unavailable)"]
+
+    failures: list[str] = []
+    for label, relative_path in fixtures:
+        script = ROOT / "deploy" / "tests" / relative_path
+        print(f"\n=== {label} ===", flush=True)
+        result = subprocess.run(
+            [*prefix, str(script)],
+            cwd=ROOT,
+            env=env,
+            check=False,
+        )
+        if result.returncode:
+            failures.append(f"{label} (exit {result.returncode})")
+    return failures
 
 
 def main() -> int:
@@ -50,11 +99,13 @@ def main() -> int:
         if result.returncode:
             failed.append(f"{label} (exit {result.returncode})")
 
+    failed.extend(run_platform_fixtures(env))
+
     print("\n=== XIDER test summary ===")
     if failed:
         print("FAILED: " + "; ".join(failed))
         return 1
-    print(f"PASS: all {len(SUITES)} isolated suites")
+    print(f"PASS: {len(SUITES)} isolated component suites and platform deployment fixtures")
     return 0
 
 

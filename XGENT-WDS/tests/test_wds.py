@@ -5,14 +5,18 @@
 """
 
 import collections
+import json
 import os
 import sys
 from pathlib import Path
 
 import psutil
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 import xgent_wds as wds
+from release_signature import release_key_id, sign_manifest
 
 
 # ---------------------------------------------------------------------------
@@ -27,6 +31,23 @@ def test_humanize_seconds():
     assert wds._humanize_seconds(None) is None
     assert wds._humanize_seconds(-1) is None
     assert wds._humanize_seconds("bad") is None
+
+
+def test_windows_agent_uses_shared_ed25519_manifest_verifier():
+    private_key = Ed25519PrivateKey.generate()
+    private_pem = private_key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+    public_bytes = private_key.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    manifest = sign_manifest({"schema": 1, "release": "v4.5.0", "assets": []}, private_pem)
+    key_id = release_key_id(public_bytes)
+
+    assert wds.verify_manifest_signature(manifest, {key_id: public_bytes}) == key_id
 
 
 def test_format_battery_none():
@@ -158,6 +179,70 @@ def client(monkeypatch):
     mock.publish.return_value.rc = 0
     monkeypatch.setattr(c, "_client", mock)
     return c
+
+
+def test_windows_remote_update_does_not_claim_success_without_signed_release(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(wds, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(
+        wds,
+        "download_verified_source_archive",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ValueError("В релизе нет единственной пары source ZIP и release manifest.")
+        ),
+    )
+    client._do_agent_update({"update": True})
+
+    responses = [
+        payload
+        for topic, payload in _publish_calls(client)
+        if topic.endswith("/output") and payload.get("type") == "agent_update"
+    ]
+    assert len(responses) == 1
+    assert responses[0]["ok"] is False
+    assert responses[0]["state"] == "failed"
+    assert "Обновление не подтверждено" in responses[0]["text"]
+    assert not (tmp_path / "agent-backups").exists()
+
+
+def test_windows_status_advertises_source_update_mode(client, monkeypatch):
+    import json
+
+    monkeypatch.setattr(wds, "ENCRYPT_PAYLOAD", False)
+    monkeypatch.setattr(wds.sys, "frozen", False, raising=False)
+    assert wds.trusted_release_keys_ready() is True
+    monkeypatch.setattr(wds, "trusted_release_keys_ready", lambda: False)
+
+    client._publish_status()
+
+    envelope = json.loads(client._client.publish.call_args.args[1])
+    payload = wds.verify_message(envelope)
+    assert payload["update_mode"] == "source"
+    assert payload["release_update_ready"] is False
+
+
+def test_windows_status_advertises_release_key_readiness(client, monkeypatch):
+    monkeypatch.setattr(wds, "ENCRYPT_PAYLOAD", False)
+    monkeypatch.setattr(wds.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(wds, "trusted_release_keys_ready", lambda: True)
+
+    client._publish_status()
+
+    envelope = json.loads(client._client.publish.call_args.args[1])
+    payload = wds.verify_message(envelope)
+    assert payload["release_update_ready"] is True
+
+
+def test_windows_frozen_status_advertises_non_updatable_package(client, monkeypatch):
+    import json
+
+    monkeypatch.setattr(wds, "ENCRYPT_PAYLOAD", False)
+    monkeypatch.setattr(wds.sys, "frozen", True, raising=False)
+
+    client._publish_status()
+
+    envelope = json.loads(client._client.publish.call_args.args[1])
+    payload = wds.verify_message(envelope)
+    assert payload["update_mode"] == "frozen"
 
 
 def test_dispatch_unknown_command(client):

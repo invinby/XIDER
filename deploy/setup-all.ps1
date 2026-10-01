@@ -1,12 +1,15 @@
 ﻿[CmdletBinding()]
 param(
     [string]$ServerIp = '141.145.152.174',
-    [string]$KeyPath = "$env:USERPROFILE\.ssh\xider",
+    [string]$KeyPath,
     [string]$EnvRoot = $env:XIDER_ENV_ROOT,
     [switch]$PreflightOnly
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not $KeyPath) {
+    $KeyPath = if ($env:XIDER_SSH_KEY) { $env:XIDER_SSH_KEY } else { Join-Path $env:USERPROFILE '.ssh\xider' }
+}
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $root = (Resolve-Path (Join-Path $repo '..')).Path
 $agentDir = Join-Path $repo 'XGENT-WDS'

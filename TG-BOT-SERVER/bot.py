@@ -204,6 +204,7 @@ async def _live_log_middleware(handler, event, data):
         user = cq.from_user
         kind = "telegram_callback"
         detail = cq.data or ""
+    detail = access_store.redact_text(detail)
     token = CURRENT_TG_USER.set(int(user.id) if user else ADMIN_ID)
     try:
         if user:
@@ -219,20 +220,20 @@ async def _live_log_middleware(handler, event, data):
 async def on_cmd_clipboard(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await cq.answer("📋 Запрашиваю буфер обмена...")
     sent, command_id = publish_tracked("clipboard")
     if not sent:
         await _replace_callback_message(cq,
-            "⚠️ Нет соединения с MQTT-брокером.",
+            _lex("mqtt_disconnected"),
             reply_markup=back_to_device_kb(),
         )
         return
     result = await clipboard_collector.wait_for(target, "clipboard", 10.0, command_id)
     if result is None:
         await _replace_callback_message(cq,
-            "⏳ Ответ не получен за 10 сек — устройство офлайн.",
+            _lex("device_timeout", seconds="10"),
             reply_markup=back_to_device_kb(),
         )
         return
@@ -255,20 +256,20 @@ async def on_cmd_clipboard(cq: CallbackQuery):
 async def on_cmd_processes(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await cq.answer("⚙️ Запрашиваю процессы (Топ-5)...")
     sent, command_id = publish_tracked("processes")
     if not sent:
         await _replace_callback_message(cq,
-            "⚠️ Нет соединения с MQTT-брокером.",
+            _lex("mqtt_disconnected"),
             reply_markup=back_to_device_kb(),
         )
         return
     result = await processes_collector.wait_for(target, "processes", 15.0, command_id)
     if result is None:
         await _replace_callback_message(cq,
-            "⏳ Ответ не получен за 15 сек — устройство офлайн.",
+            _lex("device_timeout", seconds="15"),
             reply_markup=back_to_device_kb(),
         )
         return
@@ -290,13 +291,13 @@ async def on_cmd_processes(cq: CallbackQuery):
 async def on_cmd_mic(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await cq.answer("🎙 Идет запись звука (5 сек)...")
     sent, command_id = publish_tracked("mic")
     if not sent:
         await _replace_callback_message(cq,
-            "⚠️ Нет соединения с MQTT-брокером.",
+            _lex("mqtt_disconnected"),
             reply_markup=back_to_device_kb(),
         )
         return
@@ -334,7 +335,7 @@ async def on_cmd_mic(cq: CallbackQuery):
 @router.callback_query(OwnerFilter(), F.data == "cmd:shell")
 async def on_cmd_shell(cq: CallbackQuery, state: FSMContext):
     if not SESSION.get("target"):
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await state.set_state(Form.wait_shell)
     await cq.message.answer(
@@ -358,7 +359,7 @@ async def on_shell_input(message: Message, state: FSMContext):
     sent, command_id = publish_tracked("shell", command=cmd)
     if not sent:
         await message.answer(
-            "⚠️ Нет соединения с MQTT-брокером.",
+            _lex("mqtt_disconnected"),
             reply_markup=back_to_device_kb(),
         )
         return
@@ -366,7 +367,7 @@ async def on_shell_input(message: Message, state: FSMContext):
     result = await shell_collector.wait_for(target, "shell", 20.0, command_id)
     if result is None:
         await message.answer(
-            "⏳ Ответ не получен за 20 сек — устройство зависло или офлайн.",
+            _lex("device_timeout", seconds="20"),
             reply_markup=back_to_device_kb(),
         )
         return
@@ -385,7 +386,7 @@ async def on_shell_input(message: Message, state: FSMContext):
 @router.callback_query(AdminFilter(), F.data == "cmd:open_app")
 async def on_cmd_open_app(cq: CallbackQuery, state: FSMContext):
     if not SESSION.get("target"):
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await state.set_state(Form.wait_open_app)
     await cq.message.answer(
@@ -410,7 +411,7 @@ async def on_open_app_input(message: Message, state: FSMContext):
         )
     else:
         await message.answer(
-            "⚠️ Нет соединения с MQTT-брокером.",
+            _lex("mqtt_disconnected"),
             reply_markup=back_to_device_kb(),
         )
 
@@ -768,9 +769,40 @@ def main_menu(user_id: int | None = None):
     return kb.as_markup()
 
 
-def devices_menu():
+def _visible_device_items(user_id: int | None = None) -> dict[str, dict]:
+    user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
+    all_devices = devices.all()
+    role = get_user_role(user_id)
+    if role == Role.OWNER:
+        return all_devices
+    if role != Role.USER:
+        return {}
+    record = access_store.get_user(user_id) or {}
+    permitted = set((record.get("permissions") or {}).get("devices") or [])
+    return {device_id: info for device_id, info in all_devices.items() if device_id in permitted}
+
+
+def _callback_visible_to_user(callback: str, user_id: int | None = None) -> bool:
+    """Render a device action only when the same server-side gate will allow it."""
+    user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
+    if get_user_role(user_id) == Role.OWNER:
+        return True
+    return access_store.can_use_callback(
+        user_id, callback, ADMIN_ID, SESSION.get("target")
+    )
+
+
+def _action_button(kb: InlineKeyboardBuilder, *, text: str, callback: str,
+                   style: str = "primary", user_id: int | None = None) -> None:
+    if _callback_visible_to_user(callback, user_id):
+        kb.button(text=text, callback_data=callback, style=style)
+
+
+def devices_menu(user_id: int | None = None):
+    user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
+    is_owner = get_user_role(user_id) == Role.OWNER
     kb = InlineKeyboardBuilder()
-    devs = devices.all()
+    devs = _visible_device_items(user_id)
     for device_id, info in sorted(devs.items()):
         name = info.get("name") or device_id
         dot = _status_dot(info)
@@ -785,69 +817,79 @@ def devices_menu():
         else:
             icon = "💻"
         kb.button(
-            text=f"{dot} {icon} {name}",
+            text=_limit_button_label(f"{dot} {icon} {name}"),
             callback_data=f"dev:{device_id}",
             style="success" if is_online else "danger",
         )
-    kb.button(text="➕ Добавить", callback_data="devmg:manualadd", style="primary")
-    kb.button(text="🚫 Чёрный список", callback_data="devmg:blocked", style="danger")
-    kb.button(text="🧹 Очистить список", callback_data="devmg:clear_all", style="danger")
+    if is_owner:
+        kb.button(text=_lex("devices_add_button"), callback_data="devmg:manualadd", style="primary")
+        kb.button(text=_lex("devices_blocked_button"), callback_data="devmg:blocked", style="danger")
+        kb.button(text=_lex("devices_clear_button"), callback_data="devmg:clear_all", style="danger")
     kb.button(text=_nav("refresh"), callback_data="menu:devices", style="success")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     dev_count = len(devs)
-    adjust_pattern = [1] * dev_count + [2, 1, 2]
+    adjust_pattern = [1] * dev_count + ([2, 1, 2] if is_owner else [1, 1])
     kb.adjust(*adjust_pattern)
     return kb.as_markup()
 
 
-def device_menu(device_id: str):
+def device_menu(device_id: str, user_id: int | None = None):
     if device_id == "all":
         return all_menu()
+    user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
+    is_owner = get_user_role(user_id) == Role.OWNER
     kb = InlineKeyboardBuilder()
 
-    # 9 Distinct Detailed Categories with Vibrant Colors!
-    kb.button(text=_nav("media"), callback_data="cat:media", style="success")
-    kb.button(text=_nav("screen"), callback_data="cat:screen", style="primary")
-
-    kb.button(text=_nav("input"), callback_data="cat:input", style="primary")
-    kb.button(text=_nav("system"), callback_data="cat:system", style="primary")
-
-    kb.button(text=_nav("network"), callback_data="cat:network", style="primary")
-    kb.button(text=_nav("files"), callback_data="cat:files", style="primary")
-
-    kb.button(text=_nav("terminal"), callback_data="cat:terminal", style="primary")
-    kb.button(text=_nav("power"), callback_data="cat:power", style="danger")
-
-    kb.button(text=_nav("pranks"), callback_data="cat:pranks", style="success")
-    kb.button(text=_nav("device_settings"), callback_data="cat:device", style="primary")
+    # Exact-action grants reveal only the categories that contain a granted
+    # action. `full_device` keeps the complete owner-style device menu.
+    _action_button(kb, text=_nav("media"), callback="cat:media", style="success", user_id=user_id)
+    _action_button(kb, text=_nav("screen"), callback="cat:screen", user_id=user_id)
+    _action_button(kb, text=_nav("input"), callback="cat:input", user_id=user_id)
+    _action_button(kb, text=_nav("system"), callback="cat:system", user_id=user_id)
+    _action_button(kb, text=_nav("network"), callback="cat:network", user_id=user_id)
+    _action_button(kb, text=_nav("files"), callback="cat:files", user_id=user_id)
+    _action_button(kb, text=_nav("terminal"), callback="cat:terminal", user_id=user_id)
+    _action_button(kb, text=_nav("power"), callback="cat:power", style="danger", user_id=user_id)
+    _action_button(kb, text=_nav("pranks"), callback="cat:pranks", style="success", user_id=user_id)
+    _action_button(kb, text=_nav("device_settings"), callback="cat:device", user_id=user_id)
 
     # Favorite actions (if configured)
     favs = devices.get_favorites(device_id)[:4]
     for action in favs:
-        kb.button(
-            text=f"⭐ {ACTION_LABELS.get(action, action)}",
-            callback_data=CALLBACK_BY_ACTION.get(action, "noop"),
-            style="primary",
+        callback = CALLBACK_BY_ACTION.get(action, "noop")
+        _action_button(
+            kb,
+            text=_lex("favorite_device_button", action=ACTION_LABELS.get(action, action)),
+            callback=callback,
+            user_id=user_id,
         )
 
     info = devices.get(device_id) or {}
-    agent_ver = str(info.get("version") or "?")
-    keeper_ver = str((info.get("guardian") or {}).get("version") or "?")
-    kb.button(
-        text=_lex("versions_button", agent=agent_ver, keeper=keeper_ver)[:64],
-        callback_data="versions:device", style="success",
+    if is_owner:
+        agent_ver = str(info.get("version") or "?")
+        keeper_ver = str((info.get("guardian") or {}).get("version") or "?")
+        kb.button(
+            text=_limit_button_label(_lex("versions_button", agent=agent_ver, keeper=keeper_ver)),
+            callback_data="versions:device", style="success",
+        )
+    _action_button(
+        kb, text=_lex("device_stop_agent_button"), callback="cfm:stop",
+        style="danger", user_id=user_id,
     )
-    kb.button(text="⏹ Остановить агента", callback_data="cfm:stop", style="danger")
 
     # Bottom row: Back
-    kb.button(text="🔙 К списку устройств", callback_data="menu:target", style="danger")
+    kb.button(
+        text=_lex("devices_back_list_button"),
+        callback_data="menu:target" if is_owner else "menu:devices",
+        style="danger",
+    )
 
     rows = [2, 2, 2, 2, 2]
     if favs:
         rows.extend([2] * (len(favs) // 2))
         if len(favs) % 2:
             rows.append(1)
-    rows.extend([2, 1])
+    rows.extend([2, 1] if is_owner else [1, 1])
     kb.adjust(*rows)
     return kb.as_markup()
 
@@ -856,11 +898,11 @@ def all_menu():
     kb = InlineKeyboardBuilder()
     kb.button(text=_lex("all_status_button"), callback_data="all:status", style="primary")
     kb.button(text=_lex("all_screenshot_button"), callback_data="all:screenshot", style="success")
-    kb.button(text="⚠️ " + _lex("geo_beta"), callback_data="cmd:geo_location", style="primary")
+    kb.button(text=_limit_button_label("⚠️ " + _lex("geo_beta")), callback_data="cmd:geo_location", style="primary")
     kb.button(text=_lex("all_lock_button"), callback_data="cmd:lock", style="danger")
     kb.button(text=_lex("all_mute_button"), callback_data="cmd:volume", style="primary")
     kb.button(text=_lex("all_stop_button"), callback_data="cfm:stop_all", style="danger")
-    kb.button(text="🔙 К списку устройств", callback_data="menu:target", style="primary")
+    kb.button(text=_lex("devices_back_list_button"), callback_data="menu:target", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 1, 2)
     return kb.as_markup()
@@ -912,15 +954,15 @@ def rotate_menu():
     return kb.as_markup()
 
 
-def media_menu():
+def media_menu(user_id: int | None = None):
     kb = InlineKeyboardBuilder()
-    kb.button(text=_lex("media_screenshot_button"), callback_data="cmd:screenshot", style="success")
-    kb.button(text="⚠️ " + _lex("geo_beta"), callback_data="cmd:geo_location", style="primary")
-    kb.button(text=_lex("media_webcam_button"), callback_data="cmd:webcam", style="success")
-    kb.button(text=_lex("media_mic_button"), callback_data="mic:opts", style="success")
-    kb.button(text=_lex("media_speak_button"), callback_data="cmd:sound", style="primary")
-    kb.button(text=_lex("media_volume_button"), callback_data="vol:opts", style="primary")
-    kb.button(text=_lex("media_mute_button"), callback_data="cmd:volume", style="primary")
+    _action_button(kb, text=_lex("media_screenshot_button"), callback="cmd:screenshot", style="success", user_id=user_id)
+    _action_button(kb, text=_limit_button_label("⚠️ " + _lex("geo_beta")), callback="cmd:geo_location", user_id=user_id)
+    _action_button(kb, text=_lex("media_webcam_button"), callback="cmd:webcam", style="success", user_id=user_id)
+    _action_button(kb, text=_lex("media_mic_button"), callback="mic:opts", style="success", user_id=user_id)
+    _action_button(kb, text=_lex("media_speak_button"), callback="cmd:sound", user_id=user_id)
+    _action_button(kb, text=_lex("media_volume_button"), callback="vol:opts", user_id=user_id)
+    _action_button(kb, text=_lex("media_mute_button"), callback="cmd:volume", user_id=user_id)
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 2, 2)
@@ -948,11 +990,11 @@ def screen_menu(target: str | None = None):
 
 def wallpaper_menu():
     kb = InlineKeyboardBuilder()
-    kb.button(text="🎲 Случайный мем из сети", callback_data="cmd:wallpaper_random_meme", style="success")
-    kb.button(text="📸 Загрузить фото из чата", callback_data="cmd:wallpaper_photo_guide", style="primary")
-    kb.button(text="🌐 Ввести ссылку (URL)", callback_data="fun:wallpaper", style="primary")
-    kb.button(text="🔄 Восстановить прежние обои", callback_data="cmd:prank_restore_wallpaper", style="danger")
-    kb.button(text="⬅️ К дисплею", callback_data="cat:screen", style="primary")
+    kb.button(text=_lex("wallpaper_random_meme_button"), callback_data="cmd:wallpaper_random_meme", style="success")
+    kb.button(text=_lex("wallpaper_photo_button"), callback_data="cmd:wallpaper_photo_guide", style="primary")
+    kb.button(text=_lex("wallpaper_url_button"), callback_data="fun:wallpaper", style="primary")
+    kb.button(text=_lex("wallpaper_restore_button"), callback_data="cmd:prank_restore_wallpaper", style="danger")
+    kb.button(text=_lex("wallpaper_back_screen_button"), callback_data="cat:screen", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(1, 1, 1, 1, 2)
     return kb.as_markup()
@@ -960,29 +1002,29 @@ def wallpaper_menu():
 
 def input_menu():
     kb = InlineKeyboardBuilder()
-    kb.button(text="📋 Буфер (прочитать)", callback_data="cmd:clipboard", style="success")
-    kb.button(text="📥 Буфер (вставить)", callback_data="cmd:clipset", style="primary")
-    kb.button(text="⌨️ Напечатать текст", callback_data="fun:type", style="primary")
-    kb.button(text="⌘ Нажать клавиши", callback_data="fun:hotkey", style="primary")
-    kb.button(text="🖱 Инверсия мыши", callback_data="prank:swapmouse", style="primary")
-    kb.button(text="🌀 Пьяный курсор", callback_data="prank:crazycursor", style="primary")
+    kb.button(text=_lex("input_clipboard_read_button"), callback_data="cmd:clipboard", style="success")
+    kb.button(text=_lex("input_clipboard_paste_button"), callback_data="cmd:clipset", style="primary")
+    kb.button(text=_lex("input_type_text_button"), callback_data="fun:type", style="primary")
+    kb.button(text=_lex("input_hotkey_button"), callback_data="fun:hotkey", style="primary")
+    kb.button(text=_lex("input_mouse_swap_button"), callback_data="prank:swapmouse", style="primary")
+    kb.button(text=_lex("input_crazy_cursor_button"), callback_data="prank:crazycursor", style="primary")
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 2, 2)
     return kb.as_markup()
 
 
-def system_menu():
+def system_menu(user_id: int | None = None):
     kb = InlineKeyboardBuilder()
-    kb.button(text="💻 Инфо о системе", callback_data="cmd:sysinfo", style="primary")
-    kb.button(text="⏱ Аптайм системы", callback_data="cmd:sys_uptime", style="success")
-    kb.button(text="🔋 Заряд батареи", callback_data="cmd:battery", style="success")
-    kb.button(text="🗂 Диски и память", callback_data="cmd:disks", style="primary")
-    kb.button(text="🩺 SMART дисков", callback_data="cmd:smart", style="success")
-    kb.button(text="🧹 Очистить TEMP кэш", callback_data="cmd:sys_clean_temp", style="danger")
-    kb.button(text="📦 Установленный софт", callback_data="cmd:apps", style="primary")
-    kb.button(text="📊 Возможности", callback_data="cmd:capabilities", style="primary")
-    kb.button(text="🔄 Обновить статус", callback_data="cmd:status", style="success")
+    _action_button(kb, text=_lex("system_sysinfo_button"), callback="cmd:sysinfo", user_id=user_id)
+    _action_button(kb, text=_lex("system_uptime_button"), callback="cmd:sys_uptime", style="success", user_id=user_id)
+    _action_button(kb, text=_lex("system_battery_button"), callback="cmd:battery", style="success", user_id=user_id)
+    _action_button(kb, text=_lex("system_disks_button"), callback="cmd:disks", user_id=user_id)
+    _action_button(kb, text=_lex("system_smart_button"), callback="cmd:smart", style="success", user_id=user_id)
+    _action_button(kb, text=_lex("system_clean_temp_button"), callback="cmd:sys_clean_temp", style="danger", user_id=user_id)
+    _action_button(kb, text=_lex("system_apps_button"), callback="cmd:apps", user_id=user_id)
+    _action_button(kb, text=_lex("system_capabilities_button"), callback="cmd:capabilities", user_id=user_id)
+    _action_button(kb, text=_lex("system_refresh_status_button"), callback="cmd:status", style="success", user_id=user_id)
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.adjust(2, 2, 2, 2, 1, 1)
     return kb.as_markup()
@@ -990,13 +1032,13 @@ def system_menu():
 
 def network_menu():
     kb = InlineKeyboardBuilder()
-    kb.button(text="🌍 Внешний IP адрес", callback_data="fun:extip", style="success")
-    kb.button(text="🏓 Ping узла", callback_data="cmd:net_ping", style="success")
-    kb.button(text="📡 Сеть и адаптеры", callback_data="cmd:network", style="primary")
-    kb.button(text="📶 Wi-Fi сети и пароли", callback_data="cmd:wifi", style="primary")
-    kb.button(text="🔌 USB-устройства", callback_data="cmd:usb", style="primary")
-    kb.button(text="🔵 Bluetooth устройства", callback_data="cmd:bluetooth", style="primary")
-    kb.button(text="🔗 Порты (Netstat)", callback_data="cmd:netstat", style="primary")
+    kb.button(text=_lex("network_external_ip_button"), callback_data="fun:extip", style="success")
+    kb.button(text=_lex("network_ping_button"), callback_data="cmd:net_ping", style="success")
+    kb.button(text=_lex("network_adapters_button"), callback_data="cmd:network", style="primary")
+    kb.button(text=_lex("network_wifi_button"), callback_data="cmd:wifi", style="primary")
+    kb.button(text=_lex("network_usb_button"), callback_data="cmd:usb", style="primary")
+    kb.button(text=_lex("network_bluetooth_button"), callback_data="cmd:bluetooth", style="primary")
+    kb.button(text=_lex("network_netstat_button"), callback_data="cmd:netstat", style="primary")
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 2, 1, 2)
@@ -1005,12 +1047,12 @@ def network_menu():
 
 def files_menu():
     kb = InlineKeyboardBuilder()
-    kb.button(text="📂 Список файлов", callback_data="files:list", style="primary")
-    kb.button(text="🔍 Найти файл", callback_data="files:find", style="primary")
-    kb.button(text="📥 Скачать с ПК", callback_data="files:get", style="success")
-    kb.button(text="📤 Загрузить на ПК", callback_data="files:put", style="success")
-    kb.button(text="🖥 Открыть путь на ПК", callback_data="files:open", style="primary")
-    kb.button(text="🗑 Удалить файл", callback_data="files:del", style="danger")
+    kb.button(text=_lex("files_list_button"), callback_data="files:list", style="primary")
+    kb.button(text=_lex("files_find_button"), callback_data="files:find", style="primary")
+    kb.button(text=_lex("files_download_button"), callback_data="files:get", style="success")
+    kb.button(text=_lex("files_upload_button"), callback_data="files:put", style="success")
+    kb.button(text=_lex("files_open_path_button"), callback_data="files:open", style="primary")
+    kb.button(text=_lex("files_delete_button"), callback_data="files:del", style="danger")
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 2, 2)
@@ -1019,13 +1061,13 @@ def files_menu():
 
 def terminal_menu():
     kb = InlineKeyboardBuilder()
-    kb.button(text="⚙️ Диспетчер процессов", callback_data="proc:0", style="primary")
-    kb.button(text="🔪 Убить процесс", callback_data="cmd:prockillname", style="danger")
-    kb.button(text="💻 Терминал (Shell)", callback_data="cfm:shell", style="danger")
-    kb.button(text="🚀 Запуск программы", callback_data="cmd:open_app", style="primary")
-    kb.button(text="🚀 Список автозагрузки", callback_data="cmd:startup", style="primary")
-    kb.button(text="🛠 Фоновые службы", callback_data="cmd:services", style="primary")
-    kb.button(text="🕘 История консоли", callback_data="cmd:cmdhistory", style="primary")
+    kb.button(text=_lex("terminal_processes_button"), callback_data="proc:0", style="primary")
+    kb.button(text=_lex("terminal_kill_process_button"), callback_data="cmd:prockillname", style="danger")
+    kb.button(text=_lex("terminal_shell_button"), callback_data="cfm:shell", style="danger")
+    kb.button(text=_lex("terminal_open_app_button"), callback_data="cmd:open_app", style="primary")
+    kb.button(text=_lex("terminal_startup_button"), callback_data="cmd:startup", style="primary")
+    kb.button(text=_lex("terminal_services_button"), callback_data="cmd:services", style="primary")
+    kb.button(text=_lex("terminal_history_button"), callback_data="cmd:cmdhistory", style="primary")
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.adjust(2, 2, 2, 1, 1)
     return kb.as_markup()
@@ -1036,26 +1078,25 @@ control_menu = input_menu
 fun_menu = terminal_menu
 
 
-def power_menu_new():
+def power_menu_new(user_id: int | None = None):
     kb = InlineKeyboardBuilder()
     target = SESSION.get("target") or ""
     dev_info = devices.get(target) or {}
     is_sleeping = dev_info.get("standby", False)
     if is_sleeping:
-        kb.button(text=_lex("power_wake_agent_button"), callback_data="cmd:wake", style="success")
+        _action_button(kb, text=_lex("power_wake_agent_button"), callback="cmd:wake", style="success", user_id=user_id)
     else:
-        kb.button(text=_lex("power_standby_agent_button"), callback_data="cmd:standby_sleep", style="primary")
-
-    kb.button(text=_lex("power_lock_screen_button"), callback_data="cmd:lock", style="danger")
-    kb.button(text=_lex("power_sleep_device_button"), callback_data="power:sleep", style="danger")
-    kb.button(text=_lex("power_reboot_device_button"), callback_data="power:reboot", style="danger")
-    kb.button(text=_lex("power_shutdown_device_button"), callback_data="power:shutdown", style="danger")
-    kb.button(text=_lex("power_autorun_status_button"), callback_data="cmd:autorun_status", style="primary")
-    kb.button(text=_lex("power_autorun_enable_button"), callback_data="cmd:autorun_enable", style="success")
-    kb.button(text=_lex("power_autorun_disable_button"), callback_data="cmd:autorun_disable", style="danger")
-    kb.button(text=_lex("power_guardian_menu_button"), callback_data="cmd:guardian_menu", style="primary")
-    kb.button(text=_lex("power_wol_button"), callback_data="cmd:wol", style="primary")
-    kb.button(text=_lex("power_stop_agent_button"), callback_data="cfm:stop", style="danger")
+        _action_button(kb, text=_lex("power_standby_agent_button"), callback="cmd:standby_sleep", user_id=user_id)
+    _action_button(kb, text=_lex("power_lock_screen_button"), callback="cmd:lock", style="danger", user_id=user_id)
+    _action_button(kb, text=_lex("power_sleep_device_button"), callback="power:sleep", style="danger", user_id=user_id)
+    _action_button(kb, text=_lex("power_reboot_device_button"), callback="power:reboot", style="danger", user_id=user_id)
+    _action_button(kb, text=_lex("power_shutdown_device_button"), callback="power:shutdown", style="danger", user_id=user_id)
+    _action_button(kb, text=_lex("power_autorun_status_button"), callback="cmd:autorun_status", user_id=user_id)
+    _action_button(kb, text=_lex("power_autorun_enable_button"), callback="cmd:autorun_enable", style="success", user_id=user_id)
+    _action_button(kb, text=_lex("power_autorun_disable_button"), callback="cmd:autorun_disable", style="danger", user_id=user_id)
+    _action_button(kb, text=_lex("power_guardian_menu_button"), callback="cmd:guardian_menu", user_id=user_id)
+    _action_button(kb, text=_lex("power_wol_button"), callback="cmd:wol", user_id=user_id)
+    _action_button(kb, text=_lex("power_stop_agent_button"), callback="cfm:stop", style="danger", user_id=user_id)
     kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(1, 2, 2, 1, 2, 2, 2, 1)
@@ -1082,81 +1123,83 @@ def pranks_menu(page: int = 1, target: str | None = None):
     kb = InlineKeyboardBuilder()
 
     # Главная кнопка экстренной отмены любых приколов на каждой странице
-    kb.button(text="🛑 СТОП ВСЕ ПРИКОЛЫ", callback_data="prank:stop_all", style="danger")
+    kb.button(text=_lex("prank_stop_all_button"), callback_data="prank:stop_all", style="danger")
 
     if page == 1:
         # Страница 1: Экраны & Визуал (10)
-        kb.button(text="🎬 Скример (full)", callback_data="prank:screamer", style="danger")
-        kb.button(text="🎵 Рикролл ×50", callback_data="prank:rickroll50", style="success")
-        kb.button(text="🌈 Матрица (full)", callback_data="prank:matrix", style="success")
-        kb.button(text="💀 Экран BSOD", callback_data="cmd:prank_bsod", style="danger")
-        kb.button(text="⏳ Fake Update", callback_data="cmd:prank_fake_update", style="primary")
-        kb.button(text="🙃 Инверт 180°", callback_data="cmd:prank_invert_screen", style="primary")
+        kb.button(text=_lex("prank_screamer_button"), callback_data="prank:screamer", style="danger")
+        kb.button(text=_lex("prank_rickroll_button"), callback_data="prank:rickroll50", style="success")
+        kb.button(text=_lex("prank_matrix_button"), callback_data="prank:matrix", style="success")
+        kb.button(text=_lex("prank_bsod_button"), callback_data="cmd:prank_bsod", style="danger")
+        kb.button(text=_lex("prank_fake_update_button"), callback_data="cmd:prank_fake_update", style="primary")
+        kb.button(text=_lex("prank_rotate_screen_button"), callback_data="cmd:prank_invert_screen", style="primary")
         if desktop_hidden:
-            kb.button(text="🔴 [ВКЛ] Иконки скрыты", callback_data="prank:hidedesktop", style="danger")
+            kb.button(text=_lex("prank_icons_hidden_button"), callback_data="prank:hidedesktop", style="danger")
         else:
-            kb.button(text="🫥 Скрыть иконки", callback_data="prank:hidedesktop", style="primary")
-        kb.button(text="🪟 Танцы окон", callback_data="prank:dancewin", style="primary")
-        kb.button(text="⬛ Чёрный экран", callback_data="prank:blackscreen", style="danger")
-        kb.button(text="🫨 Тряска окна", callback_data="cmd:prank_shake_window", style="primary")
+            kb.button(text=_lex("prank_hide_icons_button"), callback_data="prank:hidedesktop", style="primary")
+        kb.button(text=_lex("prank_window_dance_button"), callback_data="prank:dancewin", style="primary")
+        kb.button(text=_lex("prank_black_screen_button"), callback_data="prank:blackscreen", style="danger")
+        kb.button(text=_lex("prank_shake_window_button"), callback_data="cmd:prank_shake_window", style="primary")
     elif page == 2:
         # Страница 2: Звуки & Голос (10)
-        kb.button(text="🔊 Сирена тревоги", callback_data="prank:siren", style="danger")
-        kb.button(text="📢 Орать текстом", callback_data="prank:shout", style="success")
-        kb.button(text="📻 Морзе SOS", callback_data="cmd:prank_beep_morse", style="primary")
-        kb.button(text="👻 Жуткие звуки", callback_data="cmd:prank_sound_spooky", style="danger")
-        kb.button(text="💨 Смешной пук", callback_data="cmd:prank_sound_fart", style="primary")
-        kb.button(text="🔊 Скачки громкости", callback_data="cmd:prank_volume_jump", style="primary")
-        kb.button(text="🗣 Говорящие часы", callback_data="cmd:prank_speak_time", style="success")
-        kb.button(text="👂 Шёпот: Обернись", callback_data="cmd:prank_say_whisper", style="danger")
-        kb.button(text="🤣 Смех ситкома", callback_data="cmd:prank_laugh_track", style="primary")
-        kb.button(text="📟 Рандомные пики", callback_data="cmd:prank_random_beeps", style="primary")
+        kb.button(text=_lex("prank_siren_button"), callback_data="prank:siren", style="danger")
+        kb.button(text=_lex("prank_shout_button"), callback_data="prank:shout", style="success")
+        kb.button(text=_lex("prank_morse_button"), callback_data="cmd:prank_beep_morse", style="primary")
+        kb.button(text=_lex("prank_spooky_button"), callback_data="cmd:prank_sound_spooky", style="danger")
+        kb.button(text=_lex("prank_fart_button"), callback_data="cmd:prank_sound_fart", style="primary")
+        kb.button(text=_lex("prank_volume_jump_button"), callback_data="cmd:prank_volume_jump", style="primary")
+        kb.button(text=_lex("prank_speak_time_button"), callback_data="cmd:prank_speak_time", style="success")
+        kb.button(text=_lex("prank_whisper_button"), callback_data="cmd:prank_say_whisper", style="danger")
+        kb.button(text=_lex("prank_laugh_track_button"), callback_data="cmd:prank_laugh_track", style="primary")
+        kb.button(text=_lex("prank_random_beeps_button"), callback_data="cmd:prank_random_beeps", style="primary")
     elif page == 3:
         # Страница 3: Мышь & Клавиатура (10)
         if mouse_swapped:
-            kb.button(text="🔴 [ВКЛ] Инверсия мыши", callback_data="prank:swapmouse", style="danger")
+            kb.button(text=_lex("prank_mouse_swapped_button"), callback_data="prank:swapmouse", style="danger")
         else:
-            kb.button(text="🖱 Инверсия мыши", callback_data="prank:swapmouse", style="primary")
-        kb.button(text="🌀 Пьяный курсор", callback_data="prank:crazycursor", style="primary")
-        kb.button(text="🐌 Черепашья мышь", callback_data="cmd:prank_slow_mouse", style="primary")
-        kb.button(text="🌀 Глючный курсор", callback_data="cmd:prank_glitch_cursor", style="primary")
-        kb.button(text="🤹 Случайные клики", callback_data="cmd:prank_random_clicks", style="primary")
-        kb.button(text="💃 Диско клавиатуры", callback_data="cmd:prank_keyboard_disco", style="success")
-        kb.button(text="🚨 CapsLock Диско", callback_data="cmd:prank_caps_disco", style="primary")
-        kb.button(text="⭕ Курсор по кругу", callback_data="cmd:prank_cursor_circle", style="primary")
-        kb.button(text="📝 Печать в блокнот", callback_data="cmd:prank_open_notepad_type", style="primary")
-        kb.button(text="🧑‍💻 Hacker Typer", callback_data="cmd:prank_hacker_typer", style="success")
+            kb.button(text=_lex("prank_mouse_swap_button"), callback_data="prank:swapmouse", style="primary")
+        kb.button(text=_lex("prank_crazy_cursor_button"), callback_data="prank:crazycursor", style="primary")
+        kb.button(text=_lex("prank_slow_mouse_button"), callback_data="cmd:prank_slow_mouse", style="primary")
+        kb.button(text=_lex("prank_glitch_cursor_button"), callback_data="cmd:prank_glitch_cursor", style="primary")
+        kb.button(text=_lex("prank_random_clicks_button"), callback_data="cmd:prank_random_clicks", style="primary")
+        kb.button(text=_lex("prank_keyboard_disco_button"), callback_data="cmd:prank_keyboard_disco", style="success")
+        kb.button(text=_lex("prank_caps_disco_button"), callback_data="cmd:prank_caps_disco", style="primary")
+        kb.button(text=_lex("prank_cursor_circle_button"), callback_data="cmd:prank_cursor_circle", style="primary")
+        kb.button(text=_lex("prank_notepad_type_button"), callback_data="cmd:prank_open_notepad_type", style="primary")
+        kb.button(text=_lex("prank_hacker_typer_button"), callback_data="cmd:prank_hacker_typer", style="success")
     elif page == 4:
         # Страница 4: Фейки & Системный хаос (10)
-        kb.button(text="💬 Спам окнами", callback_data="fun:spam", style="danger")
-        kb.button(text="🔢 5 калькуляторов", callback_data="cmd:prank_open_calc_spam", style="primary")
-        kb.button(text="🦠 Вирус Pivko", callback_data="cmd:prank_fake_virus", style="danger")
-        kb.button(text="❓ Удалить Интернет", callback_data="cmd:prank_alert_loop", style="primary")
-        kb.button(text="📋 Взлом буфера", callback_data="cmd:prank_paste_clipboard_spam", style="primary")
-        kb.button(text="🔄 Инверт буфера", callback_data="cmd:prank_type_reversed", style="primary")
-        kb.button(text="⚠️ Спам ошибок (10x)", callback_data="cmd:prank_fake_error_spam", style="danger")
-        kb.button(text="💀 Удаление System32", callback_data="cmd:prank_fake_delete_sys32", style="danger")
-        kb.button(text="👻 Призрак печати", callback_data="cmd:prank_ghost_typer", style="primary")
-        kb.button(text="🌋 Землетрясение", callback_data="cmd:prank_earthquake", style="danger")
+        kb.button(text=_lex("prank_spam_windows_button"), callback_data="fun:spam", style="danger")
+        kb.button(text=_lex("prank_calculator_spam_button"), callback_data="cmd:prank_open_calc_spam", style="primary")
+        kb.button(text=_lex("prank_fake_virus_button"), callback_data="cmd:prank_fake_virus", style="danger")
+        kb.button(text=_lex("prank_alert_loop_button"), callback_data="cmd:prank_alert_loop", style="primary")
+        kb.button(text=_lex("prank_clipboard_spam_button"), callback_data="cmd:prank_paste_clipboard_spam", style="primary")
+        kb.button(text=_lex("prank_reverse_clipboard_button"), callback_data="cmd:prank_type_reversed", style="primary")
+        kb.button(text=_lex("prank_error_spam_button"), callback_data="cmd:prank_fake_error_spam", style="danger")
+        kb.button(text=_lex("prank_fake_sys32_button"), callback_data="cmd:prank_fake_delete_sys32", style="danger")
+        kb.button(text=_lex("prank_ghost_typer_button"), callback_data="cmd:prank_ghost_typer", style="primary")
+        kb.button(text=_lex("prank_earthquake_button"), callback_data="cmd:prank_earthquake", style="danger")
     else:
         # Страница 5: Мемы & Ультра-Троллинг (10)
-        kb.button(text="🖼 Мемные обои", callback_data="cmd:prank_meme_wallpaper", style="success")
-        kb.button(text="🐱 Атака котиков", callback_data="cmd:prank_cat_invaders", style="primary")
-        kb.button(text="🐈 Выкуп котиками", callback_data="cmd:prank_fake_ransom_cats", style="danger")
-        kb.button(text="🌈 Nyan Cat стрим", callback_data="cmd:prank_nyan_stream", style="success")
-        kb.button(text="🎉 Выигрыш iPhone!", callback_data="cmd:prank_confetti_winner", style="success")
-        kb.button(text="🪫 Разряд батареи 1%", callback_data="cmd:prank_low_battery_fake", style="danger")
-        kb.button(text="🚨 Блокировка FBI/ФСБ", callback_data="cmd:prank_fbi_lock", style="danger")
-        kb.button(text="🌐 Мемы в браузере", callback_data="cmd:prank_open_browser_memes", style="success")
-        kb.button(text="🕺 ASCII Рикролл", callback_data="cmd:prank_rickroll_terminal", style="success")
-        kb.button(text="🎲 Случайный сайт", callback_data="prank:randomsite", style="primary")
+        kb.button(text=_lex("prank_meme_wallpaper_button"), callback_data="cmd:prank_meme_wallpaper", style="success")
+        kb.button(text=_lex("prank_cat_invaders_button"), callback_data="cmd:prank_cat_invaders", style="primary")
+        kb.button(text=_lex("prank_fake_ransom_cats_button"), callback_data="cmd:prank_fake_ransom_cats", style="danger")
+        kb.button(text=_lex("prank_nyan_stream_button"), callback_data="cmd:prank_nyan_stream", style="success")
+        kb.button(text=_lex("prank_confetti_winner_button"), callback_data="cmd:prank_confetti_winner", style="success")
+        kb.button(text=_lex("prank_fake_low_battery_button"), callback_data="cmd:prank_low_battery_fake", style="danger")
+        kb.button(text=_lex("prank_fbi_lock_button"), callback_data="cmd:prank_fbi_lock", style="danger")
+        kb.button(text=_lex("prank_browser_memes_button"), callback_data="cmd:prank_open_browser_memes", style="success")
+        kb.button(text=_lex("prank_ascii_rickroll_button"), callback_data="cmd:prank_rickroll_terminal", style="success")
+        kb.button(text=_lex("prank_random_site_button"), callback_data="prank:randomsite", style="primary")
 
     # Панель вкладок категорий приколов (5 страниц)
-    kb.button(text="🖥 Визуал" if page != 1 else "🔘 [Визуал]", callback_data="prankpage:1", style="primary")
-    kb.button(text="🔊 Звук" if page != 2 else "🔘 [Звук]", callback_data="prankpage:2", style="primary")
-    kb.button(text="🖱 Ввод" if page != 3 else "🔘 [Ввод]", callback_data="prankpage:3", style="primary")
-    kb.button(text="💣 Хаос" if page != 4 else "🔘 [Хаос]", callback_data="prankpage:4", style="primary")
-    kb.button(text="🐱 Мемы" if page != 5 else "🔘 [Мемы]", callback_data="prankpage:5", style="primary")
+    for tab_page, tab_key in enumerate(("visual", "sound", "input", "chaos", "memes"), start=1):
+        selected_suffix = "_selected" if page == tab_page else ""
+        kb.button(
+            text=_lex(f"prank_tab_{tab_key}{selected_suffix}"),
+            callback_data=f"prankpage:{tab_page}",
+            style="primary",
+        )
 
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
@@ -1165,19 +1208,24 @@ def pranks_menu(page: int = 1, target: str | None = None):
     return kb.as_markup()
 
 
-def device_settings_menu():
+def device_settings_menu(user_id: int | None = None):
     device_id = SESSION.get("target") or ""
+    user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
+    is_owner = get_user_role(user_id) == Role.OWNER
     kb = InlineKeyboardBuilder()
-    kb.button(text="✏️ Переименовать", callback_data=f"devmg:rename:{device_id}", style="primary")
-    kb.button(text="⭐ Избранные кнопки", callback_data="fav:menu", style="primary")
-    kb.button(text="🕘 История команд", callback_data="hist:0", style="primary")
-    kb.button(text="Версии агента и Guard Keeper", callback_data="versions:device", style="success")
-    kb.button(text="🚀 Автозапуск: Статус", callback_data="cmd:autorun_status", style="primary")
-    kb.button(text="✅ Вкл автозапуск ПК", callback_data="cmd:autorun_enable", style="success")
-    kb.button(text="🛑 Выкл автозапуск ПК", callback_data="cmd:autorun_disable", style="danger")
-    kb.button(text="🗑 Удалить из списка", callback_data=f"devmg:delete:{device_id}", style="danger")
-    kb.button(text="⛔ Заблокировать устройство", callback_data=f"devmg:block:{device_id}", style="danger")
-    kb.button(text="🛑 Полное удаление агента с ПК", callback_data=f"devmg:uninstall:{device_id}", style="danger")
+    if is_owner:
+        kb.button(text=_lex("settings_rename_button"), callback_data=f"devmg:rename:{device_id}", style="primary")
+    kb.button(text=_lex("settings_favorites_button"), callback_data="fav:menu", style="primary")
+    kb.button(text=_lex("settings_history_button"), callback_data="hist:0", style="primary")
+    if is_owner:
+        kb.button(text=_lex("settings_versions_button"), callback_data="versions:device", style="success")
+    kb.button(text=_lex("settings_autorun_status_button"), callback_data="cmd:autorun_status", style="primary")
+    kb.button(text=_lex("settings_autorun_enable_button"), callback_data="cmd:autorun_enable", style="success")
+    kb.button(text=_lex("settings_autorun_disable_button"), callback_data="cmd:autorun_disable", style="danger")
+    if is_owner:
+        kb.button(text=_lex("settings_remove_device_button"), callback_data=f"devmg:delete:{device_id}", style="danger")
+        kb.button(text=_lex("settings_block_device_button"), callback_data=f"devmg:block:{device_id}", style="danger")
+        kb.button(text=_lex("settings_uninstall_button"), callback_data=f"devmg:uninstall:{device_id}", style="danger")
     kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 1, 2, 2, 1, 2)
@@ -1187,9 +1235,13 @@ def device_settings_menu():
 def mic_options_menu():
     kb = InlineKeyboardBuilder()
     for sec in (5, 15, 30, 60):
-        kb.button(text=f"🎙 {sec} сек", callback_data=f"micdur:{sec}", style="success")
-    kb.button(text="⬅️ Медиа", callback_data="cat:media", style="danger")
-    kb.button(text="🏠 Главное", callback_data="menu:main", style="primary")
+        kb.button(
+            text=_lex("microphone_duration_button", seconds=str(sec)),
+            callback_data=f"micdur:{sec}",
+            style="success",
+        )
+    kb.button(text=_nav("media"), callback_data="cat:media", style="danger")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 2)
     return kb.as_markup()
 
@@ -1197,15 +1249,23 @@ def mic_options_menu():
 def vol_options_menu():
     kb = InlineKeyboardBuilder()
     for lvl in (0, 25, 50, 75, 100):
-        kb.button(text=f"🎚 {lvl}%", callback_data=f"volq:{lvl}", style="primary")
-    kb.button(text="⬅️ Медиа", callback_data="cat:media", style="danger")
+        kb.button(
+            text=_lex("volume_level_button", level=str(lvl)),
+            callback_data=f"volq:{lvl}",
+            style="primary",
+        )
+    kb.button(text=_nav("media"), callback_data="cat:media", style="danger")
     kb.adjust(3, 2, 1)
     return kb.as_markup()
 
 
-def confirm_kb(yes_cb: str, yes_text: str = "✅ Да, выполнить!", no_cb: str = "back:device"):
+def confirm_kb(yes_cb: str, yes_text: str | None = None, no_cb: str = "back:device"):
     kb = InlineKeyboardBuilder()
-    kb.button(text=yes_text, callback_data=yes_cb, style="danger")
+    kb.button(
+        text=_limit_button_label(yes_text or _lex("confirm_execute_button")),
+        callback_data=yes_cb,
+        style="danger",
+    )
     kb.button(text=_nav("cancel"), callback_data=no_cb, style="primary")
     kb.adjust(1, 1)
     return kb.as_markup()
@@ -1214,27 +1274,33 @@ def confirm_kb(yes_cb: str, yes_text: str = "✅ Да, выполнить!", no_
 def events_menu():
     s = bot_settings.all_settings()
     kb = InlineKeyboardBuilder()
+    online_mark = "✅" if s.get("notify_online") else "❌"
     kb.button(
-        text=f"{'✅' if s.get('notify_online') else '❌'} «Вернулся онлайн»",
+        text=_lex("events_online_button", mark=online_mark),
         callback_data="ev:toggle:notify_online",
         style="success" if s.get("notify_online") else "danger",
     )
+    offline_mark = "✅" if s.get("notify_offline") else "❌"
     kb.button(
-        text=f"{'✅' if s.get('notify_offline') else '❌'} «Ушёл в оффлайн»",
+        text=_lex("events_offline_button", mark=offline_mark),
         callback_data="ev:toggle:notify_offline",
         style="success" if s.get("notify_offline") else "danger",
     )
+    battery_mark = "✅" if s.get("notify_battery_low") else "❌"
     kb.button(
-        text=f"{'✅' if s.get('notify_battery_low') else '❌'} Низкая батарея (<20%)",
+        text=_lex("events_battery_button", mark=battery_mark),
         callback_data="ev:toggle:notify_battery_low",
         style="success" if s.get("notify_battery_low") else "danger",
     )
-    kb.button(text="🌙 Тихие часы", callback_data="ev:quiet", style="primary")
-    kb.button(text="🗞 Ежедневный дайджест", callback_data="ev:digest", style="primary")
-    kb.button(text="👥 Администраторы", callback_data="ev:admins", style="primary")
+    kb.button(text=_lex("events_quiet_hours_button"), callback_data="ev:quiet", style="primary")
+    kb.button(text=_lex("events_digest_button"), callback_data="ev:digest", style="primary")
+    kb.button(text=_lex("events_admins_button"), callback_data="ev:admins", style="primary")
     auto_on = get_server_autostart_status()
     kb.button(
-        text=f"🚀 Автозапуск Сервера: {'ВКЛ ✅' if auto_on else 'ВЫКЛ ❌'}",
+        text=_lex(
+            "events_server_autostart_button",
+            state="ВКЛ ✅" if auto_on else "ВЫКЛ ❌",
+        ),
         callback_data="ev:server_autostart:toggle",
         style="success" if auto_on else "danger",
     )
@@ -1248,20 +1314,20 @@ def quiet_hours_menu():
     cur_f = str(s.get("quiet_from") or "")
     cur_t = str(s.get("quiet_to") or "")
     kb = InlineKeyboardBuilder()
-    for f, t, label in (
-        ("", "", "➖ Выключить"),
-        ("23", "8", "🌙 23:00 – 08:00"),
-        ("22", "7", "🌙 22:00 – 07:00"),
-        ("0", "6", "🌙 00:00 – 06:00"),
+    for f, t, key in (
+        ("", "", "quiet_disable_button"),
+        ("23", "8", "quiet_2308_button"),
+        ("22", "7", "quiet_2207_button"),
+        ("0", "6", "quiet_0006_button"),
     ):
         active = cur_f == f and cur_t == t
         mark = "✅" if active else ""
         kb.button(
-            text=f"{mark} {label}".strip(),
+            text=_limit_button_label(f"{mark} {_lex(key)}".strip()),
             callback_data=f"quiet:{f}:{t}",
             style="success" if active else "primary",
         )
-    kb.button(text="⬅️ События", callback_data="ev:menu", style="primary")
+    kb.button(text=_lex("events_back_button"), callback_data="ev:menu", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -1270,19 +1336,19 @@ def digest_menu():
     s = bot_settings.all_settings()
     cur = str(s.get("report_hour") or "")
     kb = InlineKeyboardBuilder()
-    for val, label in (
-        ("", "➖ Выключить"),
-        ("9", "🗞 Отчёт в 09:00"),
-        ("21", "🗞 Отчёт в 21:00"),
+    for val, key in (
+        ("", "digest_disable_button"),
+        ("9", "digest_09_button"),
+        ("21", "digest_21_button"),
     ):
         active = cur == val
         mark = "✅" if active else ""
         kb.button(
-            text=f"{mark} {label}".strip(),
+            text=_limit_button_label(f"{mark} {_lex(key)}".strip()),
             callback_data=f"digest:{val}",
             style="success" if active else "primary",
         )
-    kb.button(text="⬅️ События", callback_data="ev:menu", style="primary")
+    kb.button(text=_lex("events_back_button"), callback_data="ev:menu", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -1290,20 +1356,28 @@ def digest_menu():
 def admins_menu():
     s = bot_settings.all_settings()
     kb = InlineKeyboardBuilder()
-    kb.button(text=f"⭐ {ADMIN_ID} (владелец)", callback_data="noop", style="primary")
+    kb.button(
+        text=_lex("admin_owner_id_button", user_id=str(ADMIN_ID)),
+        callback_data="noop",
+        style="primary",
+    )
     for a in s.get("admins") or []:
-        kb.button(text=f"➖ {a}", callback_data=f"adm:rm:{a}", style="danger")
-    kb.button(text="➕ Добавить по Telegram ID", callback_data="adm:add", style="success")
-    kb.button(text="⬅️ События", callback_data="ev:menu", style="primary")
+        kb.button(
+            text=_lex("admin_remove_id_button", user_id=str(a)),
+            callback_data=f"adm:rm:{a}",
+            style="danger",
+        )
+    kb.button(text=_lex("admins_add_button"), callback_data="adm:add", style="success")
+    kb.button(text=_lex("events_back_button"), callback_data="ev:menu", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
 
-ROLE_LABELS = {
-    Role.OWNER: "Владелец",
-    Role.USER: "Пользователь",
-    Role.GUEST: "Гость",
-    Role.BLOCKED: "Заблокирован",
+ROLE_XLEX_KEYS = {
+    Role.OWNER: "role_owner",
+    Role.USER: "role_user",
+    Role.GUEST: "role_guest",
+    Role.BLOCKED: "role_blocked",
 }
 
 USER_PERMISSION_CHOICES = {
@@ -1326,8 +1400,27 @@ def _user_label(record: dict) -> str:
     return f"id:{record.get('id', '?')}"
 
 
+def _limit_button_label(value: object, max_utf16_units: int = 64) -> str:
+    """Fit Telegram button text by its UTF-16 limit and add an ellipsis if cut."""
+    text = str(value)
+    units = len(text.encode("utf-16-le")) // 2
+    if units <= max_utf16_units:
+        return text
+    budget = max(0, max_utf16_units - 1)
+    output: list[str] = []
+    used = 0
+    for char in text:
+        char_units = 2 if ord(char) > 0xFFFF else 1
+        if used + char_units > budget:
+            break
+        output.append(char)
+        used += char_units
+    return "".join(output) + "…"
+
+
 def _role_label(role: str) -> str:
-    return ROLE_LABELS.get(role, role)
+    key = ROLE_XLEX_KEYS.get(role)
+    return _lex(key) if key else str(role)
 
 
 def admin_menu():
@@ -1337,7 +1430,7 @@ def admin_menu():
     kb.button(text=_nav("admin_texts"), callback_data="admin:texts", style="primary")
     mode = xlex.normalize_style(bot_settings.get("ui_style", "technical"))
     kb.button(
-        text=f"X-LEX: {xlex.STYLE_NAMES[mode]}",
+        text=_lex("admin_style_button", style_name=xlex.STYLE_NAMES[mode]),
         callback_data="admin:style",
         style="success",
     )
@@ -1373,7 +1466,12 @@ def admin_texts_menu():
         key = f"{mode}_{suffix}"
         label = _nav(_TEXT_NAV_KEYS[suffix])
         preview = text_store.get(key).replace("\n", " ")[:34]
-        kb.button(text=f"{label}: {preview}", callback_data=f"admin:text:{key}", style="primary")
+        text = _lex("admin_text_preview_button", section=label, preview=preview)
+        kb.button(
+            text=_limit_button_label(text, 62),
+            callback_data=f"admin:text:{key}",
+            style="primary",
+        )
     kb.button(text=_nav("change_style"), callback_data="admin:style", style="primary")
     kb.button(text=_nav("back"), callback_data="menu:admin", style="primary")
     kb.adjust(1)
@@ -1389,8 +1487,18 @@ def admin_users_menu():
         uid = int(record.get("id") or 0)
         role = access_store.get_role(uid, ADMIN_ID)
         blocked = role == Role.BLOCKED
-        text = f"{'Заблокирован: ' if blocked else ''}{_user_label(record)} — {_role_label(role)}"
-        kb.button(text=text[:62], callback_data=f"admin:user:{uid}", style="danger" if blocked else "primary")
+        blocked_prefix = _lex("admin_user_blocked_prefix") if blocked else ""
+        text = _lex(
+            "admin_user_row",
+            blocked_prefix=blocked_prefix,
+            user=_user_label(record),
+            role=_role_label(role),
+        )
+        kb.button(
+            text=_limit_button_label(text, 62),
+            callback_data=f"admin:user:{uid}",
+            style="danger" if blocked else "primary",
+        )
     kb.button(text=_nav("back"), callback_data="menu:admin", style="primary")
     kb.adjust(1)
     return kb.as_markup()
@@ -1424,7 +1532,10 @@ def admin_devices_menu(user_id: int):
     for device_id, info in sorted(devices.all().items()):
         name = str(info.get("name") or device_id)
         kb.button(
-            text=_lex("permission_enabled" if device_id in granted else "permission_disabled", item=name)[:62],
+            text=_limit_button_label(
+                _lex("permission_enabled" if device_id in granted else "permission_disabled", item=name),
+                62,
+            ),
             callback_data=f"admin:device:{user_id}:{device_id}",
             style="success" if device_id in granted else "primary",
         )
@@ -1440,7 +1551,10 @@ def admin_permissions_menu(user_id: int):
     for callback, label_key in USER_PERMISSION_CHOICES.items():
         enabled = callback in granted
         kb.button(
-            text=_lex("permission_enabled" if enabled else "permission_disabled", item=_nav(label_key))[:62],
+            text=_limit_button_label(
+                _lex("permission_enabled" if enabled else "permission_disabled", item=_nav(label_key)),
+                62,
+            ),
             callback_data=f"admin:perm:{user_id}:{callback.replace(':', '_')}",
             style="success" if enabled else "primary",
         )
@@ -1454,7 +1568,11 @@ def guest_devices_menu():
     for _, info in sorted(devices.all().items()):
         name = str(info.get("name") or "Устройство")
         status = "онлайн" if _status_dot(info) in ("🟢", "🟡") else "офлайн"
-        kb.button(text=f"{name}: {status}"[:62], callback_data="guest:readonly", style="primary")
+        kb.button(
+            text=_limit_button_label(_lex("guest_device_row", name=name, status=status), 62),
+            callback_data="guest:readonly",
+            style="primary",
+        )
     kb.button(text=_nav("guest_home"), callback_data="menu:main", style="primary")
     kb.adjust(1)
     return kb.as_markup()
@@ -1523,7 +1641,7 @@ def server_confirm_menu(action: str):
     kb = InlineKeyboardBuilder()
     if action in label_keys:
         label = _lex("server_confirm_button", action=_lex(label_keys[action]))
-        kb.button(text=label[:64], callback_data=f"server_confirm:{action}", style="danger")
+        kb.button(text=_limit_button_label(label), callback_data=f"server_confirm:{action}", style="danger")
     kb.button(text=_nav("cancel"), callback_data="menu:server", style="primary")
     kb.adjust(1)
     return kb.as_markup()
@@ -1557,8 +1675,12 @@ def blocked_menu():
     s = bot_settings.all_settings()
     kb = InlineKeyboardBuilder()
     for bid in s.get("blocked_ids") or []:
-        kb.button(text=f"➖ Разблокировать {bid}", callback_data=f"devmg:unblock:{bid}", style="success")
-    kb.button(text="⬅️ К списку", callback_data="menu:target", style="primary")
+        kb.button(
+            text=_lex("blocked_unblock_button", device_id=str(bid)[:24]),
+            callback_data=f"devmg:unblock:{bid}",
+            style="success",
+        )
+    kb.button(text=_lex("blocked_back_button"), callback_data="menu:target", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -1567,9 +1689,11 @@ def _favorites_kb(device_id: str, favs: list):
     kb = InlineKeyboardBuilder()
     for action in FAVORITABLE:
         is_fav = action in favs
-        mark = "✅" if is_fav else "➕"
         kb.button(
-            text=f"{mark} {ACTION_LABELS[action]}",
+            text=_lex(
+                "favorite_remove_button" if is_fav else "favorite_add_button",
+                action=ACTION_LABELS[action],
+            ),
             callback_data=f"fav:toggle:{action}",
             style="success" if is_fav else "primary",
         )
@@ -1588,9 +1712,9 @@ def target_label(device_id: str) -> str:
     info = devices.get(device_id)
     return info.get("name", device_id) if info else device_id
 
-def publish(action: str, **kwargs) -> bool:
-    """Отправить команду текущей цели через MQTT."""
-    target = SESSION.get("target")
+def publish(action: str, *, _target: str | None = None, **kwargs) -> bool:
+    """Send to the selected target, or to an explicit target for an in-flight form."""
+    target = _target or SESSION.get("target")
     if not target:
         log.warning("⚠️ Попытка отправки '%s' без выбранной цели", action)
         return False
@@ -1602,18 +1726,40 @@ def publish(action: str, **kwargs) -> bool:
     return transport.publish_command(target, action, **kwargs)
 
 
-def publish_tracked(action: str, **kwargs) -> tuple[bool, str]:
-    """Отправить команду с известным correlation id для точного ожидания ответа."""
+def publish_tracked(action: str, *, _target: str | None = None, **kwargs) -> tuple[bool, str]:
+    """Send with a correlation ID and optionally pin it to a captured target."""
     command_id = uuid.uuid4().hex[:12]
-    ok = publish(action, id=command_id, **kwargs)
+    ok = publish(action, _target=_target, id=command_id, **kwargs)
     return ok, command_id
 
 def _no_target_text() -> str:
-    return "⚠️ Цель не выбрана. Нажмите «Назад» и выберите устройство."
+    return _lex("target_required")
+
+
+async def _stale_card_allows_replacement(chat_id: int, message_id: int, exc: Exception) -> bool:
+    """Return true only when Telegram confirms the old card is gone or removed."""
+    detail = str(exc).lower()
+    if "message to edit not found" in detail:
+        return True
+    if not any(
+        marker in detail
+        for marker in (
+            "message can't be edited",
+            "message_id_invalid",
+            "message identifier is not specified",
+        )
+    ):
+        return False
+    try:
+        await bot.delete_message(chat_id, message_id)
+        return True
+    except Exception as delete_exc:
+        log.warning("Не удалось удалить карточку %s для безопасной замены: %s", message_id, delete_exc)
+        return False
 
 
 async def _replace_callback_message(cq: CallbackQuery, text: str, reply_markup=None):
-    """Обновить текущую карточку; при запрете редактирования убрать старую."""
+    """Edit the current card; avoid duplicates on transient Telegram failures."""
     try:
         await cq.message.edit_text(text, reply_markup=reply_markup)
         try:
@@ -1625,15 +1771,70 @@ async def _replace_callback_message(cq: CallbackQuery, text: str, reply_markup=N
         # случае нельзя удалять карточку и создавать дубль.
         if "not modified" in str(exc).lower():
             return
-        try:
-            await cq.message.delete()
-        except Exception:
-            pass
+        if not await _stale_card_allows_replacement(
+            cq.message.chat.id, cq.message.message_id, exc
+        ):
+            log.warning("Не удалось обновить карточку %s: %s", cq.message.message_id, exc)
+            return
         sent = await cq.message.answer(text, reply_markup=reply_markup)
         try:
             ui_cards.set_card(sent.chat.id, cq.from_user.id, sent.message_id)
         except OSError:
             log.exception("Не удалось сохранить ID новой карточки")
+
+
+async def _replace_user_card(message: Message, text: str, reply_markup=None) -> int:
+    """Edit this user's registered bot card; create a replacement only if stale."""
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    card_id = ui_cards.get(chat_id, user_id)
+    if card_id:
+        try:
+            await bot.edit_message_text(
+                text,
+                chat_id=chat_id,
+                message_id=card_id,
+                reply_markup=reply_markup,
+            )
+            return card_id
+        except Exception as exc:
+            detail = str(exc).lower()
+            if "not modified" in detail:
+                return card_id
+            if not await _stale_card_allows_replacement(chat_id, card_id, exc):
+                log.warning("Не удалось обновить карточку %s: %s", card_id, exc)
+                return card_id
+
+    sent = await message.answer(text, reply_markup=reply_markup)
+    try:
+        ui_cards.set_card(chat_id, user_id, sent.message_id)
+    except OSError:
+        log.exception("Не удалось сохранить ID пользовательской карточки")
+    return sent.message_id
+
+
+async def _replace_user_card_with_document(
+    message: Message, document: BufferedInputFile, caption: str, reply_markup=None
+) -> int:
+    """Make a delivered document the new main card and remove the old text card."""
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    old_card_id = ui_cards.get(chat_id, user_id)
+    sent = await message.answer_document(
+        document,
+        caption=caption,
+        reply_markup=reply_markup,
+    )
+    if old_card_id and old_card_id != sent.message_id:
+        try:
+            await bot.delete_message(chat_id, old_card_id)
+        except Exception:
+            log.debug("Старая карточка не удалена при отправке файла", exc_info=True)
+    try:
+        ui_cards.set_card(chat_id, user_id, sent.message_id)
+    except OSError:
+        log.exception("Не удалось сохранить ID карточки с файлом")
+    return sent.message_id
 
 
 async def _show_start_card(message: Message, text: str, reply_markup) -> int:
@@ -1678,6 +1879,8 @@ multi_screenshot = MultiCollector()
 # Защита от двойного клика: одна Telegram-карточка не должна одновременно
 # обслуживаться несколькими долгими командами.
 _ACTIVE_UI_COMMANDS: set[tuple[int, int, int, str]] = set()
+_PENDING_VERSION_INSTALLS: dict[int, dict[str, object]] = {}
+_PENDING_VERSION_INSTALLS_LOCK = threading.Lock()
 
 # Волна новых команд: текстовые ответы приходят в общий коллектор.
 # ВАЖНО: здесь перечислены ВСЕ типы ответов, которые публикуются агентом
@@ -1731,10 +1934,12 @@ file_collector = ResponseCollector()
 HISTORY: dict[str, list] = {}
 LAST_PROCESSES: dict[str, dict] = {}
 LAST_BATTERY_ALERT: dict[str, float] = {}
-# Дебаунс онлайн/офлайн уведомлений: не слать спам при флипе публичного брокера.
-# Ключ: device_id, значение: (last_status: bool, last_notify_time: float)
-_NOTIFY_DEBOUNCE: dict[str, tuple] = {}  # {device_id: (was_online, ts)}
-_NOTIFY_DEBOUNCE_SEC = 120  # не спамить при серии перезапусков/флипов агента
+# Подтверждение перехода состояния отдельно от heartbeat-ов: heartbeat не
+# должен сбрасывать таймер уведомлений и терять реальное возвращение online.
+_STATUS_NOTICE_STATE: dict[str, bool] = {}
+_STATUS_NOTICE_PENDING: dict[str, object] = {}
+_STATUS_NOTICE_LOCK = threading.Lock()
+_STATUS_NOTICE_DELAY_SEC = 8
 _START_NOTIFY_LAST: dict[int, float] = {}
 _OFFLINE_TIMEOUT_SEC = 150  # два пропущенных heartbeat-а считаем офлайном
 
@@ -1777,6 +1982,47 @@ def _schedule_admin_notice(text: str, reply_markup=None) -> None:
     future.add_done_callback(
         lambda done: done.exception() if not done.cancelled() else None
     )
+
+def _queue_device_status_notice(
+    device_id: str,
+    online: bool,
+    name: str,
+    *,
+    delay: float | None = None,
+    offline_reason: str | None = None,
+) -> None:
+    """Send one notice only after the device has held the new state steadily."""
+    loop = LOOP
+    if loop is None or loop.is_closed():
+        log.warning("Статусное уведомление не поставлено в очередь: asyncio loop недоступен")
+        return
+
+    async def _send_if_stable() -> None:
+        await asyncio.sleep(_STATUS_NOTICE_DELAY_SEC if delay is None else max(0.0, delay))
+        current = devices.get(device_id) or {}
+        if bool(current.get("online", False)) != online:
+            return
+        with _STATUS_NOTICE_LOCK:
+            previous = _STATUS_NOTICE_STATE.get(device_id)
+            if previous is None or previous == online:
+                return
+            _STATUS_NOTICE_STATE[device_id] = online
+
+        quiet = bot_settings.quiet_active()
+        enabled = bot_settings.get("notify_online" if online else "notify_offline", True)
+        if not enabled or quiet:
+            return
+        event = "вернулся онлайн" if online else (offline_reason or "ушёл в оффлайн")
+        icon = "🟢" if online else "🔴"
+        _schedule_admin_notice(f"{icon} <b>{html.escape(name)}</b> {event}")
+
+    future = asyncio.run_coroutine_threadsafe(_send_if_stable(), loop)
+    with _STATUS_NOTICE_LOCK:
+        previous_future = _STATUS_NOTICE_PENDING.get(device_id)
+        _STATUS_NOTICE_PENDING[device_id] = future
+    if previous_future is not None:
+        previous_future.cancel()
+
 
 def _maybe_battery_alert(device_id: str, payload: dict) -> None:
     """Watchdog по батарее: алерт при заряде <=20% не чаще раза в 30 минут."""
@@ -1846,6 +2092,16 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             "online": online,
             "standby": is_standby,
         }
+        update_mode = payload.get("update_mode")
+        info["update_mode"] = (
+            update_mode
+            if isinstance(update_mode, str) and update_mode in {"source", "frozen"}
+            else "unknown"
+        )
+        info["release_update_ready"] = (
+            info["update_mode"] == "source"
+            and payload.get("release_update_ready") is True
+        )
         if online:
             info["last_seen"] = time.time()
         is_new = device_id not in devices.all()
@@ -1854,35 +2110,16 @@ def on_mqtt_message(topic: str, data: dict) -> None:
         multi_status.submit(device_id, info)
         audit("device_online" if online else "device_offline",
               device_id=device_id, name=info["name"], is_new=is_new)
-        quiet = bot_settings.quiet_active()
-        # Watchdog-уведомления: вернулся онлайн / ушёл в оффлайн (LWT)
-        # Дебаунс: не слать уведомление если статус не изменился или изменился
-        # слишком быстро (флип публичного MQTT-брокера при кратком разрыве).
-        _prev = _NOTIFY_DEBOUNCE.get(device_id)
-        _now = time.time()
-        _debounce_ok = True
-        if _prev is not None:
-            _prev_online, _prev_ts = _prev
-            if _prev_online == online:
-                _debounce_ok = False  # статус не изменился
-            elif _now - _prev_ts < _NOTIFY_DEBOUNCE_SEC:
-                _debounce_ok = False  # изменился слишком быстро — флип брокера
-        _NOTIFY_DEBOUNCE[device_id] = (online, _now)
-
-        if not is_new and online and not was_online \
-                and bot_settings.get("notify_online", True) and not quiet and _debounce_ok:
-            _schedule_admin_notice(
-                f"🟢 <b>{html.escape(info['name'])}</b> вернулся онлайн",
-            )
-        if not online and was_online \
-                and bot_settings.get("notify_offline", True) and not quiet and _debounce_ok:
-            _schedule_admin_notice(
-                f"🔴 <b>{html.escape(info['name'])}</b> ушёл в оффлайн",
-            )
+        with _STATUS_NOTICE_LOCK:
+            _STATUS_NOTICE_STATE.setdefault(device_id, online if is_new else was_online)
+            if is_new:
+                _STATUS_NOTICE_STATE[device_id] = online
+        if not is_new and online != was_online:
+            _queue_device_status_notice(device_id, online, info["name"])
         if is_new and LOOP is not None and bot_settings.get("require_device_approval", True):
             kb = InlineKeyboardBuilder()
-            kb.button(text="✅ Добавить", callback_data=f"devmg:allow:{device_id}", style="success")
-            kb.button(text="⛔ Заблокировать", callback_data=f"devmg:block:{device_id}", style="danger")
+            kb.button(text=_lex("device_approve_button"), callback_data=f"devmg:allow:{device_id}", style="success")
+            kb.button(text=_lex("device_block_button"), callback_data=f"devmg:block:{device_id}", style="danger")
             kb.adjust(1)
             _schedule_admin_notice(
                 f"🆕 Новое устройство: <b>{html.escape(info['name'])}</b> "
@@ -1965,6 +2202,7 @@ def on_mqtt_message(topic: str, data: dict) -> None:
                 "version": str(payload.get("guardian") or payload.get("version") or "?"),
                 "agent_running": bool(payload.get("agent_running")),
                 "launchd_loaded": bool(payload.get("launchd_loaded")),
+                "task_registered": bool(payload.get("guardian_task_registered", payload.get("launchd_loaded"))),
                 "auto_restart": bool(payload.get("auto_restart")),
             },
             "guardian_last_seen": time.time(),
@@ -1976,11 +2214,12 @@ def on_mqtt_message(topic: str, data: dict) -> None:
         log.info(f"ACK from {device_id}: {action} -> {status}")
     elif ((msg_type in FUN_RESPONSE_TYPES and payload.get("type") == msg_type)
           or (msg_type == "output" and payload.get("type") in FUN_RESPONSE_TYPES)):
-        # Волна новых команд: ответы с текстом → общий текст-коллектор,
-        # файлы (file_get) → файловый коллектор.
+        # Волна новых команд: ответы типа file_get → файловый коллектор,
+        # все остальные ответы → текстовый коллектор. Успешные file_put,
+        # file_del и path_open часто содержат только ok/path и иначе теряются.
         if payload.get("type") == "file_get":
             file_collector.submit(device_id, payload)
-        elif "text" in payload or "error" in payload or not payload.get("ok", True):
+        else:
             fun_text_collector.submit(device_id, payload)
 
 
@@ -1989,21 +2228,23 @@ async def _device_offline_watchdog() -> None:
     while True:
         await asyncio.sleep(30)
         now = time.time()
-        quiet = bot_settings.quiet_active()
         for device_id, info in devices.all().items():
             if not info.get("online"):
                 continue
             last_seen = float(info.get("last_seen", 0) or 0)
             if not last_seen or now - last_seen < _OFFLINE_TIMEOUT_SEC:
                 continue
+            with _STATUS_NOTICE_LOCK:
+                _STATUS_NOTICE_STATE.setdefault(device_id, True)
             devices.upsert(device_id, {"online": False, "standby": False})
-            _NOTIFY_DEBOUNCE[device_id] = (False, now)
+            _queue_device_status_notice(
+                device_id,
+                False,
+                str(info.get("name") or device_id),
+                delay=0,
+                offline_reason="не выходит на связь (heartbeat просрочен)",
+            )
             audit("device_offline_watchdog", device_id=device_id, name=info.get("name", device_id))
-            if bot_settings.get("notify_offline", True) and not quiet:
-                _schedule_admin_notice(
-                    f"🔴 <b>{html.escape(str(info.get('name') or device_id))}</b> "
-                    "не выходит на связь (heartbeat просрочен)"
-                )
 
 transport = MQTTTransport(on_mqtt_message)
 
@@ -2032,7 +2273,7 @@ async def cmd_start(message: Message, state: FSMContext):
     if should_notify_start:
         try:
             kb = InlineKeyboardBuilder()
-            kb.button(text="Открыть пользователя", callback_data=f"admin:user:{message.from_user.id}", style="primary")
+            kb.button(text=_lex("admin_open_user_button"), callback_data=f"admin:user:{message.from_user.id}", style="primary")
             kb.adjust(1)
             await _notify_admins(
                 "Новый запуск бота: "
@@ -2084,7 +2325,7 @@ async def on_menu_about(cq: CallbackQuery):
     """XIDER handbook: short index, then individually readable chapters."""
     kb = InlineKeyboardBuilder()
     for slug, title, _ in info_book.CHAPTERS:
-        kb.button(text=title, callback_data=f"about:chapter:{slug}", style="primary")
+        kb.button(text=_limit_button_label(title), callback_data=f"about:chapter:{slug}", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(1)
     await _replace_callback_message(
@@ -2107,10 +2348,10 @@ async def on_about_chapter(cq: CallbackQuery):
         return
     kb = InlineKeyboardBuilder()
     if index:
-        kb.button(text="⬅️ Предыдущая", callback_data=f"about:chapter:{info_book.CHAPTERS[index - 1][0]}", style="primary")
+        kb.button(text=_lex("about_prev_button"), callback_data=f"about:chapter:{info_book.CHAPTERS[index - 1][0]}", style="primary")
     if index + 1 < len(info_book.CHAPTERS):
-        kb.button(text="Следующая ➡️", callback_data=f"about:chapter:{info_book.CHAPTERS[index + 1][0]}", style="primary")
-    kb.button(text="К оглавлению", callback_data="menu:about", style="primary")
+        kb.button(text=_lex("about_next_button"), callback_data=f"about:chapter:{info_book.CHAPTERS[index + 1][0]}", style="primary")
+    kb.button(text=_lex("about_toc_button"), callback_data="menu:about", style="primary")
     kb.adjust(2, 1)
     await _replace_callback_message(cq, f"<b>{html.escape(title)}</b>\n\n{html.escape(body)}", reply_markup=kb.as_markup())
     await cq.answer()
@@ -2132,7 +2373,7 @@ async def on_url_input(message: Message, state: FSMContext):
         )
     else:
         await message.answer(
-            "⚠️ Нет соединения с MQTT-брокером.",
+            _lex("mqtt_disconnected"),
             reply_markup=back_to_device_kb(),
         )
 
@@ -2141,7 +2382,7 @@ async def on_text_input(message: Message, state: FSMContext):
     await state.clear()
     text = (message.text or "").strip()
     if not text:
-        await message.answer("⚠️ Пустой текст.", reply_markup=back_to_device_kb())
+        await message.answer(_lex("empty_text"), reply_markup=back_to_device_kb())
         return
     if publish("notify", text=text):
         await message.answer(
@@ -2150,7 +2391,7 @@ async def on_text_input(message: Message, state: FSMContext):
         )
     else:
         await message.answer(
-            "⚠️ Нет соединения с MQTT-брокером.",
+            _lex("mqtt_disconnected"),
             reply_markup=back_to_device_kb(),
         )
 
@@ -2159,7 +2400,7 @@ async def on_sound_input(message: Message, state: FSMContext):
     await state.clear()
     text = (message.text or "").strip()
     if not text:
-        await message.answer("⚠️ Пустой текст.", reply_markup=back_to_device_kb())
+        await message.answer(_lex("empty_text"), reply_markup=back_to_device_kb())
         return
     if publish("sound", text=text):
         await message.answer(
@@ -2168,7 +2409,7 @@ async def on_sound_input(message: Message, state: FSMContext):
         )
     else:
         await message.answer(
-            "⚠️ Нет соединения с MQTT-брокером.",
+            _lex("mqtt_disconnected"),
             reply_markup=back_to_device_kb(),
         )
 
@@ -2579,8 +2820,8 @@ async def on_admin_style(cq: CallbackQuery):
     current = xlex.normalize_style(bot_settings.get("ui_style", "technical"))
     for style in xlex.STYLES:
         prefix = "● " if style == current else "○ "
-        kb.button(text=prefix + xlex.STYLE_NAMES[style], callback_data=f"admin:style:set:{style}", style="success" if style == current else "primary")
-    kb.button(text="Назад", callback_data="menu:admin", style="primary")
+        kb.button(text=_limit_button_label(prefix + xlex.STYLE_NAMES[style]), callback_data=f"admin:style:set:{style}", style="success" if style == current else "primary")
+    kb.button(text=_nav("back"), callback_data="menu:admin", style="primary")
     kb.adjust(1)
     await cq.message.edit_text(
         "<b>X-LEX · стиль текста</b>\n"
@@ -2618,7 +2859,7 @@ async def on_noop(cq: CallbackQuery):
 
 # ---------- Управление устройствами: переименование / удаление ----------
 
-@router.callback_query(AdminFilter(), F.data.startswith("devmg:rename:"))
+@router.callback_query(OwnerFilter(), F.data.startswith("devmg:rename:"))
 async def on_devmg_rename(cq: CallbackQuery, state: FSMContext):
     device_id = cq.data.split(":", 2)[2]
     await state.set_state(Form.wait_rename)
@@ -2631,7 +2872,7 @@ async def on_devmg_rename(cq: CallbackQuery, state: FSMContext):
     await cq.answer()
 
 
-@router.message(AdminFilter(), Form.wait_rename)
+@router.message(OwnerFilter(), Form.wait_rename)
 async def on_rename_input(message: Message, state: FSMContext):
     data = await state.get_data()
     device_id = data.get("rename_device")
@@ -2653,11 +2894,11 @@ async def on_rename_input(message: Message, state: FSMContext):
         await message.answer("⚠️ Устройство не найдено.", reply_markup=main_menu())
 
 
-@router.callback_query(AdminFilter(), F.data.startswith("devmg:delete:"))
+@router.callback_query(OwnerFilter(), F.data.startswith("devmg:delete:"))
 async def on_devmg_delete(cq: CallbackQuery):
     device_id = cq.data.split(":", 2)[2]
     kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Да, удалить!", callback_data=f"devmg:delok:{device_id}", style="danger")
+    kb.button(text=_lex("confirm_delete_device_button"), callback_data=f"devmg:delok:{device_id}", style="danger")
     kb.button(text=_nav("cancel"), callback_data="back:device", style="primary")
     kb.adjust(1)
     await cq.message.answer(
@@ -2668,11 +2909,12 @@ async def on_devmg_delete(cq: CallbackQuery):
     await cq.answer()
 
 
-@router.callback_query(AdminFilter(), F.data.startswith("devmg:delok:"))
+@router.callback_query(OwnerFilter(), F.data.startswith("devmg:delok:"))
 async def on_devmg_delete_ok(cq: CallbackQuery):
     device_id = cq.data.split(":", 2)[2]
     name = target_label(device_id)
     if devices.remove(device_id):
+        access_store.revoke_devices([device_id], actor_id=cq.from_user.id)
         audit("device_remove", device_id=device_id)
         if SESSION.get("target") == device_id:
             SESSION["target"] = None
@@ -2687,11 +2929,11 @@ async def on_devmg_delete_ok(cq: CallbackQuery):
     await cq.answer()
 
 
-@router.callback_query(AdminFilter(), F.data.startswith("devmg:uninstall:"))
+@router.callback_query(OwnerFilter(), F.data.startswith("devmg:uninstall:"))
 async def on_devmg_uninstall(cq: CallbackQuery):
     device_id = cq.data.split(":", 2)[2]
     kb = InlineKeyboardBuilder()
-    kb.button(text="🛑 Да, полностью удалить агент!", callback_data=f"devmg:uninstok:{device_id}", style="danger")
+    kb.button(text=_lex("confirm_uninstall_agent_button"), callback_data=f"devmg:uninstok:{device_id}", style="danger")
     kb.button(text=_nav("cancel"), callback_data="back:device", style="primary")
     kb.adjust(1)
     await cq.message.answer(
@@ -2704,7 +2946,7 @@ async def on_devmg_uninstall(cq: CallbackQuery):
     await cq.answer()
 
 
-@router.callback_query(AdminFilter(), F.data.startswith("devmg:uninstok:"))
+@router.callback_query(OwnerFilter(), F.data.startswith("devmg:uninstok:"))
 async def on_devmg_uninstall_ok(cq: CallbackQuery):
     device_id = cq.data.split(":", 2)[2]
     name = target_label(device_id)
@@ -2716,6 +2958,7 @@ async def on_devmg_uninstall_ok(cq: CallbackQuery):
     result = await fun_text_collector.wait(10.0)
 
     devices.remove(device_id)
+    access_store.revoke_devices([device_id], actor_id=cq.from_user.id)
     if SESSION.get("target") == device_id or old_target == device_id:
         SESSION["target"] = None
 
@@ -2730,7 +2973,7 @@ async def on_devmg_uninstall_ok(cq: CallbackQuery):
 
 # ---------- Регистрация устройств: подтвердить / заблокировать ----------
 
-@router.callback_query(AdminFilter(), F.data.startswith("devmg:allow:"))
+@router.callback_query(OwnerFilter(), F.data.startswith("devmg:allow:"))
 async def on_devmg_allow(cq: CallbackQuery):
     device_id = cq.data.split(":", 2)[2]
     audit("device_approved", device_id=device_id)
@@ -2742,11 +2985,11 @@ async def on_devmg_allow(cq: CallbackQuery):
     await cq.answer()
 
 
-@router.callback_query(AdminFilter(), F.data.startswith("devmg:block:"))
+@router.callback_query(OwnerFilter(), F.data.startswith("devmg:block:"))
 async def on_devmg_block(cq: CallbackQuery):
     device_id = cq.data.split(":", 2)[2]
     kb = InlineKeyboardBuilder()
-    kb.button(text="⛔ Да, заблокировать!", callback_data=f"devmg:blockok:{device_id}", style="danger")
+    kb.button(text=_lex("confirm_block_device_button"), callback_data=f"devmg:blockok:{device_id}", style="danger")
     kb.button(text=_nav("cancel"), callback_data="back:device", style="primary")
     kb.adjust(1)
     await cq.message.answer(
@@ -2757,12 +3000,13 @@ async def on_devmg_block(cq: CallbackQuery):
     await cq.answer()
 
 
-@router.callback_query(AdminFilter(), F.data.startswith("devmg:blockok:"))
+@router.callback_query(OwnerFilter(), F.data.startswith("devmg:blockok:"))
 async def on_devmg_blockok(cq: CallbackQuery):
     device_id = cq.data.split(":", 2)[2]
     name = target_label(device_id)
     bot_settings.block(device_id)
     devices.remove(device_id)
+    access_store.revoke_devices([device_id], actor_id=cq.from_user.id)
     if SESSION.get("target") == device_id:
         SESSION["target"] = None
     audit("device_blocked", device_id=device_id)
@@ -2773,7 +3017,7 @@ async def on_devmg_blockok(cq: CallbackQuery):
     await cq.answer()
 
 
-@router.callback_query(AdminFilter(), F.data.startswith("devmg:unblock:"))
+@router.callback_query(OwnerFilter(), F.data.startswith("devmg:unblock:"))
 async def on_devmg_unblock(cq: CallbackQuery):
     device_id = cq.data.split(":", 2)[2]
     if bot_settings.unblock(device_id):
@@ -2788,7 +3032,7 @@ async def on_devmg_unblock(cq: CallbackQuery):
     await cq.answer()
 
 
-@router.callback_query(AdminFilter(), F.data == "devmg:blocked")
+@router.callback_query(OwnerFilter(), F.data == "devmg:blocked")
 async def on_devmg_blocked(cq: CallbackQuery):
     s = bot_settings.all_settings()
     blocked = s.get("blocked_ids") or []
@@ -2800,10 +3044,10 @@ async def on_devmg_blocked(cq: CallbackQuery):
     await cq.answer()
 
 
-@router.callback_query(AdminFilter(), F.data == "devmg:clear_all")
+@router.callback_query(OwnerFilter(), F.data == "devmg:clear_all")
 async def on_devmg_clear_all(cq: CallbackQuery):
     kb = InlineKeyboardBuilder()
-    kb.button(text="🧹 Да, очистить всё!", callback_data="devmg:clear_all_confirm", style="danger")
+    kb.button(text=_lex("confirm_clear_devices_button"), callback_data="devmg:clear_all_confirm", style="danger")
     kb.button(text=_nav("cancel"), callback_data="menu:devices", style="primary")
     kb.adjust(1, 1)
     await cq.message.answer(
@@ -2814,15 +3058,16 @@ async def on_devmg_clear_all(cq: CallbackQuery):
     await cq.answer()
 
 
-@router.callback_query(AdminFilter(), F.data == "devmg:clear_all_confirm")
+@router.callback_query(OwnerFilter(), F.data == "devmg:clear_all_confirm")
 async def on_devmg_clear_all_confirm(cq: CallbackQuery):
+    access_store.revoke_devices(devices.all().keys(), actor_id=cq.from_user.id)
     devices.clear()
     SESSION["target"] = None
     await cq.message.answer("🧹 <b>База устройств полностью очищена!</b>", reply_markup=devices_menu())
     await cq.answer()
 
 
-@router.callback_query(AdminFilter(), F.data == "devmg:manualadd")
+@router.callback_query(OwnerFilter(), F.data == "devmg:manualadd")
 async def on_devmg_manualadd(cq: CallbackQuery, state: FSMContext):
     await state.set_state(Form.wait_manual_add)
     await cq.message.answer(
@@ -2833,7 +3078,7 @@ async def on_devmg_manualadd(cq: CallbackQuery, state: FSMContext):
     await cq.answer()
 
 
-@router.message(AdminFilter(), Form.wait_manual_add)
+@router.message(OwnerFilter(), Form.wait_manual_add)
 async def on_manualadd_input(message: Message, state: FSMContext):
     await state.clear()
     device_id = (message.text or "").strip().lower()
@@ -2870,23 +3115,26 @@ async def on_menu_main(cq: CallbackQuery):
 @router.callback_query(AdminFilter(), F.data == "menu:devices")
 async def on_menu_devices(cq: CallbackQuery):
     lines = []
-    for device_id, info in sorted(devices.all().items()):
-        ago = time.time() - float(info.get("last_seen", 0) or 0)
+    visible_devices = _visible_device_items(cq.from_user.id)
+    for device_id, info in sorted(visible_devices.items()):
         state = "🟢 онлайн" if _status_dot(info) == "🟢" else "⚪ офлайн"
-        os_name = info.get("os", "?")
-        name = info.get("name", device_id)
+        os_name = html.escape(str(info.get("os", "?")))
+        name = html.escape(str(info.get("name", device_id)))
         lines.append(
-            f"{state} <b>{name}</b> ({device_id})\n"
+            f"{state} <b>{name}</b> (<code>{html.escape(str(device_id))}</code>)\n"
             f"    ОС: {os_name}"
         )
     if lines:
         text = "💻 <b>Устройства</b>\n\n" + "\n".join(lines)
     else:
-        text = "💻 Пока нет ни одного устройства.\nЗапустите клиент — оно появится само."
-    await _replace_callback_message(cq, text, reply_markup=devices_menu())
+        if get_user_role(cq.from_user.id) == Role.OWNER:
+            text = "💻 Пока нет ни одного устройства.\nЗапустите клиент — оно появится само."
+        else:
+            text = "💻 Вам пока не выдан доступ к устройствам. Обратитесь к владельцу."
+    await _replace_callback_message(cq, text, reply_markup=devices_menu(cq.from_user.id))
     await cq.answer()
 
-@router.callback_query(AdminFilter(), F.data == "menu:target")
+@router.callback_query(OwnerFilter(), F.data == "menu:target")
 async def on_menu_target(cq: CallbackQuery):
     if not devices.all():
         kb = InlineKeyboardBuilder()
@@ -2897,12 +3145,15 @@ async def on_menu_target(cq: CallbackQuery):
         )
         await cq.answer()
         return
-    await cq.message.edit_text("Выберите устройство:", reply_markup=devices_menu())
+    await cq.message.edit_text(_lex("device_required"), reply_markup=devices_menu())
     await cq.answer()
 
 @router.callback_query(AdminFilter(), F.data.startswith("dev:"))
 async def on_dev(cq: CallbackQuery):
     device_id = cq.data.split(":", 1)[1]
+    if not device_id or devices.get(device_id) is None:
+        await cq.answer("Устройство уже недоступно.", show_alert=True)
+        return
     SESSION["target"] = device_id
     await cq.message.edit_text(
         device_card(device_id),
@@ -2914,6 +3165,18 @@ async def on_dev(cq: CallbackQuery):
 async def on_back_to_device(cq: CallbackQuery):
     """Универсальная кнопка «Назад» — возврат в меню устройства."""
     target = SESSION.get("target")
+    if (
+        target
+        and (
+            devices.get(target) is None
+            or (
+                get_user_role(cq.from_user.id) == Role.USER
+                and target not in _visible_device_items(cq.from_user.id)
+            )
+        )
+    ):
+        SESSION["target"] = None
+        target = None
     if not target:
         await cq.message.edit_text(f"<b>{html.escape(_lex('main_title'))}</b>", reply_markup=main_menu())
     else:
@@ -2930,7 +3193,7 @@ async def on_back_to_device(cq: CallbackQuery):
 @router.callback_query(AdminFilter(), F.data == "cmd:url")
 async def on_cmd_url(cq: CallbackQuery, state: FSMContext):
     if not SESSION.get("target"):
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await state.set_state(Form.wait_url)
     await cq.message.answer(
@@ -2942,7 +3205,7 @@ async def on_cmd_url(cq: CallbackQuery, state: FSMContext):
 @router.callback_query(AdminFilter(), F.data == "cmd:text")
 async def on_cmd_text(cq: CallbackQuery, state: FSMContext):
     if not SESSION.get("target"):
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await state.set_state(Form.wait_text)
     await cq.message.answer(
@@ -2954,7 +3217,7 @@ async def on_cmd_text(cq: CallbackQuery, state: FSMContext):
 @router.callback_query(AdminFilter(), F.data == "cmd:sound")
 async def on_cmd_sound(cq: CallbackQuery, state: FSMContext):
     if not SESSION.get("target"):
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await state.set_state(Form.wait_sound)
     await cq.message.answer(
@@ -2968,17 +3231,17 @@ async def on_cmd_sound(cq: CallbackQuery, state: FSMContext):
 async def on_cmd_screenshot(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     if target == "all":
-        await cq.answer("Скриншот — только для одного устройства", show_alert=True)
+        await cq.answer(_lex("single_device_only"), show_alert=True)
         return
     await cq.answer("📸 Делаю скриншот...")
     sent, command_id = publish_tracked("screenshot")
     if not sent:
         await _replace_callback_message(
             cq,
-            "⚠️ Нет соединения с MQTT-брокером.",
+            _lex("mqtt_disconnected"),
             reply_markup=back_to_device_kb(),
         )
         return
@@ -3032,17 +3295,17 @@ async def on_cmd_screenshot(cq: CallbackQuery):
 async def on_cmd_webcam(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     if target == "all":
-        await cq.answer("Вебкамера — только для одного устройства", show_alert=True)
+        await cq.answer(_lex("single_device_only"), show_alert=True)
         return
     await cq.answer("📷 Делаю снимок с вебки (может занять пару секунд)...")
     sent, command_id = publish_tracked("webcam")
     if not sent:
         await _replace_callback_message(
             cq,
-            "⚠️ Нет соединения с MQTT-брокером.",
+            _lex("mqtt_disconnected"),
             reply_markup=back_to_device_kb(),
         )
         return
@@ -3092,16 +3355,16 @@ async def on_cmd_webcam(cq: CallbackQuery):
 async def on_cmd_battery(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await cq.answer("🔋 Запрашиваю батарею...")
     sent, command_id = publish_tracked("battery")
     if not sent:
-        await _replace_callback_message(cq, "⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
         return
     res = await battery_collector.wait_for(target, "battery", 15.0, command_id)
     if not res:
-        await _replace_callback_message(cq, "⏳ Нет ответа.", reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, _lex("device_no_response"), reply_markup=back_to_device_kb())
         return
     if not res.get("available"):
         await _replace_callback_message(cq, "🔋 Батарея отсутствует на устройстве.", reply_markup=back_to_device_kb())
@@ -3115,16 +3378,16 @@ async def on_cmd_battery(cq: CallbackQuery):
 async def on_cmd_network(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await cq.answer("🌐 Запрашиваю сеть...")
     sent, command_id = publish_tracked("network")
     if not sent:
-        await _replace_callback_message(cq, "⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
         return
     res = await network_collector.wait_for(target, "network", 15.0, command_id)
     if not res:
-        await _replace_callback_message(cq, "⏳ Нет ответа.", reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, _lex("device_no_response"), reply_markup=back_to_device_kb())
         return
     lines = []
     for i in res.get("interfaces", []):
@@ -3137,16 +3400,16 @@ async def on_cmd_network(cq: CallbackQuery):
 async def on_cmd_services(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await cq.answer("🛠 Запрашиваю службы...")
     sent, command_id = publish_tracked("services")
     if not sent:
-        await _replace_callback_message(cq, "⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
         return
     res = await services_collector.wait_for(target, "services", 15.0, command_id)
     if not res:
-        await _replace_callback_message(cq, "⏳ Нет ответа.", reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, _lex("device_no_response"), reply_markup=back_to_device_kb())
         return
     tot = res.get("total", "?")
     run = res.get("running", "?")
@@ -3156,16 +3419,16 @@ async def on_cmd_services(cq: CallbackQuery):
 async def on_cmd_capabilities(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await cq.answer("📊 Запрашиваю возможности...")
     sent, command_id = publish_tracked("capabilities")
     if not sent:
-        await _replace_callback_message(cq, "⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
         return
     res = await capabilities_collector.wait_for(target, "capabilities", 15.0, command_id)
     if not res:
-        await _replace_callback_message(cq, "⏳ Нет ответа.", reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, _lex("device_no_response"), reply_markup=back_to_device_kb())
         return
     await _replace_callback_message(cq, _format_capabilities(res), reply_markup=back_to_device_kb())
 
@@ -3240,17 +3503,17 @@ def _format_capabilities(result: dict) -> str:
 async def on_cmd_sysinfo(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     if target == "all":
-        await cq.answer("Инфо — только для одного устройства", show_alert=True)
+        await cq.answer(_lex("single_device_only"), show_alert=True)
         return
     await cq.answer("💻 Запрашиваю...")
     sent, command_id = publish_tracked("sysinfo")
     if not sent:
         await _replace_callback_message(
             cq,
-            "⚠️ Нет соединения с MQTT-брокером.",
+            _lex("mqtt_disconnected"),
             reply_markup=back_to_device_kb(),
         )
         return
@@ -3258,7 +3521,7 @@ async def on_cmd_sysinfo(cq: CallbackQuery):
     if result is None:
         await _replace_callback_message(
             cq,
-            "⏳ Ответ не получен за 12 сек — устройство офлайн.",
+            _lex("device_timeout", seconds="12"),
             reply_markup=back_to_device_kb(),
         )
         return
@@ -3286,7 +3549,7 @@ async def on_cmd_sysinfo(cq: CallbackQuery):
 async def on_cmd_lock(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     if publish("lock"):
         await _replace_callback_message(
@@ -3297,7 +3560,7 @@ async def on_cmd_lock(cq: CallbackQuery):
     else:
         await _replace_callback_message(
             cq,
-            "⚠️ Нет соединения с MQTT-брокером.",
+            _lex("mqtt_disconnected"),
             reply_markup=back_to_device_kb(),
         )
 
@@ -3311,7 +3574,7 @@ async def on_cmd_volume(cq: CallbackQuery):
 async def on_cmd_status(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await cq.answer("Запрашиваю статус...")
     if target == "all":
@@ -3325,7 +3588,7 @@ async def on_cmd_status(cq: CallbackQuery):
         else:
             await _replace_callback_message(
                 cq,
-                "⚠️ Нет соединения с MQTT-брокером.",
+                _lex("mqtt_disconnected"),
                 reply_markup=system_menu(),
             )
         return
@@ -3333,7 +3596,7 @@ async def on_cmd_status(cq: CallbackQuery):
     if not sent:
         await _replace_callback_message(
             cq,
-            "⚠️ Нет соединения с MQTT-брокером.",
+            _lex("mqtt_disconnected"),
             reply_markup=system_menu(),
         )
         return
@@ -3349,7 +3612,7 @@ async def on_cmd_status(cq: CallbackQuery):
     if status is None:
         await _replace_callback_message(
             cq,
-            "⏳ Ответ не получен — устройство офлайн.",
+            _lex("device_no_response"),
             reply_markup=system_menu(),
         )
         return
@@ -3364,7 +3627,7 @@ async def on_cmd_status(cq: CallbackQuery):
 async def on_cmd_power_menu(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await cq.message.edit_text(
         f"⚡ <b>Питание: {target_label(target)}</b>\n\n"
@@ -3379,7 +3642,7 @@ async def on_power_action(cq: CallbackQuery):
     action = cq.data.split(":", 1)[1]
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     labels = {"shutdown": "ВЫКЛЮЧИТЬ", "reboot": "ПЕРЕЗАГРУЗИТЬ", "sleep": "ОТПРАВИТЬ В СОН"}
     label = labels.get(action, action.upper())
@@ -3396,7 +3659,7 @@ async def on_power_confirm(cq: CallbackQuery):
     action = cq.data.split(":", 1)[1]
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Цель не выбрана", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     fun_text_collector.reset()
     if publish("power", action=action):
@@ -3413,7 +3676,7 @@ async def on_power_confirm(cq: CallbackQuery):
         )
     else:
         await cq.message.edit_text(
-            "⚠️ Нет соединения с MQTT-брокером.",
+            _lex("mqtt_disconnected"),
             reply_markup=back_to_device_kb(),
         )
     await cq.answer()
@@ -3434,13 +3697,13 @@ async def on_cmd_stop(cq: CallbackQuery):
 async def on_cat_media(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите устройство", show_alert=True)
+        await cq.answer(_lex("device_required"), show_alert=True)
         return
     await cq.message.edit_text(
         f"📸 <b>Медиа & Зрение</b> · <b>{target_label(target)}</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "Съемка экрана, веб-камера, микрофон и управление звуком:",
-        reply_markup=media_menu(),
+        reply_markup=media_menu(cq.from_user.id if cq.from_user else None),
     )
     await cq.answer()
 
@@ -3449,7 +3712,7 @@ async def on_cat_media(cq: CallbackQuery):
 async def on_cat_screen(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите устройство", show_alert=True)
+        await cq.answer(_lex("device_required"), show_alert=True)
         return
     await cq.message.edit_text(
         f"🖥 <b>Экран & Дисплей</b> · <b>{target_label(target)}</b>\n"
@@ -3464,7 +3727,7 @@ async def on_cat_screen(cq: CallbackQuery):
 async def on_cat_input(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите устройство", show_alert=True)
+        await cq.answer(_lex("device_required"), show_alert=True)
         return
     await cq.message.edit_text(
         f"⌨️ <b>Ввод & Мышь</b> · <b>{target_label(target)}</b>\n"
@@ -3479,13 +3742,13 @@ async def on_cat_input(cq: CallbackQuery):
 async def on_cat_system(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите устройство", show_alert=True)
+        await cq.answer(_lex("device_required"), show_alert=True)
         return
     await cq.message.edit_text(
         f"📊 <b>Система & Сенсоры</b> · <b>{target_label(target)}</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "Мониторинг ресурсов, статус батареи, здоровье SMART накопителей и софт:",
-        reply_markup=system_menu(),
+        reply_markup=system_menu(cq.from_user.id if cq.from_user else None),
     )
     await cq.answer()
 
@@ -3494,7 +3757,7 @@ async def on_cat_system(cq: CallbackQuery):
 async def on_cat_network(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите устройство", show_alert=True)
+        await cq.answer(_lex("device_required"), show_alert=True)
         return
     await cq.message.edit_text(
         f"🌐 <b>Сеть & Коннект</b> · <b>{target_label(target)}</b>\n"
@@ -3509,12 +3772,12 @@ async def on_cat_network(cq: CallbackQuery):
 async def on_cat_files(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target or target == "all":
-        await cq.answer("Файлы доступны только для конкретного устройства", show_alert=True)
+        await cq.answer(_lex("device_required"), show_alert=True)
         return
     await cq.message.edit_text(
-        f"📁 <b>Файлы & Диски</b> · <b>{target_label(target)}</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "Просмотр папок, поиск, скачивание и загрузка файлов:",
+        _lex_html("files_menu_title", device=target_label(target))
+        + "\n"
+        + _lex("files_menu_description"),
         reply_markup=files_menu(),
     )
     await cq.answer()
@@ -3524,7 +3787,7 @@ async def on_cat_files(cq: CallbackQuery):
 async def on_cat_terminal(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите устройство", show_alert=True)
+        await cq.answer(_lex("device_required"), show_alert=True)
         return
     await cq.message.edit_text(
         f"🛠 <b>Терминал & Процессы</b> · <b>{target_label(target)}</b>\n"
@@ -3539,13 +3802,13 @@ async def on_cat_terminal(cq: CallbackQuery):
 async def on_cat_power(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите устройство", show_alert=True)
+        await cq.answer(_lex("device_required"), show_alert=True)
         return
     await cq.message.edit_text(
         f"🔒 <b>Питание & Защита</b> · <b>{target_label(target)}</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "Блокировка экрана, сон, перезагрузка, выключение и Wake-on-LAN:",
-        reply_markup=power_menu_new(),
+        reply_markup=power_menu_new(cq.from_user.id if cq.from_user else None),
     )
     await cq.answer()
 
@@ -3554,7 +3817,7 @@ async def on_cat_power(cq: CallbackQuery):
 async def on_cat_pranks(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите устройство", show_alert=True)
+        await cq.answer(_lex("device_required"), show_alert=True)
         return
     await cq.message.edit_text(
         f"🎭 <b>Приколы & Розыгрыши</b> · <b>{target_label(target)}</b>\n"
@@ -3569,7 +3832,7 @@ async def on_cat_pranks(cq: CallbackQuery):
 async def on_cat_device(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите устройство", show_alert=True)
+        await cq.answer(_lex("device_required"), show_alert=True)
         return
     await cq.message.edit_text(
         f"⚙️ <b>Настройки ПК</b> · <b>{target_label(target)}</b>\n"
@@ -3587,7 +3850,7 @@ async def on_cat_device(cq: CallbackQuery):
 async def on_proc_page(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target or target == "all":
-        await cq.answer("Процессы — только для одного устройства", show_alert=True)
+        await cq.answer(_lex("single_device_only"), show_alert=True)
         return
     refresh = cq.data == "proc:refresh"
     page = 0 if refresh else int(cq.data.split(":", 1)[1] or 0)
@@ -3596,12 +3859,12 @@ async def on_proc_page(cq: CallbackQuery):
         await cq.answer("⚙️ Запрашиваю процессы...")
         processes_collector.reset()
         if not transport.publish_command(target, "processes", top_n=15):
-            await cq.message.answer("⚠️ Нет соединения с MQTT-брокером.")
+            await cq.message.answer(_lex("mqtt_disconnected"))
             return
         res = await processes_collector.wait(15.0)
         if not res:
             await cq.message.answer(
-                "⏳ Процессы не получены — устройство офлайн.",
+                _lex("device_no_response"),
                 reply_markup=back_to_device_kb(),
             )
             await cq.answer()
@@ -3616,11 +3879,11 @@ async def on_proc_page(cq: CallbackQuery):
     kb = InlineKeyboardBuilder()
     for it in chunk:
         label = f"🔪 {it.get('name', '?')} · {it.get('mem_percent', 0)}%"
-        kb.button(text=label, callback_data=f"killq:{it.get('pid')}", style="danger")
+        kb.button(text=_limit_button_label(label), callback_data=f"killq:{it.get('pid')}", style="danger")
     if pages > 1:
         if page > 0:
             kb.button(text="◀️", callback_data=f"proc:{page - 1}", style="primary")
-        kb.button(text=f"{page + 1}/{pages}", callback_data="noop", style="primary")
+        kb.button(text=_limit_button_label(f"{page + 1}/{pages}"), callback_data="noop", style="primary")
         if page < pages - 1:
             kb.button(text="▶️", callback_data=f"proc:{page + 1}", style="primary")
     kb.button(text=_nav("refresh"), callback_data="proc:refresh", style="success")
@@ -3639,7 +3902,9 @@ async def on_kill_confirm(cq: CallbackQuery):
     pid = cq.data.split(":", 1)[1]
     await cq.message.answer(
         f"🔪 Убить процесс <code>{html.escape(pid)}</code>?",
-        reply_markup=confirm_kb(f"kill:{pid}", yes_text="✅ Да, убить!"),
+        reply_markup=confirm_kb(
+            f"kill:{pid}", yes_text=_lex("confirm_kill_process_button")
+        ),
     )
     await cq.answer()
 
@@ -3648,13 +3913,13 @@ async def on_kill_confirm(cq: CallbackQuery):
 async def on_kill(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target or target == "all":
-        await cq.answer("Цель не выбрана", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     pid = cq.data.split(":", 1)[1]
     if publish("kill_process", pid=pid):
         await cq.message.answer(f"🔪 Команда kill отправлена (pid {pid}).")
     else:
-        await cq.message.answer("⚠️ Нет соединения с MQTT-брокером.")
+        await cq.message.answer(_lex("mqtt_disconnected"))
     await cq.answer()
 
 
@@ -3664,7 +3929,7 @@ async def on_kill(cq: CallbackQuery):
 async def on_all_status(cq: CallbackQuery):
     multi_status.reset()
     if not transport.publish_command("all", "status_request"):
-        await cq.message.answer("⚠️ Нет соединения с MQTT-брокером.")
+        await cq.message.answer(_lex("mqtt_disconnected"))
         await cq.answer()
         return
     await cq.answer("📡 Опрашиваю все устройства...")
@@ -3692,7 +3957,7 @@ async def on_all_status(cq: CallbackQuery):
 async def on_all_screenshot(cq: CallbackQuery):
     multi_screenshot.reset()
     if not transport.publish_command("all", "screenshot"):
-        await cq.message.answer("⚠️ Нет соединения с MQTT-брокером.")
+        await cq.message.answer(_lex("mqtt_disconnected"))
         await cq.answer()
         return
     await cq.answer("📸 Собираю скриншоты...")
@@ -3730,7 +3995,7 @@ async def on_cmd_wol(cq: CallbackQuery):
         await cq.answer("MAC неизвестен — запрашиваю у устройства...")
         sysinfo_collector.reset()
         if not transport.publish_command(target, "sysinfo"):
-            await cq.message.answer("⚠️ Нет соединения с MQTT-брокером.")
+            await cq.message.answer(_lex("mqtt_disconnected"))
             await cq.answer()
             return
         res = await sysinfo_collector.wait(12.0)
@@ -3758,17 +4023,17 @@ async def on_cmd_wol(cq: CallbackQuery):
 async def on_cmd_disks(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target or target == "all":
-        await cq.answer("Только для одного устройства", show_alert=True)
+        await cq.answer(_lex("single_device_only"), show_alert=True)
         return
     await cq.answer("🗂 Запрашиваю диски...")
     sent, command_id = publish_tracked("disks")
     if not sent:
-        await cq.message.answer("⚠️ Нет соединения с MQTT-брокером.")
+        await cq.message.answer(_lex("mqtt_disconnected"))
         await cq.answer()
         return
     res = await disks_collector.wait_for(target, "disks", 15.0, command_id)
     if not res:
-        await cq.message.answer("⏳ Нет ответа.", reply_markup=back_to_device_kb())
+        await cq.message.answer(_lex("device_no_response"), reply_markup=back_to_device_kb())
         await cq.answer()
         return
     lines = res.get("lines", [])
@@ -3787,7 +4052,7 @@ async def on_vol_opts(cq: CallbackQuery):
 async def on_vol_set(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target or target == "all":
-        await cq.answer("Только для одного устройства", show_alert=True)
+        await cq.answer(_lex("single_device_only"), show_alert=True)
         return
     level = int(cq.data.split(":", 1)[1] or 50)
     await simple_command(cq, "volume_set", "🎚", f"Громкость {level}%", timeout=8.0, level=level)
@@ -3806,13 +4071,13 @@ async def on_mic_opts(cq: CallbackQuery):
 async def on_mic_dur(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target or target == "all":
-        await cq.answer("Только для одного устройства", show_alert=True)
+        await cq.answer(_lex("single_device_only"), show_alert=True)
         return
     dur = int(cq.data.split(":", 1)[1] or 5)
     await cq.answer(f"🎙 Запись {dur} сек...")
     sent, command_id = publish_tracked("mic", duration=dur)
     if not sent:
-        await cq.message.answer("⚠️ Нет соединения с MQTT-брокером.")
+        await cq.message.answer(_lex("mqtt_disconnected"))
         await cq.answer()
         return
     res = await mic_collector.wait_for(target, "mic", dur + 12.0, command_id)
@@ -3829,14 +4094,14 @@ async def on_mic_dur(cq: CallbackQuery):
         )
     except Exception:
         log.exception("Не удалось отправить аудио")
-        await cq.message.answer("⚠️ Ошибка отправки звука.")
+        await cq.message.answer(_lex("mqtt_publish_failed"))
     await cq.answer()
 
 
 @router.callback_query(AdminFilter(), F.data == "cmd:clipset")
 async def on_cmd_clipset(cq: CallbackQuery, state: FSMContext):
     if not SESSION.get("target"):
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await state.set_state(Form.wait_clipset)
     await cq.message.answer(
@@ -3851,12 +4116,12 @@ async def on_clipset_input(message: Message, state: FSMContext):
     await state.clear()
     text = (message.text or "").strip()
     if not text:
-        await message.answer("⚠️ Пустой текст.", reply_markup=back_to_device_kb())
+        await message.answer(_lex("empty_text"), reply_markup=back_to_device_kb())
         return
     if publish("clipboard_set", text=text):
         await message.answer("📥 Текст записан в буфер обмена устройства.")
     else:
-        await message.answer("⚠️ Нет соединения с MQTT-брокером.")
+        await message.answer(_lex("mqtt_disconnected"))
 
 
 # ---------- События (уведомления) ----------
@@ -4009,7 +4274,7 @@ async def on_adm_rm(cq: CallbackQuery):
 async def on_fav_menu(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target or target == "all":
-        await cq.answer("Только для одного устройства", show_alert=True)
+        await cq.answer(_lex("single_device_only"), show_alert=True)
         return
     favs = devices.get_favorites(target)
     await cq.message.edit_text(
@@ -4024,7 +4289,7 @@ async def on_fav_menu(cq: CallbackQuery):
 async def on_fav_toggle(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target or target == "all":
-        await cq.answer("Только для одного устройства", show_alert=True)
+        await cq.answer(_lex("single_device_only"), show_alert=True)
         return
     action = cq.data.split(":", 2)[2]
     added = devices.toggle_favorite(target, action)
@@ -4043,7 +4308,7 @@ async def on_fav_toggle(cq: CallbackQuery):
 async def on_history(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target or target == "all":
-        await cq.answer("Только для одного устройства", show_alert=True)
+        await cq.answer(_lex("single_device_only"), show_alert=True)
         return
     hist = HISTORY.get(target, [])
     kb = InlineKeyboardBuilder()
@@ -4059,7 +4324,7 @@ async def on_history(cq: CallbackQuery):
         )
         for i, (action, _kw, _ts) in enumerate(hist):
             kb.button(
-                text=f"↻ {ACTION_LABELS.get(action, action)}",
+                text=_limit_button_label(f"↻ {ACTION_LABELS.get(action, action)}"),
                 callback_data=f"rep:{i}",
                 style="primary",
             )
@@ -4073,7 +4338,7 @@ async def on_history(cq: CallbackQuery):
 async def on_repeat(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target or target == "all":
-        await cq.answer("Цель не выбрана", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     hist = HISTORY.get(target, [])
     try:
@@ -4088,7 +4353,7 @@ async def on_repeat(cq: CallbackQuery):
     if transport.publish_command(target, action, **kwargs):
         await cq.answer(f"↻ Повторяю: {ACTION_LABELS.get(action, action)}")
     else:
-        await cq.message.answer("⚠️ Нет соединения с MQTT-брокером.")
+        await cq.message.answer(_lex("mqtt_disconnected"))
         await cq.answer()
 
 
@@ -4111,10 +4376,13 @@ async def on_confirm_action(cq: CallbackQuery):
         await cq.answer()
         return
     if not SESSION.get("target"):
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     text, yes_cb = CONFIRM_PROMPTS[kind]
-    await cq.message.answer(f"⚠️ {text}", reply_markup=confirm_kb(yes_cb, yes_text="✅ Да!"))
+    await cq.message.answer(
+        f"⚠️ {text}",
+        reply_markup=confirm_kb(yes_cb, yes_text=_lex("confirm_yes_button")),
+    )
     await cq.answer()
 
 
@@ -4152,7 +4420,7 @@ async def on_stopall_ok(cq: CallbackQuery):
             reply_markup=back_to_device_kb(),
         )
     else:
-        await _replace_callback_message(cq, "⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
     await cq.answer()
 
 
@@ -4168,7 +4436,7 @@ async def on_sleep_ok(cq: CallbackQuery):
             f"😴 Сон отправлен: <b>{target_label(SESSION.get('target'))}</b>"
         )
     else:
-        await cq.message.answer("⚠️ Нет соединения с MQTT-брокером.")
+        await cq.message.answer(_lex("mqtt_disconnected"))
     await cq.answer()
 
 
@@ -4183,13 +4451,31 @@ def _require_target(cq: CallbackQuery) -> str | None:
     return target
 
 
+def _safe_transfer_filename(value: object) -> str:
+    """Keep Telegram/agent filenames as a single portable Downloads entry."""
+    raw = str(value or "file.bin").replace("\\", "/")
+    name = raw.rsplit("/", 1)[-1]
+    name = re.sub(r'[<>:"|?*\x00-\x1f\x7f]', "_", name).strip().rstrip(" .")
+    if name in {"", ".", ".."}:
+        name = "file.bin"
+
+    stem = name.split(".", 1)[0].upper()
+    if stem in {"CON", "PRN", "AUX", "NUL"} or re.fullmatch(r"(?:COM|LPT)[1-9]", stem):
+        name = f"_{name}"
+
+    # POSIX filesystems cap a single path component at 255 UTF-8 bytes. Keep
+    # the same bound on every client and never split a multibyte character.
+    name = name.encode("utf-8")[:255].decode("utf-8", errors="ignore").rstrip(" .")
+    return name or "file.bin"
+
+
 @router.callback_query(AdminFilter(), F.data == "files:menu")
 async def on_files_menu(cq: CallbackQuery):
     if not _require_target(cq):
-        await cq.answer("Выберите конкретное устройство (не «все»)", show_alert=True)
+        await cq.answer(_lex("device_required"), show_alert=True)
         return
     await cq.message.edit_text(
-        f"📁 Файлы: <b>{target_label(SESSION['target'])}</b>",
+        _lex_html("files_menu_title", device=target_label(SESSION["target"])),
         reply_markup=files_menu(),
     )
     await cq.answer()
@@ -4197,13 +4483,15 @@ async def on_files_menu(cq: CallbackQuery):
 
 @router.callback_query(AdminFilter(), F.data == "files:list")
 async def on_files_list(cq: CallbackQuery, state: FSMContext):
-    if not _require_target(cq):
-        await cq.answer("Выберите устройство", show_alert=True)
+    target = _require_target(cq)
+    if not target:
+        await cq.answer(_lex("device_required"), show_alert=True)
         return
     await state.set_state(Form.wait_path)
-    await state.update_data(path_mode="list")
-    await cq.message.answer(
-        "📂 Отправьте путь к папке, например:\n<code>C:\\Users</code> или <code>~/Downloads</code>",
+    await state.update_data(path_mode="list", target=target)
+    await _replace_callback_message(
+        cq,
+        _lex("files_prompt_list"),
         reply_markup=back_to_device_kb(),
     )
     await cq.answer()
@@ -4211,12 +4499,15 @@ async def on_files_list(cq: CallbackQuery, state: FSMContext):
 
 @router.callback_query(AdminFilter(), F.data == "files:find")
 async def on_files_find(cq: CallbackQuery, state: FSMContext):
-    if not _require_target(cq):
-        await cq.answer("Выберите устройство", show_alert=True)
+    target = _require_target(cq)
+    if not target:
+        await cq.answer(_lex("device_required"), show_alert=True)
         return
     await state.set_state(Form.wait_find)
-    await cq.message.answer(
-        "🔍 Отправьте что искать (часть имени файла):\n<code>report.pdf</code> или <code>отчёт</code>",
+    await state.update_data(target=target)
+    await _replace_callback_message(
+        cq,
+        _lex("files_prompt_find"),
         reply_markup=back_to_device_kb(),
     )
     await cq.answer()
@@ -4224,13 +4515,15 @@ async def on_files_find(cq: CallbackQuery, state: FSMContext):
 
 @router.callback_query(AdminFilter(), F.data == "files:get")
 async def on_files_get(cq: CallbackQuery, state: FSMContext):
-    if not _require_target(cq):
-        await cq.answer("Выберите устройство", show_alert=True)
+    target = _require_target(cq)
+    if not target:
+        await cq.answer(_lex("device_required"), show_alert=True)
         return
     await state.set_state(Form.wait_path)
-    await state.update_data(path_mode="get")
-    await cq.message.answer(
-        "📥 Отправьте полный путь к файлу, который забрать:\n<code>C:\\Users\\me\\report.pdf</code>",
+    await state.update_data(path_mode="get", target=target)
+    await _replace_callback_message(
+        cq,
+        _lex("files_prompt_get"),
         reply_markup=back_to_device_kb(),
     )
     await cq.answer()
@@ -4238,13 +4531,15 @@ async def on_files_get(cq: CallbackQuery, state: FSMContext):
 
 @router.callback_query(AdminFilter(), F.data == "files:put")
 async def on_files_put(cq: CallbackQuery, state: FSMContext):
-    if not _require_target(cq):
-        await cq.answer("Выберите устройство", show_alert=True)
+    target = _require_target(cq)
+    if not target:
+        await cq.answer(_lex("device_required"), show_alert=True)
         return
     await state.set_state(Form.wait_path)
-    await state.update_data(path_mode="put")
-    await cq.message.answer(
-        "📤 Отправьте файл (документом) — он будет сохранён в Downloads на устройстве.",
+    await state.update_data(path_mode="put", target=target)
+    await _replace_callback_message(
+        cq,
+        _lex("files_prompt_put"),
         reply_markup=back_to_device_kb(),
     )
     await cq.answer()
@@ -4252,13 +4547,15 @@ async def on_files_put(cq: CallbackQuery, state: FSMContext):
 
 @router.callback_query(AdminFilter(), F.data == "files:del")
 async def on_files_del(cq: CallbackQuery, state: FSMContext):
-    if not _require_target(cq):
-        await cq.answer("Выберите устройство", show_alert=True)
+    target = _require_target(cq)
+    if not target:
+        await cq.answer(_lex("device_required"), show_alert=True)
         return
     await state.set_state(Form.wait_path)
-    await state.update_data(path_mode="del")
-    await cq.message.answer(
-        "🗑 Отправьте полный путь к файлу, который удалить. Это необратимо!",
+    await state.update_data(path_mode="del", target=target)
+    await _replace_callback_message(
+        cq,
+        _lex("files_prompt_delete"),
         reply_markup=back_to_device_kb(),
     )
     await cq.answer()
@@ -4266,13 +4563,15 @@ async def on_files_del(cq: CallbackQuery, state: FSMContext):
 
 @router.callback_query(AdminFilter(), F.data == "files:open")
 async def on_files_open(cq: CallbackQuery, state: FSMContext):
-    if not _require_target(cq):
-        await cq.answer("Выберите устройство", show_alert=True)
+    target = _require_target(cq)
+    if not target:
+        await cq.answer(_lex("device_required"), show_alert=True)
         return
     await state.set_state(Form.wait_path)
-    await state.update_data(path_mode="open")
-    await cq.message.answer(
-        "🖥 Отправьте путь, который открыть (папка или файл):\n<code>C:\\Users\\me\\Desktop</code>",
+    await state.update_data(path_mode="open", target=target)
+    await _replace_callback_message(
+        cq,
+        _lex("files_prompt_open"),
         reply_markup=back_to_device_kb(),
     )
     await cq.answer()
@@ -4283,106 +4582,161 @@ async def on_path_input(message: Message, state: FSMContext):
     data = await state.get_data()
     mode = data.get("path_mode", "list")
     await state.clear()
-    target = SESSION.get("target")
+    target = data.get("target") or SESSION.get("target")
     if not target or target == "all":
-        await message.answer("Цель не выбрана.", reply_markup=back_to_device_kb())
+        await _replace_user_card(message, _lex("target_required"), reply_markup=back_to_device_kb())
         return
 
     if mode == "put":
         doc = message.document
         if not doc:
-            await message.answer("⚠️ Отправьте файл документом.", reply_markup=back_to_device_kb())
+            await _replace_user_card(message, _lex("files_document_required"), reply_markup=back_to_device_kb())
             return
         buf = await bot.download(doc)
         chunk = buf.read()
-        name = doc.file_name or "file.bin"
+        name = _safe_transfer_filename(doc.file_name)
         dest = f"~/Downloads/{name}"
         if len(chunk) > 30 * 1024 * 1024:
-            await message.answer("⚠️ Файл > 30 МБ не влезет в MQTT-сообщение.", reply_markup=back_to_device_kb())
+            await _replace_user_card(message, _lex("files_size_limit", limit="30"), reply_markup=back_to_device_kb())
             return
-        fun_text_collector.reset()
-        if not publish("file_put", name=name, path=dest, b64=base64.b64encode(chunk).decode("ascii")):
-            await message.answer("⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
+        sent, command_id = publish_tracked(
+            "file_put",
+            _target=target,
+            name=name,
+            path=dest,
+            b64=base64.b64encode(chunk).decode("ascii"),
+        )
+        if not sent:
+            await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
             return
-        result = await fun_text_collector.wait(25.0)
+        result = await fun_text_collector.wait_for(target, "file_put", timeout=25.0, command_id=command_id)
         if result and result.get("ok"):
-            await message.answer(f"✅ Сохранено: <code>{html.escape(str(result.get('path') or dest))}</code>", reply_markup=back_to_device_kb())
+            await _replace_user_card(
+                message,
+                _lex_html("files_upload_saved", path=result.get("path") or dest),
+                reply_markup=back_to_device_kb(),
+            )
         else:
-            await message.answer(f"⚠️ {html.escape(str((result or {}).get('error') or 'Нет ответа от устройства'))}", reply_markup=back_to_device_kb())
+            error = (result or {}).get("error") or _lex("device_no_response")
+            await _replace_user_card(
+                message,
+                _lex_html("files_upload_failed", error=error),
+                reply_markup=back_to_device_kb(),
+            )
         return
 
     path = (message.text or "").strip()
     if not path:
-        await message.answer("⚠️ Пустой путь.", reply_markup=back_to_device_kb())
+        await _replace_user_card(message, _lex("files_empty_path"), reply_markup=back_to_device_kb())
         return
 
     if mode == "list":
-        fun_text_collector.reset()
-        if not publish("dir_list", path=path):
-            await message.answer("⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
+        sent, command_id = publish_tracked("dir_list", _target=target, path=path)
+        if not sent:
+            await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
             return
-        result = await fun_text_collector.wait(15.0)
-        text = (result or {}).get("text") or "⏳ Нет ответа от устройства"
-        await message.answer(f"<pre>{html.escape(str(text)[:3500])}</pre>", reply_markup=back_to_device_kb())
+        result = await fun_text_collector.wait_for(target, "dir_list", timeout=15.0, command_id=command_id)
+        text = (result or {}).get("text") or _lex("device_no_response")
+        await _replace_user_card(
+            message,
+            _lex_html("files_list_result", text=str(text)[:3500]),
+            reply_markup=back_to_device_kb(),
+        )
     elif mode == "get":
-        file_collector.reset()
-        if not publish("file_get", path=path):
-            await message.answer("⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
+        sent, command_id = publish_tracked("file_get", _target=target, path=path)
+        if not sent:
+            await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
             return
-        result = await file_collector.wait(30.0)
+        result = await file_collector.wait_for(target, "file_get", timeout=30.0, command_id=command_id)
         if not result:
-            await message.answer("⏳ Файл не получен (нет ответа / слишком большой).", reply_markup=back_to_device_kb())
+            await _replace_user_card(message, _lex("files_download_timeout"), reply_markup=back_to_device_kb())
             return
         if not result.get("ok", False):
-            await message.answer(f"⚠️ {html.escape(str(result.get('error') or 'Устройство не смогло прочитать файл.'))}", reply_markup=back_to_device_kb())
+            await _replace_user_card(
+                message,
+                _lex_html("files_download_failed", error=result.get("error") or ""),
+                reply_markup=back_to_device_kb(),
+            )
             return
         encoded = result.get("data") or result.get("b64") or ""
         try:
             data = base64.b64decode(encoded, validate=True)
         except (ValueError, TypeError):
-            await message.answer("⚠️ Устройство вернуло повреждённый файл.", reply_markup=back_to_device_kb())
+            await _replace_user_card(message, _lex("files_download_corrupt"), reply_markup=back_to_device_kb())
             return
-        await message.answer_document(
-            BufferedInputFile(data, filename=result.get("filename") or result.get("name") or "file.bin"),
-            caption=f"📥 Файл с <b>{target_label(target)}</b>",
+        await _replace_user_card_with_document(
+            message,
+            BufferedInputFile(
+                data,
+                filename=_safe_transfer_filename(result.get("filename") or result.get("name")),
+            ),
+            caption=_lex_html("files_download_caption", device=target_label(target)),
+            reply_markup=back_to_device_kb(),
         )
     elif mode == "del":
-        fun_text_collector.reset()
-        if not publish("file_del", path=path):
-            await message.answer("⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
+        sent, command_id = publish_tracked("file_del", _target=target, path=path)
+        if not sent:
+            await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
             return
-        result = await fun_text_collector.wait(15.0)
+        result = await fun_text_collector.wait_for(target, "file_del", timeout=15.0, command_id=command_id)
         if result and result.get("ok"):
-            await message.answer(f"🗑 Удалено: <code>{html.escape(path)}</code>", reply_markup=back_to_device_kb())
+            await _replace_user_card(
+                message,
+                _lex_html("files_delete_done", path=path),
+                reply_markup=back_to_device_kb(),
+            )
         else:
-            await message.answer(f"⚠️ {html.escape(str((result or {}).get('error') or 'Нет ответа'))}", reply_markup=back_to_device_kb())
+            await _replace_user_card(
+                message,
+                _lex_html("files_delete_failed", error=(result or {}).get("error") or _lex("device_no_response")),
+                reply_markup=back_to_device_kb(),
+            )
     elif mode == "open":
-        fun_text_collector.reset()
-        if not publish("path_open", path=path):
-            await message.answer("⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
+        sent, command_id = publish_tracked("path_open", _target=target, path=path)
+        if not sent:
+            await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
             return
-        result = await fun_text_collector.wait(10.0)
+        result = await fun_text_collector.wait_for(target, "path_open", timeout=10.0, command_id=command_id)
         if result and result.get("ok"):
-            await message.answer(f"🖥 Открыто: <code>{html.escape(path)}</code>", reply_markup=back_to_device_kb())
+            await _replace_user_card(
+                message,
+                _lex_html("files_open_done", path=path),
+                reply_markup=back_to_device_kb(),
+            )
         else:
-            await message.answer(f"⚠️ {html.escape(str((result or {}).get('error') or 'Нет ответа'))}", reply_markup=back_to_device_kb())
+            await _replace_user_card(
+                message,
+                _lex_html("files_open_failed", error=(result or {}).get("error") or _lex("device_no_response")),
+                reply_markup=back_to_device_kb(),
+            )
 
 
 @router.message(AdminFilter(), Form.wait_find)
 async def on_find_input(message: Message, state: FSMContext):
+    data = await state.get_data()
     await state.clear()
-    target = SESSION.get("target")
+    target = data.get("target") or SESSION.get("target")
     pattern = (message.text or "").strip()
-    if not target or target == "all" or not pattern:
-        await message.answer("⚠️ Пустой запрос или нет цели.", reply_markup=back_to_device_kb())
+    if not target or target == "all":
+        await _replace_user_card(message, _lex("device_required"), reply_markup=back_to_device_kb())
         return
-    fun_text_collector.reset()
-    if not publish("find_file", pattern=pattern, root="~"):
-        await message.answer("⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
+    if not pattern:
+        await _replace_user_card(message, _lex("files_find_empty"), reply_markup=back_to_device_kb())
         return
-    result = await fun_text_collector.wait(20.0)
-    text = (result or {}).get("text") or "⏳ Нет ответа (поиск мог занять больше времени)"
-    await message.answer(f"🔍 <b>Найдено:</b>\n<pre>{html.escape(str(text)[:3500])}</pre>", reply_markup=back_to_device_kb())
+    sent, command_id = publish_tracked("find_file", _target=target, pattern=pattern, root="~")
+    if not sent:
+        await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
+        return
+    result = await fun_text_collector.wait_for(target, "find_file", timeout=20.0, command_id=command_id)
+    text = (result or {}).get("text")
+    if not text:
+        await _replace_user_card(message, _lex("files_find_no_response"), reply_markup=back_to_device_kb())
+        return
+    await _replace_user_card(
+        message,
+        _lex_html("files_find_result", text=str(text)[:3500]),
+        reply_markup=back_to_device_kb(),
+    )
 
 
 # =====================================================================
@@ -4393,15 +4747,15 @@ async def on_find_input(message: Message, state: FSMContext):
 async def on_fun_extip(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await cq.answer("🌍 Запрашиваю внешний IP...")
     fun_text_collector.reset()
     if not publish("ext_ip"):
-        await _replace_callback_message(cq, "⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
         return
     result = await fun_text_collector.wait(10.0)
-    text = (result or {}).get("text") or "⏳ Нет ответа от устройства"
+    text = (result or {}).get("text") or _lex("device_no_response")
     await _replace_callback_message(cq, f"🌍 <b>Внешний IP ({target_label(target)}):</b>\n<code>{html.escape(str(text))}</code>", reply_markup=back_to_device_kb())
 
 
@@ -4409,35 +4763,35 @@ async def on_fun_extip(cq: CallbackQuery):
 async def on_fun_screenoff(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     if publish("screen_off"):
         await cq.answer("🧯 Экран выключен")
         await _replace_callback_message(cq, f"🧯 Экран успешно погашен: <b>{target_label(target)}</b>", reply_markup=back_to_device_kb())
     else:
-        await cq.answer("⚠️ Ошибка отправки")
-        await _replace_callback_message(cq, "⚠️ Ошибка отправки", reply_markup=back_to_device_kb())
+        await cq.answer(_lex("send_failed"))
+        await _replace_callback_message(cq, _lex("send_failed"), reply_markup=back_to_device_kb())
 
 
 @router.callback_query(AdminFilter(), F.data.in_({"fun:screensaver", "cmd:saveron"}))
 async def on_fun_screensaver(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     if publish("screensaver_on"):
         await cq.answer("💤 Заставка запущена")
         await _replace_callback_message(cq, f"💤 Заставка экрана включена: <b>{target_label(target)}</b>", reply_markup=back_to_device_kb())
     else:
-        await cq.answer("⚠️ Ошибка отправки")
-        await _replace_callback_message(cq, "⚠️ Ошибка отправки", reply_markup=back_to_device_kb())
+        await cq.answer(_lex("send_failed"))
+        await _replace_callback_message(cq, _lex("send_failed"), reply_markup=back_to_device_kb())
 
 
 @router.callback_query(AdminFilter(), F.data.in_({"fun:type", "cmd:typetxt"}))
 async def on_fun_type(cq: CallbackQuery, state: FSMContext):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await state.set_state(Form.wait_fun_text)
     await cq.message.answer("⌨️ Введите текст, который агент должен напечатать на клавиатуре ПК:", reply_markup=back_to_device_kb())
@@ -4448,7 +4802,7 @@ async def on_fun_type(cq: CallbackQuery, state: FSMContext):
 async def on_fun_hotkey(cq: CallbackQuery, state: FSMContext):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await state.set_state(Form.wait_fun_hotkey)
     await cq.message.answer("⌘ Введите сочетание клавиш через плюс (например: <code>ctrl+c</code>, <code>cmd+space</code>, <code>alt+tab</code>):", reply_markup=back_to_device_kb())
@@ -4459,7 +4813,7 @@ async def on_fun_hotkey(cq: CallbackQuery, state: FSMContext):
 async def on_fun_wallpaper(cq: CallbackQuery, state: FSMContext):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await state.set_state(Form.wait_fun_wallpaper)
     await cq.message.answer("🖼 Отправьте прямую ссылку на картинку (.jpg или .png) для установки на рабочий стол:", reply_markup=back_to_device_kb())
@@ -4470,7 +4824,7 @@ async def on_fun_wallpaper(cq: CallbackQuery, state: FSMContext):
 async def on_fun_spam(cq: CallbackQuery, state: FSMContext):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await state.set_state(Form.wait_fun_spam)
     await cq.message.answer("💬 Отправьте текст для всплывающих окон на экране ПК:", reply_markup=back_to_device_kb())
@@ -4483,12 +4837,12 @@ async def on_fun_text_input(message: Message, state: FSMContext):
     target = SESSION.get("target")
     text = (message.text or "").strip()
     if not target or not text:
-        await message.answer("⚠️ Пустой текст или цель не выбрана.", reply_markup=back_to_device_kb())
+        await message.answer(_lex("target_and_text_required"), reply_markup=back_to_device_kb())
         return
     if publish("type_text", text=text):
         await message.answer(f"⌨️ Текст отправлен на ввод: <b>{target_label(target)}</b>", reply_markup=back_to_device_kb())
     else:
-        await message.answer("⚠️ Ошибка отправки на брокер.", reply_markup=back_to_device_kb())
+        await message.answer(_lex("mqtt_publish_failed"), reply_markup=back_to_device_kb())
 
 
 @router.message(AdminFilter(), Form.wait_fun_hotkey)
@@ -4502,7 +4856,7 @@ async def on_fun_hotkey_input(message: Message, state: FSMContext):
     if publish("hotkey", keys=keys):
         await message.answer(f"⌘ Сочетание <code>{html.escape(keys)}</code> нажато на <b>{target_label(target)}</b>", reply_markup=back_to_device_kb())
     else:
-        await message.answer("⚠️ Ошибка отправки на брокер.", reply_markup=back_to_device_kb())
+        await message.answer(_lex("mqtt_publish_failed"), reply_markup=back_to_device_kb())
 
 
 @router.message(AdminFilter(), Form.wait_fun_wallpaper)
@@ -4515,7 +4869,7 @@ async def on_fun_wallpaper_input(message: Message, state: FSMContext):
         return
     fun_text_collector.reset()
     if not publish("wallpaper_set", url=url):
-        await message.answer("⚠️ Нет соединения с MQTT-брокером.", reply_markup=back_to_device_kb())
+        await message.answer(_lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
         return
     await message.answer("⏳ Устанавливаю обои рабочего стола...")
     result = await fun_text_collector.wait(20.0)
@@ -4530,7 +4884,7 @@ async def on_fun_wallpaper_input(message: Message, state: FSMContext):
 async def on_menu_wallpaper(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите устройство", show_alert=True)
+        await cq.answer(_lex("device_required"), show_alert=True)
         return
     await cq.message.edit_text(
         f"🖼 <b>Управление обоями рабочего стола</b> · <b>{target_label(target)}</b>\n"
@@ -4548,12 +4902,12 @@ async def on_menu_wallpaper(cq: CallbackQuery):
 async def on_wallpaper_random_meme(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await cq.answer("🎲 Ищу мем и ставлю на рабочий стол...")
     fun_text_collector.reset()
     if not publish("wallpaper_set", random_meme=True):
-        await cq.message.answer("⚠️ Ошибка отправки на брокер.", reply_markup=back_to_device_kb())
+        await cq.message.answer(_lex("mqtt_publish_failed"), reply_markup=back_to_device_kb())
         return
     result = await fun_text_collector.wait(15.0)
     if result and result.get("ok"):
@@ -4570,7 +4924,7 @@ async def on_wallpaper_random_meme(cq: CallbackQuery):
 async def on_wallpaper_photo_guide(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await cq.message.answer(
         f"📸 <b>Установка обоев прямо из фото</b>\n"
@@ -4600,7 +4954,7 @@ async def on_photo_wallpaper_message(message: Message):
 
         fun_text_collector.reset()
         if not publish("wallpaper_set", b64=b64_img):
-            await status_msg.edit_text("⚠️ Ошибка отправки фото через брокер.", reply_markup=back_to_device_kb())
+            await status_msg.edit_text(_lex("mqtt_photo_failed"), reply_markup=back_to_device_kb())
             return
 
         result = await fun_text_collector.wait(20.0)
@@ -4626,12 +4980,12 @@ async def on_fun_spam_input(message: Message, state: FSMContext):
     target = SESSION.get("target")
     text = (message.text or "").strip()
     if not target or not text:
-        await message.answer("⚠️ Текст пуст.", reply_markup=back_to_device_kb())
+        await message.answer(_lex("empty_text"), reply_markup=back_to_device_kb())
         return
     if publish("msgbox_spam", text=text, count=5):
         await message.answer(f"💬 Отправлено 5 диалоговых окон на экран <b>{target_label(target)}</b>!", reply_markup=back_to_device_kb())
     else:
-        await message.answer("⚠️ Ошибка отправки на брокер.", reply_markup=back_to_device_kb())
+        await message.answer(_lex("mqtt_publish_failed"), reply_markup=back_to_device_kb())
 
 
 # =====================================================================
@@ -4642,59 +4996,59 @@ async def on_fun_spam_input(message: Message, state: FSMContext):
 async def on_prank_screamer(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     if publish("prank_screamer"):
         await cq.answer("🎬 Скример запущен!")
         await cq.message.answer(f"🎬 <b>Полноэкранный скример активирован:</b> {target_label(target)}", reply_markup=back_to_device_kb())
     else:
-        await cq.answer("⚠️ Ошибка отправки", show_alert=True)
+        await cq.answer(_lex("send_failed"), show_alert=True)
 
 
 @router.callback_query(AdminFilter(), F.data == "prank:rickroll50")
 async def on_prank_rickroll(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     if publish("prank_rickroll", tabs=50):
         await cq.answer("🎵 Рикролл x50 запущен!")
         await cq.message.answer(f"🎵 <b>50 вкладок Rickroll отправлены на открытие:</b> {target_label(target)}", reply_markup=back_to_device_kb())
     else:
-        await cq.answer("⚠️ Ошибка отправки", show_alert=True)
+        await cq.answer(_lex("send_failed"), show_alert=True)
 
 
 @router.callback_query(AdminFilter(), F.data == "prank:matrix")
 async def on_prank_matrix(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     if publish("prank_matrix", duration=15):
         await cq.answer("🌈 Матрица запущена!")
         await cq.message.answer(f"🌈 <b>Зеленый дождь «Матрица» запущен на весь экран:</b> {target_label(target)}", reply_markup=back_to_device_kb())
     else:
-        await cq.answer("⚠️ Ошибка отправки", show_alert=True)
+        await cq.answer(_lex("send_failed"), show_alert=True)
 
 
 @router.callback_query(AdminFilter(), F.data == "prank:siren")
 async def on_prank_siren(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     if publish("prank_siren", duration=10):
         await cq.answer("🔊 Сирена включена!")
         await cq.message.answer(f"🔊 <b>Звуковая сирена тревоги запущена на 10 сек:</b> {target_label(target)}", reply_markup=back_to_device_kb())
     else:
-        await cq.answer("⚠️ Ошибка отправки", show_alert=True)
+        await cq.answer(_lex("send_failed"), show_alert=True)
 
 
 @router.callback_query(AdminFilter(), F.data == "prank:shout")
 async def on_prank_shout(cq: CallbackQuery, state: FSMContext):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await state.set_state(Form.wait_shout)
     await cq.message.answer("📢 Введите текст, который агент должен прокричать через динамики на 100% громкости:", reply_markup=back_to_device_kb())
@@ -4707,19 +5061,19 @@ async def on_prank_shout_input(message: Message, state: FSMContext):
     target = SESSION.get("target")
     text = (message.text or "").strip()
     if not target or not text:
-        await message.answer("⚠️ Текст пуст.", reply_markup=back_to_device_kb())
+        await message.answer(_lex("empty_text"), reply_markup=back_to_device_kb())
         return
     if publish("prank_shout_tts", text=text):
         await message.answer(f"📢 Текст отправлен на громкую озвучку на <b>{target_label(target)}</b>!", reply_markup=back_to_device_kb())
     else:
-        await message.answer("⚠️ Ошибка отправки на брокер.", reply_markup=back_to_device_kb())
+        await message.answer(_lex("mqtt_publish_failed"), reply_markup=back_to_device_kb())
 
 
 @router.callback_query(AdminFilter(), F.data == "prank:swapmouse")
 async def on_prank_swapmouse(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     current_state = bool(SESSION.get(f"mouse_swapped_{target}", False))
     new_state = not current_state
@@ -4734,27 +5088,27 @@ async def on_prank_swapmouse(cq: CallbackQuery):
         else:
             await cq.answer("🖱 Инверсия мыши ВЫКЛЮЧЕНА! (Стандартный режим)", show_alert=True)
     else:
-        await cq.answer("⚠️ Ошибка отправки на брокер", show_alert=True)
+        await cq.answer(_lex("mqtt_publish_failed"), show_alert=True)
 
 
 @router.callback_query(AdminFilter(), F.data == "prank:crazycursor")
 async def on_prank_crazycursor(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     if publish("prank_crazy_cursor", duration=10):
         await cq.answer("🌀 Курсор крутится!")
         await cq.message.answer(f"🌀 <b>Пьяный курсор активирован на 10 сек:</b> {target_label(target)}", reply_markup=back_to_device_kb())
     else:
-        await cq.answer("⚠️ Ошибка отправки", show_alert=True)
+        await cq.answer(_lex("send_failed"), show_alert=True)
 
 
 @router.callback_query(AdminFilter(), F.data == "prank:hidedesktop")
 async def on_prank_hidedesktop(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     current_state = bool(SESSION.get(f"desktop_hidden_{target}", False))
     new_state = not current_state
@@ -4769,14 +5123,14 @@ async def on_prank_hidedesktop(cq: CallbackQuery):
         else:
             await cq.answer("🖥 Иконки рабочего стола восстановлены!", show_alert=True)
     else:
-        await cq.answer("⚠️ Ошибка отправки на брокер", show_alert=True)
+        await cq.answer(_lex("mqtt_publish_failed"), show_alert=True)
 
 
 @router.callback_query(AdminFilter(), F.data == "prank:stop_all")
 async def on_prank_stop_all(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     if publish("prank_stop_all"):
         SESSION[f"mouse_swapped_{target}"] = False
@@ -4794,46 +5148,46 @@ async def on_prank_stop_all(cq: CallbackQuery):
             pass
         await cq.answer("🛑 ВСЕ ПРИКОЛЫ ОСТАНОВЛЕНЫ! Мышь, экран и рабочий стол в норме.", show_alert=True)
     else:
-        await cq.answer("⚠️ Ошибка отправки команды остановки", show_alert=True)
+        await cq.answer(_lex("mqtt_publish_failed"), show_alert=True)
 
 
 @router.callback_query(AdminFilter(), F.data == "prank:dancewin")
 async def on_prank_dancewin(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     if publish("prank_dancing_windows", duration=10):
         await cq.answer("🪟 Окна танцуют!")
         await cq.message.answer(f"🪟 <b>Анимация тряски окон запущена на:</b> {target_label(target)}", reply_markup=back_to_device_kb())
     else:
-        await cq.answer("⚠️ Ошибка отправки", show_alert=True)
+        await cq.answer(_lex("send_failed"), show_alert=True)
 
 
 @router.callback_query(AdminFilter(), F.data == "prank:blackscreen")
 async def on_prank_blackscreen(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     if publish("prank_black_screen", duration=15):
         await cq.answer("⬛ Чёрный экран!")
         await cq.message.answer(f"⬛ <b>Чёрный экран включен на 15 сек на:</b> {target_label(target)}", reply_markup=back_to_device_kb())
     else:
-        await cq.answer("⚠️ Ошибка отправки", show_alert=True)
+        await cq.answer(_lex("send_failed"), show_alert=True)
 
 
 @router.callback_query(AdminFilter(), F.data == "prank:randomsite")
 async def on_prank_randomsite(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     if publish("prank_random_site"):
         await cq.answer("🎲 Сайт открывается!")
         await cq.message.answer(f"🎲 <b>Случайный забавный сайт открыт в браузере:</b> {target_label(target)}", reply_markup=back_to_device_kb())
     else:
-        await cq.answer("⚠️ Ошибка отправки", show_alert=True)
+        await cq.answer(_lex("send_failed"), show_alert=True)
 
 
 # =====================================================================
@@ -4844,7 +5198,7 @@ async def on_prank_randomsite(cq: CallbackQuery):
 async def on_cmd_brightness(cq: CallbackQuery, state: FSMContext):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await state.set_state(Form.wait_brightness)
     await cq.message.answer("☀️ Введите уровень яркости экрана в процентах (0–100):", reply_markup=back_to_device_kb())
@@ -4888,13 +5242,13 @@ async def on_brightness_input(message: Message, state: FSMContext):
 async def on_cmd_nightlight(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     current_state = bool(SESSION.get(f"nightlight_{target}", False))
     new_state = not current_state
     sent, command_id = publish_tracked("display_night_light", enabled=new_state)
     if not sent:
-        await cq.answer("⚠️ Ошибка отправки на брокер", show_alert=True)
+        await cq.answer(_lex("mqtt_publish_failed"), show_alert=True)
         return
     await cq.answer("🌙 Переключаю ночной свет...")
     result = await fun_text_collector.wait_for(target, "display_night_light", timeout=8.0, command_id=command_id)
@@ -4913,7 +5267,7 @@ async def on_cmd_nightlight(cq: CallbackQuery):
 async def on_cmd_rotate(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await cq.answer()
     await cq.message.answer(
@@ -4926,7 +5280,7 @@ async def on_cmd_rotate(cq: CallbackQuery):
 async def on_rotate_select(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     try:
         angle = int(cq.data.split(":", 1)[1])
@@ -4934,7 +5288,7 @@ async def on_rotate_select(cq: CallbackQuery):
         angle = 0
     sent, command_id = publish_tracked("display_rotate", angle=angle)
     if not sent:
-        await cq.answer("⚠️ Ошибка отправки", show_alert=True)
+        await cq.answer(_lex("send_failed"), show_alert=True)
         return
     await cq.answer("🔄 Поворачиваю экран...")
     result = await fun_text_collector.wait_for(target, "display_rotate", timeout=8.0, command_id=command_id)
@@ -4949,7 +5303,7 @@ async def on_rotate_select(cq: CallbackQuery):
 async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, label: str, timeout: float = 12.0, **publish_kwargs):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await cq.answer(f"{emoji} {label}...")
     sent, command_id = publish_tracked(action, **publish_kwargs)
@@ -5021,46 +5375,32 @@ async def simple_command(cq: CallbackQuery, action: str, emoji: str, label: str,
 
 @router.callback_query(AdminFilter(), F.data == "cmd:check_update")
 async def on_cmd_check_update(cq: CallbackQuery):
-    result = await simple_command(cq, "agent_update", "🔄", "Обновить агента", timeout=45.0, update=True)
     target = SESSION.get("target") or ""
-    target_os = str((devices.get(target) or {}).get("os") or "").lower()
-    is_windows = "windows" in target_os
-    # Старые агенты до v3.3.6 умели только сообщить статус и игнорировали
-    # update=true. Для них выполняем одноразовый переход через уже имеющийся
-    # безопасный shell-канал; после этого дальнейшие обновления идут кнопкой.
-    text = str((result or {}).get("text") or "")
-    # Если старый агент вообще не ответил, result будет None (обычный случай
-    # для старой версии). Не ждём, что он подтвердит agent_update: shell уже
-    # есть в старом агенте и может сам подтянуть новую версию.
-    needs_legacy = not result
-    if result and result.get("ok"):
-        needs_legacy = "v1.3" in text or "Актуален" in text
-    if needs_legacy:
-        if is_windows:
+    info = devices.get(target) or {}
+    target_os = str(info.get("os") or "").lower()
+    if "mac" in target_os or "darwin" in target_os or "windows" in target_os:
+        current = str(info.get("version") or "не определена")
+        if not release_catalog.supports_release_manifest_update(current):
+            await cq.answer()
             await _replace_callback_message(
                 cq,
-                "⚠️ Windows-агент ответил старым форматом. Автообновление через macOS-команду отключено; обновите Windows-агент установщиком.",
+                _lex_html(
+                    "versions_update_requires_agent",
+                    current=current,
+                    minimum="4.0.1",
+                ),
                 reply_markup=back_to_device_kb(),
             )
             return
-        legacy = (
-            'cd "$HOME/XIDER/git-ver/XGENT-MCS" && t=$(mktemp -d) && '
-            'curl -fsSL https://github.com/invinby/XIDER/archive/refs/heads/main.zip -o "$t/x.zip" && '
-            'unzip -q "$t/x.zip" -d "$t" && '
-            'for f in xgent_mcs.py config.py crypto.py xgencrypto.py xider_guardian.py requirements.txt setup_mac.py start_agent.sh stop_agent.sh start_guardian.sh; do '
-            'cp "$t/XIDER-main/XGENT-MCS/$f" "$f"; done && '
-            'chmod +x start_agent.sh stop_agent.sh start_guardian.sh && '
-            'launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.xgent.agent.plist" 2>/dev/null || true && '
-            'rm -f "$HOME/Library/LaunchAgents/com.xgent.agent.plist" && '
-            '(kill "$(cat agent.pid)" 2>/dev/null || true) && sleep 1 && bash ./start_agent.sh && bash ./start_guardian.sh'
-        )
-        sent, _ = publish_tracked("shell", command=legacy, timeout=60)
-        if sent:
+        if info.get("update_mode") != "source":
+            await cq.answer()
             await _replace_callback_message(
                 cq,
-                "🛠 Старый агент найден. Запустил одноразовое обновление через его защищённый канал; дальше обновления будут из этой кнопки.",
+                _lex_html("versions_update_package_unsupported", current=current),
                 reply_markup=back_to_device_kb(),
             )
+            return
+    await simple_command(cq, "agent_update", "🔄", "Обновить агента", timeout=110.0, update=True)
 
 
 @router.callback_query(AdminFilter(), F.data == "cmd:smart")
@@ -5107,7 +5447,7 @@ async def on_cmd_cmdhistory(cq: CallbackQuery):
 async def on_cmd_prockillname(cq: CallbackQuery, state: FSMContext):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await state.set_state(Form.wait_prockill)
     await cq.message.answer("🔪 Введите имя процесса для завершения (например: <code>chrome.exe</code> или <code>Discord</code>):", reply_markup=back_to_device_kb())
@@ -5125,7 +5465,7 @@ async def on_prockill_input(message: Message, state: FSMContext):
     if publish("proc_kill_name", name=name):
         await message.answer(f"🔪 Команда завершения процесса <code>{html.escape(name)}</code> отправлена на <b>{target_label(target)}</b>!", reply_markup=back_to_device_kb())
     else:
-        await message.answer("⚠️ Ошибка отправки на брокер.", reply_markup=back_to_device_kb())
+        await message.answer(_lex("mqtt_publish_failed"), reply_markup=back_to_device_kb())
 
 
 # =====================================================================
@@ -5136,7 +5476,7 @@ async def on_prockill_input(message: Message, state: FSMContext):
 async def on_prank_page(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите устройство", show_alert=True)
+        await cq.answer(_lex("device_required"), show_alert=True)
         return
     page = int(cq.data.split(":", 1)[1])
     page_names = {
@@ -5160,13 +5500,13 @@ async def on_prank_page(cq: CallbackQuery):
 async def on_cmd_prank_generic(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     prank_cmd = cq.data[4:]  # e.g. "prank_bsod"
     await cq.answer("🎭 Запускаю...")
     fun_text_collector.reset()
     if not publish(prank_cmd):
-        await cq.message.answer("⚠️ Ошибка отправки на брокер.", reply_markup=back_to_device_kb())
+        await cq.message.answer(_lex("mqtt_publish_failed"), reply_markup=back_to_device_kb())
         return
     result = await fun_text_collector.wait(10.0)
     text = (result or {}).get("text") or "🎭 Команда розыгрыша отправлена агенту!"
@@ -5181,7 +5521,7 @@ async def on_cmd_prank_generic(cq: CallbackQuery):
 async def on_cmd_standby_sleep(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await cq.answer("💤 Перевожу агента в режим сна...")
     fun_text_collector.reset()
@@ -5197,7 +5537,7 @@ async def on_cmd_standby_sleep(cq: CallbackQuery):
 async def on_cmd_wake(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите цель", show_alert=True)
+        await cq.answer(_lex("target_required"), show_alert=True)
         return
     await cq.answer("☀️ Пробуждаю агента...")
     fun_text_collector.reset()
@@ -5232,7 +5572,7 @@ async def on_cmd_autorun_disable(cq: CallbackQuery):
 async def on_cmd_guardian_menu(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
-        await cq.answer("Сначала выберите устройство", show_alert=True)
+        await cq.answer(_lex("device_required"), show_alert=True)
         return
     await cq.message.edit_text(
         f"🛡 <b>Guardian</b> · {html.escape(target_label(target))}\n\n"
@@ -5262,18 +5602,58 @@ def _version_context(kind: str) -> tuple[str, str, str] | None:
 def _version_root_menu(server: bool = False):
     kb = InlineKeyboardBuilder()
     if server:
-        kb.button(text=_lex("versions_server_root_button", version=VERSION)[:64], callback_data="versions:list:server:0", style="primary")
+        kb.button(text=_limit_button_label(_lex("versions_server_root_button", version=VERSION)), callback_data="versions:list:server:0", style="primary")
         kb.button(text=_lex("versions_back_server"), callback_data="menu:server", style="primary")
     else:
         target = SESSION.get("target") or ""
         info = devices.get(target) or {}
         agent = str(info.get("version") or "?")
         keeper = str((info.get("guardian") or {}).get("version") or "?")
-        kb.button(text=_lex("versions_agent_button", version=agent)[:64], callback_data="versions:list:agent:0", style="primary")
-        kb.button(text=_lex("versions_keeper_button", version=keeper)[:64], callback_data="versions:list:keeper:0", style="primary")
+        kb.button(text=_limit_button_label(_lex("versions_agent_button", version=agent)), callback_data="versions:list:agent:0", style="primary")
+        kb.button(text=_limit_button_label(_lex("versions_keeper_button", version=keeper)), callback_data="versions:list:keeper:0", style="primary")
         kb.button(text=_lex("versions_back_device"), callback_data="back:device", style="primary")
     kb.adjust(1)
     return kb.as_markup()
+
+
+def _version_install_block_reason(kind: str, release, component: str, info: dict | None) -> str | None:
+    """Fail closed unless this exact release can be verified by this live source agent."""
+    if kind != "agent":
+        return "versions_install_component_unsupported"
+    if not release.has_source_update_payload(component):
+        return "versions_install_payload_missing"
+    if not info:
+        return "versions_missing_device"
+    if not release_catalog.supports_release_manifest_update(str(info.get("version") or "")):
+        return "versions_install_requires_agent"
+    if info.get("update_mode") != "source":
+        return "versions_install_frozen"
+    if info.get("release_update_ready") is not True:
+        return "versions_install_trust_missing"
+    if _status_dot(info) == "⚪":
+        return "versions_install_offline"
+    return None
+
+
+def _version_install_confirmation_kb(tag: str):
+    kb = InlineKeyboardBuilder()
+    kb.button(
+        text=_limit_button_label(_lex("versions_install_confirm_button", tag=tag)),
+        callback_data=f"versions:install_confirm:{tag}",
+        style="danger",
+    )
+    kb.button(
+        text=_lex("versions_install_cancel_button"),
+        callback_data=f"versions:install_cancel:{tag}",
+        style="primary",
+    )
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def _clear_pending_version_install(user_id: int) -> None:
+    with _PENDING_VERSION_INSTALLS_LOCK:
+        _PENDING_VERSION_INSTALLS.pop(int(user_id), None)
 
 
 @router.callback_query(AdminFilter(), F.data == "versions:device")
@@ -5346,7 +5726,7 @@ async def on_versions_list(cq: CallbackQuery):
         lines.append(_lex_html(phrase_key, tag=release.tag, name=release.name[:55]))
         icon = "✅" if available else "○"
         kb.button(
-            text=_lex("versions_release_button", icon=icon, tag=release.tag)[:64],
+            text=_limit_button_label(_lex("versions_release_button", icon=icon, tag=release.tag)),
             callback_data=f"versions:detail:{kind}:{release.tag}",
             style="success" if available else "primary",
         )
@@ -5426,11 +5806,20 @@ async def on_versions_detail(cq: CallbackQuery):
     note_count = len(note_chunks)
     notes_page = min(notes_page, note_count - 1)
     note_chunk = note_chunks[notes_page]
+    target = SESSION.get("target")
+    info = devices.get(target) if target else None
+    install_reason = _version_install_block_reason(kind, release, component, info)
     kb = InlineKeyboardBuilder()
     if notes_page:
         kb.button(text=_lex("versions_notes_previous"), callback_data=f"versions:detail:{kind}:{tag}:{notes_page - 1}", style="primary")
     if notes_page + 1 < note_count:
         kb.button(text=_lex("versions_notes_next"), callback_data=f"versions:detail:{kind}:{tag}:{notes_page + 1}", style="primary")
+    if install_reason is None:
+        kb.button(
+            text=_limit_button_label(_lex("versions_install_button", tag=release.tag)),
+            callback_data=f"versions:install:agent:{release.tag}",
+            style="success",
+        )
     kb.button(text=_lex("versions_release_list"), callback_data=f"versions:list:{kind}:0", style="primary")
     kb.adjust(1)
     await _replace_callback_message(
@@ -5441,10 +5830,139 @@ async def on_versions_detail(cq: CallbackQuery):
         f"{html.escape(status)}\n\n"
         f"<b>{_lex('versions_notes_title', page=str(notes_page + 1), count=str(note_count))}</b>\n"
         f"<pre>{html.escape(note_chunk)}</pre>\n\n"
-        f"{_lex('versions_install_notice')}",
+        f"{_lex(install_reason or 'versions_install_ready')}",
         reply_markup=kb.as_markup(),
     )
     await cq.answer()
+
+
+@router.callback_query(AdminFilter(), F.data.startswith("versions:install:agent:"))
+async def on_versions_install_select(cq: CallbackQuery):
+    parts = cq.data.split(":")
+    if len(parts) != 4 or parts[2] != "agent":
+        await cq.answer(_lex("versions_bad_request"), show_alert=True)
+        return
+    tag = parts[3]
+    target = SESSION.get("target")
+    info = devices.get(target) if target else None
+    context = _version_context("agent")
+    if not target or target == "all" or info is None or context is None:
+        await cq.answer(_lex("versions_missing_device"), show_alert=True)
+        return
+    _, component, _ = context
+    try:
+        releases = await asyncio.to_thread(release_catalog.catalog.list)
+    except (OSError, ValueError):
+        await cq.answer(_lex("versions_catalog_unavailable"), show_alert=True)
+        return
+    release = next((item for item in releases if item.tag == tag), None)
+    if release is None:
+        await cq.answer(_lex("versions_not_found"), show_alert=True)
+        return
+    reason = _version_install_block_reason("agent", release, component, info)
+    if reason:
+        await cq.answer(_lex(reason), show_alert=True)
+        return
+
+    user_id = int(cq.from_user.id)
+    with _PENDING_VERSION_INSTALLS_LOCK:
+        _PENDING_VERSION_INSTALLS[user_id] = {
+            "target": str(target), "tag": tag, "created_at": time.time(),
+        }
+    await cq.answer()
+    await _replace_callback_message(
+        cq,
+        _lex_html("versions_install_confirm_body", device=target_label(target), tag=release.tag),
+        reply_markup=_version_install_confirmation_kb(tag),
+    )
+
+
+@router.callback_query(AdminFilter(), F.data.startswith("versions:install_cancel:"))
+async def on_versions_install_cancel(cq: CallbackQuery):
+    parts = cq.data.split(":")
+    if len(parts) != 3:
+        await cq.answer(_lex("versions_bad_request"), show_alert=True)
+        return
+    user_id = int(cq.from_user.id)
+    target = SESSION.get("target")
+    cancelled = False
+    with _PENDING_VERSION_INSTALLS_LOCK:
+        pending = _PENDING_VERSION_INSTALLS.get(user_id)
+        if pending and pending.get("tag") == parts[2] and pending.get("target") == target:
+            _PENDING_VERSION_INSTALLS.pop(user_id, None)
+            cancelled = True
+    if not cancelled:
+        await cq.answer(_lex("versions_install_expired"), show_alert=True)
+        return
+    await cq.answer()
+    await _replace_callback_message(
+        cq,
+        _lex("versions_install_cancelled"),
+        reply_markup=_version_root_menu(),
+    )
+
+
+@router.callback_query(AdminFilter(), F.data.startswith("versions:install_confirm:"))
+async def on_versions_install_confirm(cq: CallbackQuery):
+    parts = cq.data.split(":")
+    if len(parts) != 3:
+        await cq.answer(_lex("versions_bad_request"), show_alert=True)
+        return
+    tag = parts[2]
+    user_id = int(cq.from_user.id)
+    now = time.time()
+    with _PENDING_VERSION_INSTALLS_LOCK:
+        pending = _PENDING_VERSION_INSTALLS.get(user_id)
+        if not pending or pending.get("tag") != tag:
+            pending = None
+        elif now - float(pending.get("created_at") or 0) > 180:
+            _PENDING_VERSION_INSTALLS.pop(user_id, None)
+            pending = None
+    if pending is None:
+        await cq.answer(_lex("versions_install_expired"), show_alert=True)
+        return
+
+    target = SESSION.get("target")
+    if target != pending.get("target"):
+        with _PENDING_VERSION_INSTALLS_LOCK:
+            _PENDING_VERSION_INSTALLS.pop(user_id, None)
+        await cq.answer(_lex("versions_install_target_changed"), show_alert=True)
+        return
+    info = devices.get(target) if target else None
+    context = _version_context("agent")
+    if not info or not context:
+        _clear_pending_version_install(user_id)
+        await cq.answer(_lex("versions_missing_device"), show_alert=True)
+        return
+    _, component, _ = context
+    try:
+        releases = await asyncio.to_thread(release_catalog.catalog.list)
+    except (OSError, ValueError):
+        _clear_pending_version_install(user_id)
+        await cq.answer(_lex("versions_catalog_unavailable"), show_alert=True)
+        return
+    release = next((item for item in releases if item.tag == tag), None)
+    if release is None:
+        _clear_pending_version_install(user_id)
+        await cq.answer(_lex("versions_not_found"), show_alert=True)
+        return
+    reason = _version_install_block_reason("agent", release, component, info)
+    if reason:
+        _clear_pending_version_install(user_id)
+        await cq.answer(_lex(reason), show_alert=True)
+        return
+
+    with _PENDING_VERSION_INSTALLS_LOCK:
+        _PENDING_VERSION_INSTALLS.pop(user_id, None)
+    await simple_command(
+        cq,
+        "agent_update",
+        "🔄",
+        _lex("versions_install_action", tag=tag),
+        timeout=110.0,
+        update=True,
+        release_tag=tag,
+    )
 
 
 async def _guardian_command(cq: CallbackQuery, command: str, *, enabled: bool | None = None):

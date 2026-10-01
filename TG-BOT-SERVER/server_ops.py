@@ -17,9 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-SERVICE = os.environ.get("XIDER_SERVICE", "xider-bot.service")
-APP_DIR = Path(os.environ.get("XIDER_APP_DIR", "/opt/xider"))
-UPDATE_SCRIPT = APP_DIR / "deploy" / "update-server.sh"
+SERVICE = "xider-bot.service"
 CONTROL = Path(os.environ.get("XIDER_SERVER_OPS", "/usr/local/sbin/xider-server-ops"))
 HISTORY_FILE = Path(os.environ.get(
     "XIDER_METRICS_FILE",
