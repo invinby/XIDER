@@ -13,6 +13,10 @@ recovery channel alive while the worker agent is stopped and supports status,
 start, stop, restart, and opt-in automatic recovery. It writes a clear local
 `guardian.log`.
 
+An intentional worker stop is persisted as owner intent, so Guardian does not
+immediately relaunch it. Automatic startup at the next login remains controlled
+separately.
+
 Guardian is not a hidden process and does not bypass macOS controls. Camera,
 microphone, screen recording, and location remain permission-gated by macOS.
 If the Mac is powered off or discharged, the VPS can only report its last
@@ -27,6 +31,12 @@ curl -fsSL https://raw.githubusercontent.com/invinby/XIDER/main/deploy/bootstrap
 The bootstrap preserves the local `.env`, downloads the current source, fixes
 script permissions, starts the worker, and registers Guardian. Do not paste the
 shell prompt or surrounding backticks into Terminal.
+This convenience bootstrap follows the moving `main` branch and does not verify
+a signature before execution; this direct command is for development installs.
+A tagged release quickstart verifies an OpenSSH signature over the bootstrap
+digest, platform, release tag, and full commit before execution, then pins the
+source to that commit. The quickstart itself is not independently signed before
+it runs and still relies on the initial HTTPS/GitHub download.
 
 ### Manual status
 
@@ -49,6 +59,10 @@ stop, restart, and automatic recovery.
 показывать статус, запускать, останавливать и перезапускать агент, а также
 включать или отключать автовосстановление.
 
+Намеренная остановка агента записывается как состояние владельца: Guardian не
+поднимает его тут же повторно. При следующем входе агент запустится только если
+автозапуск оставлен включённым.
+
 Guardian не скрывается в системе и не обходит контроль macOS. Камера,
 микрофон, запись экрана и геолокация доступны только после разрешения
 пользователя. Если Mac выключен или разряжен, VPS покажет последний heartbeat,
@@ -62,5 +76,11 @@ curl -fsSL https://raw.githubusercontent.com/invinby/XIDER/main/deploy/bootstrap
 
 Bootstrap сохраняет локальный `.env`, скачивает свежий код, исправляет права
 скриптов, запускает агент и регистрирует Guardian.
+Эта прямая команда для разработки: она берёт изменяемую ветку `main` и не
+проверяет подпись bootstrap до запуска. Tagged release quickstart закрепляет
+скрипт и архив на одном полном commit ID и проверяет OpenSSH-подпись хэша,
+платформы, tag и commit. Подпись quickstart отдельно до запуска не
+проверяется, поэтому начальная загрузка всё ещё опирается на HTTPS/GitHub.
+До публикации успешного подписанного релиза не считай release-команду готовой.
 
 Открой в Telegram: **Устройство → Питание & Защита → Guardian**.

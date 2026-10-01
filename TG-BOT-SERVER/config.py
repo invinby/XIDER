@@ -40,16 +40,19 @@ GUEST_IDS = [int(x.strip()) for x in _guest_ids_env.split(",") if x.strip().isdi
 # Токен бота от @BotFather.
 BOT_TOKEN = _require_env("BOT_TOKEN")
 
-# Публичный MQTT-брокер — не нужен проброс портов, но трафик идёт через
-# сторонний сервис. Для личного использования приемлемо при подписи сообщений.
+# Требуется приватный MQTT-брокер с TLS и отдельными ACL-учётными данными.
 MQTT_BROKER = os.getenv("MQTT_BROKER", "").strip()
 if not MQTT_BROKER:
     raise SystemExit("FATAL: MQTT_BROKER must be set in .env")
-MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
+MQTT_PORT = int(os.getenv("MQTT_PORT", "8883"))
 MQTT_PREFIX = os.getenv("MQTT_PREFIX", "xgent/v1")
-MQTT_TLS = os.getenv("MQTT_TLS", "false").strip().lower() in ("1", "true", "yes")
+MQTT_TLS = os.getenv("MQTT_TLS", "true").strip().lower() in ("1", "true", "yes")
 MQTT_USERNAME = os.getenv("MQTT_USERNAME", "").strip() or None
 MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "").strip() or None
+if not MQTT_TLS:
+    raise SystemExit("FATAL: MQTT_TLS must be true; plaintext MQTT is disabled.")
+if not MQTT_USERNAME or not MQTT_PASSWORD:
+    raise SystemExit("FATAL: private MQTT_USERNAME and MQTT_PASSWORD are required for broker ACLs.")
 
 # Шифрование payload (AES-256-GCM) поверх HMAC-подписи.
 # Должно быть true ОДНОВРЕМЕННО во всех трёх компонентах.

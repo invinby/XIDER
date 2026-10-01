@@ -10,12 +10,13 @@ mkdir -p "$HOME/Library/LaunchAgents"
 chmod +x "$0"
 
 if [[ "${1:-}" == "--status" || "${1:-}" == "-s" ]]; then
-  if launchctl print "gui/$(id -u)/com.xider.guardian" >/dev/null 2>&1; then
+  LAUNCH_STATE="$(launchctl print "gui/$(id -u)/com.xider.guardian" 2>/dev/null || true)"
+  if printf '%s\n' "$LAUNCH_STATE" | grep -Eq 'pid = [0-9]+|state = running'; then
     echo "[OK] XIDER Guardian работает через LaunchAgent"
     echo "[LOG] $PWD/guardian.log"
     exit 0
   fi
-  echo "[STOPPED] XIDER Guardian не запущен"
+  echo "[STOPPED] XIDER Guardian не запущен (или LaunchAgent ещё ожидает процесс)"
   exit 1
 fi
 
@@ -46,4 +47,13 @@ EOF
 
 launchctl bootout "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
-echo "[OK] XIDER Guardian зарегистрирован и запущен"
+for attempt in {1..10}; do
+  LAUNCH_STATE="$(launchctl print "gui/$(id -u)/com.xider.guardian" 2>/dev/null || true)"
+  if printf '%s\n' "$LAUNCH_STATE" | grep -Eq 'pid = [0-9]+|state = running'; then
+    echo "[OK] XIDER Guardian зарегистрирован и запущен"
+    exit 0
+  fi
+  sleep 1
+done
+echo "[ERROR] XIDER Guardian зарегистрирован, но процесс не запустился. Проверь guardian.log." >&2
+exit 1

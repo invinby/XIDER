@@ -31,32 +31,45 @@ from config import (
     MQTT_TLS,
     MQTT_USERNAME,
     VERSION,
+    set_guardian_desired_running,
+    set_guardian_startup_enabled,
+    update_guardian_state,
 )
 from crypto import sign_message, verify_message
 from xgencrypto import decrypt_payload, encrypt_payload
 
 log = logging.getLogger("xider.guardian.wds")
 SCRIPT_DIR = Path(__file__).resolve().parent
-STATE_FILE = CONFIG_DIR / "guardian-windows.json"
+STATE_FILE = CONFIG_DIR / "guardian.json"
+LEGACY_STATE_FILE = CONFIG_DIR / "guardian-windows.json"
 AGENT_TASK = "XIDER Agent"
 GUARDIAN_TASK = "XIDER Guardian"
 
 
 def _load_state() -> dict:
-    try:
-        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            return data
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        pass
-    return {"auto_restart": False, "desired_running": True}
+    for path in (STATE_FILE, LEGACY_STATE_FILE):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            continue
+    return {
+        "state_version": 2, "auto_restart": True,
+        "desired_running": True, "startup_enabled": True,
+    }
 
 
-def _save_state(data: dict) -> None:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = STATE_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(STATE_FILE)
+def _save_state(data: dict, *fields: str) -> None:
+    """Persist selected fields with the same lock used by the worker config."""
+    if not fields or any(field not in data for field in fields):
+        raise ValueError("Guardian state update must name existing fields.")
+    merged = update_guardian_state(
+        initial_state=data,
+        **{field: data[field] for field in fields},
+    )
+    data.clear()
+    data.update(merged)
 
 
 def _task_exists(task_name: str) -> bool:
@@ -70,9 +83,35 @@ def _task_exists(task_name: str) -> bool:
 class Guardian:
     def __init__(self) -> None:
         self.state = _load_state()
-        self.state.setdefault("auto_restart", False)
+        original_state = dict(self.state)
+        try:
+            state_version = int(self.state.get("state_version", 1))
+        except (TypeError, ValueError):
+            state_version = 1
+        if state_version < 2:
+            # Earlier Windows installs shipped with recovery disabled by default.
+            # Turn it on once, while preserving an explicit stopped-worker state.
+            self.state["auto_restart"] = True
+            self.state["state_version"] = 2
+        self.state.setdefault("auto_restart", True)
         self.state.setdefault("desired_running", True)
-        _save_state(self.state)
+        self.state.setdefault("startup_enabled", True)
+        current_boot = int(psutil.boot_time())
+        try:
+            previous_boot = int(self.state.get("boot_time", current_boot))
+        except (TypeError, ValueError):
+            previous_boot = current_boot
+        if previous_boot != current_boot:
+            # Apply boot-autostart policy only on a new OS boot, not whenever
+            # Guardian itself is restarted during the current session.
+            self.state["desired_running"] = bool(self.state["startup_enabled"])
+        self.state["boot_time"] = current_boot
+        changed_fields = tuple(
+            field for field, value in self.state.items()
+            if field not in original_state or original_state[field] != value
+        )
+        if changed_fields:
+            _save_state(self.state, *changed_fields)
         self.stop_event = threading.Event()
         self.lock = threading.RLock()
         self.client = mqtt.Client(
@@ -164,6 +203,7 @@ class Guardian:
             "agent_running": bool(proc),
             "agent_pid": proc.pid if proc else None,
             "launchd_loaded": task_loaded,
+            "guardian_task_registered": task_loaded,
             "auto_restart": bool(self.state.get("auto_restart")),
             "desired_running": bool(self.state.get("desired_running")),
             "text": (
@@ -172,6 +212,18 @@ class Guardian:
                 f"Задача Guardian: {'зарегистрирована' if task_loaded else 'не зарегистрирована'}"
             ),
         }
+
+    def _refresh_worker_intent(self) -> None:
+        """Observe explicit stop/autostart changes made by the worker process."""
+        try:
+            external = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return
+        if not isinstance(external, dict):
+            return
+        for key in ("desired_running", "startup_enabled"):
+            if key in external:
+                self.state[key] = bool(external[key])
 
     def start_agent(self) -> int | None:
         proc = self.agent_process()
@@ -188,13 +240,20 @@ class Guardian:
             creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
         )
         self.state["desired_running"] = True
-        _save_state(self.state)
+        _save_state(self.state, "desired_running")
         return child.pid
 
     def stop_agent(self) -> None:
         proc = self.agent_process()
         self.state["desired_running"] = False
-        _save_state(self.state)
+        _save_state(self.state, "desired_running")
+        # Stop the scheduled task first so its restart-on-failure policy does not
+        # race the owner's explicit stop command.
+        if _task_exists(AGENT_TASK):
+            subprocess.run(
+                ["schtasks.exe", "/End", "/TN", AGENT_TASK],
+                capture_output=True, text=True, check=False,
+            )
         if not proc:
             return
         try:
@@ -207,12 +266,20 @@ class Guardian:
                 pass
 
     def handle(self, payload: dict) -> None:
+        lock = getattr(self, "lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self.lock = lock
+        with lock:
+            self._handle_locked(payload)
+
+    def _handle_locked(self, payload: dict) -> None:
         command = str(payload.get("command") or "status").lower()
         if command == "status":
             result = self.status_payload()
         elif command == "start":
             self.state["desired_running"] = True
-            _save_state(self.state)
+            _save_state(self.state, "desired_running")
             pid = self.start_agent()
             result = self.status_payload()
             result["text"] = f"✅ Windows-агент запущен Guardian (PID {pid or '?'})"
@@ -223,15 +290,14 @@ class Guardian:
         elif command == "restart":
             self.stop_agent()
             self.state["desired_running"] = True
-            _save_state(self.state)
+            _save_state(self.state, "desired_running")
             pid = self.start_agent()
             result = self.status_payload()
             result["text"] = f"🔄 Windows-агент перезапущен Guardian (PID {pid or '?'})"
         elif command == "auto_restart":
             enabled = bool(payload.get("enabled"))
             self.state["auto_restart"] = enabled
-            self.state["desired_running"] = True
-            _save_state(self.state)
+            _save_state(self.state, "auto_restart")
             result = self.status_payload()
             result["text"] = f"🛡 Windows Guardian: {'автовосстановление ВКЛ' if enabled else 'автовосстановление ВЫКЛ'}"
         else:
@@ -242,7 +308,14 @@ class Guardian:
 
     def monitor(self) -> None:
         while not self.stop_event.wait(5):
-            if self.state.get("auto_restart") and self.state.get("desired_running") and not self.agent_process():
+            with self.lock:
+                self._refresh_worker_intent()
+                if not (
+                    self.state.get("auto_restart")
+                    and self.state.get("desired_running")
+                    and not self.agent_process()
+                ):
+                    continue
                 try:
                     pid = self.start_agent()
                     self._publish({"ok": True, "text": f"🛡 Windows Guardian восстановил агент (PID {pid or '?'})"})

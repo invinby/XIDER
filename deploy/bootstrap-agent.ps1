@@ -1,92 +1,420 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$InstallRoot = "$env:LOCALAPPDATA\XIDER",
     [string]$EnvRoot = $env:XIDER_ENV_ROOT,
     [string]$ServerHost = '141.145.152.174',
-    [string]$ServerUser = 'ubuntu'
+    [string]$ServerUser = 'ubuntu',
+    [string]$Branch = 'main',
+    [string]$Ref = $env:XIDER_REF,
+    [switch]$PreflightOnly,
+    [string]$SourceArchive
 )
 
 $ErrorActionPreference = 'Stop'
-$repoUrl = 'https://github.com/invinby/XIDER/archive/refs/heads/main.zip'
+if ($Branch -notmatch '^[A-Za-z0-9._/-]+$' -or $Branch.Split('/') -contains '..') {
+    throw 'Недопустимое имя ветки XIDER_BRANCH.'
+}
+if ($Ref -and $Ref -notmatch '^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$') {
+    throw 'XIDER_REF должен быть полным 40- или 64-символьным commit ID.'
+}
+$repoUrl = if ($Ref) {
+    "https://github.com/invinby/XIDER/archive/$Ref.zip"
+} else {
+    "https://github.com/invinby/XIDER/archive/refs/heads/$Branch.zip"
+}
+$ProgressPreference = 'SilentlyContinue'
 $extract = Join-Path $env:TEMP ('xider-agent-' + [guid]::NewGuid().ToString('N'))
 $zip = Join-Path $extract 'source.zip'
 $unpack = Join-Path $extract 'unpacked'
 $repo = Join-Path $InstallRoot 'git-ver'
 $agent = Join-Path $repo 'XGENT-WDS'
+$stage = $null
+$backup = $null
+$failed = $null
+$oldTasks = @{}
+$tasksStopped = $false
+$activationStarted = $false
+$taskInstallAttempted = $false
+
+function Expand-XiderArchiveSafely {
+    param(
+        [Parameter(Mandatory)][string]$ArchivePath,
+        [Parameter(Mandatory)][string]$DestinationPath,
+        [long]$MaxUncompressedBytes = 1073741824,
+        [int]$MaxEntries = 20000
+    )
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $destination = [IO.Path]::GetFullPath($DestinationPath).TrimEnd('\')
+    $destinationPrefix = $destination + '\'
+    $archive = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try {
+        if ($archive.Entries.Count -gt $MaxEntries) {
+            throw "Архив содержит больше $MaxEntries элементов."
+        }
+
+        $seen = @{}
+        $files = @{}
+        $implicitDirectories = @{}
+        [long]$totalUncompressedBytes = 0
+        foreach ($entry in $archive.Entries) {
+            # Some Windows ZIP writers serialize path separators as backslashes.
+            # Normalize before traversal checks so both forms share one path model.
+            $name = ([string]$entry.FullName).Replace('\', '/')
+            if ([string]::IsNullOrWhiteSpace($name) -or
+                $name.StartsWith('/') -or $name -match '^[A-Za-z]:' -or
+                $name -match '(^|/)\.\.(/|$)') {
+                throw "Небезопасный путь в ZIP-архиве: $name"
+            }
+
+            $relativeName = $name.TrimEnd('/')
+            if (-not $relativeName) { throw 'В ZIP-архиве найден пустой путь.' }
+            foreach ($part in $relativeName.Split('/')) {
+                if (-not $part -or $part -eq '.' -or $part -eq '..' -or
+                    $part.EndsWith('.') -or $part.EndsWith(' ') -or
+                    $part -match '[:<>"|?*]' -or
+                    $part -match '^(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$') {
+                    throw "Небезопасный компонент пути в ZIP-архиве: $name"
+                }
+            }
+
+            $unixType = ($entry.ExternalAttributes -shr 16) -band 0xF000
+            if ($unixType -eq 0xA000) { throw "Символическая ссылка в ZIP-архиве запрещена: $name" }
+            if ($unixType -ne 0 -and $unixType -ne 0x4000 -and $unixType -ne 0x8000) {
+                throw "Специальный файл в ZIP-архиве запрещён: $name"
+            }
+
+            $target = [IO.Path]::GetFullPath([IO.Path]::Combine(
+                $destination,
+                $relativeName.Replace('/', [IO.Path]::DirectorySeparatorChar)
+            ))
+            if (-not $target.StartsWith($destinationPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Путь ZIP-архива выходит за staging-каталог: $name"
+            }
+            if ($seen.ContainsKey($target)) { throw "Повторяющийся путь в ZIP-архиве: $name" }
+
+            $parent = [IO.Path]::GetDirectoryName($target)
+            while ($parent -and $parent.StartsWith($destinationPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                if ($files.ContainsKey($parent)) { throw "Файл ZIP-архива используется как каталог: $name" }
+                $implicitDirectories[$parent] = $true
+                $nextParent = [IO.Path]::GetDirectoryName($parent)
+                if ($nextParent -eq $parent) { break }
+                $parent = $nextParent
+            }
+
+            $isDirectory = $name.EndsWith('/') -or $unixType -eq 0x4000
+            if (-not $isDirectory -and $implicitDirectories.ContainsKey($target)) {
+                throw "Файл ZIP-архива конфликтует с вложенными путями: $name"
+            }
+            if (-not $isDirectory) { $files[$target] = $true }
+            $seen[$target] = $true
+
+            $totalUncompressedBytes += [long]$entry.Length
+            if ($totalUncompressedBytes -gt $MaxUncompressedBytes) {
+                throw "Архив распаковывается больше чем в $MaxUncompressedBytes байт."
+            }
+        }
+    }
+    finally {
+        $archive.Dispose()
+    }
+
+    Expand-Archive -LiteralPath $ArchivePath -DestinationPath $DestinationPath -Force
+}
 
 try {
-    Write-Host '[1/5] Скачиваю последнюю версию XIDER...'
+    if ($SourceArchive) { Write-Host '[1/5] Проверяю локальный архив XIDER...' }
+    elseif ($Ref) { Write-Host "[1/5] Скачиваю XIDER из закреплённого commit $Ref (тайм-аут 90 секунд)..." }
+    else { Write-Host "[1/5] Скачиваю XIDER из ветки $Branch (тайм-аут 90 секунд)..." }
     New-Item -ItemType Directory -Path $extract -Force | Out-Null
-    Invoke-WebRequest -Uri $repoUrl -OutFile $zip -UseBasicParsing -TimeoutSec 90
-    Expand-Archive -LiteralPath $zip -DestinationPath $unpack -Force
+    if ($SourceArchive) {
+        Copy-Item -LiteralPath $SourceArchive -Destination $zip -ErrorAction Stop
+    } else {
+        Invoke-WebRequest -Uri $repoUrl -OutFile $zip -UseBasicParsing -TimeoutSec 90
+    }
+    Expand-XiderArchiveSafely -ArchivePath $zip -DestinationPath $unpack
     $downloaded = Get-ChildItem -LiteralPath $unpack -Directory | Select-Object -First 1
     if (-not $downloaded) { throw 'GitHub archive is empty.' }
+    foreach ($requiredFile in @(
+        'XGENT-WDS\xgent_wds.py',
+        'XGENT-WDS\xider_guardian_wds.py',
+        'XGENT-WDS\install_agent.ps1',
+        'XGENT-WDS\install_guardian.ps1',
+        'XGENT-WDS\requirements.txt'
+    )) {
+        if (-not (Test-Path -LiteralPath (Join-Path $downloaded.FullName $requiredFile) -PathType Leaf)) {
+            throw "В скачанном архиве нет $requiredFile. Рабочая установка не изменена."
+        }
+    }
 
     Write-Host '[2/5] Ищу локальный .env...'
     $envCandidates = @()
+    # The active install is authoritative: an old Desktop checkout may use
+    # different credentials and must not silently replace its configuration.
+    $envCandidates += (Join-Path $agent '.env')
     if ($EnvRoot) { $envCandidates += (Join-Path $EnvRoot 'XGENT-WDS\.env') }
     $envCandidates += @(
         "$env:USERPROFILE\Desktop\XIDER\git-ver\XGENT-WDS\.env",
-        "$env:USERPROFILE\Desktop\XIDER\XGENT-WDS\.env",
-        (Join-Path $agent '.env')
+        "$env:USERPROFILE\Desktop\XIDER\XGENT-WDS\.env"
     )
     $envSource = $envCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 
     if (-not $envSource) {
-        Write-Host "Локальный .env не найден. Получаю настройки с $ServerUser@$ServerHost; введи пароль SSH, если он будет запрошен."
+        Write-Host "Локальный .env не найден. Пробую SSH-ключ/ssh-agent, затем пароль VPS при запросе: $ServerUser@$ServerHost."
         $fetched = Join-Path $extract 'agent.env'
-        & ssh.exe -o StrictHostKeyChecking=accept-new -o PreferredAuthentications=password -o PubkeyAuthentication=no `
-            "$ServerUser@$ServerHost" `
-            "sudo -n sh -c 'grep -E \"^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD)=\" /etc/xider/bot.env'" `
-            | Out-File -LiteralPath $fetched -Encoding utf8
-        if ((Get-Item -LiteralPath $fetched).Length -eq 0) { throw 'Не удалось получить настройки агента.' }
+        $remoteCommand = "sudo -n sh -c 'grep -E `"^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD)=`" /etc/xider/bot.env'"
+        $sshArguments = @(
+            '-o', 'StrictHostKeyChecking=accept-new',
+            '-o', 'ConnectTimeout=15',
+            '-o', 'ServerAliveInterval=10',
+            '-o', 'ServerAliveCountMax=2'
+        )
+        $sshKey = $env:XIDER_SSH_KEY
+        if (-not $sshKey) {
+            $defaultSshKey = Join-Path $env:USERPROFILE '.ssh\xider'
+            if (Test-Path -LiteralPath $defaultSshKey -PathType Leaf) { $sshKey = $defaultSshKey }
+        }
+        if ($sshKey) {
+            if (-not (Test-Path -LiteralPath $sshKey -PathType Leaf)) {
+                throw "SSH-ключ не найден: $sshKey. VPS и файлы агента не изменены."
+            }
+            $sshArguments += @('-i', $sshKey, '-o', 'IdentitiesOnly=yes')
+        }
+        & ssh.exe @sshArguments `
+            "$ServerUser@$ServerHost" $remoteCommand | Set-Content -LiteralPath $fetched -Encoding utf8
+        $sshExit = $LASTEXITCODE
+        if ($sshExit -ne 0) { throw "SSH не смог получить настройки (код $sshExit). VPS и файлы агента не изменены." }
+        $allowed = Get-Content -LiteralPath $fetched | Where-Object {
+            $_ -match '^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD)='
+        }
+        $prefixEntries = @($allowed | Where-Object { $_ -match '^MQTT_PREFIX=' })
+        if ($prefixEntries.Count -gt 1) {
+            throw 'На VPS параметр MQTT_PREFIX указан несколько раз. Файлы агента не изменены.'
+        }
+        if ($prefixEntries.Count -eq 0) {
+            $allowed += 'MQTT_PREFIX=xgent/v1'
+        }
+        foreach ($required in @('SHARED_KEY', 'MQTT_BROKER', 'MQTT_PORT', 'MQTT_TLS', 'ENCRYPT_PAYLOAD')) {
+            if (-not ($allowed | Where-Object { $_ -match "^${required}=.+$" })) {
+                throw "На VPS отсутствует обязательный параметр $required. Файлы агента не изменены."
+            }
+        }
+        $allowed | Set-Content -LiteralPath $fetched -Encoding utf8
         $envSource = $fetched
     }
 
-    $targetEnv = Join-Path $agent '.env'
-    if (Test-Path -LiteralPath $targetEnv) {
-        # Защищённый ACL файл не копируем во временную папку и не перезаписываем.
-        # Это устраняет отказ в доступе при повторной установке.
-        Write-Host '[3/5] Существующий .env оставляю без изменений.'
-    } else {
-        $stagedEnv = Join-Path $extract 'agent-preserved.env'
-        Copy-Item -LiteralPath $envSource -Destination $stagedEnv -Force
-        $envSource = $stagedEnv
-        Write-Host '[3/5] Новый .env подготовлен.'
+    $requiredSettings = @(
+        'SHARED_KEY', 'MQTT_BROKER', 'MQTT_PORT', 'MQTT_PREFIX',
+        'MQTT_TLS', 'MQTT_USERNAME', 'MQTT_PASSWORD', 'ENCRYPT_PAYLOAD'
+    )
+    $configLines = @(Get-Content -LiteralPath $envSource -ErrorAction Stop)
+    $prefixPattern = '^\s*(?:export\s+)?MQTT_PREFIX\s*=\s*(.*)$'
+    $prefixLines = @($configLines | Where-Object { $_ -match $prefixPattern })
+    if ($prefixLines.Count -gt 1) {
+        throw 'В конфигурации MQTT_PREFIX указан несколько раз. Рабочая установка не изменена.'
     }
-    New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
-    New-Item -ItemType Directory -Path $repo -Force | Out-Null
-    Copy-Item -Path (Join-Path $downloaded.FullName '*') -Destination $repo -Recurse -Force
-    if (-not (Test-Path -LiteralPath $targetEnv)) {
-        Copy-Item -LiteralPath $envSource -Destination $targetEnv -Force
+    if ($prefixLines.Count -eq 0) {
+        $configLines += 'MQTT_PREFIX=xgent/v1'
+        $normalizedEnv = Join-Path $extract 'agent.normalized.env'
+        [IO.File]::WriteAllLines($normalizedEnv, [string[]]$configLines, [System.Text.UTF8Encoding]::new($false))
+        $envSource = $normalizedEnv
+    } else {
+        $prefixValue = [regex]::Match([string]$prefixLines[0], $prefixPattern).Groups[1].Value.Trim().Trim('"', "'").Trim()
+        if ($prefixValue -notmatch '^[A-Za-z0-9._/-]+$') {
+            throw 'В конфигурации MQTT_PREFIX пустой или имеет неподдерживаемый формат. Рабочая установка не изменена.'
+        }
+    }
+    $settings = @{}
+    foreach ($required in $requiredSettings) {
+        $pattern = '^\s*(?:export\s+)?' + [regex]::Escape($required) + '\s*=\s*(.*)$'
+        $matchingLines = @($configLines | Where-Object { $_ -match $pattern })
+        if ($matchingLines.Count -ne 1) {
+            throw "Параметр $required отсутствует или указан несколько раз. Рабочая установка не изменена."
+        }
+        $value = if ($matchingLines.Count) {
+            [regex]::Match($matchingLines[-1], $pattern).Groups[1].Value.Trim().Trim('"', "'").Trim()
+        } else { '' }
+        if (-not $value -or $value.StartsWith('#')) {
+            throw "В конфигурации агента отсутствует $required. Рабочая установка не изменена."
+        }
+        $settings[$required] = $value
+    }
+    if ($settings['MQTT_TLS'].ToLowerInvariant() -notin @('true', '1', 'yes')) {
+        throw 'Для установки агента требуется MQTT_TLS=true. Рабочая установка не изменена.'
+    }
+    if ($settings['ENCRYPT_PAYLOAD'].ToLowerInvariant() -notin @('true', '1', 'yes')) {
+        throw 'Для установки агента требуется ENCRYPT_PAYLOAD=true. Рабочая установка не изменена.'
+    }
+    $mqttPort = 0
+    if (-not [int]::TryParse($settings['MQTT_PORT'], [ref]$mqttPort) -or $mqttPort -lt 1 -or $mqttPort -gt 65535) {
+        throw 'MQTT_PORT должен быть числом от 1 до 65535. Рабочая установка не изменена.'
+    }
+    if ($PreflightOnly) {
+        if ($SourceArchive) { $sourceLabel = 'Локальный архив' }
+        elseif ($Ref) { $sourceLabel = "Архив commit $Ref" }
+        else { $sourceLabel = "Архив ветки $Branch" }
+        Write-Host "[OK] $sourceLabel и конфигурация агента проверены. Установка не запускалась."
+        return
     }
 
-    Push-Location $agent
-    $venvCreated = $false
-    if (-not (Test-Path -LiteralPath '.\venv\Scripts\python.exe')) {
-        Write-Host '[4/5] Создаю виртуальное окружение и ставлю зависимости...'
-        $pythonLauncher = (Get-Command py.exe -ErrorAction SilentlyContinue).Source
-        if ($pythonLauncher) {
-            & $pythonLauncher -3 -m venv venv
-        } else {
-            & (Get-Command python.exe -ErrorAction Stop).Source -m venv venv
+    Write-Host '[3/5] Подготавливаю новую версию рядом с рабочей...'
+    New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
+    # Keep the caller's canonical long path. Resolve-Path may return an 8.3
+    # alias (for example RUNNER~1) while Join-Path/GetFullPath return its long
+    # name, making string-based containment checks disagree on the same folder.
+    $resolvedRoot = [IO.Path]::GetFullPath($InstallRoot)
+    $rootOfVolume = [IO.Path]::GetPathRoot($resolvedRoot)
+    if ($resolvedRoot.Length -gt $rootOfVolume.Length) {
+        $resolvedRoot = $resolvedRoot.TrimEnd([char[]]@('\', '/'))
+    }
+    $stage = Join-Path $resolvedRoot ('git-ver.stage.' + [guid]::NewGuid().ToString('N'))
+    $backup = Join-Path $resolvedRoot ('git-ver.previous.' + (Get-Date -Format 'yyyyMMddHHmmss') + '.' + [guid]::NewGuid().ToString('N'))
+    $failed = Join-Path $resolvedRoot ('git-ver.failed.' + (Get-Date -Format 'yyyyMMddHHmmss') + '.' + [guid]::NewGuid().ToString('N'))
+    foreach ($path in @($stage, $backup, $failed, $repo)) {
+        $fullPath = [IO.Path]::GetFullPath($path)
+        # These generated targets must be direct children of InstallRoot.
+        # Comparing their canonical parent is explicit and avoids prefix matches.
+        $fullParent = [IO.Path]::GetDirectoryName($fullPath)
+        $parentRoot = [IO.Path]::GetPathRoot($fullParent)
+        if ($fullParent.Length -gt $parentRoot.Length) {
+            $fullParent = $fullParent.TrimEnd([char[]]@('\', '/'))
         }
-        if ($LASTEXITCODE -ne 0) { throw 'Не удалось создать Python venv.' }
-        $venvCreated = $true
-    } else {
-        Write-Host '[4/5] Существующее venv найдено, повторную установку пакетов пропускаю.'
+        if (-not [string]::Equals($fullParent, $resolvedRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Недопустимый путь установки: $fullPath (parent=$fullParent; root=$resolvedRoot)"
+        }
     }
-    if ($venvCreated) {
-        & .\venv\Scripts\python.exe -m pip install --disable-pip-version-check --no-input -r requirements.txt
-        if ($LASTEXITCODE -ne 0) { throw 'Не удалось установить зависимости Python.' }
+    Copy-Item -LiteralPath $downloaded.FullName -Destination $stage -Recurse -Force
+    $stageAgent = Join-Path $stage 'XGENT-WDS'
+    $stageEnv = Join-Path $stageAgent '.env'
+    # Copy instead of moving the original protected .env. The original stays
+    # untouched inside the previous checkout until activation has succeeded.
+    Copy-Item -LiteralPath $envSource -Destination $stageEnv -Force
+
+    Write-Host '[4/5] Собираю отдельное окружение Python и ставлю зависимости...'
+    $venv = Join-Path $stageAgent 'venv'
+    $pythonLauncher = (Get-Command py.exe -ErrorAction SilentlyContinue).Source
+    if ($pythonLauncher) { & $pythonLauncher -3 -m venv $venv }
+    else { & (Get-Command python.exe -ErrorAction Stop).Source -m venv $venv }
+    if ($LASTEXITCODE -ne 0) { throw 'Не удалось создать Python venv; рабочая версия не изменена.' }
+    $stagePython = Join-Path $venv 'Scripts\python.exe'
+    & $stagePython -m pip install --disable-pip-version-check --no-input -r (Join-Path $stageAgent 'requirements.txt')
+    if ($LASTEXITCODE -ne 0) { throw 'Не удалось установить зависимости Python.' }
+    & $stagePython -m py_compile (Join-Path $stageAgent 'xgent_wds.py') (Join-Path $stageAgent 'xider_guardian_wds.py')
+    if ($LASTEXITCODE -ne 0) { throw 'Код агента не компилируется; рабочая версия не изменена.' }
+
+    Write-Host '[5/5] Переключаю версию и регистрирую Agent + Guardian...'
+    foreach ($taskName in @('XIDER Agent', 'XIDER Guardian')) {
+        $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        if ($task) {
+            $oldTasks[$taskName] = @{
+                Xml = Export-ScheduledTask -TaskName $taskName
+                WasRunning = ($task.State -eq 'Running')
+            }
+        }
     }
-    Write-Host '[5/5] Регистрирую Agent и Guardian...'
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install_agent.ps1 -AgentDir (Get-Location).Path
+    # Stop the supervisor first so it cannot restart the worker during swap.
+    foreach ($taskName in @('XIDER Guardian', 'XIDER Agent')) {
+        if ($oldTasks.ContainsKey($taskName) -and $oldTasks[$taskName].WasRunning) {
+            Stop-ScheduledTask -TaskName $taskName
+            $tasksStopped = $true
+        }
+    }
+    $stillRunning = @()
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        $stillRunning = @($oldTasks.Keys | Where-Object {
+            $oldTasks[$_].WasRunning -and (Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue).State -eq 'Running'
+        })
+        if (-not $stillRunning.Count) { break }
+        Start-Sleep -Seconds 1
+    }
+    if ($stillRunning.Count) { throw "Прежние задачи не остановились: $($stillRunning -join ', ')" }
+    if (Test-Path -LiteralPath $repo) { Move-Item -LiteralPath $repo -Destination $backup }
+    Move-Item -LiteralPath $stage -Destination $repo
+    $activationStarted = $true
+    $activePython = Join-Path $agent 'venv\Scripts\python.exe'
+    & $activePython -m pip --version | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Новое окружение Python не работает после переключения; выполняю откат.' }
+    $taskInstallAttempted = $true
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $agent 'install_agent.ps1') -AgentDir $agent -PreferPython
     if ($LASTEXITCODE -ne 0) { throw 'Установка Windows-агента/Guardian завершилась ошибкой.' }
-    Pop-Location
+    $healthy = $false
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        $agentTask = Get-ScheduledTask -TaskName 'XIDER Agent' -ErrorAction SilentlyContinue
+        $guardianTask = Get-ScheduledTask -TaskName 'XIDER Guardian' -ErrorAction SilentlyContinue
+        if ($agentTask -and $guardianTask -and $agentTask.State -eq 'Running' -and $guardianTask.State -eq 'Running') {
+            $expectedAgent = Join-Path $agent 'venv\Scripts\pythonw.exe'
+            $expectedGuardian = Join-Path $agent 'venv\Scripts\python.exe'
+            $agentExecutable = [string]($agentTask.Actions | Select-Object -First 1 -ExpandProperty Execute)
+            $guardianExecutable = [string]($guardianTask.Actions | Select-Object -First 1 -ExpandProperty Execute)
+            if ([string]::Equals($agentExecutable, $expectedAgent, [StringComparison]::OrdinalIgnoreCase) -and
+                [string]::Equals($guardianExecutable, $expectedGuardian, [StringComparison]::OrdinalIgnoreCase)) {
+                $healthy = $true
+                break
+            }
+        }
+        Start-Sleep -Seconds 1
+    }
+    if (-not $healthy) { throw 'Agent или Guardian не перешёл в Running; выполняю откат.' }
     Write-Host '[OK] XIDER Windows Agent + Guardian установлены и запущены.'
+    if (Test-Path -LiteralPath $backup) { Write-Host "[BACKUP] Предыдущая версия сохранена: $backup" }
+}
+catch {
+    $originalError = $_
+    $rollbackProblems = @()
+    if ($taskInstallAttempted) {
+        foreach ($taskName in @('XIDER Guardian', 'XIDER Agent')) {
+            try {
+                $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+                if ($task -and $task.State -eq 'Running') { Stop-ScheduledTask -TaskName $taskName }
+            } catch { $rollbackProblems += "Не удалось остановить ${taskName}: $($_.Exception.Message)" }
+        }
+        for ($attempt = 0; $attempt -lt 20; $attempt++) {
+            $stillRunning = @(@('XIDER Agent', 'XIDER Guardian') | Where-Object {
+                (Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue).State -eq 'Running'
+            })
+            if (-not $stillRunning.Count) { break }
+            Start-Sleep -Seconds 1
+        }
+        if ($stillRunning.Count) { $rollbackProblems += "Новые задачи не остановились: $($stillRunning -join ', ')" }
+    }
+    if ($activationStarted -and (Test-Path -LiteralPath $repo)) {
+        try {
+            Move-Item -LiteralPath $repo -Destination $failed
+            $failedEnv = Join-Path $failed 'XGENT-WDS\.env'
+            if (Test-Path -LiteralPath $failedEnv) { Remove-Item -LiteralPath $failedEnv -Force }
+        } catch { $rollbackProblems += "Не удалось убрать неудачную версию: $($_.Exception.Message)" }
+    }
+    if ($backup -and (Test-Path -LiteralPath $backup) -and -not (Test-Path -LiteralPath $repo)) {
+        try { Move-Item -LiteralPath $backup -Destination $repo }
+        catch { $rollbackProblems += "Не удалось вернуть предыдущие файлы: $($_.Exception.Message)" }
+    }
+    if ($taskInstallAttempted) {
+        foreach ($taskName in @('XIDER Agent', 'XIDER Guardian')) {
+            try {
+                if ($oldTasks.ContainsKey($taskName)) {
+                    Register-ScheduledTask -TaskName $taskName -Xml $oldTasks[$taskName].Xml -Force | Out-Null
+                } elseif (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+                    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+                }
+            } catch { $rollbackProblems += "Не удалось восстановить задачу ${taskName}: $($_.Exception.Message)" }
+        }
+    }
+    if ($tasksStopped) {
+        foreach ($taskName in @('XIDER Agent', 'XIDER Guardian')) {
+            if ($oldTasks.ContainsKey($taskName) -and $oldTasks[$taskName].WasRunning) {
+                try { Start-ScheduledTask -TaskName $taskName }
+                catch { $rollbackProblems += "Не удалось перезапустить ${taskName}: $($_.Exception.Message)" }
+            }
+        }
+    }
+    $problemText = if ($rollbackProblems.Count) { ' Откат неполный: ' + ($rollbackProblems -join '; ') } else { '' }
+    throw "Установка Windows-агента не завершена: $($originalError.Exception.Message).$problemText"
 }
 finally {
-    Pop-Location -ErrorAction SilentlyContinue
+    if ($stage -and (Test-Path -LiteralPath $stage)) {
+        $stageEnv = Join-Path $stage 'XGENT-WDS\.env'
+        if (Test-Path -LiteralPath $stageEnv) { Remove-Item -LiteralPath $stageEnv -Force -ErrorAction SilentlyContinue }
+        Write-Warning "Незавершённая подготовка оставлена без .env: $stage"
+    }
     Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue
 }

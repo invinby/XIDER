@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-SERVICE="${XIDER_SERVICE:-xider-bot.service}"
-APP_DIR="${XIDER_APP_DIR:-/opt/xider}"
+SERVICE="xider-bot.service"
+UPDATE_HELPER="/usr/local/libexec/xider/update-server.sh"
 
 case "${1:-}" in
   status)
@@ -15,11 +15,15 @@ case "${1:-}" in
   restart)
     exec /bin/systemctl restart "$SERVICE"
     ;;
-  update|rollback)
-    exec /bin/bash "$APP_DIR/deploy/update-server.sh" "$1"
+  update)
+    exec /bin/bash "$UPDATE_HELPER" update
+    ;;
+  rollback)
+    shift
+    exec /bin/bash "$UPDATE_HELPER" rollback "$@"
     ;;
   *)
-    echo "Usage: xider-server-ops {status|logs|restart|update|rollback}" >&2
+    echo "Usage: xider-server-ops {status|logs|restart|update|rollback [backup-archive]}" >&2
     exit 2
     ;;
 esac

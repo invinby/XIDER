@@ -17,7 +17,7 @@ from typing import Callable
 
 
 RELEASES_URL = "https://api.github.com/repos/invinby/XIDER/releases"
-_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+_TAG = re.compile(r"^v([0-9]{1,6})\.([0-9]{1,6})\.([0-9]{1,6})$")
 _ASSET_NAMES = {
     "windows_agent": {"XGENT-WDS.exe", "XGENT-WDS-Windows.zip"},
     "mac_agent": {"XGENT-MCS-macos-bundle.zip"},
@@ -25,6 +25,7 @@ _ASSET_NAMES = {
     "mac_keeper": {"Guard-Keeper-macOS.zip"},
     "server": {"X-STAB-server.zip"},
 }
+_SOURCE_UPDATE_ASSETS = frozenset({"XIDER-source.zip", "release-manifest.json"})
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,10 @@ class Release:
 
     def has_package(self, component: str) -> bool:
         return bool(self.asset_names & _ASSET_NAMES.get(component, set()))
+
+    def has_source_update_payload(self, component: str) -> bool:
+        """Require both the platform bundle and the inputs used by source updater."""
+        return self.has_package(component) and _SOURCE_UPDATE_ASSETS.issubset(self.asset_names)
 
 
 def component_for(os_name: str, keeper: bool = False) -> str | None:
@@ -131,6 +136,17 @@ def newest_with_package(releases: list[Release], component: str) -> Release | No
 def is_older(current: str, latest: Release | None) -> bool:
     match = _TAG.fullmatch("v" + str(current or "").removeprefix("v"))
     return bool(latest and match and tuple(map(int, match.groups())) < latest.version)
+
+
+def supports_release_manifest_update(current: str, minimum: str = "4.0.1") -> bool:
+    """Return whether an agent understands the release-manifest update protocol."""
+    current_match = _TAG.fullmatch("v" + str(current or "").strip().removeprefix("v"))
+    minimum_match = _TAG.fullmatch("v" + str(minimum or "").strip().removeprefix("v"))
+    return bool(
+        current_match
+        and minimum_match
+        and tuple(map(int, current_match.groups())) >= tuple(map(int, minimum_match.groups()))
+    )
 
 
 catalog = Catalog()

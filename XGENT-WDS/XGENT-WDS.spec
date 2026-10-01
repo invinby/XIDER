@@ -1,5 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
+from pathlib import Path
 from PyInstaller.utils.hooks import collect_all
+
+REPO_ROOT = Path(SPECPATH).resolve().parent
+MAC_AGENT_DIR = REPO_ROOT / 'XGENT-MCS'
 
 datas = []
 binaries = []
@@ -12,7 +16,7 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 a = Analysis(
     ['xgent_wds.py'],
-    pathex=[],
+    pathex=[str(MAC_AGENT_DIR)],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,

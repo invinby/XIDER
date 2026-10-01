@@ -115,8 +115,16 @@ chmod +x "$0"
 if [[ "${1:-}" != "--foreground" && "${1:-}" != "-f" && "${XIDER_NO_AUTOSTART:-0}" != "1" && -x "$VENV_DIR/bin/python3" ]]; then
     if "$VENV_DIR/bin/python3" -c 'from xgent_mcs import XgentClient; XgentClient()._do_autorun_enable({})' >/dev/null 2>&1 \
        && launchctl print "gui/$(id -u)/com.xgent.agent" >/dev/null 2>&1; then
-        echo "🚀 LaunchAgent зарегистрирован; агент запускается через launchd."
-        exit 0
+        for attempt in {1..10}; do
+            LAUNCH_STATE="$(launchctl print "gui/$(id -u)/com.xgent.agent" 2>/dev/null || true)"
+            if printf '%s\n' "$LAUNCH_STATE" | grep -Eq 'pid = [0-9]+|state = running'; then
+                echo "🚀 LaunchAgent зарегистрирован; процесс агента запущен через launchd."
+                exit 0
+            fi
+            sleep 1
+        done
+        echo "[ERROR] LaunchAgent зарегистрирован, но процесс агента не запустился. Проверь agent.log." >&2
+        exit 1
     fi
 fi
 

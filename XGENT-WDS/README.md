@@ -28,21 +28,17 @@ pyinstaller --onefile --windowed --name XGENT xgent_wds.py
 
 Бинарь появится в `dist\XGENT.exe`.
 
-2. Вариант А — планировщик задач (рекомендуется). Запуск при входе в систему:
+2. Устанавливайте автозапуск только через `install_agent.ps1` ниже. Старые
+   ручные варианты с задачей `XGENT` и ключами `XGENT`/`XGentAgent` в реестре
+   устарели и могут запускать несколько экземпляров. Современный установщик
+   использует одну видимую задачу `XIDER Agent` и очищает эти известные старые
+   записи, не затрагивая `.env`.
 
-```powershell
-schtasks /Create /TN "XGENT" /TR "C:\полный\путь\к\XGENT.exe" /SC ONLOGON /RL LIMITED /F
-```
-
-3. Вариант Б — ключ автозагрузки в реестре:
-
-```powershell
-reg add HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v XGENT /t REG_SZ /d "C:\полный\путь\к\XGENT.exe" /f
-```
-
-The Windows agent is visible in the tray. Windows Guardian is a separate
-Scheduled Task that can report status and restart the agent when its
-auto-recovery policy is enabled.
+The Windows agent is visible in the tray. Windows Guardian is a separate,
+visible Scheduled Task and is the only automatic worker-recovery mechanism.
+An intentional stop from the tray is recorded as owner intent, so Guardian
+does not immediately relaunch the agent; automatic logon startup remains
+independently configured.
 
 Install both tasks from an elevated PowerShell prompt:
 
@@ -56,11 +52,12 @@ commands, if needed:
 
 ```powershell
 PowerShell -NoProfile -ExecutionPolicy Bypass -File .\install_guardian.ps1
-schtasks /End /TN "XIDER Guardian"
+.\stop_guardian.bat
 ```
 
-⚠️ «Остановить клиент» из Telegram завершает клиент до следующего входа
-в систему (автозапуск сработает при следующем входе).
+⚠️ Если остановить агент вручную или через Guardian, он остаётся остановленным
+в текущем сеансе. Если автозапуск включён, задача агента может снова запуститься
+при следующем входе в Windows.
 
 ## Настройка
 
@@ -69,7 +66,29 @@ schtasks /End /TN "XIDER Guardian"
 - Лог клиента: `%USERPROFILE%\.xgent\xgent.log` (ротация, 3 файла по 500 КБ).
 - Секреты и параметры брокера — в `.env` (скопируйте из `.env.example`):
   `SHARED_KEY` должен совпадать с TG-BOT-SERVER и XGENT-MCS;
-  `MQTT_TLS`, `MQTT_USERNAME`, `MQTT_PASSWORD` — опционально, для своего брокера.
+  `MQTT_TLS=true`, `MQTT_USERNAME` и `MQTT_PASSWORD` обязательны. Агент
+  отклоняет plaintext MQTT и соединение без broker credentials. Настройте
+  ACL на приватном брокере только для топиков XIDER. В текущей схеме bootstrap
+  передаёт агенту общую broker-пару; отдельные роли ACL ещё не реализованы и
+  не проверяются клиентом.
+
+## Подписанное обновление агента
+
+В исходной Python-установке начиная с версии **4.0.1** бот может запросить
+стабильный GitHub Release. Агент проверяет подпись Ed25519 и размер/SHA-256
+архива, выбирает только allowlist-файлы Windows-агента, сохраняет прежние файлы
+в `%USERPROFILE%\.xgent\agent-backups`, а после перезапуска ждёт MQTT-соединение.
+Если запуск прерван или агент не подключился за 120 секунд, транзакция пытается
+вернуть предыдущие файлы. Это проверка доступности MQTT, не полный health-check
+всех функций и не A/B-обновление.
+
+Это не обновляет Guard Keeper и не заменяет отдельные файлы `.env`, venv или
+установщик. Однофайловая Windows EXE-сборка пока отказывает без изменения файлов;
+версии ниже 4.0.1 сначала нужно обновить установщиком. Обновление возможно
+только из опубликованного релиза, подписанного ключом издателя, которому агент
+доверяет. Локальный исходный кандидат закрепляет ключ издателя, но сам ключ и
+подписанный релиз ещё не опубликованы; до публикации обновление заканчивается
+безопасным отказом.
 
 ## Команды из Telegram
 

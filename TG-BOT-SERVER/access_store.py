@@ -23,12 +23,43 @@ _LOCK = threading.RLock()
 
 class Role:
     OWNER = "owner"
+    # Read-only migration marker for older installations. `get_role` downgrades
+    # it to USER; it must never continue to grant owner-level access.
     COOWNER = "coowner"
     USER = "user"
     GUEST = "guest"
     BLOCKED = "blocked"
 
     ALL = (OWNER, COOWNER, USER, GUEST, BLOCKED)
+
+
+OWNER_ONLY_CALLBACKS = frozenset({"cmd:shell", "menu:target", "cfm:stop_all"})
+OWNER_ONLY_CALLBACK_PREFIXES = (
+    "admin:", "devmg:", "server:", "versions:", "ev:", "adm:", "all:",
+)
+USER_NAVIGATION_CALLBACKS = frozenset({"menu:main", "menu:about", "menu:devices", "back:device"})
+
+# A small set of categories is useful when a role gets only one or two
+# individual actions. Entering a category must never imply permission for the
+# other buttons inside it; the UI filters those buttons separately.
+CATEGORY_REQUIRED_GRANTS = {
+    "cat:media": frozenset({"cmd:screenshot"}),
+    "cat:system": frozenset({"cmd:status", "cmd:sysinfo", "cmd:battery"}),
+    "cat:power": frozenset({"cmd:lock"}),
+}
+
+# `full_device` expands only into callbacks that operate on the currently
+# selected, explicitly granted device. New/global callback families stay
+# unavailable until deliberately classified here.
+DEVICE_ACTION_PREFIXES = (
+    "cmd:", "cat:", "files:", "fun:", "power:", "power_confirm:",
+    "proc:", "kill:", "killq:", "rotate:", "volq:", "micdur:",
+    "prank:", "prankpage:", "fav:", "rep:", "cfm:",
+)
+DEVICE_ACTION_CALLBACKS = frozenset({
+    "menu:wallpaper", "noop", "vol:opts", "mic:opts", "hist:0",
+    "openapp:ok", "stop:ok", "guardianstop:ok", "sleep:ok",
+})
 
 
 def _load() -> dict[str, Any]:
@@ -89,14 +120,29 @@ def _identity(user: Any) -> dict[str, str]:
 
 def _redact(text: str) -> str:
     """Keep useful audit context without copying credentials into the log."""
+    text = re.sub(
+        r"-----BEGIN (?:OPENSSH |RSA |EC |DSA )?PRIVATE KEY-----.*?"
+        r"-----END (?:OPENSSH |RSA |EC |DSA )?PRIVATE KEY-----",
+        "[PRIVATE KEY REDACTED]",
+        text,
+        flags=re.DOTALL,
+    )
+    text = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [REDACTED]", text)
     text = re.sub(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b", "[TOKEN]", text)
     text = re.sub(
-        r"(?i)\b(token|password|passwd|secret|api[_-]?key|ssh[_-]?key)\s*[:=]\s*\S+",
+        r"(?i)\b((?:bot[_-]?)?token|password|passwd|secret|shared[_-]?key|"
+        r"mqtt[_-]?password|api[_-]?key|ssh[_-]?key|private[_-]?key|authorization)"
+        r"\s*[:=]\s*[^\s,;]+",
         r"\1=[REDACTED]",
         text,
     )
     text = " ".join(text.split())
     return text[:500]
+
+
+def redact_text(text: str) -> str:
+    """Redact credential-like content before it reaches application logs."""
+    return _redact(str(text))
 
 
 def append_audit(kind: str, *, actor_id: int | None = None, target_id: int | None = None,
@@ -194,6 +240,8 @@ def get_role(user_id: int, owner_id: int) -> str:
     if record.get("blocked") or record.get("role") == Role.BLOCKED:
         return Role.BLOCKED
     role = str(record.get("role") or Role.GUEST)
+    if role == Role.COOWNER:
+        return Role.USER
     return role if role in Role.ALL else Role.GUEST
 
 
@@ -210,7 +258,7 @@ def _update(user_id: int, mutator) -> dict[str, Any]:
 
 
 def set_role(actor_id: int, target_id: int, role: str, owner_id: int) -> bool:
-    if int(target_id) == int(owner_id) or role not in (Role.COOWNER, Role.USER, Role.GUEST):
+    if int(target_id) == int(owner_id) or role not in (Role.USER, Role.GUEST):
         return False
     _update(target_id, lambda record: record.update(role=role, blocked=False))
     append_audit("role_set", actor_id=actor_id, target_id=target_id, detail=role)
@@ -264,23 +312,69 @@ def toggle_device(actor_id: int, target_id: int, device_id: str, owner_id: int) 
     return enabled
 
 
+def revoke_devices(device_ids, *, actor_id: int | None = None) -> int:
+    """Remove device grants before a device is deleted, blocked, or uninstalled."""
+    revoked = {str(device_id) for device_id in device_ids if str(device_id)}
+    if not revoked:
+        return 0
+    changed_users = 0
+    with _LOCK:
+        data = _load()
+        users = data.setdefault("users", {})
+        for key, raw in list(users.items()):
+            if not isinstance(raw, dict):
+                continue
+            record = _safe_user(raw)
+            permissions = record["permissions"]
+            current = set(permissions.get("devices") or [])
+            updated = current - revoked
+            if updated == current:
+                continue
+            permissions["devices"] = sorted(updated)
+            users[key] = record
+            changed_users += 1
+        if changed_users:
+            _save(data)
+    if changed_users:
+        append_audit(
+            "device_permissions_revoked",
+            actor_id=actor_id,
+            detail=f"count={len(revoked)}; users={changed_users}",
+        )
+    return changed_users
+
+
 def can_use_callback(user_id: int, callback: str | None, owner_id: int,
                      selected_device: str | None = None) -> bool:
     role = get_role(user_id, owner_id)
-    if role in (Role.OWNER, Role.COOWNER):
+    if role == Role.OWNER:
         return True
+    data = str(callback or "")
+    if data in OWNER_ONLY_CALLBACKS or any(data.startswith(prefix) for prefix in OWNER_ONLY_CALLBACK_PREFIXES):
+        return False
     if role != Role.USER:
         return False
     record = get_user(user_id) or {}
     perms = record.get("permissions") or {}
     callbacks = set(perms.get("callbacks") or [])
     device_ids = set(perms.get("devices") or [])
-    data = str(callback or "")
-    if data in {"menu:main", "menu:about", "menu:devices", "back:device"}:
+    if data in USER_NAVIGATION_CALLBACKS:
         return True
     if data.startswith("dev:"):
         device_id = data.split(":", 1)[1]
-        return device_id in device_ids
-    if selected_device and selected_device in device_ids and "full_device" in callbacks:
+        return bool(device_id and device_id != "all" and device_id in device_ids)
+    # A button grant never grants a device, and a device grant never grants
+    # every button. Both scopes must match the current target. Unknown/global
+    # callback families fail closed even if stale permission data contains them.
+    if not selected_device or selected_device not in device_ids:
+        return False
+    is_device_action = (
+        data in DEVICE_ACTION_CALLBACKS
+        or any(data.startswith(prefix) for prefix in DEVICE_ACTION_PREFIXES)
+    )
+    if not is_device_action:
+        return False
+    if "full_device" in callbacks or data in callbacks:
         return True
-    return data in callbacks
+    required_grants = CATEGORY_REQUIRED_GRANTS.get(data)
+    return bool(required_grants and callbacks.intersection(required_grants))

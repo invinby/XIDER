@@ -1,0 +1,30 @@
+[Unit]
+Description=XIDER encrypted recipient-key backup to standby VPS
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/xider/x-vault-backup.env
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+EnvironmentFile=/etc/xider/x-vault-backup.env
+RuntimeDirectory=xider xider-vault
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/local/libexec/xider/x-vault-backup.sh
+TimeoutStartSec=30min
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ReadWritePaths=/run/xider-vault /run/xider
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native

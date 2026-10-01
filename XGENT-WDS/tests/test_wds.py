@@ -5,14 +5,18 @@
 """
 
 import collections
+import json
 import os
 import sys
 from pathlib import Path
 
 import psutil
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 import xgent_wds as wds
+from release_signature import release_key_id, sign_manifest
 
 
 # ---------------------------------------------------------------------------
@@ -27,6 +31,23 @@ def test_humanize_seconds():
     assert wds._humanize_seconds(None) is None
     assert wds._humanize_seconds(-1) is None
     assert wds._humanize_seconds("bad") is None
+
+
+def test_windows_agent_uses_shared_ed25519_manifest_verifier():
+    private_key = Ed25519PrivateKey.generate()
+    private_pem = private_key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+    public_bytes = private_key.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    manifest = sign_manifest({"schema": 1, "release": "v4.5.0", "assets": []}, private_pem)
+    key_id = release_key_id(public_bytes)
+
+    assert wds.verify_manifest_signature(manifest, {key_id: public_bytes}) == key_id
 
 
 def test_format_battery_none():
@@ -160,6 +181,70 @@ def client(monkeypatch):
     return c
 
 
+def test_windows_remote_update_does_not_claim_success_without_signed_release(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(wds, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(
+        wds,
+        "download_verified_source_archive",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ValueError("В релизе нет единственной пары source ZIP и release manifest.")
+        ),
+    )
+    client._do_agent_update({"update": True})
+
+    responses = [
+        payload
+        for topic, payload in _publish_calls(client)
+        if topic.endswith("/output") and payload.get("type") == "agent_update"
+    ]
+    assert len(responses) == 1
+    assert responses[0]["ok"] is False
+    assert responses[0]["state"] == "failed"
+    assert "Обновление не подтверждено" in responses[0]["text"]
+    assert not (tmp_path / "agent-backups").exists()
+
+
+def test_windows_status_advertises_source_update_mode(client, monkeypatch):
+    import json
+
+    monkeypatch.setattr(wds, "ENCRYPT_PAYLOAD", False)
+    monkeypatch.setattr(wds.sys, "frozen", False, raising=False)
+    assert wds.trusted_release_keys_ready() is True
+    monkeypatch.setattr(wds, "trusted_release_keys_ready", lambda: False)
+
+    client._publish_status()
+
+    envelope = json.loads(client._client.publish.call_args.args[1])
+    payload = wds.verify_message(envelope)
+    assert payload["update_mode"] == "source"
+    assert payload["release_update_ready"] is False
+
+
+def test_windows_status_advertises_release_key_readiness(client, monkeypatch):
+    monkeypatch.setattr(wds, "ENCRYPT_PAYLOAD", False)
+    monkeypatch.setattr(wds.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(wds, "trusted_release_keys_ready", lambda: True)
+
+    client._publish_status()
+
+    envelope = json.loads(client._client.publish.call_args.args[1])
+    payload = wds.verify_message(envelope)
+    assert payload["release_update_ready"] is True
+
+
+def test_windows_frozen_status_advertises_non_updatable_package(client, monkeypatch):
+    import json
+
+    monkeypatch.setattr(wds, "ENCRYPT_PAYLOAD", False)
+    monkeypatch.setattr(wds.sys, "frozen", True, raising=False)
+
+    client._publish_status()
+
+    envelope = json.loads(client._client.publish.call_args.args[1])
+    payload = wds.verify_message(envelope)
+    assert payload["update_mode"] == "frozen"
+
+
 def test_dispatch_unknown_command(client):
     client._dispatch({"type": "no_such_command", "id": "abc"})
     # Должен уйти ack с ошибкой unknown_command.
@@ -286,17 +371,116 @@ def _publish_calls(client):
     ]
 
 
+def test_remove_current_worker_task_does_not_end_acknowledgement_process(monkeypatch):
+    calls = []
+
+    def fake_run(args, **_kwargs):
+        calls.append(args)
+        return type("Result", (), {"returncode": 0, "stdout": "deleted", "stderr": ""})()
+
+    monkeypatch.setattr(wds.subprocess, "run", fake_run)
+
+    ok, detail = wds._remove_scheduled_task(
+        wds.WINDOWS_TASK_NAME, stop_running=False,
+    )
+
+    assert ok is True
+    assert detail == "deleted"
+    assert calls == [[
+        "schtasks.exe", "/Delete", "/TN", wds.WINDOWS_TASK_NAME, "/F",
+    ]]
+
+
+def test_windows_uninstall_unregisters_worker_without_killing_ack(client, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    config_dir = tmp_path / ".xgent"
+    config_dir.mkdir()
+    (config_dir / "state.json").write_text("state", encoding="utf-8")
+    monkeypatch.setattr(wds, "CONFIG_DIR", config_dir)
+    desired = []
+    monkeypatch.setattr(wds, "set_guardian_desired_running", desired.append)
+    removed = []
+    monkeypatch.setattr(
+        wds, "_remove_scheduled_task",
+        lambda task, *, stop_running: (removed.append((task, stop_running)) or (True, "")),
+    )
+
+    class NoStartThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(wds.threading, "Thread", NoStartThread)
+    monkeypatch.setitem(sys.modules, "winreg", SimpleNamespace(
+        HKEY_CURRENT_USER=0, KEY_SET_VALUE=0,
+        OpenKey=lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError()),
+    ))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
+
+    client._do_uninstall_agent({})
+
+    assert desired == [False]
+    assert removed == [
+        (wds.WINDOWS_TASK_NAME, False),
+        (wds.WINDOWS_GUARDIAN_TASK_NAME, True),
+    ]
+    assert not config_dir.exists()
+    responses = [
+        payload for topic, payload in _publish_calls(client)
+        if topic.endswith("/output") and payload.get("type") == "uninstall_agent"
+    ]
+    assert len(responses) == 1 and responses[0]["ok"] is True
+
+
+def test_windows_uninstall_preserves_state_when_worker_task_cannot_be_removed(
+    client, monkeypatch, tmp_path
+):
+    config_dir = tmp_path / ".xgent"
+    config_dir.mkdir()
+    marker = config_dir / "state.json"
+    marker.write_text("preserve", encoding="utf-8")
+    monkeypatch.setattr(wds, "CONFIG_DIR", config_dir)
+    desired = []
+    monkeypatch.setattr(wds, "set_guardian_desired_running", desired.append)
+    calls = []
+
+    def remove_task(task, *, stop_running):
+        calls.append((task, stop_running))
+        return False, "task scheduler denied removal"
+
+    monkeypatch.setattr(wds, "_remove_scheduled_task", remove_task)
+    client._do_uninstall_agent({})
+
+    assert calls == [(wds.WINDOWS_TASK_NAME, False)]
+    assert desired == [False, True]
+    assert marker.read_text(encoding="utf-8") == "preserve"
+    responses = [
+        payload for topic, payload in _publish_calls(client)
+        if topic.endswith("/output") and payload.get("type") == "uninstall_agent"
+    ]
+    assert len(responses) == 1 and responses[0]["ok"] is False
+
+
+def _wait_for_topic(client, suffix, timeout=5.0):
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        topics = _publish_calls(client)
+        if any(topic.endswith(suffix) for topic, _ in topics):
+            return topics
+        time.sleep(0.05)
+    return _publish_calls(client)
+
+
 def test_clipboard_routing(client, monkeypatch):
     import pyperclip
     monkeypatch.setattr(pyperclip, "paste", lambda: "hello world")
     client._dispatch({"type": "clipboard", "id": "c1"})
-    import time
-    for _ in range(50):
-        topics = _publish_calls(client)
-        if any(t.endswith("/clipboard") for t, _ in topics):
-            break
-        time.sleep(0.05)
-    topics = _publish_calls(client)
+    topics = _wait_for_topic(client, "/clipboard")
     assert any(t.endswith("/clipboard") for t, _ in topics)
     payload = next(p for t, p in topics if t.endswith("/clipboard"))
     assert payload["text"] == "hello world"
@@ -319,12 +503,7 @@ def test_shell_routing_uses_capture(client, monkeypatch):
 
     monkeypatch.setattr(wds.subprocess, "run", fake_run)
     client._dispatch({"type": "shell", "command": "whoami", "id": "s1"})
-    import time
-    for _ in range(50):
-        topics = _publish_calls(client)
-        if any(t.endswith("/shell") for t, _ in topics):
-            break
-        time.sleep(0.05)
+    topics = _wait_for_topic(client, "/shell")
     assert captured["cmd"] == "whoami"
     assert captured["kwargs"]["shell"] is True
     assert captured["kwargs"]["timeout"] >= 1
@@ -339,12 +518,7 @@ def test_shell_timeout_reports_error(client, monkeypatch):
         raise wds.subprocess.TimeoutExpired(cmd="x", timeout=20)
     monkeypatch.setattr(wds.subprocess, "run", fake_run)
     client._dispatch({"type": "shell", "command": "sleep 999"})
-    import time
-    for _ in range(50):
-        topics = _publish_calls(client)
-        if any(t.endswith("/shell") for t, _ in topics):
-            break
-        time.sleep(0.05)
+    topics = _wait_for_topic(client, "/shell")
     payload = next(p for t, p in topics if t.endswith("/shell"))
     assert "TIMEOUT" in payload["output"]
     assert payload["returncode"] == -1
@@ -363,13 +537,7 @@ def test_open_app_uses_startfile_no_shell(client, monkeypatch):
 
 def test_capabilities_does_not_leak_secret(client):
     client._dispatch({"type": "capabilities", "id": "cap1"})
-    import time
-    for _ in range(50):
-        topics = _publish_calls(client)
-        if any(t.endswith("/capabilities") for t, _ in topics):
-            break
-        time.sleep(0.05)
-    topics = _publish_calls(client)
+    topics = _wait_for_topic(client, "/capabilities")
     payload = next(p for t, p in topics if t.endswith("/capabilities"))
     assert "SHARED_KEY" not in payload
     assert "shared_key" not in payload
@@ -377,6 +545,25 @@ def test_capabilities_does_not_leak_secret(client):
     assert "mic" in payload["commands"]
     assert "shell" in payload["commands"]
     assert "open_app" in payload["commands"]
+    assert payload["feature_status"]["geolocation"] == "approximate"
+    assert payload["feature_status"]["screenshot"] in {
+        "device_unverified", "dependency_missing",
+    }
+
+
+def test_feature_status_does_not_claim_camera_permission(monkeypatch):
+    monkeypatch.setattr(wds, "_detect_features", lambda: {
+        "screenshot": True, "clipboard": True, "battery": True,
+    })
+    monkeypatch.setattr(wds, "_module_available", lambda _name: True)
+
+    status = wds._detect_feature_status()
+
+    assert status["webcam"] == "permission_unverified"
+    assert status["microphone"] == "permission_unverified"
+    assert status["screenshot"] == "device_unverified"
+    assert status["geolocation"] == "approximate"
+    assert status["battery"] == "supported"
 
 
 def test_x_lock_rejects_second_windows_agent(tmp_path, monkeypatch):

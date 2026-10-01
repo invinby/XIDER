@@ -50,6 +50,10 @@ def get_for_style(key: str, style: str | None) -> str:
         saved = _load()
     if specific in saved:
         return str(saved[specific])
+    for legacy_style in xlex.LEGACY_STYLE_KEYS.get(canonical, ()):
+        legacy_specific = f"{legacy_style}_{key}"
+        if legacy_specific in saved:
+            return str(saved[legacy_specific])
     legacy = f"custom_{key}"
     if canonical == "xperson" and legacy in saved:
         return str(saved[legacy])

@@ -1,0 +1,11 @@
+[Unit]
+Description=Promote completed X-VAULT uploads every five minutes
+
+[Timer]
+OnBootSec=2m
+OnUnitActiveSec=5m
+Persistent=true
+Unit=xider-vault-promote.service
+
+[Install]
+WantedBy=timers.target

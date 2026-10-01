@@ -25,7 +25,9 @@ def get_user_role(user_id: int) -> str:
         try:
             legacy_admins = {int(item) for item in bot_settings.get("admins", []) if str(item).isdigit()}
             if int(user_id) in legacy_admins:
-                return Role.COOWNER
+                # Legacy notification/admin lists are not an authorization
+                # source. The owner must grant new user permissions explicitly.
+                return Role.USER
             if int(user_id) in set(GUEST_IDS):
                 return Role.GUEST
         except (TypeError, ValueError):
@@ -45,14 +47,14 @@ class OwnerFilter(BaseFilter):
 
 
 class AdminFilter(BaseFilter):
-    """Owner/co-owner full access; user gets explicitly granted actions."""
+    """Owner full access; user gets only explicitly granted actions."""
 
     async def __call__(self, obj: Message | CallbackQuery) -> bool:
         if not obj.from_user:
             return False
         user_id = int(obj.from_user.id)
         role = get_user_role(user_id)
-        if role in (Role.OWNER, Role.COOWNER):
+        if role == Role.OWNER:
             return True
         if role != Role.USER:
             return False
@@ -62,15 +64,25 @@ class AdminFilter(BaseFilter):
             return True
         callback = obj.data or ""
         try:
-            from bot import SESSION  # avoids bot/roles import cycle at import time
+            from bot import SESSION, devices  # avoids bot/roles import cycle at import time
             selected_device = SESSION.get("target")
         except Exception:
+            devices = None
             selected_device = None
-        return access_store.can_use_callback(user_id, callback, ADMIN_ID, selected_device)
+        if not access_store.can_use_callback(user_id, callback, ADMIN_ID, selected_device):
+            return False
+        if callback in access_store.USER_NAVIGATION_CALLBACKS:
+            return True
+        if callback.startswith("dev:"):
+            device_id = callback.split(":", 1)[1]
+            return bool(device_id and devices and devices.get(device_id) is not None)
+        # A grant must still refer to a device that exists. This closes stale
+        # grants left behind by old databases or a concurrent remove/block.
+        return bool(selected_device and devices and devices.get(selected_device) is not None)
 
 
 class ReadOnlyFilter(BaseFilter):
-    """Navigation and information for owner, co-owner, user and guest."""
+    """Navigation and information for owner, user and guest."""
 
     async def __call__(self, obj: Message | CallbackQuery) -> bool:
         return bool(obj.from_user and get_user_role(int(obj.from_user.id)) != Role.BLOCKED)
