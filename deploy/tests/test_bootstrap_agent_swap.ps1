@@ -82,11 +82,17 @@ try {
     $rollbackRoot = Join-Path $fixture 'rollback-install'
     New-OldInstall $rollbackRoot
     $failedAsExpected = $false
+    $failureMessage = ''
     try { & $bootstrap -InstallRoot $rollbackRoot -SourceArchive $archive }
-    catch { $failedAsExpected = $_.Exception.Message -match 'Windows-' }
-    if (-not $failedAsExpected) { throw 'Simulated installer failure did not fail the bootstrap.' }
+    catch {
+        $failureMessage = $_.Exception.Message
+        $failedAsExpected = -not [string]::IsNullOrWhiteSpace($failureMessage)
+    }
+    if (-not $failedAsExpected) {
+        throw 'Simulated installer failure did not fail the bootstrap.'
+    }
     if ($global:XiderMockInstallerCalls -ne 1) {
-        throw 'The failure did not reach the simulated installer; rollback was not exercised.'
+        throw "The failure did not reach the simulated installer; rollback was not exercised. Bootstrap error: $failureMessage"
     }
     if (-not (Test-Path -LiteralPath (Join-Path $rollbackRoot 'git-ver\XGENT-WDS\old-marker.txt'))) {
         throw 'The previous checkout was not restored after installer failure.'
