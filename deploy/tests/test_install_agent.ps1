@@ -9,12 +9,31 @@ function New-ScheduledTaskAction {
     return [pscustomobject]@{ Execute = $Execute; Argument = $Argument; WorkingDirectory = $WorkingDirectory }
 }
 function New-ScheduledTaskTrigger { param([switch]$AtLogOn, $User) return 'fixture-trigger' }
-function New-ScheduledTaskSettingsSet { param([switch]$Hidden, $ExecutionTimeLimit, $RestartCount, $RestartInterval) return 'fixture-settings' }
+function New-ScheduledTaskSettingsSet {
+    param(
+        [switch]$Hidden, $ExecutionTimeLimit, $RestartCount, $RestartInterval,
+        [switch]$AllowStartIfOnBatteries, [switch]$DontStopIfGoingOnBatteries,
+        [switch]$StartWhenAvailable
+    )
+    return [pscustomobject]@{
+        ExecutionTimeLimit = $ExecutionTimeLimit
+        RestartCount = $RestartCount
+        RestartInterval = $RestartInterval
+        AllowStartIfOnBatteries = $AllowStartIfOnBatteries.IsPresent
+        DontStopIfGoingOnBatteries = $DontStopIfGoingOnBatteries.IsPresent
+        StartWhenAvailable = $StartWhenAvailable.IsPresent
+    }
+}
 function New-ScheduledTaskPrincipal { param($UserId, $LogonType, $RunLevel) return 'fixture-principal' }
 function Register-ScheduledTask {
     param($TaskName, $Action, $Trigger, $Settings, $Principal, $Description, [switch]$Force)
     $global:XiderRegisterCount++
-    $global:XiderTestActions[$TaskName] = $Action
+    $global:XiderTestActions[$TaskName] = [pscustomobject]@{
+        Execute = $Action.Execute
+        Argument = $Action.Argument
+        WorkingDirectory = $Action.WorkingDirectory
+        Settings = $Settings
+    }
 }
 function Start-ScheduledTask { param($TaskName) $global:XiderStartCount++ }
 
@@ -57,6 +76,14 @@ try {
     }
     if ($global:XiderRegisterCount -ne 2 -or $global:XiderStartCount -ne 2) {
         throw 'Agent installation did not register and start both visible scheduled tasks.'
+    }
+    foreach ($taskName in @('XIDER Fixture', 'XIDER Guardian')) {
+        $settings = $global:XiderTestActions[$taskName].Settings
+        if (-not $settings.AllowStartIfOnBatteries -or
+            -not $settings.DontStopIfGoingOnBatteries -or
+            -not $settings.StartWhenAvailable) {
+            throw "$taskName must start on battery, keep running when unplugged, and start when available."
+        }
     }
 
     & $installer -AgentDir $fixture -TaskName 'XIDER Fixture'

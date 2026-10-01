@@ -84,7 +84,11 @@ $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 # Guardian is the sole worker-recovery owner. A second Task Scheduler restart
 # policy races an intentional tray stop and can revive the worker after it was
 # explicitly stopped.
-$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero)
+$settings = New-ScheduledTaskSettingsSet `
+    -ExecutionTimeLimit ([TimeSpan]::Zero) `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -StartWhenAvailable
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'XIDER device agent (MQTT/TLS)' -Force | Out-Null
 Start-ScheduledTask -TaskName $TaskName

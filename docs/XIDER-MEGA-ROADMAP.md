@@ -60,6 +60,14 @@ macOS-агент, Guard Keeper и система релизов.
   отсутствуют. Сборка завершилась успешно; осталась необязательная warning-строка
   OpenCV `cv2.gapi`/GStreamer hook. Исполняемый файл не запускался, macOS runner
   и GitHub Actions не проверены.
+- Read-only-снимок локальной Windows-машины (2026-10-01): зарегистрированы задачи
+  `XIDER Agent` и `XIDER Guardian`, но XIDER-процессы не обнаружены. Установленный
+  EXE всё ещё версии `4.0.0`; последний запуск обеих задач отмечен 28 сентября
+  кодами `0x8007042B` и `0xC000013A`. Текущие задачи запрещают запуск на батарее.
+  В исходные установщики добавлены явные `AllowStartIfOnBatteries`,
+  `DontStopIfGoingOnBatteries` и `StartWhenAvailable`; целевая Windows-фикстура и
+  полный набор прошли. На реальной машине эта правка ещё не установлена;
+  существующие задачи, процессы и `.env` не менялись.
 - X-VAULT/2 sender/standby receiver подготовлены, но не включены на VPS. Передача
   идёт по pinned-host-key SSH как length-prefixed stream; отдельная forced
   command не принимает shell-команды и клиентские пути. Receiver ограничивает
