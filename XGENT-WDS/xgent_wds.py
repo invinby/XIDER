@@ -208,19 +208,37 @@ def _scheduled_task_exists(task_name: str = WINDOWS_TASK_NAME) -> bool:
     return result.returncode == 0
 
 
-def _remove_scheduled_task(task_name: str = WINDOWS_TASK_NAME) -> tuple[bool, str]:
-    """Удалить автозапуск агента независимо от старого Registry-варианта."""
-    subprocess.run(
-        ["schtasks.exe", "/End", "/TN", task_name],
-        capture_output=True, text=True, check=False,
-    )
-    delete = subprocess.run(
-        ["schtasks.exe", "/Delete", "/TN", task_name, "/F"],
-        capture_output=True, text=True, check=False,
-    )
-    ok = delete.returncode == 0 or "cannot find" in (delete.stderr or "").lower()
+def _remove_scheduled_task(
+    task_name: str = WINDOWS_TASK_NAME, *, stop_running: bool = True,
+) -> tuple[bool, str]:
+    """Remove one known XIDER task and confirm it is no longer registered.
+
+    The worker calls this for its own task while handling the uninstall
+    acknowledgement. ``schtasks /end`` would kill that same Python process
+    before it can publish the correlated response, so callers can unregister
+    a running task without interrupting its current process.
+    """
+    try:
+        if stop_running:
+            subprocess.run(
+                ["schtasks.exe", "/End", "/TN", task_name],
+                capture_output=True, text=True, check=False,
+            )
+        delete = subprocess.run(
+            ["schtasks.exe", "/Delete", "/TN", task_name, "/F"],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError as exc:
+        return False, str(exc)
+
     detail = (delete.stdout or delete.stderr or "").strip()
-    return ok, detail
+    if delete.returncode == 0:
+        return True, detail
+    # Task Scheduler output is localized, so use its query result rather than
+    # matching English/Russian "task not found" messages.
+    if not _scheduled_task_exists(task_name):
+        return True, detail
+    return False, detail or f"Scheduled Task is still registered: {task_name}"
 
 # Команды, которые умеет выполнять этот клиент. Используются и для
 # маршрутизации, и для отчёта о возможностях (capabilities).
@@ -3526,12 +3544,46 @@ setTimeout(()=>window.close(),15000);
         log.warning("Получена команда полного удаления агента с ПК!")
         try:
             set_guardian_desired_running(False)
-        except Exception:
+        except Exception as exc:
             log.exception("Could not persist Guardian stop intent before uninstall")
-        # Установщик Windows создаёт Scheduled Task; удаляем его первым,
-        # иначе задача сможет запустить агент снова после удаления файлов.
-        _remove_scheduled_task()
-        _remove_scheduled_task(WINDOWS_GUARDIAN_TASK_NAME)
+            self._publish_response("output", {
+                "type": "uninstall_agent", "device_id": DEVICE_ID, "ok": False,
+                "text": f"❌ Удаление отменено: не удалось сохранить состояние Guardian: {exc}",
+            })
+            return
+
+        # Unregister the worker task without ending its current instance: this
+        # callback must stay alive long enough to publish the correlated ACK.
+        worker_removed, worker_detail = _remove_scheduled_task(
+            WINDOWS_TASK_NAME, stop_running=False,
+        )
+        if not worker_removed:
+            try:
+                set_guardian_desired_running(True)
+            except Exception:
+                log.exception("Could not restore Guardian intent after task removal failure")
+            self._publish_response("output", {
+                "type": "uninstall_agent", "device_id": DEVICE_ID, "ok": False,
+                "text": f"❌ Удаление отменено: задача агента не удалена ({worker_detail}). Настройки сохранены.",
+            })
+            return
+
+        # The Guardian is a different process, so stop it before unregistering
+        # its task. If that cannot be confirmed, preserve the worker state and
+        # report failure instead of pretending the uninstall completed.
+        guardian_removed, guardian_detail = _remove_scheduled_task(
+            WINDOWS_GUARDIAN_TASK_NAME, stop_running=True,
+        )
+        if not guardian_removed:
+            try:
+                set_guardian_desired_running(True)
+            except Exception:
+                log.exception("Could not restore Guardian intent after Guardian task removal failure")
+            self._publish_response("output", {
+                "type": "uninstall_agent", "device_id": DEVICE_ID, "ok": False,
+                "text": f"❌ Удаление не завершено: Guardian не остановлен ({guardian_detail}). Состояние агента сохранено.",
+            })
+            return
         try:
             import winreg
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE)

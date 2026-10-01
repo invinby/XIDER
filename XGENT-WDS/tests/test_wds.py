@@ -371,6 +371,99 @@ def _publish_calls(client):
     ]
 
 
+def test_remove_current_worker_task_does_not_end_acknowledgement_process(monkeypatch):
+    calls = []
+
+    def fake_run(args, **_kwargs):
+        calls.append(args)
+        return type("Result", (), {"returncode": 0, "stdout": "deleted", "stderr": ""})()
+
+    monkeypatch.setattr(wds.subprocess, "run", fake_run)
+
+    ok, detail = wds._remove_scheduled_task(
+        wds.WINDOWS_TASK_NAME, stop_running=False,
+    )
+
+    assert ok is True
+    assert detail == "deleted"
+    assert calls == [[
+        "schtasks.exe", "/Delete", "/TN", wds.WINDOWS_TASK_NAME, "/F",
+    ]]
+
+
+def test_windows_uninstall_unregisters_worker_without_killing_ack(client, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    config_dir = tmp_path / ".xgent"
+    config_dir.mkdir()
+    (config_dir / "state.json").write_text("state", encoding="utf-8")
+    monkeypatch.setattr(wds, "CONFIG_DIR", config_dir)
+    desired = []
+    monkeypatch.setattr(wds, "set_guardian_desired_running", desired.append)
+    removed = []
+    monkeypatch.setattr(
+        wds, "_remove_scheduled_task",
+        lambda task, *, stop_running: (removed.append((task, stop_running)) or (True, "")),
+    )
+
+    class NoStartThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(wds.threading, "Thread", NoStartThread)
+    monkeypatch.setitem(sys.modules, "winreg", SimpleNamespace(
+        HKEY_CURRENT_USER=0, KEY_SET_VALUE=0,
+        OpenKey=lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError()),
+    ))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
+
+    client._do_uninstall_agent({})
+
+    assert desired == [False]
+    assert removed == [
+        (wds.WINDOWS_TASK_NAME, False),
+        (wds.WINDOWS_GUARDIAN_TASK_NAME, True),
+    ]
+    assert not config_dir.exists()
+    responses = [
+        payload for topic, payload in _publish_calls(client)
+        if topic.endswith("/output") and payload.get("type") == "uninstall_agent"
+    ]
+    assert len(responses) == 1 and responses[0]["ok"] is True
+
+
+def test_windows_uninstall_preserves_state_when_worker_task_cannot_be_removed(
+    client, monkeypatch, tmp_path
+):
+    config_dir = tmp_path / ".xgent"
+    config_dir.mkdir()
+    marker = config_dir / "state.json"
+    marker.write_text("preserve", encoding="utf-8")
+    monkeypatch.setattr(wds, "CONFIG_DIR", config_dir)
+    desired = []
+    monkeypatch.setattr(wds, "set_guardian_desired_running", desired.append)
+    calls = []
+
+    def remove_task(task, *, stop_running):
+        calls.append((task, stop_running))
+        return False, "task scheduler denied removal"
+
+    monkeypatch.setattr(wds, "_remove_scheduled_task", remove_task)
+    client._do_uninstall_agent({})
+
+    assert calls == [(wds.WINDOWS_TASK_NAME, False)]
+    assert desired == [False, True]
+    assert marker.read_text(encoding="utf-8") == "preserve"
+    responses = [
+        payload for topic, payload in _publish_calls(client)
+        if topic.endswith("/output") and payload.get("type") == "uninstall_agent"
+    ]
+    assert len(responses) == 1 and responses[0]["ok"] is False
+
+
 def _wait_for_topic(client, suffix, timeout=5.0):
     import time
 

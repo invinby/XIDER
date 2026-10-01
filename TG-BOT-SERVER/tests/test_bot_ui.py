@@ -88,6 +88,397 @@ def test_about_chapter_button_uses_each_xlex_voice():
     assert len(set(labels.values())) == len(bot.xlex.STYLES)
 
 
+def test_completed_xlex_screen_copy_has_six_distinct_voices():
+    keys = (
+        "guest_devices_overview",
+        "admin_user_profile",
+        "admin_device_access_intro",
+        "admin_permissions_intro",
+        "style_select_intro",
+        "style_enabled_notice",
+        "power_menu_intro",
+        "power_confirm_prompt",
+        "category_media",
+        "category_screen",
+        "category_input",
+        "category_system",
+        "category_network",
+        "category_terminal",
+        "category_power",
+        "category_pranks",
+        "category_device_settings",
+        "events_menu_intro",
+        "quiet_hours_intro",
+        "digest_menu_intro",
+        "admins_menu_intro",
+        "favorites_page_intro",
+        "wallpaper_guide",
+        "prank_page_intro",
+        "prank_spam_prompt",
+        "prank_shout_prompt",
+        "guardian_menu_intro",
+        "volume_options_title",
+        "mic_duration_prompt",
+        "power_action_result",
+        "wallpaper_photo_installed",
+        "wallpaper_photo_sent",
+        "wallpaper_photo_error",
+        "device_command_completed",
+        "brightness_result",
+        "command_waiting",
+        "status_waiting",
+        "no_devices_yet",
+        "admin_invalid_user",
+        "admin_user_not_found",
+        "admin_invalid_data",
+        "device_unavailable",
+        "text_edit_prompt",
+        "text_saved",
+        "admin_message_prompt",
+        "admin_role_changed",
+        "owner_immutable",
+        "admin_user_blocked",
+        "admin_user_unblocked",
+        "device_rename_prompt",
+        "device_delete_confirm",
+        "agent_uninstall_confirm",
+        "agent_uninstall_pending",
+        "agent_uninstall_result",
+        "device_confirmed",
+        "device_block_confirm",
+        "device_blocked_notice",
+        "devices_clear_confirm",
+        "devices_cleared",
+        "manual_device_id_prompt",
+        "text_edit_expired",
+        "text_save_failed",
+        "admin_device_access_changed",
+        "admin_permission_changed",
+        "admin_message_empty",
+        "admin_message_sent",
+        "admin_message_failed",
+        "device_renamed_result",
+        "device_rename_unselected",
+        "device_name_empty",
+        "device_delete_result",
+        "device_unblocked_notice",
+        "device_not_blocked",
+        "devices_blocked_empty",
+        "devices_blocked_heading",
+        "device_id_invalid",
+        "device_added_manual",
+        "device_already_present",
+        "agent_uninstall_timeout",
+        "agent_uninstall_no_result",
+        "command_started",
+        "command_result",
+        "command_already_running",
+        "agent_update_label",
+    )
+    assert set(keys) <= set(bot.xlex.COPY)
+    for key in keys:
+        rendered = {
+            style: bot.xlex.render(
+                key,
+                style,
+                device="Laptop",
+                name="Owner",
+                user_id="123",
+                role="Пользователь",
+                online="1",
+                total="2",
+                devices="1",
+                buttons="3",
+                action="перезапустить",
+                page="1",
+                text="OK",
+                level="40",
+                command="status",
+                size="42",
+                error="ошибка",
+                emoji="⚡",
+                label="Перезапуск",
+                current="Old value",
+                device_id="a1b2c3d4e5f6",
+                permission="cmd:screenshot",
+            )
+            for style in bot.xlex.STYLES
+        }
+        assert len(set(rendered.values())) == len(bot.xlex.STYLES), key
+
+
+def test_simple_command_labels_follow_selected_xlex_voice(monkeypatch):
+    values = {"level": "40", "command": "status"}
+    for action, (copy_key, _value_name) in bot._SIMPLE_COMMAND_LABELS.items():
+        for style in bot.xlex.STYLES:
+            monkeypatch.setattr(bot, "bot_settings", {"ui_style": style})
+            label = bot._simple_command_label(action, "fallback", values)
+            expected_values = {_value_name: values[_value_name]} if _value_name else {}
+            assert label == bot.xlex.render(copy_key, style, **expected_values), action
+
+
+def test_all_stateless_prank_menu_commands_have_xlex_labels():
+    actions = {
+        callback[4:]
+        for page in range(1, 6)
+        for callback in _callback_data(bot.pranks_menu(page=page))
+        if callback.startswith("cmd:prank_")
+    }
+
+    assert actions
+    assert actions <= set(bot._SIMPLE_COMMAND_LABELS)
+    assert all(
+        bot._SIMPLE_COMMAND_LABELS[action][0] in bot.xlex.COPY
+        for action in actions
+    )
+
+
+def test_generic_prank_callback_uses_single_card_command_flow(monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+
+    async def simple_command(cq, action, emoji, label, timeout=12.0, **kwargs):
+        calls.append((action, emoji, label, timeout, kwargs))
+
+    class FakeCallback:
+        data = "cmd:prank_fake_update"
+
+    monkeypatch.setattr(bot, "simple_command", simple_command)
+    monkeypatch.setattr(bot.bot_settings, "get", lambda key, default=None: "xperson" if key == "ui_style" else default)
+
+    asyncio.run(bot.on_cmd_prank_generic(FakeCallback()))
+
+    assert calls == [(
+        "prank_fake_update",
+        "🎭",
+        bot.xlex.render("prank_fake_update_button", "xperson"),
+        15.0,
+        {},
+    )]
+
+
+def test_simple_command_shows_success_when_agent_ack_has_no_text(monkeypatch):
+    from types import SimpleNamespace
+
+    edits = []
+
+    class FakeMessage:
+        chat = SimpleNamespace(id=1)
+        message_id = 9
+
+        async def edit_text(self, text, **kwargs):
+            edits.append(text)
+
+    class FakeCallback:
+        from_user = SimpleNamespace(id=1)
+        message = FakeMessage()
+
+        async def answer(self, *args, **kwargs):
+            pass
+
+    class FakeCollector:
+        async def wait_for(self, *args, **kwargs):
+            return {"ok": True, "id": "cmd-1"}
+
+    monkeypatch.setitem(bot.SESSION, "target", "device-1")
+    monkeypatch.setattr(bot, "target_label", lambda _target: "Test device")
+    monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (True, "cmd-1"))
+    monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
+
+    asyncio.run(bot._simple_command_unlocked(
+        FakeCallback(), "prank_screamer", "🎬", "Скример", timeout=1.0
+    ))
+
+    assert len(edits) == 2
+    assert bot._lex("device_command_completed") in edits[-1]
+    assert bot._lex("device_no_response") not in edits[-1]
+
+
+@pytest.mark.parametrize(
+    ("handler", "action", "emoji", "label_key", "extra"),
+    [
+        (bot.on_fun_spam_input, "msgbox_spam", "💬", "prank_spam_windows_button", {"count": 5}),
+        (bot.on_prank_shout_input, "prank_shout_tts", "📢", "prank_shout_button", {}),
+    ],
+)
+def test_prompted_prank_input_edits_one_card_and_keeps_captured_target(
+    monkeypatch, handler, action, emoji, label_key, extra
+):
+    from types import SimpleNamespace
+
+    edits = []
+    published = []
+
+    class FakeState:
+        async def get_data(self):
+            return {"target": "captured-device"}
+
+        async def clear(self):
+            pass
+
+    class FakeMessage:
+        text = "A test phrase"
+
+    class FakeCollector:
+        async def wait_for(self, *args, **kwargs):
+            return {"ok": True, "id": "cmd-1"}
+
+    async def replace_card(_message, text, reply_markup=None):
+        edits.append(text)
+
+    monkeypatch.setitem(bot.SESSION, "target", "a-different-current-device")
+    monkeypatch.setattr(bot.bot_settings, "get", lambda key, default=None: "xperson" if key == "ui_style" else default)
+    monkeypatch.setattr(bot, "target_label", lambda target: target)
+    monkeypatch.setattr(bot, "publish_tracked", lambda name, **kwargs: published.append((name, kwargs)) or (True, "cmd-1"))
+    monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
+    monkeypatch.setattr(bot, "_replace_user_card", replace_card)
+
+    asyncio.run(handler(FakeMessage(), FakeState()))
+
+    label = bot.xlex.render(label_key, "xperson")
+    assert edits == [
+        bot._lex_html(
+            "command_waiting",
+            emoji=emoji,
+            label=label,
+            device="captured-device",
+        ),
+        bot._lex_html(
+            "command_result",
+            emoji=emoji,
+            label=label,
+            device="captured-device",
+            text=bot.xlex.render("device_command_completed", "xperson"),
+        ),
+    ]
+    assert published == [(
+        action,
+        {"_target": "captured-device", "text": "A test phrase", **extra},
+    )]
+
+
+def test_xlex_html_helpers_escape_dynamic_device_names():
+    rendered = bot._lex_html("category_media", device="<b>not markup</b>")
+    assert "<b>not markup</b>" not in rendered
+    assert "&lt;b&gt;not markup&lt;/b&gt;" in rendered
+
+
+def test_uninstall_timeout_does_not_remove_device_or_retarget_other_session(monkeypatch):
+    from types import SimpleNamespace
+
+    removed = []
+    revoked = []
+    published = []
+    rendered = []
+    answers = []
+
+    class FakeDevices:
+        def remove(self, device_id):
+            removed.append(device_id)
+            return True
+
+    class FakeAccessStore:
+        def revoke_devices(self, device_ids, *, actor_id):
+            revoked.append((list(device_ids), actor_id))
+
+    class FakeCollector:
+        async def wait_for(self, device_id, action_type, *, timeout, command_id):
+            assert (device_id, action_type, timeout, command_id) == (
+                "device-1", "uninstall_agent", 15.0, "ticket-1"
+            )
+            return None
+
+    class FakeCallback:
+        data = "devmg:uninstok:device-1"
+        from_user = SimpleNamespace(id=7)
+        message = SimpleNamespace()
+
+        async def answer(self, *args, **kwargs):
+            answers.append((args, kwargs))
+
+    async def replace(_cq, text, **kwargs):
+        rendered.append((text, kwargs))
+
+    def publish_tracked(action, **kwargs):
+        published.append((action, kwargs))
+        return True, "ticket-1"
+
+    monkeypatch.setattr(bot, "devices", FakeDevices())
+    monkeypatch.setattr(bot, "access_store", FakeAccessStore())
+    monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
+    monkeypatch.setattr(bot, "publish_tracked", publish_tracked)
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    monkeypatch.setattr(bot, "devices_menu", lambda *_args, **_kwargs: "devices-menu")
+    monkeypatch.setattr(bot, "target_label", lambda _device_id: "Laptop")
+    monkeypatch.setattr(bot, "audit", lambda *_args, **_kwargs: None)
+    monkeypatch.setitem(bot.SESSION, "target", "other-device")
+
+    asyncio.run(bot.on_devmg_uninstall_ok(FakeCallback()))
+
+    assert published == [("uninstall_agent", {"_target": "device-1"})]
+    assert removed == []
+    assert revoked == []
+    assert bot.SESSION["target"] == "other-device"
+    assert answers == [((bot._lex("agent_uninstall_pending"),), {})]
+    assert rendered == [(
+        bot._lex_html("agent_uninstall_timeout", device="Laptop"),
+        {"reply_markup": "devices-menu"},
+    )]
+
+
+def test_uninstall_only_revokes_device_after_correlated_success(monkeypatch):
+    from types import SimpleNamespace
+
+    removed = []
+    revoked = []
+    rendered = []
+
+    class FakeDevices:
+        def remove(self, device_id):
+            removed.append(device_id)
+            return True
+
+    class FakeAccessStore:
+        def revoke_devices(self, device_ids, *, actor_id):
+            revoked.append((list(device_ids), actor_id))
+
+    class FakeCollector:
+        async def wait_for(self, device_id, action_type, *, timeout, command_id):
+            assert (device_id, action_type, command_id) == ("device-1", "uninstall_agent", "ticket-2")
+            return {"type": "uninstall_agent", "ok": True, "text": "Removed", "id": command_id}
+
+    class FakeCallback:
+        data = "devmg:uninstok:device-1"
+        from_user = SimpleNamespace(id=7)
+        message = SimpleNamespace()
+
+        async def answer(self, *_args, **_kwargs):
+            pass
+
+    async def replace(_cq, text, **kwargs):
+        rendered.append((text, kwargs))
+
+    monkeypatch.setattr(bot, "devices", FakeDevices())
+    monkeypatch.setattr(bot, "access_store", FakeAccessStore())
+    monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
+    monkeypatch.setattr(bot, "publish_tracked", lambda *_args, **_kwargs: (True, "ticket-2"))
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    monkeypatch.setattr(bot, "devices_menu", lambda *_args, **_kwargs: "devices-menu")
+    monkeypatch.setattr(bot, "target_label", lambda _device_id: "Laptop")
+    monkeypatch.setattr(bot, "audit", lambda *_args, **_kwargs: None)
+    monkeypatch.setitem(bot.SESSION, "target", "device-1")
+
+    asyncio.run(bot.on_devmg_uninstall_ok(FakeCallback()))
+
+    assert removed == ["device-1"]
+    assert revoked == [(["device-1"], 7)]
+    assert bot.SESSION["target"] is None
+    assert len(rendered) == 1
+    assert "Removed" in rendered[0][0]
+    assert "Laptop" in rendered[0][0]
+
+
 def test_device_card_all_shows_online_total(monkeypatch):
     _setup(monkeypatch, {"mac1": {"name": "Mac", "os": "macOS", "last_seen": time.time()},
                          "win1": {"name": "PC", "os": "Windows", "last_seen": 0}})
@@ -202,6 +593,80 @@ def test_guardian_command_includes_dispatch_marker(monkeypatch):
 
     assert captured["command"] == "stop"
     assert captured["action"] == "guardian"
+
+
+def test_power_confirmation_dispatches_action_payload_without_duplicate_callback_answer(monkeypatch):
+    from types import SimpleNamespace
+
+    published = []
+    answers = []
+    edits = []
+
+    class FakeCollector:
+        def reset(self):
+            pass
+
+        async def wait(self, _timeout):
+            return None
+
+    class FakeMessage:
+        async def edit_text(self, text, **kwargs):
+            edits.append((text, kwargs))
+
+    class FakeCallback:
+        data = "power_confirm:reboot"
+        message = FakeMessage()
+
+        async def answer(self, *args, **kwargs):
+            answers.append((args, kwargs))
+
+    def fake_transport_publish(target, command_name, **payload):
+        published.append((target, command_name, payload))
+        return True
+
+    monkeypatch.setitem(bot.SESSION, "target", "device-A")
+    monkeypatch.setattr(bot, "target_label", lambda target: target)
+    monkeypatch.setattr(bot, "audit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bot, "HISTORY", {})
+    monkeypatch.setattr(bot.transport, "publish_command", fake_transport_publish)
+    monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
+
+    asyncio.run(bot.on_power_confirm(FakeCallback()))
+
+    assert published == [("device-A", "power", {"action": "reboot"})]
+    assert len(answers) == 1
+    assert len(edits) == 1
+
+
+def test_sleep_confirmation_uses_captured_target_and_replaces_current_card(monkeypatch):
+    published = []
+    rendered = []
+    answers = []
+
+    class FakeCallback:
+        async def answer(self, *args, **kwargs):
+            answers.append((args, kwargs))
+
+    def fake_transport_publish(target, command_name, **payload):
+        published.append((target, command_name, payload))
+        return True
+
+    async def replace_card(_cq, text, reply_markup=None):
+        rendered.append((text, reply_markup))
+
+    monkeypatch.setitem(bot.SESSION, "target", "device-A")
+    monkeypatch.setattr(bot, "target_label", lambda target: target)
+    monkeypatch.setattr(bot, "audit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bot, "HISTORY", {})
+    monkeypatch.setattr(bot.transport, "publish_command", fake_transport_publish)
+    monkeypatch.setattr(bot, "_replace_callback_message", replace_card)
+
+    asyncio.run(bot.on_sleep_ok(FakeCallback()))
+
+    assert published == [("device-A", "power", {"action": "sleep"})]
+    assert len(rendered) == 1
+    assert "Сон отправлен: device-A" in rendered[0][0]
+    assert len(answers) == 1
 
 
 def test_check_update_blocks_old_mac_without_sending_update_or_shell(monkeypatch):

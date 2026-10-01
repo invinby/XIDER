@@ -20,6 +20,8 @@ CALLBACK_ALIASES = {"check_update": "agent_update"}
 DYNAMIC_ACTION_WRAPPERS = {
     ("publish_command", "publish"): "shared_publish_dispatch",
     ("publish_command", "on_repeat"): "history_replay",
+    ("publish_tracked", "_run_text_prank_input"): "prompted_text_prank_dispatch",
+    ("simple_command", "on_cmd_prank_generic"): "xlex_prank_dispatch",
     ("publish_tracked", "_simple_command_unlocked"): "simple_command_dispatch",
 }
 

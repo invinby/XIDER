@@ -154,7 +154,8 @@ def test_current_repo_has_no_declared_worker_action_gaps():
     assert report["dynamic_action_calls_not_classified"] == 0
     assert report["dynamic_action_sites"] == []
     assert [item["classification"] for item in report["dynamic_action_wrappers"]] == [
-        "shared_publish_dispatch", "history_replay", "simple_command_dispatch",
+        "shared_publish_dispatch", "history_replay",
+        "prompted_text_prank_dispatch", "simple_command_dispatch", "xlex_prank_dispatch",
     ]
     assert report["feature_status"]["expected_features"] == sorted({
         "screenshot", "webcam", "microphone", "geolocation", "battery", "clipboard", "shell", "open_app",
