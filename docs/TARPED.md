@@ -104,5 +104,14 @@ edited per-voice copy remain compatible without being deleted.
 The first TARPED source changes add X-LEX core copy and owner selection,
 X-LEDGER's read-only GitHub Release catalogue, a per-device version browser,
 and an in-bot handbook. They do **not** yet implement A/B installation,
-complete six-voice coverage, or live-verified updates. Those items remain
-unchecked above and must not be advertised as released.
+complete six-voice coverage, or live-verified updates. X-DOCK now has a separate
+proposed enrollment design: a stable public IP may replace a domain if
+short-lived IP-TLS certificates can be renewed and reloaded reliably. No
+enrollment endpoint, per-device credential issuer, or live pairing exists yet.
+The Windows installer now retires only the documented legacy `XGENT` scheduled
+task and `XGENT`/`XGentAgent` per-user Run entries before registering the single
+supported `XIDER Agent` task; preflight remains read-only and `.env` is untouched.
+This cleanup is covered by a Windows fixture, but has not been run on the owner’s
+Windows device, so duplicate tray icons and stale desktop copies are not yet
+confirmed resolved.
+These items remain unchecked above and must not be advertised as released.

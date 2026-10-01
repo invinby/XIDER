@@ -76,6 +76,38 @@ if ($PreflightOnly) {
     return
 }
 
+# Retire the two autostart sources documented by the original XGENT installer.
+# The current, visible Scheduled Task below is the only supported agent startup
+# owner. Keep this allowlist narrow: do not enumerate or delete arbitrary tasks.
+$legacyTaskName = 'XGENT'
+if ($legacyTaskName -ne $TaskName) {
+    try {
+        $legacyTask = Get-ScheduledTask -TaskName $legacyTaskName -ErrorAction SilentlyContinue
+        if ($legacyTask) {
+            if ($legacyTask.State -eq 'Running') {
+                Stop-ScheduledTask -TaskName $legacyTaskName -ErrorAction Stop
+            }
+            Unregister-ScheduledTask -TaskName $legacyTaskName -Confirm:$false -ErrorAction Stop
+            Write-Host '[OK] Removed the legacy XGENT Scheduled Task.'
+        }
+    } catch {
+        Write-Warning ("Не удалось удалить старую задачу «XGENT»: {0}" -f $_.Exception.Message)
+    }
+}
+
+$legacyRunKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+try {
+    $legacyRunValues = Get-ItemProperty -LiteralPath $legacyRunKey -ErrorAction SilentlyContinue
+    foreach ($legacyValueName in @('XGENT', 'XGentAgent')) {
+        if ($legacyRunValues -and $legacyRunValues.PSObject.Properties[$legacyValueName]) {
+            Remove-ItemProperty -LiteralPath $legacyRunKey -Name $legacyValueName -ErrorAction Stop
+            Write-Host ("[OK] Removed the legacy XGENT Run entry '{0}'." -f $legacyValueName)
+        }
+    }
+} catch {
+    Write-Warning ("Не удалось очистить известные старые ключи автозапуска XGENT: {0}" -f $_.Exception.Message)
+}
+
 # Keep the sidecar env readable only by the account that runs this agent.
 icacls $envPath /inheritance:r | Out-Null
 icacls $envPath /grant:r "$($env:USERNAME):R" | Out-Null

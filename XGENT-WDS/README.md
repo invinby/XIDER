@@ -28,17 +28,11 @@ pyinstaller --onefile --windowed --name XGENT xgent_wds.py
 
 Бинарь появится в `dist\XGENT.exe`.
 
-2. Вариант А — планировщик задач (рекомендуется). Запуск при входе в систему:
-
-```powershell
-schtasks /Create /TN "XGENT" /TR "C:\полный\путь\к\XGENT.exe" /SC ONLOGON /RL LIMITED /F
-```
-
-3. Вариант Б — ключ автозагрузки в реестре:
-
-```powershell
-reg add HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v XGENT /t REG_SZ /d "C:\полный\путь\к\XGENT.exe" /f
-```
+2. Устанавливайте автозапуск только через `install_agent.ps1` ниже. Старые
+   ручные варианты с задачей `XGENT` и ключами `XGENT`/`XGentAgent` в реестре
+   устарели и могут запускать несколько экземпляров. Современный установщик
+   использует одну видимую задачу `XIDER Agent` и очищает эти известные старые
+   записи, не затрагивая `.env`.
 
 The Windows agent is visible in the tray. Windows Guardian is a separate,
 visible Scheduled Task and is the only automatic worker-recovery mechanism.

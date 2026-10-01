@@ -36,6 +36,23 @@ function Register-ScheduledTask {
     }
 }
 function Start-ScheduledTask { param($TaskName) $global:XiderStartCount++ }
+function Get-ScheduledTask {
+    param($TaskName, $ErrorAction)
+    if ($TaskName -eq 'XGENT') {
+        return [pscustomobject]@{ TaskName = 'XGENT'; State = 'Running' }
+    }
+    return $null
+}
+function Stop-ScheduledTask { param($TaskName, $ErrorAction) $global:XiderLegacyTaskStopped++ }
+function Unregister-ScheduledTask { param($TaskName, [switch]$Confirm, $ErrorAction) $global:XiderLegacyTaskRemoved++ }
+function Get-ItemProperty {
+    param($LiteralPath, $ErrorAction)
+    if ($LiteralPath -eq 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run') {
+        return [pscustomobject]@{ XGENT = 'C:\Old\XIDER\XGENT.exe'; XGentAgent = 'C:\Old\XIDER\XGENT.exe' }
+    }
+    return $null
+}
+function Remove-ItemProperty { param($LiteralPath, $Name, $ErrorAction) $global:XiderRemovedLegacyValues += $Name }
 
 try {
     $venv = Join-Path $fixture 'venv\Scripts'
@@ -63,6 +80,9 @@ try {
     $global:XiderAclCallCount = 0
     $global:XiderRegisterCount = 0
     $global:XiderStartCount = 0
+    $global:XiderLegacyTaskStopped = 0
+    $global:XiderLegacyTaskRemoved = 0
+    $global:XiderRemovedLegacyValues = @()
     $global:XiderTestActions = @{}
     & $installer -AgentDir $fixture -TaskName 'XIDER Fixture' -PreflightOnly
     if ($global:XiderTestActions.Count -ne 0 -or $global:XiderAclCallCount -ne 0 -or
@@ -76,6 +96,16 @@ try {
     }
     if ($global:XiderRegisterCount -ne 2 -or $global:XiderStartCount -ne 2) {
         throw 'Agent installation did not register and start both visible scheduled tasks.'
+    }
+    if ($global:XiderLegacyTaskStopped -ne 1 -or $global:XiderLegacyTaskRemoved -ne 1 -or
+        (@($global:XiderRemovedLegacyValues | Sort-Object -Unique) -join ',') -ne 'XGENT,XGentAgent') {
+        throw 'Installer did not retire the known legacy XGENT task and Run entries.'
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $fixture '.env') -PathType Leaf)) {
+        throw 'Legacy startup cleanup removed or lost the active .env.'
+    }
+    if (([IO.File]::ReadAllLines((Join-Path $fixture '.env')) -join "`n") -ne ($secureEnv -join "`n")) {
+        throw 'Legacy startup cleanup changed the active .env contents.'
     }
     foreach ($taskName in @('XIDER Fixture', 'XIDER Guardian')) {
         $settings = $global:XiderTestActions[$taskName].Settings
@@ -123,6 +153,6 @@ finally {
         $fixture.StartsWith([IO.Path]::GetFullPath($env:TEMP), [StringComparison]::OrdinalIgnoreCase)) {
         Remove-Item -LiteralPath $fixture -Recurse -Force
     }
-    Remove-Item Function:\icacls,Function:\New-ScheduledTaskAction,Function:\New-ScheduledTaskTrigger,Function:\New-ScheduledTaskSettingsSet,Function:\New-ScheduledTaskPrincipal,Function:\Register-ScheduledTask,Function:\Start-ScheduledTask -ErrorAction SilentlyContinue
-    Remove-Variable XiderTestActions,XiderAclCallCount,XiderRegisterCount,XiderStartCount -Scope Global -ErrorAction SilentlyContinue
+    Remove-Item Function:\icacls,Function:\New-ScheduledTaskAction,Function:\New-ScheduledTaskTrigger,Function:\New-ScheduledTaskSettingsSet,Function:\New-ScheduledTaskPrincipal,Function:\Register-ScheduledTask,Function:\Start-ScheduledTask,Function:\Get-ScheduledTask,Function:\Stop-ScheduledTask,Function:\Unregister-ScheduledTask,Function:\Get-ItemProperty,Function:\Remove-ItemProperty -ErrorAction SilentlyContinue
+    Remove-Variable XiderTestActions,XiderAclCallCount,XiderRegisterCount,XiderStartCount,XiderLegacyTaskStopped,XiderLegacyTaskRemoved,XiderRemovedLegacyValues -Scope Global -ErrorAction SilentlyContinue
 }
