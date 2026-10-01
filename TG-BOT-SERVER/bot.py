@@ -765,7 +765,8 @@ def main_menu(user_id: int | None = None):
     kb.button(text=_lex("about_button"), callback_data="menu:about", style="primary")
     if role == Role.OWNER:
         kb.button(text=_nav("admin"), callback_data="menu:admin", style="danger")
-    kb.adjust(1)
+    # Compact dashboard rows group devices, operations, then information/admin.
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -884,13 +885,7 @@ def device_menu(device_id: str, user_id: int | None = None):
         style="danger",
     )
 
-    rows = [2, 2, 2, 2, 2]
-    if favs:
-        rows.extend([2] * (len(favs) // 2))
-        if len(favs) % 2:
-            rows.append(1)
-    rows.extend([2, 1] if is_owner else [1, 1])
-    kb.adjust(*rows)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -1436,7 +1431,7 @@ def admin_menu():
     )
     kb.button(text=_nav("admin_server"), callback_data="menu:server", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -1591,16 +1586,16 @@ def server_menu(user_id: int | None = None):
         kb.button(text=_lex("server_chart"), callback_data="server:chart", style="primary")
         kb.button(text=_lex("server_logs"), callback_data="server:logs", style="primary")
         kb.button(text=_lex("server_terminal"), callback_data="server:terminal", style="primary")
-        kb.button(text=_lex("server_restart"), callback_data="server:restart", style="danger")
-        kb.button(text=_lex("server_update"), callback_data="server:update", style="primary")
-        kb.button(text=_lex("server_rollback"), callback_data="server:rollback", style="danger")
         kb.button(
             text=_lex("server_approval", state='включено' if approval else 'выключено'),
             callback_data="server:approval",
             style="success" if approval else "danger",
         )
+        kb.button(text=_lex("server_restart"), callback_data="server:restart", style="danger")
+        kb.button(text=_lex("server_update"), callback_data="server:update", style="primary")
+        kb.button(text=_lex("server_rollback"), callback_data="server:rollback", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 

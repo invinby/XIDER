@@ -552,6 +552,44 @@ def test_device_menu_has_nine_category_buttons(monkeypatch):
     assert NINE_CATEGORIES.issubset(set(cbs))
 
 
+def test_primary_navigation_is_grouped_into_compact_dashboard_rows(monkeypatch):
+    _setup(monkeypatch, {"dev1": {"name": "Dev"}})
+    main_rows = [
+        [button.callback_data for button in row]
+        for row in bot.main_menu(bot.ADMIN_ID).inline_keyboard
+    ]
+    assert main_rows == [
+        ["menu:devices", "dev:all"],
+        ["menu:server", "ev:menu"],
+        ["menu:about", "menu:admin"],
+    ]
+
+    device_rows = [
+        [button.callback_data for button in row]
+        for row in bot.device_menu("dev1").inline_keyboard
+    ]
+    assert device_rows[:5] == [
+        ["cat:media", "cat:screen"],
+        ["cat:input", "cat:system"],
+        ["cat:network", "cat:files"],
+        ["cat:terminal", "cat:power"],
+        ["cat:pranks", "cat:device"],
+    ]
+
+
+def test_admin_menu_pairs_access_audit_and_text_controls(monkeypatch):
+    _setup(monkeypatch, {})
+    admin_rows = [
+        [button.callback_data for button in row]
+        for row in bot.admin_menu().inline_keyboard
+    ]
+    assert admin_rows == [
+        ["admin:users", "admin:audit"],
+        ["admin:texts", "admin:style"],
+        ["menu:server", "menu:main"],
+    ]
+
+
 def test_each_category_menu_builds_buttons():
     """Каждый новый категорийный рендерер возвращает клавиатуру с цветными кнопками."""
     builders = (
@@ -2110,6 +2148,15 @@ def test_server_menu_contains_metrics_chart_and_safe_terminal():
     markup = bot.server_menu(bot.ADMIN_ID)
     callbacks = _callback_data(markup)
     assert {"server:specs", "server:metrics", "server:chart", "server:terminal"}.issubset(set(callbacks))
+    rows = [[button.callback_data for button in row] for row in markup.inline_keyboard]
+    assert rows == [
+        ["versions:server", "server:status"],
+        ["server:specs", "server:metrics"],
+        ["server:chart", "server:logs"],
+        ["server:terminal", "server:approval"],
+        ["server:restart", "server:update"],
+        ["server:rollback", "menu:main"],
+    ]
 
 
 def test_device_card_shows_guardian_state(monkeypatch):

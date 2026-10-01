@@ -265,7 +265,10 @@ try {
     $failed = Join-Path $resolvedRoot ('git-ver.failed.' + (Get-Date -Format 'yyyyMMddHHmmss') + '.' + [guid]::NewGuid().ToString('N'))
     foreach ($path in @($stage, $backup, $failed, $repo)) {
         $fullPath = [IO.Path]::GetFullPath($path)
-        if (-not $fullPath.StartsWith($resolvedRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        # These generated targets must be direct children of InstallRoot.
+        # Comparing their canonical parent is explicit and avoids prefix matches.
+        $fullParent = [IO.Path]::GetDirectoryName($fullPath).TrimEnd('\')
+        if (-not [string]::Equals($fullParent, $resolvedRoot, [StringComparison]::OrdinalIgnoreCase)) {
             throw "Недопустимый путь установки: $fullPath"
         }
     }
