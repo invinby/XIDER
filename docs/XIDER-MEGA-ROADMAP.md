@@ -64,10 +64,15 @@ macOS-агент, Guard Keeper и система релизов.
 
 - Свежая проверка X-VAULT: на основном VPS не установлены unit/timer для
   `xider-vault-backup`/`xider-vault-promote`; оба timer показывают `inactive`.
-  Подключение к резервному VPS `84.235.243.31` доступным ключом `xider.key`
-  отклонено (`Permission denied`). Значит, копия и восстановление сейчас не
-  работают; timers не включались, серверы не менялись. Последний GitHub Release
-  по API всё ещё `v4.0.0`; это не опубликованный локальный кандидат `4.1.0`.
+  Первый ключ `xider.key` на резервном VPS отклонён, но найден альтернативный
+  ключ из Downloads: SSH и `sudo -n` работают. Standby — storage-only хост без
+  `/opt/xider` и X-VAULT units; свободно около 40 GiB, `sshd -t` проходит.
+  Recovery key сгенерирован локально в защищённой папке
+  `%LOCALAPPDATA%\XIDER\vault-recovery`; его private file не передавался. До
+  независимого офлайн-сохранения этой копии scheduler включать нельзя. На обоих
+  VPS units/timers пока не установлены; серверы не менялись. Последний GitHub
+  Release по API всё ещё `v4.0.0`; это не опубликованный локальный кандидат
+  `4.1.0`.
 
 - X-DOCK enrollment получил отдельный proposed design в
   [`X-DOCK-ENROLLMENT.md`](X-DOCK-ENROLLMENT.md). Актуальная проверка официальных
