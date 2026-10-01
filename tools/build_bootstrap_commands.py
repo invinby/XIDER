@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import re
+import subprocess
 from pathlib import Path
 
 
@@ -13,14 +14,33 @@ REPOSITORY = "invinby/XIDER"
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _committed_file(commit_id: str, relative_path: str) -> bytes:
+    """Read the exact bytes GitHub serves for a file at the pinned commit.
+
+    Hashing a Windows worktree file is not reliable with core.autocrlf or a
+    mixed-line-ending checkout: its bytes can differ from the immutable Git
+    blob even though the source looks identical in an editor.
+    """
+    try:
+        return subprocess.check_output(
+            ["git", "show", f"{commit_id}:{relative_path}"],
+            cwd=ROOT,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ValueError(
+            f"Commit {commit_id} or required file {relative_path} is not available locally."
+        ) from exc
+
+
 def build_commands(commit_id: str) -> str:
     if not isinstance(commit_id, str) or not COMMIT_ID.fullmatch(commit_id):
         raise ValueError("A full 40- or 64-character Git commit ID is required.")
 
     ref = commit_id.lower()
     raw_base = f"https://raw.githubusercontent.com/{REPOSITORY}/{ref}"
-    windows_hash = hashlib.sha256((ROOT / "deploy" / "bootstrap.ps1").read_bytes()).hexdigest()
-    macos_hash = hashlib.sha256((ROOT / "deploy" / "bootstrap.sh").read_bytes()).hexdigest()
+    windows_hash = hashlib.sha256(_committed_file(ref, "deploy/bootstrap.ps1")).hexdigest()
+    macos_hash = hashlib.sha256(_committed_file(ref, "deploy/bootstrap.sh")).hexdigest()
     return (
         "XIDER quick install (pinned to this release commit)\n"
         f"Commit: {ref}\n\n"

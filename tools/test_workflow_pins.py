@@ -91,8 +91,10 @@ def test_tagged_release_publishes_commit_pinned_quickstart_for_both_platforms():
 
     builder = (ROOT / "tools" / "build_bootstrap_commands.py").read_text(encoding="utf-8")
     assert 'raw_base = f"https://raw.githubusercontent.com/{REPOSITORY}/{ref}"' in builder
-    assert "hashlib.sha256((ROOT / \"deploy\" / \"bootstrap.ps1\").read_bytes())" in builder
-    assert "hashlib.sha256((ROOT / \"deploy\" / \"bootstrap.sh\").read_bytes())" in builder
+    assert 'hashlib.sha256(_committed_file(ref, "deploy/bootstrap.ps1"))' in builder
+    assert 'hashlib.sha256(_committed_file(ref, "deploy/bootstrap.sh"))' in builder
+    assert '["git", "show", f"{commit_id}:{relative_path}"]' in builder
+    assert "mixed-line-ending checkout" in builder
     assert "Get-FileHash -LiteralPath $p -Algorithm SHA256" in builder
     assert "shasum -a 256 -c -" in builder
     assert 'XIDER_REF={ref} bash' in builder
