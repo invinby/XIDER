@@ -614,6 +614,44 @@ def test_power_menu_exposes_guardian_for_windows_and_mac(monkeypatch):
     assert "cmd:guardian_menu" in mac_cbs
 
 
+def test_power_menu_places_shutdown_and_autorun_controls_in_clear_groups(monkeypatch):
+    monkeypatch.setattr(bot, "SESSION", {"target": "win1"})
+    _setup(monkeypatch, {"win1": {"name": "PC", "os": "Windows 11"}})
+    rows = [
+        [button.callback_data for button in row]
+        for row in bot.power_menu_new().inline_keyboard
+    ]
+    assert rows[:6] == [
+        ["cmd:standby_sleep", "cmd:lock"],
+        ["power:sleep", "power:reboot"],
+        ["power:shutdown", "cmd:wol"],
+        ["cmd:autorun_status", "cmd:autorun_enable"],
+        ["cmd:autorun_disable", "cmd:guardian_menu"],
+        ["cfm:stop", "back:device"],
+    ]
+
+
+def test_event_settings_use_compact_rows_without_changing_callbacks():
+    rows = [
+        [button.callback_data for button in row]
+        for row in bot.events_menu().inline_keyboard
+    ]
+    assert rows == [
+        ["ev:toggle:notify_online", "ev:toggle:notify_offline"],
+        ["ev:toggle:notify_battery_low", "ev:quiet"],
+        ["ev:digest", "ev:admins"],
+        ["ev:server_autostart:toggle", "menu:main"],
+    ]
+    assert [
+        [button.callback_data for button in row]
+        for row in bot.quiet_hours_menu().inline_keyboard
+    ] == [
+        ["quiet::", "quiet:23:8"],
+        ["quiet:22:7", "quiet:0:6"],
+        ["ev:menu"],
+    ]
+
+
 def test_guardian_stop_requires_confirmation():
     cbs = _callback_data(bot.guardian_menu())
     assert "cfm:guardian_stop" in cbs

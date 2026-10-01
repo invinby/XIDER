@@ -269,7 +269,7 @@ try {
         # Comparing their canonical parent is explicit and avoids prefix matches.
         $fullParent = [IO.Path]::GetDirectoryName($fullPath).TrimEnd('\')
         if (-not [string]::Equals($fullParent, $resolvedRoot, [StringComparison]::OrdinalIgnoreCase)) {
-            throw "Недопустимый путь установки: $fullPath"
+            throw "Недопустимый путь установки: $fullPath (parent=$fullParent; root=$resolvedRoot)"
         }
     }
     Copy-Item -LiteralPath $downloaded.FullName -Destination $stage -Recurse -Force

@@ -899,7 +899,7 @@ def all_menu():
     kb.button(text=_lex("all_stop_button"), callback_data="cfm:stop_all", style="danger")
     kb.button(text=_lex("devices_back_list_button"), callback_data="menu:target", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
-    kb.adjust(2, 2, 1, 2)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -991,7 +991,7 @@ def wallpaper_menu():
     kb.button(text=_lex("wallpaper_restore_button"), callback_data="cmd:prank_restore_wallpaper", style="danger")
     kb.button(text=_lex("wallpaper_back_screen_button"), callback_data="cat:screen", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
-    kb.adjust(1, 1, 1, 1, 2)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -1021,7 +1021,7 @@ def system_menu(user_id: int | None = None):
     _action_button(kb, text=_lex("system_capabilities_button"), callback="cmd:capabilities", user_id=user_id)
     _action_button(kb, text=_lex("system_refresh_status_button"), callback="cmd:status", style="success", user_id=user_id)
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
-    kb.adjust(2, 2, 2, 2, 1, 1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -1036,7 +1036,7 @@ def network_menu():
     kb.button(text=_lex("network_netstat_button"), callback_data="cmd:netstat", style="primary")
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
-    kb.adjust(2, 2, 2, 1, 2)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -1064,7 +1064,7 @@ def terminal_menu():
     kb.button(text=_lex("terminal_services_button"), callback_data="cmd:services", style="primary")
     kb.button(text=_lex("terminal_history_button"), callback_data="cmd:cmdhistory", style="primary")
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
-    kb.adjust(2, 2, 2, 1, 1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -1086,15 +1086,15 @@ def power_menu_new(user_id: int | None = None):
     _action_button(kb, text=_lex("power_sleep_device_button"), callback="power:sleep", style="danger", user_id=user_id)
     _action_button(kb, text=_lex("power_reboot_device_button"), callback="power:reboot", style="danger", user_id=user_id)
     _action_button(kb, text=_lex("power_shutdown_device_button"), callback="power:shutdown", style="danger", user_id=user_id)
+    _action_button(kb, text=_lex("power_wol_button"), callback="cmd:wol", user_id=user_id)
     _action_button(kb, text=_lex("power_autorun_status_button"), callback="cmd:autorun_status", user_id=user_id)
     _action_button(kb, text=_lex("power_autorun_enable_button"), callback="cmd:autorun_enable", style="success", user_id=user_id)
     _action_button(kb, text=_lex("power_autorun_disable_button"), callback="cmd:autorun_disable", style="danger", user_id=user_id)
     _action_button(kb, text=_lex("power_guardian_menu_button"), callback="cmd:guardian_menu", user_id=user_id)
-    _action_button(kb, text=_lex("power_wol_button"), callback="cmd:wol", user_id=user_id)
     _action_button(kb, text=_lex("power_stop_agent_button"), callback="cfm:stop", style="danger", user_id=user_id)
     kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
-    kb.adjust(1, 2, 2, 1, 2, 2, 2, 1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -1107,7 +1107,7 @@ def guardian_menu():
     kb.button(text=_lex("guardian_auto_enable_button"), callback_data="cmd:guardian_auto_on", style="success")
     kb.button(text=_lex("guardian_auto_disable_button"), callback_data="cmd:guardian_auto_off", style="danger")
     kb.button(text=_lex("guardian_back_power_button"), callback_data="cat:power", style="primary")
-    kb.adjust(2, 2, 2, 1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -1223,7 +1223,7 @@ def device_settings_menu(user_id: int | None = None):
         kb.button(text=_lex("settings_uninstall_button"), callback_data=f"devmg:uninstall:{device_id}", style="danger")
     kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
-    kb.adjust(2, 2, 1, 2, 2, 1, 2)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -1300,7 +1300,7 @@ def events_menu():
         style="success" if auto_on else "danger",
     )
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -1323,7 +1323,7 @@ def quiet_hours_menu():
             style="success" if active else "primary",
         )
     kb.button(text=_lex("events_back_button"), callback_data="ev:menu", style="primary")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -1344,7 +1344,7 @@ def digest_menu():
             style="success" if active else "primary",
         )
     kb.button(text=_lex("events_back_button"), callback_data="ev:menu", style="primary")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -1469,7 +1469,7 @@ def admin_texts_menu():
         )
     kb.button(text=_nav("change_style"), callback_data="admin:style", style="primary")
     kb.button(text=_nav("back"), callback_data="menu:admin", style="primary")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
