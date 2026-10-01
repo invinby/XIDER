@@ -1,8 +1,10 @@
 """Тесты UI-редизайна бота: device_card и новые категорийные меню (2026-09-05)."""
 
 import asyncio
+import ast
 import base64
 import time
+from pathlib import Path
 
 import pytest
 
@@ -38,6 +40,52 @@ def _callback_data(markup):
 
 def _setup(monkeypatch, devices):
     monkeypatch.setattr(bot, "devices", FakeDevices(devices))
+
+
+def test_static_xlex_keys_exist_and_keyboard_labels_are_not_hardcoded():
+    tree = ast.parse(Path(bot.__file__).read_text(encoding="utf-8"))
+    lex_keys = set()
+    nav_keys = set()
+    literal_button_labels = set()
+
+    def call_name(node):
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Attribute):
+            return node.attr
+        return ""
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        function = call_name(node.func)
+        if function in {"_lex", "_nav"} and node.args:
+            key = node.args[0]
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                (lex_keys if function == "_lex" else nav_keys).add(key.value)
+        if function in {"button", "_action_button"}:
+            text_arg = next(
+                (item.value for item in node.keywords if item.arg == "text"),
+                None,
+            )
+            if isinstance(text_arg, ast.Constant) and isinstance(text_arg.value, str):
+                literal_button_labels.add(text_arg.value)
+
+    assert lex_keys <= set(bot.xlex.COPY)
+    assert nav_keys <= set(bot.xlex.NAV_KEYS)
+    # Pager glyphs have no wording to translate; all other literal labels belong in X-LEX.
+    assert literal_button_labels == {"◀️", "▶️"}
+
+
+def test_about_chapter_button_uses_each_xlex_voice():
+    title = "01 · Зачем существует XIDER"
+    labels = {
+        style: bot.xlex.render("about_chapter_button", style, title=title)
+        for style in bot.xlex.STYLES
+    }
+
+    assert all(title in label for label in labels.values())
+    assert len(set(labels.values())) == len(bot.xlex.STYLES)
 
 
 def test_device_card_all_shows_online_total(monkeypatch):

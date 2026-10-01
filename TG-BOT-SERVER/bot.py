@@ -2325,7 +2325,8 @@ async def on_menu_about(cq: CallbackQuery):
     """XIDER handbook: short index, then individually readable chapters."""
     kb = InlineKeyboardBuilder()
     for slug, title, _ in info_book.CHAPTERS:
-        kb.button(text=_limit_button_label(title), callback_data=f"about:chapter:{slug}", style="primary")
+        label = _lex("about_chapter_button", title=title)
+        kb.button(text=_limit_button_label(label), callback_data=f"about:chapter:{slug}", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(1)
     await _replace_callback_message(

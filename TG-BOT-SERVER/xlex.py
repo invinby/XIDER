@@ -529,6 +529,14 @@ COPY = {
         "xcore": "Досье",
         "xadam": "Сведения",
     },
+    "about_chapter_button": {
+        "xtech": "{title}",
+        "xperson": "📖 {title}",
+        "xpikmi": "🎀 {title} ♡",
+        "xtarped": "Глава · {title}",
+        "xcore": "Раздел · {title}",
+        "xadam": "{title} · читать",
+    },
     "role_label": {
         "xtech": "Уровень доступа: {role}",
         "xperson": "Твои права: {role}",
