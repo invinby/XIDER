@@ -259,7 +259,14 @@ try {
 
     Write-Host '[3/5] Подготавливаю новую версию рядом с рабочей...'
     New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
-    $resolvedRoot = (Resolve-Path -LiteralPath $InstallRoot).Path.TrimEnd('\')
+    # Keep the caller's canonical long path. Resolve-Path may return an 8.3
+    # alias (for example RUNNER~1) while Join-Path/GetFullPath return its long
+    # name, making string-based containment checks disagree on the same folder.
+    $resolvedRoot = [IO.Path]::GetFullPath($InstallRoot)
+    $rootOfVolume = [IO.Path]::GetPathRoot($resolvedRoot)
+    if ($resolvedRoot.Length -gt $rootOfVolume.Length) {
+        $resolvedRoot = $resolvedRoot.TrimEnd([char[]]@('\', '/'))
+    }
     $stage = Join-Path $resolvedRoot ('git-ver.stage.' + [guid]::NewGuid().ToString('N'))
     $backup = Join-Path $resolvedRoot ('git-ver.previous.' + (Get-Date -Format 'yyyyMMddHHmmss') + '.' + [guid]::NewGuid().ToString('N'))
     $failed = Join-Path $resolvedRoot ('git-ver.failed.' + (Get-Date -Format 'yyyyMMddHHmmss') + '.' + [guid]::NewGuid().ToString('N'))
@@ -267,7 +274,11 @@ try {
         $fullPath = [IO.Path]::GetFullPath($path)
         # These generated targets must be direct children of InstallRoot.
         # Comparing their canonical parent is explicit and avoids prefix matches.
-        $fullParent = [IO.Path]::GetDirectoryName($fullPath).TrimEnd('\')
+        $fullParent = [IO.Path]::GetDirectoryName($fullPath)
+        $parentRoot = [IO.Path]::GetPathRoot($fullParent)
+        if ($fullParent.Length -gt $parentRoot.Length) {
+            $fullParent = $fullParent.TrimEnd([char[]]@('\', '/'))
+        }
         if (-not [string]::Equals($fullParent, $resolvedRoot, [StringComparison]::OrdinalIgnoreCase)) {
             throw "Недопустимый путь установки: $fullPath (parent=$fullParent; root=$resolvedRoot)"
         }
