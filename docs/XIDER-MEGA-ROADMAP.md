@@ -26,6 +26,13 @@ macOS-агент, Guard Keeper и система релизов.
 
 ### Продолжение · 2026-10-01
 
+- CI и release workflows теперь оба используют полные SHA для внешних Actions;
+  тест pin-ов проверяет все `.github/workflows/*.yml`, а CI `GITHUB_TOKEN`
+  ограничен `contents: read`. Целевой тест — **5 passed**, полный
+  `py -3.12 tools/run_tests.py` — **305 passed, 2 skipped**; все Windows
+  deployment fixtures тоже прошли. Сам GitHub Actions run не запускался: ветка
+  ещё не опубликована.
+
 - Усилен read-only X-MAP аудит: схема `x-map-static-audit-v4` сверяет
   словарь функций и разрешённых статусов бота с capability-ответами обоих
   агентов. Теперь отчёт показывает отсутствующие/лишние поля и статусы, которые

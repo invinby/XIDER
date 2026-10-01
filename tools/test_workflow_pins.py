@@ -4,6 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "build-agents.yml"
+WORKFLOWS = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
 EXPECTED_ACTIONS = {
     "actions/checkout": ("11bd71901bbe5b1630ceea73d27597364c9af683", "v4.2.2"),
     "actions/setup-python": ("a26af69be951a213d495a4c3e4e4022e16d87065", "v5.6.0"),
@@ -14,20 +15,25 @@ EXPECTED_ACTIONS = {
 
 
 def test_every_github_action_uses_an_explicit_immutable_commit_pin():
-    text = WORKFLOW.read_text(encoding="utf-8")
-    uses_lines = re.findall(r"(?m)^\s*uses:\s*(.+?)\s*$", text)
-
-    assert uses_lines
     observed = {}
-    for value in uses_lines:
-        match = re.fullmatch(r"([^@\s]+)@([0-9a-f]{40})\s+#\s+(v\S+)", value)
-        assert match, f"Action is not pinned to a documented immutable SHA: {value}"
-        action, sha, release = match.groups()
-        assert action in EXPECTED_ACTIONS, f"Unexpected external action: {action}"
-        assert EXPECTED_ACTIONS[action] == (sha, release)
-        observed.setdefault(action, set()).add((sha, release))
+    assert WORKFLOWS
+    for workflow in WORKFLOWS:
+        text = workflow.read_text(encoding="utf-8")
+        uses_lines = re.findall(r"(?m)^\s*uses:\s*(.+?)\s*$", text)
+        for value in uses_lines:
+            match = re.fullmatch(r"([^@\s]+)@([0-9a-f]{40})\s+#\s+(v\S+)", value)
+            assert match, f"{workflow.name} action is not pinned to an immutable SHA: {value}"
+            action, sha, release = match.groups()
+            assert action in EXPECTED_ACTIONS, f"Unexpected external action in {workflow.name}: {action}"
+            assert EXPECTED_ACTIONS[action] == (sha, release)
+            observed.setdefault(action, set()).add((sha, release))
 
     assert observed == {name: {pin} for name, pin in EXPECTED_ACTIONS.items()}
+
+
+def test_ci_workflow_has_read_only_github_token_permissions():
+    text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "permissions:\n  contents: read" in text
 
 
 def test_tagged_release_builds_and_publishes_signed_source_package():
