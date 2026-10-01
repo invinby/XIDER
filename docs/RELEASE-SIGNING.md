@@ -6,6 +6,16 @@ publisher key is separate from the X-VAULT recovery passphrase, MQTT credentials
 and SSH keys. The private half must never enter Git, a source archive, either
 VPS, an endpoint agent, or a chat.
 
+Tagged releases also carry OpenSSH signatures for the exact Windows and macOS
+bootstrap hashes. The signed message binds the platform, semantic release tag,
+full source commit, and SHA-256 digest. `XIDER-QUICKSTART.txt` obtains the
+bootstrap from that full commit, obtains its `.sig` from the matching release,
+and verifies the signature with the public key pinned in
+`release_signature.py` before executing the script. Client verification uses
+the stock OpenSSH `ssh-keygen -Y verify` command. This authenticates the
+bootstrap against a trusted quickstart; it does not independently sign the
+quickstart or remove the need to trust its initial download over HTTPS/GitHub.
+
 ## One-time key creation
 
 Use the checked-in helper from a trusted checkout. The final directory must be
@@ -59,7 +69,9 @@ created for `invinby/XIDER` and restricted to `v*` tags; add
 commit it, or send it in chat. The tagged workflow rejects a missing secret or
 a secret whose public key is not pinned in the tagged source.
 
-The key has been generated and pinned locally, but it has not been installed as
-the GitHub environment secret and no signed release has been published. This
-does not make mutable-branch bootstrap signed or enable a release until those
-separate steps and the platform build checks succeed.
+The key has been generated and pinned locally. The bootstrap-signing step uses
+the same protected GitHub environment secret and fails closed if the key is
+missing or does not match the pinned public key. No signed release is considered
+available until the secret is installed, the tagged workflow succeeds, and the
+resulting signatures and manifest are published. The mutable-branch bootstrap
+command remains a development path and is not made signed by this mechanism.

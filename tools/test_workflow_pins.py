@@ -61,6 +61,8 @@ def test_tagged_release_builds_and_publishes_signed_source_package():
         "release-manifest.json",
         "XIDER-bootstrap-windows.ps1",
         "XIDER-bootstrap-macos.sh",
+        "XIDER-bootstrap-windows.ps1.sig",
+        "XIDER-bootstrap-macos.sh.sig",
         "XIDER-QUICKSTART.txt",
     ):
         assert f"artifacts/{asset}" in published_assets
@@ -83,21 +85,28 @@ def test_tagged_release_publishes_commit_pinned_quickstart_for_both_platforms():
     release = text.split("  create-release:", 1)[1]
     published_assets = release.split("          files: |", 1)[1].split("          draft:", 1)[0]
 
-    assert 'python tools/build_bootstrap_commands.py "${GITHUB_SHA}" artifacts/XIDER-QUICKSTART.txt' in release
+    assert 'python tools/sign_bootstrap.py "${GITHUB_REF_NAME}" "${GITHUB_SHA}" artifacts' in release
+    assert 'python tools/build_bootstrap_commands.py "${GITHUB_SHA}" "${GITHUB_REF_NAME}" artifacts/XIDER-QUICKSTART.txt' in release
     assert "artifacts/XIDER-QUICKSTART.txt" in published_assets
     assert "cp deploy/bootstrap.ps1 artifacts/XIDER-bootstrap-windows.ps1" in release
     assert "cp deploy/bootstrap.sh artifacts/XIDER-bootstrap-macos.sh" in release
+    assert "XIDER-bootstrap-windows.ps1.sig" in release
+    assert "XIDER-bootstrap-macos.sh.sig" in release
     assert 'python tools/build_release_manifest.py "${GITHUB_REF_NAME}" artifacts --require-signature' in release
+    assert release.index('python tools/sign_bootstrap.py "${GITHUB_REF_NAME}" "${GITHUB_SHA}" artifacts') < release.index(
+        'python tools/build_bootstrap_commands.py "${GITHUB_SHA}" "${GITHUB_REF_NAME}" artifacts/XIDER-QUICKSTART.txt'
+    ) < release.index('python tools/build_release_manifest.py "${GITHUB_REF_NAME}" artifacts --require-signature')
 
     builder = (ROOT / "tools" / "build_bootstrap_commands.py").read_text(encoding="utf-8")
     assert 'raw_base = f"https://raw.githubusercontent.com/{REPOSITORY}/{ref}"' in builder
-    assert 'hashlib.sha256(_committed_file(ref, "deploy/bootstrap.ps1"))' in builder
-    assert 'hashlib.sha256(_committed_file(ref, "deploy/bootstrap.sh"))' in builder
+    assert 'for path in ("deploy/bootstrap.ps1", "deploy/bootstrap.sh")' in builder
+    assert "_committed_file(ref, path)" in builder
     assert '["git", "show", f"{commit_id}:{relative_path}"]' in builder
-    assert "mixed-line-ending checkout" in builder
-    assert "Get-FileHash -LiteralPath $p -Algorithm SHA256" in builder
-    assert "shasum -a 256 -c -" in builder
-    assert 'XIDER_REF={ref} bash' in builder
+    assert "core.autocrlf" in builder
+    assert "[Security.Cryptography.SHA256]::Create()" in builder
+    assert "shasum -a 256" in builder
+    assert "ssh-keygen -Y verify" in builder
+    assert "XIDER_REF='{ref}' bash" in builder
     assert "& $p -Ref '" in builder
 
 

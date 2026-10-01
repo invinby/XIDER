@@ -11,15 +11,17 @@ irm https://raw.githubusercontent.com/invinby/XIDER/main/deploy/bootstrap.ps1 | 
 ```
 
 Эта прямая команда использует подвижную ветку `main` и предназначена для
-разработки. В GitHub Release планируется прикладывать `XIDER-QUICKSTART.txt`
-с командами, закреплёнными на полном commit ID релиза; для обеих платформ
-bootstrap и исходный архив тогда запрашиваются с одного commit, а не с ветки.
-Команды quickstart проверяют SHA-256 скачанного bootstrap до исполнения и
-закрепляют архив на том же commit. GitHub Release включает bootstrap-скрипты и
-quickstart в подписанный manifest, чтобы их байты можно было проверить вместе
-с остальными assets. Но сама one-line команда подпись manifest до запуска не
-проверяет; первый шаг всё ещё доверяет HTTPS и GitHub. Подписанная проверка в
-самом bootstrap остаётся отдельным release gate.
+разработки; она полагается на HTTPS/GitHub и не проверяет подпись до запуска.
+Tagged release должен приложить `XIDER-QUICKSTART.txt` с bootstrap, закреплённым
+на полном commit ID. Команда сверяет OpenSSH-подпись SHA-256, ОС, tag и commit
+перед исполнением, затем bootstrap получает исходный архив с того же commit.
+Подписи и сами скрипты включены в подписанный release manifest.
+
+Quickstart содержит открытый ключ из `release_signature.py`, но не имеет
+отдельной подписи до своего запуска. Поэтому начальная загрузка quickstart
+всё ещё доверяет HTTPS/GitHub; подпись не защищает, если quickstart и его
+проверочный ключ подменены одновременно. До успешной tagged workflow и
+публикации подписанного релиза нельзя выдавать этот путь за доступный.
 
 Bootstrap не переносит `TG-BOT-SERVER\.env` и BOT_TOKEN на Windows. В полном
 сценарии `bootstrap.ps1` → `setup-all.ps1` для чтения конфигурации агента,
@@ -71,9 +73,11 @@ subsequent local Agent/Guardian registration fails, it asks the updater to
 restore that same snapshot. Manual `rollback` without a path still selects the
 newest snapshot; a supplied path is checked to remain under
 `/var/backups/xider/`. A GitHub push is not required for checkout-based
-deployment. The ordinary short bootstrap still downloads a moving branch; the
-release quickstart pins it to a full commit ID, but neither path verifies the
-bootstrap with the publisher key.
+deployment. The ordinary short bootstrap still downloads a moving branch and
+verifies no publisher signature before executing. The release quickstart
+verifies an OpenSSH signature over the bootstrap digest, platform, release tag,
+and full commit, but the quickstart itself is still initially trusted through
+HTTPS/GitHub.
 
 The updater smoke test runs against temporary directories and mocked
 `systemctl`; it verifies successful update, health-check rollback, `.env`
@@ -145,11 +149,12 @@ For a test branch, set `XIDER_BRANCH` before running the same installer. The ins
 XIDER_BRANCH='branch-name' bash -c "$(curl -fsSL https://raw.githubusercontent.com/invinby/XIDER/branch-name/deploy/bootstrap.sh)"
 ```
 
-The command above fetches the bootstrap itself from a moving GitHub branch.
-Release `XIDER-QUICKSTART.txt` commands pin both bootstrap and archive to the
-same full commit ID, but this is an HTTPS/GitHub trust pin, not verification by
-the release signing key. Do not treat either path as a signed bootstrap until
-the bootstrap verifier and pinned trust anchor are independently tested.
+The command above fetches the bootstrap itself from a moving GitHub branch and
+does not verify its signature before execution. Release `XIDER-QUICKSTART.txt`
+commands verify an OpenSSH signature over the bootstrap digest, platform,
+release tag, and full commit before execution, then pin the source archive to
+that same commit. The quickstart itself is still initially trusted through
+HTTPS/GitHub and is not independently signed before it runs.
 
 `XIDER_SOURCE_ARCHIVE=/path/to/xider.zip` may be set for an offline test.
 The installer still validates the expected agent files and exercises the same
@@ -231,9 +236,10 @@ that job. The environment's reviewer rules and secret have not been configured
 or independently verified. The PyInstaller macOS bundle and Windows agent
 updater remain fail-closed until their own transaction installers exist; the
 source updater refuses to mutate a frozen bundle. Direct short bootstraps still
-default to a moving branch. A release quickstart can pin bootstrap and source to
-one full commit, but that installation path is not authenticated by the pinned
-release key. macOS post-restart health
+default to a moving branch and are not authenticated by a publisher signature.
+A release quickstart verifies the pinned release signature on bootstrap before
+execution, but the quickstart itself still arrives through HTTPS/GitHub.
+macOS post-restart health
 confirmation and automatic rollback cover this source-agent path only; they
 have not been tested on a physical Mac.
 

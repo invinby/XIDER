@@ -213,7 +213,8 @@ jobs:
           cp artifacts/components/*.zip artifacts/
           cp deploy/bootstrap.ps1 artifacts/XIDER-bootstrap-windows.ps1
           cp deploy/bootstrap.sh artifacts/XIDER-bootstrap-macos.sh
-          python tools/build_bootstrap_commands.py "${GITHUB_SHA}" artifacts/XIDER-QUICKSTART.txt
+          python tools/sign_bootstrap.py "${GITHUB_REF_NAME}" "${GITHUB_SHA}" artifacts
+          python tools/build_bootstrap_commands.py "${GITHUB_SHA}" "${GITHUB_REF_NAME}" artifacts/XIDER-QUICKSTART.txt
           python tools/build_release_manifest.py "${GITHUB_REF_NAME}" artifacts --require-signature
 
       - name: "Create GitHub Release"
@@ -228,6 +229,8 @@ jobs:
             artifacts/XIDER-source.zip
             artifacts/XIDER-bootstrap-windows.ps1
             artifacts/XIDER-bootstrap-macos.sh
+            artifacts/XIDER-bootstrap-windows.ps1.sig
+            artifacts/XIDER-bootstrap-macos.sh.sig
             artifacts/XIDER-QUICKSTART.txt
             artifacts/release-manifest.json
           draft: false

@@ -26,6 +26,8 @@ COMPONENTS = {
     "X-STAB-server.zip": ("server", "linux"),
     "XIDER-bootstrap-windows.ps1": ("bootstrap", "windows"),
     "XIDER-bootstrap-macos.sh": ("bootstrap", "macos"),
+    "XIDER-bootstrap-windows.ps1.sig": ("bootstrap_signature", "windows"),
+    "XIDER-bootstrap-macos.sh.sig": ("bootstrap_signature", "macos"),
     "XIDER-QUICKSTART.txt": ("quickstart", "all"),
 }
 TAG = re.compile(r"^v\d+\.\d+\.\d+$")

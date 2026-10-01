@@ -31,13 +31,12 @@ curl -fsSL https://raw.githubusercontent.com/invinby/XIDER/main/deploy/bootstrap
 The bootstrap preserves the local `.env`, downloads the current source, fixes
 script permissions, starts the worker, and registers Guardian. Do not paste the
 shell prompt or surrounding backticks into Terminal.
-This convenience bootstrap follows the moving `main` branch and is not signed;
-this direct command is for development installs. A tagged release can include
-`XIDER-QUICKSTART.txt` with both bootstrap and source pinned to the same full
-commit ID and checks the bootstrap SHA-256 before execution. Release inventory
-signing covers the bootstrap and quickstart bytes, but the one-line command does
-not verify that signature before running; the first download still trusts
-HTTPS/GitHub.
+This convenience bootstrap follows the moving `main` branch and does not verify
+a signature before execution; this direct command is for development installs.
+A tagged release quickstart verifies an OpenSSH signature over the bootstrap
+digest, platform, release tag, and full commit before execution, then pins the
+source to that commit. The quickstart itself is not independently signed before
+it runs and still relies on the initial HTTPS/GitHub download.
 
 ### Manual status
 
@@ -78,10 +77,10 @@ curl -fsSL https://raw.githubusercontent.com/invinby/XIDER/main/deploy/bootstrap
 Bootstrap сохраняет локальный `.env`, скачивает свежий код, исправляет права
 скриптов, запускает агент и регистрирует Guardian.
 Эта прямая команда для разработки: она берёт изменяемую ветку `main` и не
-проверяет подпись bootstrap. В release `XIDER-QUICKSTART.txt` может закрепить
-bootstrap и архив на одном полном commit ID и проверяет SHA-256 bootstrap до
-запуска. Bootstrap и quickstart включены в подписанный release manifest, но
-сама команда не проверяет эту подпись до запуска; начальная загрузка всё ещё
-опирается на HTTPS/GitHub. Проверка подписи самим bootstrap остаётся блокером.
+проверяет подпись bootstrap до запуска. Tagged release quickstart закрепляет
+скрипт и архив на одном полном commit ID и проверяет OpenSSH-подпись хэша,
+платформы, tag и commit. Подпись quickstart отдельно до запуска не
+проверяется, поэтому начальная загрузка всё ещё опирается на HTTPS/GitHub.
+До публикации успешного подписанного релиза не считай release-команду готовой.
 
 Открой в Telegram: **Устройство → Питание & Защита → Guardian**.
