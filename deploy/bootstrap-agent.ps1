@@ -36,6 +36,92 @@ $tasksStopped = $false
 $activationStarted = $false
 $taskInstallAttempted = $false
 
+function Expand-XiderArchiveSafely {
+    param(
+        [Parameter(Mandatory)][string]$ArchivePath,
+        [Parameter(Mandatory)][string]$DestinationPath,
+        [long]$MaxUncompressedBytes = 1073741824,
+        [int]$MaxEntries = 20000
+    )
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $destination = [IO.Path]::GetFullPath($DestinationPath).TrimEnd('\')
+    $destinationPrefix = $destination + '\'
+    $archive = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try {
+        if ($archive.Entries.Count -gt $MaxEntries) {
+            throw "Архив содержит больше $MaxEntries элементов."
+        }
+
+        $seen = @{}
+        $files = @{}
+        $implicitDirectories = @{}
+        [long]$totalUncompressedBytes = 0
+        foreach ($entry in $archive.Entries) {
+            # Some Windows ZIP writers serialize path separators as backslashes.
+            # Normalize before traversal checks so both forms share one path model.
+            $name = ([string]$entry.FullName).Replace('\', '/')
+            if ([string]::IsNullOrWhiteSpace($name) -or
+                $name.StartsWith('/') -or $name -match '^[A-Za-z]:' -or
+                $name -match '(^|/)\.\.(/|$)') {
+                throw "Небезопасный путь в ZIP-архиве: $name"
+            }
+
+            $relativeName = $name.TrimEnd('/')
+            if (-not $relativeName) { throw 'В ZIP-архиве найден пустой путь.' }
+            foreach ($part in $relativeName.Split('/')) {
+                if (-not $part -or $part -eq '.' -or $part -eq '..' -or
+                    $part.EndsWith('.') -or $part.EndsWith(' ') -or
+                    $part -match '[:<>"|?*]' -or
+                    $part -match '^(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$') {
+                    throw "Небезопасный компонент пути в ZIP-архиве: $name"
+                }
+            }
+
+            $unixType = ($entry.ExternalAttributes -shr 16) -band 0xF000
+            if ($unixType -eq 0xA000) { throw "Символическая ссылка в ZIP-архиве запрещена: $name" }
+            if ($unixType -ne 0 -and $unixType -ne 0x4000 -and $unixType -ne 0x8000) {
+                throw "Специальный файл в ZIP-архиве запрещён: $name"
+            }
+
+            $target = [IO.Path]::GetFullPath([IO.Path]::Combine(
+                $destination,
+                $relativeName.Replace('/', [IO.Path]::DirectorySeparatorChar)
+            ))
+            if (-not $target.StartsWith($destinationPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Путь ZIP-архива выходит за staging-каталог: $name"
+            }
+            if ($seen.ContainsKey($target)) { throw "Повторяющийся путь в ZIP-архиве: $name" }
+
+            $parent = [IO.Path]::GetDirectoryName($target)
+            while ($parent -and $parent.StartsWith($destinationPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                if ($files.ContainsKey($parent)) { throw "Файл ZIP-архива используется как каталог: $name" }
+                $implicitDirectories[$parent] = $true
+                $nextParent = [IO.Path]::GetDirectoryName($parent)
+                if ($nextParent -eq $parent) { break }
+                $parent = $nextParent
+            }
+
+            $isDirectory = $name.EndsWith('/') -or $unixType -eq 0x4000
+            if (-not $isDirectory -and $implicitDirectories.ContainsKey($target)) {
+                throw "Файл ZIP-архива конфликтует с вложенными путями: $name"
+            }
+            if (-not $isDirectory) { $files[$target] = $true }
+            $seen[$target] = $true
+
+            $totalUncompressedBytes += [long]$entry.Length
+            if ($totalUncompressedBytes -gt $MaxUncompressedBytes) {
+                throw "Архив распаковывается больше чем в $MaxUncompressedBytes байт."
+            }
+        }
+    }
+    finally {
+        $archive.Dispose()
+    }
+
+    Expand-Archive -LiteralPath $ArchivePath -DestinationPath $DestinationPath -Force
+}
+
 try {
     if ($SourceArchive) { Write-Host '[1/5] Проверяю локальный архив XIDER...' }
     elseif ($Ref) { Write-Host "[1/5] Скачиваю XIDER из закреплённого commit $Ref (тайм-аут 90 секунд)..." }
@@ -46,7 +132,7 @@ try {
     } else {
         Invoke-WebRequest -Uri $repoUrl -OutFile $zip -UseBasicParsing -TimeoutSec 90
     }
-    Expand-Archive -LiteralPath $zip -DestinationPath $unpack -Force
+    Expand-XiderArchiveSafely -ArchivePath $zip -DestinationPath $unpack
     $downloaded = Get-ChildItem -LiteralPath $unpack -Directory | Select-Object -First 1
     if (-not $downloaded) { throw 'GitHub archive is empty.' }
     foreach ($requiredFile in @(

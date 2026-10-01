@@ -7,6 +7,7 @@ $envRoot = Join-Path $fixture 'env'
 $envDir = Join-Path $envRoot 'XGENT-WDS'
 $installRoot = Join-Path $fixture 'install'
 $archive = Join-Path $fixture 'source.zip'
+$traversalArchive = Join-Path $fixture 'traversal.zip'
 $missingFileArchive = Join-Path $fixture 'missing-file.zip'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $global:XiderBootstrapDownloadSource = $null
@@ -16,6 +17,20 @@ $global:XiderBootstrapObservedProgressPreference = $null
 $originalUserProfile = $env:USERPROFILE
 $originalXiderSshKey = $env:XIDER_SSH_KEY
 $originalXiderRef = $env:XIDER_REF
+
+function New-TraversalZip($path, $entryName) {
+    Add-Type -AssemblyName System.IO.Compression
+    $stream = [IO.File]::Open($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    $zip = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create)
+    try {
+        $entry = $zip.CreateEntry("../$entryName")
+        $writer = [IO.StreamWriter]::new($entry.Open())
+        try { $writer.Write('must not escape staging') } finally { $writer.Dispose() }
+    } finally {
+        $zip.Dispose()
+        $stream.Dispose()
+    }
+}
 
 function Invoke-WebRequest {
     param([string]$Uri, [string]$OutFile, [switch]$UseBasicParsing, [int]$TimeoutSec)
@@ -55,6 +70,20 @@ try {
         [IO.File]::WriteAllText((Join-Path $agentSource $name), 'fixture', $utf8)
     }
     Compress-Archive -Path (Join-Path $sourceRoot 'XIDER-fixture') -DestinationPath $archive
+
+    $escapeName = 'xider-agent-bootstrap-escape-' + [guid]::NewGuid().ToString('N') + '.txt'
+    # This bootstrap extracts beneath a second "unpacked" directory, so two
+    # parent segments would escape its entire unique temp directory.
+    New-TraversalZip $traversalArchive "../$escapeName"
+    $traversalRejected = $false
+    try {
+        & $bootstrap -InstallRoot $installRoot -EnvRoot $envRoot -SourceArchive $traversalArchive -PreflightOnly
+    } catch { $traversalRejected = $true }
+    if (-not $traversalRejected -or
+        (Test-Path -LiteralPath (Join-Path $env:TEMP $escapeName)) -or
+        (Test-Path -LiteralPath (Join-Path $installRoot 'git-ver'))) {
+        throw 'Windows agent bootstrap accepted a traversal archive or changed the active installation.'
+    }
 
     $env:USERPROFILE = Join-Path $fixture 'isolated-user'
     $defaultKey = Join-Path (Join-Path $env:USERPROFILE '.ssh') 'xider'

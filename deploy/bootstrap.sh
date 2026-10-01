@@ -20,6 +20,7 @@ if [[ -n "$REF" && ! "$REF" =~ ^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$ ]]; then
 fi
 command -v curl >/dev/null || { echo "curl is required" >&2; exit 2; }
 command -v unzip >/dev/null || { echo "unzip is required" >&2; exit 2; }
+command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 2; }
 mkdir -p "$INSTALL_ROOT"
 stage="$(mktemp -d "${INSTALL_ROOT}/.xider-install.XXXXXX")"
 trap 'rm -rf "$stage"' EXIT
@@ -40,6 +41,75 @@ else
   fi
   curl --fail --silent --show-error --location --max-time 90 \
     "$archive_url" -o "$stage/source.zip"
+fi
+if ! python3 - "$stage/source.zip" <<'PY'
+from pathlib import PurePosixPath
+from stat import S_IFDIR, S_IFREG, S_IFLNK
+from unicodedata import normalize
+from zipfile import ZipFile
+import sys
+
+MAX_UNCOMPRESSED_SIZE = 1024 * 1024 * 1024
+MAX_MEMBER_COUNT = 20_000
+archive_path = sys.argv[1]
+seen = set()
+files = set()
+implicit_directories = set()
+total_size = 0
+
+try:
+    with ZipFile(archive_path) as archive:
+        members = archive.infolist()
+        if len(members) > MAX_MEMBER_COUNT:
+            raise ValueError("archive contains too many entries")
+        for info in members:
+            name = info.filename
+            path = PurePosixPath(name)
+            raw_parts = name.rstrip("/").split("/")
+            if (
+                not name
+                or "\\" in name
+                or ":" in name
+                or path.is_absolute()
+                or not raw_parts
+                or any(part in ("", ".", "..") for part in raw_parts)
+            ):
+                raise ValueError(f"unsafe archive path: {name!r}")
+
+            mode = (info.external_attr >> 16) & 0o170000
+            if mode == S_IFLNK:
+                raise ValueError(f"symbolic link is not allowed: {name!r}")
+            if mode not in (0, S_IFDIR, S_IFREG):
+                raise ValueError(f"special file is not allowed: {name!r}")
+
+            normalized_parts = [normalize("NFD", part).casefold() for part in raw_parts]
+            key = "/".join(normalized_parts)
+            if key in seen:
+                raise ValueError(f"duplicate normalized path: {name!r}")
+
+            for index in range(1, len(normalized_parts)):
+                parent = "/".join(normalized_parts[:index])
+                if parent in files:
+                    raise ValueError(f"file is used as a directory: {name!r}")
+                implicit_directories.add(parent)
+
+            is_directory = info.is_dir() or mode == S_IFDIR
+            if not is_directory and key in implicit_directories:
+                raise ValueError(f"file conflicts with nested paths: {name!r}")
+            if not is_directory:
+                files.add(key)
+            seen.add(key)
+
+            total_size += info.file_size
+            if total_size > MAX_UNCOMPRESSED_SIZE:
+                raise ValueError("archive exceeds the 1 GiB uncompressed limit")
+except Exception as exc:
+    print(f"XIDER source archive rejected: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+then
+  echo "Архив XIDER отклонён до распаковки; действующая установка не менялась." >&2
+  exit 3
 fi
 unzip -q "$stage/source.zip" -d "$stage"
 downloaded="$(find "$stage" -mindepth 1 -maxdepth 1 -type d ! -name '.xider-install.*' | head -n1)"

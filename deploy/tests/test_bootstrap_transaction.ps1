@@ -33,12 +33,40 @@ function New-OldCheckout($installRoot) {
     [IO.File]::WriteAllText((Join-Path $oldAgent '.env'), 'SHARED_KEY=old-local-secret', $utf8)
 }
 
+function New-TraversalZip($path, $entryName) {
+    Add-Type -AssemblyName System.IO.Compression
+    $stream = [IO.File]::Open($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    $zip = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create)
+    try {
+        $entry = $zip.CreateEntry("../$entryName")
+        $writer = [IO.StreamWriter]::new($entry.Open())
+        try { $writer.Write('must not escape staging') } finally { $writer.Dispose() }
+    } finally {
+        $zip.Dispose()
+        $stream.Dispose()
+    }
+}
+
 try {
     New-Item -ItemType Directory -Path (Join-Path $sourceRepo 'deploy'),(Join-Path $sourceRepo 'XGENT-WDS') -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $sourceRepo 'deploy\setup-all.ps1'), '# fixture', $utf8)
     [IO.File]::WriteAllText((Join-Path $sourceRepo 'XGENT-WDS\install_agent.ps1'), '# fixture', $utf8)
     [IO.File]::WriteAllText((Join-Path $sourceRepo 'new-marker.txt'), 'new-version', $utf8)
     Compress-Archive -Path $sourceRepo -DestinationPath $archive
+
+    $traversalArchive = Join-Path $fixture 'traversal.zip'
+    $escapeName = 'xider-bootstrap-escape-' + [guid]::NewGuid().ToString('N') + '.txt'
+    New-TraversalZip $traversalArchive $escapeName
+    $guardRoot = Join-Path $fixture 'archive-guard-install'
+    New-OldCheckout $guardRoot
+    $guardRejected = $false
+    try { & $bootstrap -InstallRoot $guardRoot -SourceArchive $traversalArchive }
+    catch { $guardRejected = $true }
+    if (-not $guardRejected -or $global:XiderBootstrapSetupCalls -ne 0 -or
+        -not (Test-Path -LiteralPath (Join-Path $guardRoot 'git-ver/old-marker.txt')) -or
+        (Test-Path -LiteralPath (Join-Path $env:TEMP $escapeName))) {
+        throw 'The Windows full bootstrap accepted a traversal archive or changed the active installation.'
+    }
 
     $rollbackRoot = Join-Path $fixture 'rollback-install'
     New-OldCheckout $rollbackRoot

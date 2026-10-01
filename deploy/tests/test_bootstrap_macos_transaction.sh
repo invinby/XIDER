@@ -152,6 +152,31 @@ reject_remote_config() {
   }
 }
 
+MALICIOUS_ROOT="$FIXTURE/malicious-install"
+mkdir -p "$MALICIOUS_ROOT/git-ver/XGENT-MCS"
+printf 'old-checkout\n' > "$MALICIOUS_ROOT/git-ver/old-marker.txt"
+MALICIOUS_ARCHIVE="$FIXTURE/traversal.zip"
+ESCAPE_NAME="xider-macos-bootstrap-escape-$RANDOM-$$.txt"
+python3 - "$MALICIOUS_ARCHIVE" "$ESCAPE_NAME" <<'PY'
+from zipfile import ZipFile
+import sys
+
+with ZipFile(sys.argv[1], "w") as archive:
+    archive.writestr("../" + sys.argv[2], "must not escape staging")
+PY
+SAFE_ARCHIVE="$ARCHIVE"
+ARCHIVE="$MALICIOUS_ARCHIVE"
+if run_bootstrap "$MALICIOUS_ROOT" 0 > "$FIXTURE/traversal.log" 2>&1; then
+  echo 'The macOS bootstrap unexpectedly accepted a traversal archive.' >&2
+  exit 1
+fi
+[[ -f "$MALICIOUS_ROOT/git-ver/old-marker.txt" && ! -e "$MALICIOUS_ROOT/$ESCAPE_NAME" ]] || {
+  echo 'The macOS bootstrap changed the active checkout or extracted outside staging.' >&2
+  cat "$FIXTURE/traversal.log" >&2
+  exit 1
+}
+ARCHIVE="$SAFE_ARCHIVE"
+
 ROLLBACK_ROOT="$FIXTURE/rollback-install"
 make_old_install "$ROLLBACK_ROOT"
 if run_bootstrap "$ROLLBACK_ROOT" 1 > "$FIXTURE/rollback.log" 2>&1; then
