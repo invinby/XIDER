@@ -71,6 +71,19 @@ try:
 except ImportError:
     fcntl = None  # type: ignore
 
+# The native macOS demo screen runs in a short-lived child process. Dispatch it
+# before taking the agent's singleton lock or loading MQTT/update state; the
+# frozen PyInstaller build re-enters this executable with the same flag.
+if __name__ == "__main__" and sys.argv[1:] == ["--xider-fake-update"]:
+    try:
+        from fake_update_screen import run_fake_update_demo
+
+        run_fake_update_demo()
+    except Exception as exc:
+        sys.stderr.write(f"XIDER demo screen failed: {exc}\n")
+        raise SystemExit(1) from exc
+    raise SystemExit(0)
+
 # Claim the normal process lock before examining a crash journal. A manual
 # second launch must never roll back files while the live updater is replacing
 # them. This prelude intentionally uses only the Python standard library.
@@ -1715,8 +1728,14 @@ class XgentClient:
 
     def _do_prank_fake_update(self, payload: dict) -> None:
         try:
-            subprocess.Popen(["open", "https://fakeupdate.net/apple/"])
-            text = "⏳ Фейковое обновление Apple macOS запущено в браузере!"
+            command = [sys.executable]
+            if not getattr(sys, "frozen", False):
+                command.append(str(Path(__file__).resolve()))
+            command.append("--xider-fake-update")
+            child = subprocess.Popen(command, close_fds=True)
+            if child.poll() is not None:
+                raise RuntimeError("дочерний процесс сразу завершился")
+            text = "⏳ Запускаю локальный полноэкранный демо-экран macOS. Он закроется через 30 секунд; можно закрыть кнопкой."
             ok = True
         except Exception as exc:
             text = f"⚠️ Ошибка: {exc}"

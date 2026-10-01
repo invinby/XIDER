@@ -98,6 +98,10 @@ jobs:
             echo "The macOS executable does not contain update_package." >&2
             exit 1
           fi
+          if ! printf '%s\n' "$contents" | grep -Eq '^[[:space:]]*fake_update_screen[[:space:]]*$'; then
+            echo "The macOS executable does not contain the local fake-update demo screen." >&2
+            exit 1
+          fi
           chmod +x dist/XGENT-MCS
           cp .env.example dist/.env.example
           cp start_agent.sh dist/start_agent.sh
