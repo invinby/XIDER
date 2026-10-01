@@ -62,16 +62,19 @@ TRUSTED_RELEASE_KEYS = {
 ```
 
 Run the release-signature tests and publish that reviewed change before making
-a signed version tag. The `xider-release-signing` GitHub environment has been
-created for `invinby/XIDER` and restricted to `v*` tags; add
-`XIDER_RELEASE_PRIVATE_KEY_B64` there from the protected
-`release-signing-key.b64` file. Do not paste the value into a terminal command,
-commit it, or send it in chat. The tagged workflow rejects a missing secret or
-a secret whose public key is not pinned in the tagged source.
+a signed version tag. The `xider-release-signing` GitHub environment for
+`invinby/XIDER` is restricted to `v*` tags, and its
+`XIDER_RELEASE_PRIVATE_KEY_B64` secret was configured on 2026-10-02 from the
+protected local key file. Its public key ID was checked against the pinned
+source key; the secret value was not printed. Do not paste it into a terminal
+command, commit it, or send it in chat. The tagged workflow rejects a missing
+secret or a secret whose public key is not pinned in the tagged source.
 
-The key has been generated and pinned locally. The bootstrap-signing step uses
-the same protected GitHub environment secret and fails closed if the key is
-missing or does not match the pinned public key. No signed release is considered
-available until the secret is installed, the tagged workflow succeeds, and the
-resulting signatures and manifest are published. The mutable-branch bootstrap
-command remains a development path and is not made signed by this mechanism.
+The key has been generated and pinned locally. Before the first public signed
+release, keep a separate encrypted owner-held backup of the private files; the
+GitHub secret cannot be read back and is not a recoverable backup. The
+bootstrap-signing step uses the protected environment secret and fails closed
+if the key is missing or does not match the pinned public key. No signed
+release is available until a tagged workflow succeeds and its signatures and
+manifest are published. The mutable-branch bootstrap command remains a
+development path and is not made signed by this mechanism.
