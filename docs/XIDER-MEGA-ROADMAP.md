@@ -28,10 +28,12 @@ macOS-агент, Guard Keeper и система релизов.
 
 - CI и release workflows теперь оба используют полные SHA для внешних Actions;
   тест pin-ов проверяет все `.github/workflows/*.yml`, а CI `GITHUB_TOKEN`
-  ограничен `contents: read`. Целевой тест — **5 passed**, полный
-  `py -3.12 tools/run_tests.py` — **305 passed, 2 skipped**; все Windows
-  deployment fixtures тоже прошли. Сам GitHub Actions run не запускался: ветка
-  ещё не опубликована.
+  ограничен `contents: read`. Tag-release теперь вызывает `ci.yml` как reusable
+  workflow и ждёт его успешного завершения вместе с обеими сборками и упаковкой;
+  публикация не пройдёт при красном CI. Регрессионный gate-тест добавлен.
+  Целевой workflow-набор — **6 passed**, полный `py -3.12 tools/run_tests.py` —
+  **308 passed, 2 skipped**; Windows deployment fixtures прошли. Сам GitHub
+  Actions run не запускался: ветка ещё не опубликована.
 - Свежий AST-аудит клавиатур бота нашёл 316 call-site: 228 явно используют
   `_lex`, 76 — `_nav`, ещё 10 собирают подписи из подготовленных значений или
   runtime-данных; две буквальные подписи — только стрелки пагинации.

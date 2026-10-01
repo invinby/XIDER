@@ -12,6 +12,13 @@ permissions:
   contents: read
 
 jobs:
+  release-ci:
+    name: "Release test gate"
+    if: startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   build-windows:
     name: "Build Windows Agent (EXE)"
     runs-on: windows-latest
@@ -160,7 +167,7 @@ jobs:
 
   create-release:
     name: "Publish GitHub Release"
-    needs: [build-windows, build-macos, pack-components]
+    needs: [release-ci, build-windows, build-macos, pack-components]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment:

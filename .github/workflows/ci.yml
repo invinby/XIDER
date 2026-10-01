@@ -1,6 +1,7 @@
 name: "CI - Test Suite"
 
 on:
+  workflow_call: {}
   push:
     branches: [ "main", "master", "xider-local-prep-*" ]
   pull_request:

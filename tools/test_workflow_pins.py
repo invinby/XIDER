@@ -21,6 +21,10 @@ def test_every_github_action_uses_an_explicit_immutable_commit_pin():
         text = workflow.read_text(encoding="utf-8")
         uses_lines = re.findall(r"(?m)^\s*uses:\s*(.+?)\s*$", text)
         for value in uses_lines:
+            if value == "./.github/workflows/ci.yml":
+                assert workflow.name == "build-agents.yml"
+                assert (ROOT / ".github" / "workflows" / "ci.yml").is_file()
+                continue
             match = re.fullmatch(r"([^@\s]+)@([0-9a-f]{40})\s+#\s+(v\S+)", value)
             assert match, f"{workflow.name} action is not pinned to an immutable SHA: {value}"
             action, sha, release = match.groups()
@@ -60,6 +64,18 @@ def test_tagged_release_builds_and_publishes_signed_source_package():
         "XIDER-QUICKSTART.txt",
     ):
         assert f"artifacts/{asset}" in published_assets
+
+
+def test_tagged_release_waits_for_the_full_ci_workflow():
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    release_workflow = WORKFLOW.read_text(encoding="utf-8")
+    release = release_workflow.split("  create-release:", 1)[1]
+
+    assert "on:\n  workflow_call: {}" in ci
+    assert "  release-ci:\n    name: \"Release test gate\"" in release_workflow
+    assert "    uses: ./.github/workflows/ci.yml" in release_workflow
+    assert "    if: startsWith(github.ref, 'refs/tags/v')" in release_workflow
+    assert "needs: [release-ci, build-windows, build-macos, pack-components]" in release
 
 
 def test_tagged_release_publishes_commit_pinned_quickstart_for_both_platforms():
