@@ -1,4 +1,5 @@
 import hashlib
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -29,7 +30,7 @@ def _key_pair():
 
 
 @pytest.mark.skipif(not SSH_KEYGEN, reason="OpenSSH ssh-keygen is unavailable")
-def test_bootstrap_signatures_cover_exact_digest_platform_tag_and_commit(tmp_path):
+def test_bootstrap_signatures_cover_exact_digest_platform_tag_and_commit(tmp_path, monkeypatch):
     private_pem, trusted = _key_pair()
     payloads = {
         "windows": b"Write-Output 'signed bootstrap'\r\n",
@@ -37,6 +38,27 @@ def test_bootstrap_signatures_cover_exact_digest_platform_tag_and_commit(tmp_pat
     }
     for platform, name in sign_bootstrap.BOOTSTRAPS.items():
         (tmp_path / name).write_bytes(payloads[platform])
+
+    if os.name == "nt":
+        # Reproduce hosted Windows profiles whose temp directory contributes
+        # an OWNER RIGHTS ACE; OpenSSH refuses that ACL unless the signer
+        # removes the extra ACE before writing key material.
+        restrict_private_file = sign_bootstrap._restrict_private_file
+
+        def restrict_after_owner_rights_ace(path):
+            added = subprocess.run(
+                ["icacls.exe", str(path), "/grant", "*S-1-3-4:(R)", "/Q"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=15,
+            )
+            assert added.returncode == 0, added.stderr or added.stdout
+            restrict_private_file(path)
+
+        monkeypatch.setattr(
+            sign_bootstrap, "_restrict_private_file", restrict_after_owner_rights_ace
+        )
 
     signatures = sign_bootstrap.sign_bootstrap_assets(
         tmp_path,

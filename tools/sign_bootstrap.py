@@ -78,7 +78,16 @@ def _restrict_private_file(path: Path) -> None:
             raise RuntimeError("Cannot identify the Windows account for the temporary signing-key ACL.")
         identity = f"{domain}\\{username}" if domain else username
         result = subprocess.run(
-            ["icacls.exe", str(path), "/inheritance:r", "/grant:r", f"{identity}:(R)", "/Q"],
+            [
+                "icacls.exe",
+                str(path),
+                "/inheritance:r",
+                "/remove:g",
+                "*S-1-3-4",  # OWNER RIGHTS is not accepted by OpenSSH as a private-key ACL.
+                "/grant:r",
+                f"{identity}:(R)",
+                "/Q",
+            ],
             capture_output=True,
             text=True,
             check=False,
