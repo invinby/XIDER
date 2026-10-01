@@ -191,7 +191,16 @@ def sign_bootstrap_assets(
             )
             temp_signature = Path(f"{message_path}.sig")
             if sign_result.returncode != 0 or not temp_signature.is_file():
-                raise RuntimeError("OpenSSH could not sign the bootstrap hash message.")
+                # Keep the actionable OpenSSH diagnostic. In particular,
+                # Windows runners can reject the temporary key ACL, and
+                # suppressing stderr turns that into an opaque CI failure.
+                detail = (sign_result.stderr or sign_result.stdout or "").strip()
+                detail = " ".join(detail.split())[:500]
+                suffix = f" OpenSSH: {detail}" if detail else ""
+                raise RuntimeError(
+                    "OpenSSH could not sign the bootstrap hash message "
+                    f"(exit {sign_result.returncode}).{suffix}"
+                )
 
             verify_result = subprocess.run(
                 [

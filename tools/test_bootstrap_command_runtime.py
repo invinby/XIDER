@@ -123,6 +123,19 @@ def test_generated_macos_quickstart_verifies_before_execution(tmp_path, monkeypa
         if not wsl:
             pytest.skip("WSL is unavailable for Bash/OpenSSH verification")
 
+        # GitHub's Windows image includes wsl.exe, but may not have an
+        # installed WSL distribution. Probe the actual tools before treating
+        # the launcher stub as a runnable Linux environment.
+        wsl_probe = subprocess.run(
+            [wsl, "-e", "sh", "-lc", "command -v wslpath && command -v bash"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+        if wsl_probe.returncode != 0:
+            pytest.skip("No usable WSL distribution with Bash/OpenSSH tools is installed")
+
         def to_shell_path(path):
             return subprocess.check_output(
                 [wsl, "-e", "wslpath", "-a", str(path)], text=True, timeout=15
