@@ -146,6 +146,10 @@ try {
     Write-Host 'Windows full bootstrap transaction and rollback fixture passed.'
 }
 finally {
+    # GitHub Actions' PowerShell wrapper exits with a leftover LASTEXITCODE.
+    # The final simulated setup failure sets it to 8 even when every assertion
+    # passes, so clear the mock's process status before returning from the test.
+    $global:LASTEXITCODE = 0
     $env:XIDER_SSH_KEY = $originalXiderSshKey
     $env:XIDER_REF = $originalXiderRef
     if ((Test-Path -LiteralPath $fixture) -and
