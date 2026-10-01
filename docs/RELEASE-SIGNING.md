@@ -70,11 +70,14 @@ source key; the secret value was not printed. Do not paste it into a terminal
 command, commit it, or send it in chat. The tagged workflow rejects a missing
 secret or a secret whose public key is not pinned in the tagged source.
 
-The key has been generated and pinned locally. Before the first public signed
-release, keep a separate encrypted owner-held backup of the private files; the
-GitHub secret cannot be read back and is not a recoverable backup. The
-bootstrap-signing step uses the protected environment secret and fails closed
-if the key is missing or does not match the pinned public key. No signed
-release is available until a tagged workflow succeeds and its signatures and
-manifest are published. The mutable-branch bootstrap command remains a
-development path and is not made signed by this mechanism.
+The key has been generated and pinned locally. The protected GitHub environment
+secret is configured, but it cannot be read back and is not a recoverable
+backup. A separate encrypted owner-held backup of the private files has not
+been confirmed. Do not create the first public release tag until the owner
+confirms an encrypted backup stored separately. As of
+2026-10-02, `v4.1.0` is not tagged or published; the latest published release is
+`v4.0.0`. The bootstrap-signing step uses the protected environment secret and
+fails closed if the key is missing or does not match the pinned public key. No
+signed `v4.1.0` release is available until its tagged workflow succeeds and its
+signatures and manifest are published. The mutable-branch bootstrap command
+remains a development path and is not made signed by this mechanism.

@@ -216,11 +216,14 @@ Python 3.12.10 and PyInstaller 6.22.2; archive inspection confirms
 workflow now fails if either module is absent from the EXE. The executable was
 not launched. Its remote updater remains disabled until the Windows transaction
 installer is complete.
-The current local source pins release key ID `521c56c0c89f0ddd`; the matching
-private key is stored outside the checkout and is never included in source,
-archives, or either VPS. The protected GitHub environment secret and a signed
-release have not been configured, so no installable signed release exists yet.
-The vault-recovery and SSH keys must not be reused for release signing.
+The current source pins release key ID `521c56c0c89f0ddd`; the matching private
+key is stored outside the checkout and is never included in source, archives,
+or either VPS. The protected GitHub environment secret was configured on
+2026-10-02 and its public key ID matched the source pin. The vault-recovery and
+SSH keys must not be reused for release signing. As of 2026-10-02, the latest
+published release is `v4.0.0`; `v4.1.0` has not been tagged or published. The
+owner-held encrypted backup of the signing key has not been confirmed, so the
+first `v4.1.0` tag remains gated on that backup confirmation.
 Before replacing files, the macOS updater now flushes a backup and durable
 transaction journal. Each file replacement is atomic; a caught error rolls back
 immediately, and an interrupted swap is restored before the compatible agent
@@ -229,11 +232,11 @@ but fails to connect to MQTT within 120 seconds it restores the prior files; if
 it crashes during import, the next supervisor-driven start rolls back before
 loading config. No rollback can execute until the OS starts a process again.
 This is still not an A/B slot: a mixed tree can exist until recovery runs.
-The GitHub release job now requires `XIDER_RELEASE_PRIVATE_KEY_B64`, checks that
+The GitHub release job requires `XIDER_RELEASE_PRIVATE_KEY_B64`, checks that
 the derived key ID is present in the pinned public-key ring, and targets the
 `xider-release-signing` environment with contents-write permission limited to
-that job. The environment's reviewer rules and secret have not been configured
-or independently verified. The PyInstaller macOS bundle and Windows agent
+that job. The secret is configured; additional environment reviewer rules have
+not been independently verified. The PyInstaller macOS bundle and Windows agent
 updater remain fail-closed until their own transaction installers exist; the
 source updater refuses to mutate a frozen bundle. Direct short bootstraps still
 default to a moving branch and are not authenticated by a publisher signature.
