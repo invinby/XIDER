@@ -138,9 +138,9 @@ def test_bootstrap_signature_message_rejects_unpinned_release_identity(tag, comm
         sign_bootstrap.signed_hash_message("macos", tag, commit, "0" * 64)
 
 
-def test_windows_signed_hash_message_matches_powershell_bom_contract():
+def test_windows_signed_hash_message_uses_encoding_independent_ascii_bytes():
     message = sign_bootstrap.signed_hash_message("windows", "v4.1.0", "A" * 40, "f" * 64)
-    assert message.startswith(b"\xef\xbb\xbfXIDER-BOOTSTRAP-SHA256\nwindows\n")
+    assert message.startswith(b"XIDER-BOOTSTRAP-SHA256\nwindows\n")
     assert message.endswith(b"\n" + b"f" * 64 + b"\n")
 
 

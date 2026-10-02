@@ -77,6 +77,180 @@ def test_static_xlex_keys_exist_and_keyboard_labels_are_not_hardcoded():
     assert literal_button_labels == {"◀️", "▶️"}
 
 
+def test_text_command_flows_reuse_the_existing_chat_card():
+    tree = ast.parse(Path(bot.__file__).read_text(encoding="utf-8"))
+    target_functions = {
+        "on_cmd_shell": "_replace_callback_message",
+        "on_shell_ok": "_replace_callback_message",
+        "on_shell_input": "_replace_user_card",
+        "on_cmd_open_app": "_replace_callback_message",
+        "on_openapp_ok": "_replace_callback_message",
+        "on_open_app_input": "_replace_user_card",
+        "on_cmd_url": "_replace_callback_message",
+        "on_url_input": "_replace_user_card",
+        "on_cmd_text": "_replace_callback_message",
+        "on_text_input": "_replace_user_card",
+        "on_cmd_sound": "_replace_callback_message",
+        "on_sound_input": "_replace_user_card",
+        "on_cmd_clipset": "_replace_callback_message",
+        "on_clipset_input": "_replace_user_card",
+        "on_fun_type": "_replace_callback_message",
+        "on_fun_text_input": "_replace_user_card",
+        "on_fun_hotkey": "_replace_callback_message",
+        "on_fun_hotkey_input": "_replace_user_card",
+        "on_fun_wallpaper": "_replace_callback_message",
+        "on_fun_wallpaper_input": "_replace_user_card",
+        "on_cmd_brightness": "_replace_callback_message",
+        "on_brightness_input": "_replace_user_card",
+        "on_cmd_prockillname": "_replace_callback_message",
+        "on_prockill_input": "_replace_user_card",
+    }
+    prompt_functions = {
+        "on_cmd_shell", "on_shell_ok", "on_cmd_open_app", "on_openapp_ok",
+        "on_cmd_url", "on_cmd_text", "on_cmd_sound",
+        "on_cmd_clipset", "on_fun_type", "on_fun_hotkey",
+        "on_fun_wallpaper", "on_cmd_brightness", "on_cmd_prockillname",
+    }
+    input_functions = {
+        "on_shell_input", "on_open_app_input", "on_url_input",
+        "on_text_input", "on_sound_input",
+        "on_clipset_input", "on_fun_text_input", "on_fun_hotkey_input",
+        "on_fun_wallpaper_input", "on_brightness_input", "on_prockill_input",
+    }
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    for name, required_helper in target_functions.items():
+        calls = [
+            node
+            for node in ast.walk(functions[name])
+            if isinstance(node, ast.Call)
+        ]
+        assert any(
+            isinstance(call.func, ast.Name) and call.func.id == required_helper
+            for call in calls
+        ), name
+        if name in prompt_functions:
+            assert any(
+                isinstance(call.func, ast.Attribute)
+                and call.func.attr == "update_data"
+                and any(keyword.arg == "command_target" for keyword in call.keywords)
+                for call in calls
+            ), name
+            assert any(
+                isinstance(call.func, ast.Name)
+                and call.func.id == "_lex"
+                and call.args
+                and isinstance(call.args[0], ast.Constant)
+                and call.args[0].value == "single_device_only"
+                for call in calls
+            ), name
+        if name in input_functions:
+            assert any(
+                isinstance(call.func, ast.Attribute) and call.func.attr == "get_data"
+                for call in calls
+            ), name
+        for call in calls:
+            if not isinstance(call.func, ast.Attribute) or call.func.attr != "answer":
+                continue
+            receiver = call.func.value
+            is_chat_send = isinstance(receiver, ast.Name) and receiver.id == "message"
+            is_callback_chat_send = (
+                isinstance(receiver, ast.Attribute)
+                and receiver.attr == "message"
+                and isinstance(receiver.value, ast.Name)
+                and receiver.value.id == "cq"
+            )
+            assert not (is_chat_send or is_callback_chat_send), name
+
+
+@pytest.mark.parametrize(
+    ("handler_name", "action", "input_text"),
+    [
+        ("on_shell_input", "shell", "whoami"),
+        ("on_open_app_input", "open_app", "Calculator"),
+        ("on_url_input", "open_url", "https://example.com"),
+        ("on_text_input", "notify", "hello"),
+        ("on_sound_input", "sound", "beep"),
+        ("on_clipset_input", "clipboard_set", "note for clipboard"),
+        ("on_fun_text_input", "type_text", "typed text"),
+        ("on_fun_hotkey_input", "hotkey", "ctrl+c"),
+        ("on_fun_wallpaper_input", "wallpaper_set", "https://example.com/image.png"),
+        ("on_brightness_input", "display_brightness", "65"),
+        ("on_prockill_input", "proc_kill_name", "example.exe"),
+    ],
+)
+def test_text_command_inputs_keep_the_device_chosen_when_prompt_opened(
+    monkeypatch, handler_name, action, input_text
+):
+    from types import SimpleNamespace
+
+    class FakeState:
+        cleared = False
+
+        async def get_data(self):
+            return {"command_target": "pinned-device"}
+
+        async def clear(self):
+            self.cleared = True
+
+    publications = []
+    rendered = []
+
+    async def replace_card(_message, text, reply_markup=None):
+        rendered.append(text)
+
+    def publish(command_name, **kwargs):
+        publications.append((command_name, kwargs))
+        return True
+
+    def publish_tracked(command_name, **kwargs):
+        publications.append((command_name, kwargs))
+        return True, "command-id"
+
+    async def shell_result(_target, _action, _timeout, _command_id):
+        return {"output": "done"}
+
+    class FakeTextCollector:
+        def reset(self):
+            pass
+
+        async def wait(self, _timeout):
+            return {"ok": True, "text": "done"}
+
+        async def wait_for(self, _target, _action, *, timeout, command_id):
+            assert timeout > 0
+            assert command_id
+            return {"text": "done"}
+
+    monkeypatch.setattr(bot, "SESSION", {"target": "selected-later"})
+    monkeypatch.setattr(bot, "target_label", lambda device: device)
+    monkeypatch.setattr(bot, "_replace_user_card", replace_card)
+    monkeypatch.setattr(bot, "back_to_device_kb", lambda: "back")
+    monkeypatch.setattr(bot, "publish", publish)
+    monkeypatch.setattr(bot, "publish_tracked", publish_tracked)
+    monkeypatch.setattr(bot.shell_collector, "wait_for", shell_result)
+    monkeypatch.setattr(bot, "fun_text_collector", FakeTextCollector())
+
+    message = SimpleNamespace(text=input_text)
+    state = FakeState()
+    asyncio.run(getattr(bot, handler_name)(message, state))
+
+    assert state.cleared
+    assert publications[0][0] == action
+    assert publications[0][1]["_target"] == "pinned-device"
+    assert rendered
+    assert all("pinned-device" in text for text in rendered)
+    assert len(rendered) == (
+        2
+        if handler_name in {"on_shell_input", "on_fun_wallpaper_input", "on_brightness_input"}
+        else 1
+    )
+
+
 def test_about_chapter_button_uses_each_xlex_voice():
     title = "01 · Зачем существует XIDER"
     labels = {

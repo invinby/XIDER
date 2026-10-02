@@ -51,7 +51,8 @@ def test_quickstart_bootstrap_source_is_pinned_to_the_exact_git_commit():
         ["git", "show", f"{CURRENT_COMMIT}:deploy/bootstrap.ps1"], cwd=ROOT
     )
     assert "ComputeHash($f)" in text
-    assert "StandardInput.Write" in text
+    assert "StandardInput.BaseStream.Write" in text
+    assert "StandardInputEncoding" not in text
 
     # This checkout has mixed line endings in the PowerShell file on Windows;
     # the raw GitHub blob must remain the source of truth for the expected hash.

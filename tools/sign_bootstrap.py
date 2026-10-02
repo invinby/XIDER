@@ -54,9 +54,10 @@ def signed_hash_message(platform: str, tag: str, commit_id: str, digest: str) ->
         f"XIDER-BOOTSTRAP-SHA256\n{platform}\n{tag}\n"
         f"{commit_id.lower()}\n{digest}\n"
     ).encode("ascii")
-    # Windows PowerShell 5.1's redirected StandardInput emits UTF-8's BOM.
-    # The quickstart explicitly sets UTF-8-with-BOM in newer PowerShell too.
-    return b"\xef\xbb\xbf" + body if platform == "windows" else body
+    # The Windows quickstart writes these ASCII bytes directly through the
+    # redirected stream's BaseStream. This avoids PowerShell/.NET-version
+    # dependent BOM and text-encoding behavior.
+    return body
 
 
 def _openssh_public_key_line(public_key: bytes) -> str:

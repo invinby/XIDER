@@ -334,13 +334,18 @@ async def on_cmd_mic(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data == "cmd:shell")
 async def on_cmd_shell(cq: CallbackQuery, state: FSMContext):
-    if not SESSION.get("target"):
+    target = SESSION.get("target")
+    if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await state.set_state(Form.wait_shell)
-    await cq.message.answer(
-        "💻 Отправьте команду терминала, которую нужно выполнить.\n"
-        "Например: <code>whoami</code> или <code>ls -la</code>",
+    await state.update_data(command_target=target)
+    await _replace_callback_message(
+        cq,
+        _lex("shell_prompt"),
         reply_markup=back_to_device_kb(),
     )
     await cq.answer()
@@ -348,50 +353,81 @@ async def on_cmd_shell(cq: CallbackQuery, state: FSMContext):
 
 @router.message(OwnerFilter(), Form.wait_shell)
 async def on_shell_input(message: Message, state: FSMContext):
+    form_data = await state.get_data()
     await state.clear()
     cmd = (message.text or "").strip()
     if not cmd:
-        await message.answer("⚠️ Пустая команда.", reply_markup=back_to_device_kb())
-        return
-    target = SESSION.get("target")
-    
-    await message.answer(f"💻 Выполняю команду: <code>{cmd}</code>...")
-    sent, command_id = publish_tracked("shell", command=cmd)
-    if not sent:
-        await message.answer(
-            _lex("mqtt_disconnected"),
-            reply_markup=back_to_device_kb(),
+        await _replace_user_card(
+            message, _lex("generic_empty_command"), reply_markup=back_to_device_kb()
         )
         return
-        
+    target = form_data.get("command_target")
+    if not target:
+        await _replace_user_card(
+            message, _lex("target_required"), reply_markup=back_to_device_kb()
+        )
+        return
+    if target == "all":
+        await _replace_user_card(
+            message, _lex("single_device_only"), reply_markup=back_to_device_kb()
+        )
+        return
+    sent, command_id = publish_tracked("shell", _target=target, command=cmd)
+    if not sent:
+        await _replace_user_card(
+            message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb()
+        )
+        return
+
+    await _replace_user_card(
+        message,
+        _lex_html("command_waiting", emoji="💻", label="Shell", device=target_label(target)),
+        reply_markup=back_to_device_kb(),
+    )
     result = await shell_collector.wait_for(target, "shell", 20.0, command_id)
     if result is None:
-        await message.answer(
+        await _replace_user_card(
+            message,
             _lex("device_timeout", seconds="20"),
             reply_markup=back_to_device_kb(),
         )
         return
-        
-    output = result.get("output", "")
+
+    output = str(result.get("output", ""))
     safe_out = html.escape(output)
     if len(safe_out) > 3800:
-        safe_out = safe_out[:3800] + "\n...[ОБРЕЗАНО]"
-        
-    await message.answer(
-        f"💻 <b>Результат:</b>\n<pre>{safe_out}</pre>",
+        safe_out = safe_out[:3800]
+        if safe_out.rfind("&") > safe_out.rfind(";"):
+            safe_out = safe_out[:safe_out.rfind("&")]
+        safe_out += "\n...[ОБРЕЗАНО]"
+
+    await _replace_user_card(
+        message,
+        _lex(
+            "command_result",
+            emoji="💻",
+            label="Shell",
+            device=html.escape(target_label(target)),
+            text=safe_out,
+        ),
         reply_markup=back_to_device_kb(),
     )
 
 
 @router.callback_query(AdminFilter(), F.data == "cmd:open_app")
 async def on_cmd_open_app(cq: CallbackQuery, state: FSMContext):
-    if not SESSION.get("target"):
+    target = SESSION.get("target")
+    if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await state.set_state(Form.wait_open_app)
-    await cq.message.answer(
-        "🚀 Отправьте название программы или путь к файлу для запуска.\n"
-        "Например: <code>calc</code> или <code>notepad</code>",
+    await state.update_data(command_target=target)
+    await _replace_callback_message(
+        cq,
+        _lex("open_app_prompt"),
         reply_markup=back_to_device_kb(),
     )
     await cq.answer()
@@ -399,20 +435,34 @@ async def on_cmd_open_app(cq: CallbackQuery, state: FSMContext):
 
 @router.message(AdminFilter(), Form.wait_open_app)
 async def on_open_app_input(message: Message, state: FSMContext):
+    form_data = await state.get_data()
     await state.clear()
     app = (message.text or "").strip()
     if not app:
-        await message.answer("⚠️ Пустая команда.", reply_markup=back_to_device_kb())
+        await _replace_user_card(
+            message, _lex("generic_empty_command"), reply_markup=back_to_device_kb()
+        )
         return
-    if publish("open_app", app=app):
-        await message.answer(
-            f"✅ Программа <b>{app}</b> запущена на <b>{target_label(SESSION['target'])}</b>.",
+    target = form_data.get("command_target")
+    if not target:
+        await _replace_user_card(
+            message, _lex("target_required"), reply_markup=back_to_device_kb()
+        )
+        return
+    if target == "all":
+        await _replace_user_card(
+            message, _lex("single_device_only"), reply_markup=back_to_device_kb()
+        )
+        return
+    if publish("open_app", _target=target, app=app):
+        await _replace_user_card(
+            message,
+            _lex_html("app_launch_request_sent", app=app, device=target_label(target)),
             reply_markup=back_to_device_kb(),
         )
     else:
-        await message.answer(
-            _lex("mqtt_disconnected"),
-            reply_markup=back_to_device_kb(),
+        await _replace_user_card(
+            message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb()
         )
 
 
@@ -2281,7 +2331,11 @@ async def cmd_start(message: Message, state: FSMContext):
         except Exception:
             log.exception("Не удалось уведомить владельца о новом пользователе")
     if role == Role.BLOCKED:
-        await message.answer(text_store.get_for_style("blocked", bot_settings.get("ui_style", "technical")))
+        await _show_start_card(
+            message,
+            text_store.get_for_style("blocked", bot_settings.get("ui_style", "technical")),
+            reply_markup=None,
+        )
         return
     if role == Role.GUEST:
         intro_key = "start_guest"
@@ -2308,12 +2362,13 @@ async def cmd_cancel(message: Message, state: FSMContext):
     cur = await state.get_state()
     await state.clear()
     if cur:
-        await message.answer(
+        await _replace_user_card(
+            message,
             "🚫 Ввод отменён.",
             reply_markup=back_to_device_kb() if SESSION.get("target") else main_menu(),
         )
     else:
-        await message.answer("Нечего отменять.", reply_markup=main_menu())
+        await _replace_user_card(message, "Нечего отменять.", reply_markup=main_menu())
 
 
 @router.callback_query(ReadOnlyFilter(), F.data == "menu:about")
@@ -2356,58 +2411,100 @@ async def on_about_chapter(cq: CallbackQuery):
 
 @router.message(AdminFilter(), Form.wait_url)
 async def on_url_input(message: Message, state: FSMContext):
+    form_data = await state.get_data()
     await state.clear()
     url = (message.text or "").strip()
     if not url:
-        await message.answer("⚠️ Пустая ссылка.", reply_markup=back_to_device_kb())
+        await _replace_user_card(
+            message, _lex("empty_text"), reply_markup=back_to_device_kb()
+        )
         return
     if not re.match(r"^https?://", url, re.IGNORECASE):
         url = "https://" + url
-    if publish("open_url", url=url):
-        await message.answer(
-            f"✅ Открываю на <b>{target_label(SESSION['target'])}</b>:\n{url}",
+    target = form_data.get("command_target")
+    if not target:
+        await _replace_user_card(
+            message, _lex("target_required"), reply_markup=back_to_device_kb()
+        )
+        return
+    if target == "all":
+        await _replace_user_card(
+            message, _lex("single_device_only"), reply_markup=back_to_device_kb()
+        )
+        return
+    if publish("open_url", _target=target, url=url):
+        await _replace_user_card(
+            message,
+            _lex_html("url_request_sent", device=target_label(target), url=url),
             reply_markup=back_to_device_kb(),
         )
     else:
-        await message.answer(
-            _lex("mqtt_disconnected"),
-            reply_markup=back_to_device_kb(),
+        await _replace_user_card(
+            message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb()
         )
 
 @router.message(AdminFilter(), Form.wait_text)
 async def on_text_input(message: Message, state: FSMContext):
+    form_data = await state.get_data()
     await state.clear()
     text = (message.text or "").strip()
     if not text:
-        await message.answer(_lex("empty_text"), reply_markup=back_to_device_kb())
+        await _replace_user_card(
+            message, _lex("empty_text"), reply_markup=back_to_device_kb()
+        )
         return
-    if publish("notify", text=text):
-        await message.answer(
-            f"✅ Текст отправлен на <b>{target_label(SESSION['target'])}</b>.",
+    target = form_data.get("command_target")
+    if not target:
+        await _replace_user_card(
+            message, _lex("target_required"), reply_markup=back_to_device_kb()
+        )
+        return
+    if target == "all":
+        await _replace_user_card(
+            message, _lex("single_device_only"), reply_markup=back_to_device_kb()
+        )
+        return
+    if publish("notify", _target=target, text=text):
+        await _replace_user_card(
+            message,
+            _lex_html("notify_text_request_sent", device=target_label(target)),
             reply_markup=back_to_device_kb(),
         )
     else:
-        await message.answer(
-            _lex("mqtt_disconnected"),
-            reply_markup=back_to_device_kb(),
+        await _replace_user_card(
+            message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb()
         )
 
 @router.message(AdminFilter(), Form.wait_sound)
 async def on_sound_input(message: Message, state: FSMContext):
+    form_data = await state.get_data()
     await state.clear()
     text = (message.text or "").strip()
     if not text:
-        await message.answer(_lex("empty_text"), reply_markup=back_to_device_kb())
+        await _replace_user_card(
+            message, _lex("empty_text"), reply_markup=back_to_device_kb()
+        )
         return
-    if publish("sound", text=text):
-        await message.answer(
-            f"✅ Звук отправлен на <b>{target_label(SESSION['target'])}</b>.",
+    target = form_data.get("command_target")
+    if not target:
+        await _replace_user_card(
+            message, _lex("target_required"), reply_markup=back_to_device_kb()
+        )
+        return
+    if target == "all":
+        await _replace_user_card(
+            message, _lex("single_device_only"), reply_markup=back_to_device_kb()
+        )
+        return
+    if publish("sound", _target=target, text=text):
+        await _replace_user_card(
+            message,
+            _lex_html("sound_request_sent", device=target_label(target)),
             reply_markup=back_to_device_kb(),
         )
     else:
-        await message.answer(
-            _lex("mqtt_disconnected"),
-            reply_markup=back_to_device_kb(),
+        await _replace_user_card(
+            message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb()
         )
 
 @router.message(F.from_user.id != ADMIN_ID)
@@ -2528,12 +2625,19 @@ async def on_server_terminal(cq: CallbackQuery, state: FSMContext):
 async def on_server_terminal_command(message: Message, state: FSMContext):
     await state.clear()
     command = (message.text or "").strip()
+    if not command:
+        await _replace_user_card(
+            message, _lex("generic_empty_command"),
+            reply_markup=server_menu(message.from_user.id),
+        )
+        return
     result = await asyncio.to_thread(server_ops.run_terminal, command)
     access_store.append_audit(
         "server_terminal", actor_id=message.from_user.id,
         detail=f"command={command[:32]!r}; ok={result.ok}",
     )
-    await message.answer(
+    await _replace_user_card(
+        message,
         f"<b>{html.escape(_lex('server_terminal_result'))}</b>\n"
         f"<pre>{html.escape(result.text[-3600:])}</pre>",
         reply_markup=server_menu(message.from_user.id),
@@ -3234,37 +3338,54 @@ async def on_back_to_device(cq: CallbackQuery):
 
 @router.callback_query(AdminFilter(), F.data == "cmd:url")
 async def on_cmd_url(cq: CallbackQuery, state: FSMContext):
-    if not SESSION.get("target"):
+    target = SESSION.get("target")
+    if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await state.set_state(Form.wait_url)
-    await cq.message.answer(
-        "🔗 Отправьте ссылку, например:\n<code>https://example.com</code>",
+    await state.update_data(command_target=target)
+    await _replace_callback_message(
+        cq,
+        _lex("url_prompt"),
         reply_markup=back_to_device_kb(),
     )
     await cq.answer()
 
 @router.callback_query(AdminFilter(), F.data == "cmd:text")
 async def on_cmd_text(cq: CallbackQuery, state: FSMContext):
-    if not SESSION.get("target"):
+    target = SESSION.get("target")
+    if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await state.set_state(Form.wait_text)
-    await cq.message.answer(
-        "📝 Отправьте текст — он появится на экране устройства.",
+    await state.update_data(command_target=target)
+    await _replace_callback_message(
+        cq,
+        _lex("notify_text_prompt"),
         reply_markup=back_to_device_kb(),
     )
     await cq.answer()
 
 @router.callback_query(AdminFilter(), F.data == "cmd:sound")
 async def on_cmd_sound(cq: CallbackQuery, state: FSMContext):
-    if not SESSION.get("target"):
+    target = SESSION.get("target")
+    if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await state.set_state(Form.wait_sound)
-    await cq.message.answer(
-        "🔊 Отправьте текст для озвучки.\n"
-        "Отправьте <code>beep</code> — прозвучит системный сигнал.",
+    await state.update_data(command_target=target)
+    await _replace_callback_message(
+        cq,
+        _lex("sound_prompt"),
         reply_markup=back_to_device_kb(),
     )
     await cq.answer()
@@ -4125,11 +4246,17 @@ async def on_mic_dur(cq: CallbackQuery):
 
 @router.callback_query(AdminFilter(), F.data == "cmd:clipset")
 async def on_cmd_clipset(cq: CallbackQuery, state: FSMContext):
-    if not SESSION.get("target"):
+    target = SESSION.get("target")
+    if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await state.set_state(Form.wait_clipset)
-    await cq.message.answer(
+    await state.update_data(command_target=target)
+    await _replace_callback_message(
+        cq,
         "📥 Отправь текст — он попадёт в буфер обмена устройства.",
         reply_markup=back_to_device_kb(),
     )
@@ -4138,15 +4265,23 @@ async def on_cmd_clipset(cq: CallbackQuery, state: FSMContext):
 
 @router.message(AdminFilter(), Form.wait_clipset)
 async def on_clipset_input(message: Message, state: FSMContext):
+    form_data = await state.get_data()
     await state.clear()
     text = (message.text or "").strip()
+    target = form_data.get("command_target")
     if not text:
-        await message.answer(_lex("empty_text"), reply_markup=back_to_device_kb())
+        await _replace_user_card(message, _lex("empty_text"), reply_markup=back_to_device_kb())
         return
-    if publish("clipboard_set", text=text):
-        await message.answer("📥 Текст записан в буфер обмена устройства.")
+    if not target:
+        await _replace_user_card(message, _lex("target_required"), reply_markup=back_to_device_kb())
+        return
+    if target == "all":
+        await _replace_user_card(message, _lex("single_device_only"), reply_markup=back_to_device_kb())
+        return
+    if publish("clipboard_set", _target=target, text=text):
+        await _replace_user_card(message, f"📥 Запрос записи текста в буфер отправлен на <b>{html.escape(target_label(target))}</b>.", reply_markup=back_to_device_kb())
     else:
-        await message.answer(_lex("mqtt_disconnected"))
+        await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
 
 
 # ---------- События (уведомления) ----------
@@ -4244,7 +4379,8 @@ async def on_ev_admins(cq: CallbackQuery):
 @router.callback_query(AdminFilter(), F.data == "adm:add")
 async def on_adm_add(cq: CallbackQuery, state: FSMContext):
     await state.set_state(Form.wait_admin)
-    await cq.message.answer(
+    await _replace_callback_message(
+        cq,
         "➕ Пришлите Telegram ID нового администратора.\n"
         "Узнать свой ID: @userinfobot. Пример: <code>123456789</code>",
         reply_markup=back_to_device_kb(),
@@ -4257,7 +4393,8 @@ async def on_admin_input(message: Message, state: FSMContext):
     await state.clear()
     raw = (message.text or "").strip()
     if not raw.isdigit():
-        await message.answer(
+        await _replace_user_card(
+            message,
             "⚠️ ID должен быть числом.", reply_markup=back_to_device_kb()
         )
         return
@@ -4269,12 +4406,14 @@ async def on_admin_input(message: Message, state: FSMContext):
         label = f"id{uid}"
     if bot_settings.add_admin(uid):
         audit("admin_added", user_id=uid)
-        await message.answer(
+        await _replace_user_card(
+            message,
             f"✅ <b>{html.escape(str(label))}</b> добавлен администратором.",
             reply_markup=admins_menu(),
         )
     else:
-        await message.answer(
+        await _replace_user_card(
+            message,
             "ℹ️ Уже есть в списке.", reply_markup=admins_menu()
         )
 
@@ -4411,9 +4550,18 @@ async def on_confirm_action(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data == "shell:ok")
 async def on_shell_ok(cq: CallbackQuery, state: FSMContext):
+    target = SESSION.get("target")
+    if not target:
+        await cq.answer(_lex("target_required"), show_alert=True)
+        return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await state.set_state(Form.wait_shell)
-    await cq.message.answer(
-        "💻 Отправьте команду терминала.\nНапример: <code>whoami</code> или <code>dir</code>",
+    await state.update_data(command_target=target)
+    await _replace_callback_message(
+        cq,
+        _lex("shell_prompt"),
         reply_markup=back_to_device_kb(),
     )
     await cq.answer()
@@ -4421,9 +4569,18 @@ async def on_shell_ok(cq: CallbackQuery, state: FSMContext):
 
 @router.callback_query(AdminFilter(), F.data == "openapp:ok")
 async def on_openapp_ok(cq: CallbackQuery, state: FSMContext):
+    target = SESSION.get("target")
+    if not target:
+        await cq.answer(_lex("target_required"), show_alert=True)
+        return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await state.set_state(Form.wait_open_app)
-    await cq.message.answer(
-        "🚀 Отправьте название программы или путь к файлу.\nНапример: <code>calc</code>",
+    await state.update_data(command_target=target)
+    await _replace_callback_message(
+        cq,
+        _lex("open_app_prompt"),
         reply_markup=back_to_device_kb(),
     )
     await cq.answer()
@@ -4824,8 +4981,12 @@ async def on_fun_type(cq: CallbackQuery, state: FSMContext):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await state.set_state(Form.wait_fun_text)
-    await cq.message.answer("⌨️ Введите текст, который агент должен напечатать на клавиатуре ПК:", reply_markup=back_to_device_kb())
+    await state.update_data(command_target=target)
+    await _replace_callback_message(cq, "⌨️ Введите текст для набора на выбранном устройстве:", reply_markup=back_to_device_kb())
     await cq.answer()
 
 
@@ -4835,8 +4996,12 @@ async def on_fun_hotkey(cq: CallbackQuery, state: FSMContext):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await state.set_state(Form.wait_fun_hotkey)
-    await cq.message.answer("⌘ Введите сочетание клавиш через плюс (например: <code>ctrl+c</code>, <code>cmd+space</code>, <code>alt+tab</code>):", reply_markup=back_to_device_kb())
+    await state.update_data(command_target=target)
+    await _replace_callback_message(cq, "⌘ Введите сочетание клавиш через плюс (например: <code>ctrl+c</code>, <code>cmd+space</code>, <code>alt+tab</code>):", reply_markup=back_to_device_kb())
     await cq.answer()
 
 
@@ -4846,8 +5011,12 @@ async def on_fun_wallpaper(cq: CallbackQuery, state: FSMContext):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await state.set_state(Form.wait_fun_wallpaper)
-    await cq.message.answer("🖼 Отправьте прямую ссылку на картинку (.jpg или .png) для установки на рабочий стол:", reply_markup=back_to_device_kb())
+    await state.update_data(command_target=target)
+    await _replace_callback_message(cq, "🖼 Отправьте прямую ссылку на картинку (.jpg или .png) для установки на рабочий стол:", reply_markup=back_to_device_kb())
     await cq.answer()
 
 
@@ -4950,51 +5119,72 @@ async def on_fun_spam(cq: CallbackQuery, state: FSMContext):
 
 @router.message(AdminFilter(), Form.wait_fun_text)
 async def on_fun_text_input(message: Message, state: FSMContext):
+    form_data = await state.get_data()
     await state.clear()
-    target = SESSION.get("target")
+    target = form_data.get("command_target")
     text = (message.text or "").strip()
-    if not target or not text:
-        await message.answer(_lex("target_and_text_required"), reply_markup=back_to_device_kb())
+    if not text:
+        await _replace_user_card(message, _lex("target_and_text_required"), reply_markup=back_to_device_kb())
         return
-    if publish("type_text", text=text):
-        await message.answer(f"⌨️ Текст отправлен на ввод: <b>{target_label(target)}</b>", reply_markup=back_to_device_kb())
+    if not target:
+        await _replace_user_card(message, _lex("target_required"), reply_markup=back_to_device_kb())
+        return
+    if target == "all":
+        await _replace_user_card(message, _lex("single_device_only"), reply_markup=back_to_device_kb())
+        return
+    if publish("type_text", _target=target, text=text):
+        await _replace_user_card(message, f"⌨️ Запрос набора текста отправлен на <b>{html.escape(target_label(target))}</b>.", reply_markup=back_to_device_kb())
     else:
-        await message.answer(_lex("mqtt_publish_failed"), reply_markup=back_to_device_kb())
+        await _replace_user_card(message, _lex("mqtt_publish_failed"), reply_markup=back_to_device_kb())
 
 
 @router.message(AdminFilter(), Form.wait_fun_hotkey)
 async def on_fun_hotkey_input(message: Message, state: FSMContext):
+    form_data = await state.get_data()
     await state.clear()
-    target = SESSION.get("target")
+    target = form_data.get("command_target")
     keys = (message.text or "").strip().lower()
-    if not target or not keys:
-        await message.answer("⚠️ Пустое сочетание или цель не выбрана.", reply_markup=back_to_device_kb())
+    if not keys:
+        await _replace_user_card(message, "⚠️ Пустое сочетание клавиш.", reply_markup=back_to_device_kb())
         return
-    if publish("hotkey", keys=keys):
-        await message.answer(f"⌘ Сочетание <code>{html.escape(keys)}</code> нажато на <b>{target_label(target)}</b>", reply_markup=back_to_device_kb())
+    if not target:
+        await _replace_user_card(message, _lex("target_required"), reply_markup=back_to_device_kb())
+        return
+    if target == "all":
+        await _replace_user_card(message, _lex("single_device_only"), reply_markup=back_to_device_kb())
+        return
+    if publish("hotkey", _target=target, keys=keys):
+        await _replace_user_card(message, f"⌘ Запрос сочетания <code>{html.escape(keys)}</code> отправлен на <b>{html.escape(target_label(target))}</b>.", reply_markup=back_to_device_kb())
     else:
-        await message.answer(_lex("mqtt_publish_failed"), reply_markup=back_to_device_kb())
+        await _replace_user_card(message, _lex("mqtt_publish_failed"), reply_markup=back_to_device_kb())
 
 
 @router.message(AdminFilter(), Form.wait_fun_wallpaper)
 async def on_fun_wallpaper_input(message: Message, state: FSMContext):
+    form_data = await state.get_data()
     await state.clear()
-    target = SESSION.get("target")
+    target = form_data.get("command_target")
     url = (message.text or "").strip()
-    if not target or not url:
-        await message.answer("⚠️ Ссылка пуста или цель не выбрана.", reply_markup=back_to_device_kb())
+    if not url:
+        await _replace_user_card(message, "⚠️ Ссылка пуста.", reply_markup=back_to_device_kb())
+        return
+    if not target:
+        await _replace_user_card(message, _lex("target_required"), reply_markup=back_to_device_kb())
+        return
+    if target == "all":
+        await _replace_user_card(message, _lex("single_device_only"), reply_markup=back_to_device_kb())
         return
     fun_text_collector.reset()
-    if not publish("wallpaper_set", url=url):
-        await message.answer(_lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
+    if not publish("wallpaper_set", _target=target, url=url):
+        await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
         return
-    await message.answer("⏳ Устанавливаю обои рабочего стола...")
+    await _replace_user_card(message, f"⏳ Запрос установки обоев отправлен на <b>{html.escape(target_label(target))}</b>; жду ответ устройства…", reply_markup=back_to_device_kb())
     result = await fun_text_collector.wait(20.0)
     if result and result.get("ok"):
-        await message.answer(f"🖼 Обои успешно обновлены на <b>{target_label(target)}</b>!", reply_markup=back_to_device_kb())
+        await _replace_user_card(message, f"🖼 Обои обновлены на <b>{html.escape(target_label(target))}</b>.", reply_markup=back_to_device_kb())
     else:
         err = (result or {}).get("error") or "Устройство не ответило вовремя"
-        await message.answer(f"⚠️ Ошибка смены обоев: {html.escape(err)}", reply_markup=back_to_device_kb())
+        await _replace_user_card(message, f"⚠️ Ошибка смены обоев: {html.escape(str(err))}", reply_markup=back_to_device_kb())
 
 
 @router.callback_query(AdminFilter(), F.data == "menu:wallpaper")
@@ -5264,34 +5454,49 @@ async def on_cmd_brightness(cq: CallbackQuery, state: FSMContext):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await state.set_state(Form.wait_brightness)
-    await cq.message.answer("☀️ Введите уровень яркости экрана в процентах (0–100):", reply_markup=back_to_device_kb())
+    await state.update_data(command_target=target)
+    await _replace_callback_message(cq, "☀️ Введите уровень яркости экрана в процентах (0–100):", reply_markup=back_to_device_kb())
     await cq.answer()
 
 
 @router.message(AdminFilter(), Form.wait_brightness)
 async def on_brightness_input(message: Message, state: FSMContext):
+    form_data = await state.get_data()
     await state.clear()
-    target = SESSION.get("target")
+    target = form_data.get("command_target")
+    if not target:
+        await _replace_user_card(message, _lex("target_required"), reply_markup=back_to_device_kb())
+        return
+    if target == "all":
+        await _replace_user_card(message, _lex("single_device_only"), reply_markup=back_to_device_kb())
+        return
     try:
         lvl = int((message.text or "").strip())
         lvl = max(0, min(100, lvl))
     except ValueError:
-        await message.answer("⚠️ Введите число от 0 до 100.", reply_markup=back_to_device_kb())
+        await _replace_user_card(message, "⚠️ Введите целое число от 0 до 100.", reply_markup=back_to_device_kb())
         return
 
-    status_msg = await message.answer(
+    await _replace_user_card(
+        message,
         f"⏳ <b>☀️ Яркость экрана</b> · <b>{html.escape(target_label(target))}</b>\n<code>[■□□□□] 25% Настройка яркости {lvl}%...</code>",
         reply_markup=back_to_device_kb(),
     )
-    sent, command_id = publish_tracked("display_brightness", level=lvl)
+    sent, command_id = publish_tracked("display_brightness", _target=target, level=lvl)
     if not sent:
-        await status_msg.edit_text(_lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
+        await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
         return
     result = await fun_text_collector.wait_for(target, "display_brightness", timeout=8.0, command_id=command_id)
-    txt = (result or {}).get("text") or f"☀️ Яркость экрана установлена на {lvl}%"
+    txt = (result or {}).get("text") or (result or {}).get("error") or (
+        _lex("device_timeout", seconds="8") if result is None else _lex("device_no_response")
+    )
     try:
-        await status_msg.edit_text(
+        await _replace_user_card(
+            message,
             _lex_html(
                 "brightness_result",
                 device=target_label(target),
@@ -5300,10 +5505,7 @@ async def on_brightness_input(message: Message, state: FSMContext):
             reply_markup=back_to_device_kb(),
         )
     except Exception:
-        await message.answer(
-            f"☀️ <b>Яркость ({html.escape(target_label(target))}):</b>\n<pre>{html.escape(str(txt)[:3800])}</pre>",
-            reply_markup=back_to_device_kb(),
-        )
+        log.exception("Не удалось обновить карточку результата яркости")
 
 
 @router.callback_query(AdminFilter(), F.data == "cmd:nightlight")
@@ -5628,23 +5830,34 @@ async def on_cmd_prockillname(cq: CallbackQuery, state: FSMContext):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await state.set_state(Form.wait_prockill)
-    await cq.message.answer("🔪 Введите имя процесса для завершения (например: <code>chrome.exe</code> или <code>Discord</code>):", reply_markup=back_to_device_kb())
+    await state.update_data(command_target=target)
+    await _replace_callback_message(cq, "🔪 Введите имя процесса для завершения (например: <code>chrome.exe</code> или <code>Discord</code>):", reply_markup=back_to_device_kb())
     await cq.answer()
 
 
 @router.message(AdminFilter(), Form.wait_prockill)
 async def on_prockill_input(message: Message, state: FSMContext):
+    form_data = await state.get_data()
     await state.clear()
-    target = SESSION.get("target")
+    target = form_data.get("command_target")
     name = (message.text or "").strip()
-    if not target or not name:
-        await message.answer("⚠️ Имя процесса пусто.", reply_markup=back_to_device_kb())
+    if not name:
+        await _replace_user_card(message, "⚠️ Имя процесса пустое.", reply_markup=back_to_device_kb())
         return
-    if publish("proc_kill_name", name=name):
-        await message.answer(f"🔪 Команда завершения процесса <code>{html.escape(name)}</code> отправлена на <b>{target_label(target)}</b>!", reply_markup=back_to_device_kb())
+    if not target:
+        await _replace_user_card(message, _lex("target_required"), reply_markup=back_to_device_kb())
+        return
+    if target == "all":
+        await _replace_user_card(message, _lex("single_device_only"), reply_markup=back_to_device_kb())
+        return
+    if publish("proc_kill_name", _target=target, name=name):
+        await _replace_user_card(message, f"🔪 Запрос завершения процесса <code>{html.escape(name)}</code> отправлен на <b>{html.escape(target_label(target))}</b>.", reply_markup=back_to_device_kb())
     else:
-        await message.answer(_lex("mqtt_publish_failed"), reply_markup=back_to_device_kb())
+        await _replace_user_card(message, _lex("mqtt_publish_failed"), reply_markup=back_to_device_kb())
 
 
 # =====================================================================

@@ -64,6 +64,40 @@ def test_common_command_feedback_has_six_distinct_xlex_voices():
     assert all("15" in xlex.render("device_timeout", style, seconds="15") for style in xlex.STYLES)
 
 
+def test_text_command_flow_copy_has_six_distinct_voices_and_truthful_delivery():
+    keys = (
+        "shell_prompt",
+        "open_app_prompt",
+        "url_prompt",
+        "notify_text_prompt",
+        "sound_prompt",
+    )
+    for key in keys:
+        phrases = [xlex.render(key, style) for style in xlex.STYLES]
+        assert len(set(phrases)) == len(xlex.STYLES), key
+
+    arguments = {
+        "device": "Test <device>",
+        "url": "https://example.com/?a=1&b=2",
+        "app": "Calculator <test>",
+    }
+    result_keys = (
+        "url_request_sent",
+        "notify_text_request_sent",
+        "sound_request_sent",
+        "app_launch_request_sent",
+    )
+    for key in result_keys:
+        phrases = [xlex.render(key, style, **arguments) for style in xlex.STYLES]
+        assert len(set(phrases)) == len(xlex.STYLES), key
+
+    launch = xlex.render("app_launch_request_sent", "xadam", **arguments)
+    assert "подтверждение устройства" in launch
+    safe_url = bot._lex_html("url_request_sent", **arguments)
+    assert "&amp;" in safe_url
+    assert "<device>" not in safe_url
+
+
 def test_file_workflow_copy_has_six_complete_distinct_voices(monkeypatch):
     keys = (
         "files_menu_title", "files_menu_description", "files_prompt_list",
