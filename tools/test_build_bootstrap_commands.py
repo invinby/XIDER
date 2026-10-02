@@ -51,7 +51,11 @@ def test_quickstart_bootstrap_source_is_pinned_to_the_exact_git_commit():
         ["git", "show", f"{CURRENT_COMMIT}:deploy/bootstrap.ps1"], cwd=ROOT
     )
     assert "ComputeHash($f)" in text
-    assert "StandardInput.BaseStream.Write" in text
+    assert "$m=Join-Path $d 'message'" in text
+    assert "WriteAllBytes($m,$mb)" in text
+    assert "pushd \"%~dp0\"" in text
+    assert "< \"message\"" in text
+    assert "StandardInput.BaseStream.Write" not in text
     assert "StandardInputEncoding" not in text
 
     # This checkout has mixed line endings in the PowerShell file on Windows;
