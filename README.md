@@ -1,8 +1,8 @@
-# XIDER · TARPED 4.1.0 — управление устройствами через Telegram
+# XIDER · TARPED 4.1.1 — управление устройствами через Telegram
 
-> Source version: 4.1.0. Published installable versions are listed in
+> Source version: 4.1.1. Published installable versions are listed in
 > [GitHub Releases](https://github.com/invinby/XIDER/releases); a source version
-> is not proof of a successful device installation. / Версия исходников: 4.1.0.
+> is not proof of a successful device installation. / Версия исходников: 4.1.1.
 > Опубликованные пакеты — в Releases. План, ограничения и незавершённая приёмка:
 > [TARPED](docs/TARPED.md), [подготовка Mac](docs/MAC-REMOTE-UPDATES.md).
 
@@ -29,6 +29,10 @@ bootstrap, привязанный к точному тегу и commit. Треб
 на самом устройстве. / Both entry points verify a publisher signature before
 running a commit-pinned bootstrap. OS permissions still require local consent.
 
+В Telegram ручная установка доступна владельцу: **Устройства → Установка · одна команда**,
+затем выберите Windows или macOS и скопируйте одну строку в терминал устройства.
+The same two copy-ready commands are available in the owner's device list in the bot.
+
 <p align="center">
   <img src="XDicon.png" alt="XIDER Logo" width="128" height="128" />
 </p>
@@ -49,8 +53,9 @@ running a commit-pinned bootstrap. OS permissions still require local consent.
 
 **Guard Keeper** is the platform supervisor for Windows and macOS. It reports
 worker status and can start, stop, restart, or recover the agent from the
-owner-only Telegram panel. Version 4.1.0 adds signed macOS file recovery,
-serialized source updates, and a lock-safe restart. Deliberate stop/uninstall
+owner-only Telegram panel. Version 4.1.0 added signed macOS file recovery,
+serialized source updates, and a lock-safe restart; 4.1.1 adds a copy-ready
+one-command Windows/macOS installer picker in Telegram. Deliberate stop/uninstall
 remains effective; Guard Keeper does not bypass local OS controls or access
 camera, microphone, screen, or location without the required OS permission.
 

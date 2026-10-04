@@ -1,5 +1,25 @@
 # XIDER release history
 
+## X4.1.1-TARPED+20261005 — X-DOCK manual setup
+
+### English
+
+- Added an owner-only manual setup button to the Telegram device list.
+- The OS picker returns one copy-ready signed installer command for Windows or
+  macOS and keeps the flow in the current bot card.
+- Includes the callback privacy, updater recovery, and Guard Keeper stability
+  fixes validated in the TARPED release candidate.
+- Aligned the bot, Windows agent, and macOS agent version strings at 4.1.1.
+
+### Русский
+
+- В список устройств добавлена доступная только владельцу кнопка ручной установки.
+- После выбора Windows или macOS бот показывает одну готовую к копированию
+  команду подписанного установщика; переходы остаются в текущей карточке.
+- В релиз включены проверенные исправления приватности callback-ов, восстановления
+  обновлятора и стабильности Guard Keeper из кандидата TARPED.
+- Версии бота и обоих агентов синхронизированы на 4.1.1.
+
 ## X4.0.0-TARPED+20260927 — TARPED foundation
 
 Deployed to the XIDER VPS on 2026-09-27. Release artifacts are built from the

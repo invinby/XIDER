@@ -914,14 +914,58 @@ def devices_menu(user_id: int | None = None):
         )
     if is_owner:
         kb.button(text=_lex("devices_add_button"), callback_data="devmg:manualadd", style="primary")
+        kb.button(text=_lex("manual_install_button"), callback_data="install:manual", style="success")
         kb.button(text=_lex("devices_blocked_button"), callback_data="devmg:blocked", style="danger")
         kb.button(text=_lex("devices_clear_button"), callback_data="devmg:clear_all", style="danger")
     kb.button(text=_nav("refresh"), callback_data="menu:devices", style="success")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     dev_count = len(devs)
-    adjust_pattern = [1] * dev_count + ([2, 1, 2] if is_owner else [1, 1])
+    adjust_pattern = [1] * dev_count + ([2, 2, 2] if is_owner else [1, 1])
     kb.adjust(*adjust_pattern)
     return kb.as_markup()
+
+
+def manual_install_os_keyboard(*, selected_os: str | None = None):
+    """Owner-only OS picker for copyable one-line agent installation commands."""
+    kb = InlineKeyboardBuilder()
+    if selected_os != "windows":
+        kb.button(
+            text=_lex("manual_install_windows"),
+            callback_data="install:windows",
+            style="primary",
+        )
+    if selected_os != "macos":
+        kb.button(
+            text=_lex("manual_install_macos"),
+            callback_data="install:macos",
+            style="primary",
+        )
+    kb.button(text=_lex("manual_install_back"), callback_data="menu:devices", style="primary")
+    kb.adjust(2, 1)
+    return kb.as_markup()
+
+
+def manual_install_command_screen(selected_os: str) -> str:
+    """Render the published, signed one-line installer for the selected OS."""
+    commands = {
+        "windows": (
+            "manual_install_windows_title",
+            "irm https://invinby.github.io/XIDER/win.ps1 | iex",
+        ),
+        "macos": (
+            "manual_install_macos_title",
+            "curl -fsSL https://invinby.github.io/XIDER/mac | bash",
+        ),
+    }
+    item = commands.get(selected_os)
+    if item is None:
+        raise ValueError("Unsupported XIDER installer OS")
+    title_key, command = item
+    return (
+        f"<b>{_lex(title_key)}</b>\n\n"
+        f"<code>{html.escape(command)}</code>\n\n"
+        f"{_lex('manual_install_copy_note')}"
+    )
 
 
 def device_menu(device_id: str, user_id: int | None = None):
@@ -3512,6 +3556,28 @@ async def on_menu_devices(cq: CallbackQuery):
         else:
             text = "💻 Вам пока не выдан доступ к устройствам. Обратитесь к владельцу."
     await _replace_callback_message(cq, text, reply_markup=devices_menu(cq.from_user.id))
+    await cq.answer()
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("install:"))
+async def on_manual_install(cq: CallbackQuery):
+    selected = cq.data.split(":", 1)[1]
+    if selected == "manual":
+        await _replace_callback_message(
+            cq,
+            _lex("manual_install_pick_os"),
+            reply_markup=manual_install_os_keyboard(),
+        )
+        await cq.answer()
+        return
+    if selected not in {"windows", "macos"}:
+        await cq.answer(_lex("versions_bad_request"), show_alert=True)
+        return
+    await _replace_callback_message(
+        cq,
+        manual_install_command_screen(selected),
+        reply_markup=manual_install_os_keyboard(selected_os=selected),
+    )
     await cq.answer()
 
 @router.callback_query(OwnerFilter(), F.data == "menu:target")

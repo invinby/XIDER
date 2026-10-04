@@ -1497,6 +1497,111 @@ def test_device_menu_has_nine_category_buttons(monkeypatch):
     assert NINE_CATEGORIES.issubset(set(cbs))
 
 
+def test_manual_install_is_owner_only_and_uses_published_one_line_commands(monkeypatch):
+    from types import SimpleNamespace
+
+    _setup(monkeypatch, {})
+    monkeypatch.setattr(
+        bot, "get_user_role",
+        lambda user_id: bot.Role.OWNER if user_id == 100 else bot.Role.USER,
+    )
+    assert "install:manual" in _callback_data(bot.devices_menu(100))
+    assert "install:manual" not in _callback_data(bot.devices_menu(200))
+
+    expected = {
+        "windows": "irm https://invinby.github.io/XIDER/win.ps1 | iex",
+        "macos": "curl -fsSL https://invinby.github.io/XIDER/mac | bash",
+    }
+    for selected_os, command in expected.items():
+        screen = bot.manual_install_command_screen(selected_os)
+        assert f"<code>{command}</code>" in screen
+        assert bot._lex("manual_install_copy_note") in screen
+        buttons = bot.manual_install_os_keyboard(selected_os=selected_os)
+        callbacks = _callback_data(buttons)
+        assert "menu:devices" in callbacks
+        assert f"install:{selected_os}" not in callbacks
+
+    with pytest.raises(ValueError, match="Unsupported XIDER installer OS"):
+        bot.manual_install_command_screen("linux")
+
+
+def test_manual_install_copy_has_complete_six_voice_xlex(monkeypatch):
+    keys = (
+        "manual_install_button",
+        "manual_install_pick_os",
+        "manual_install_windows",
+        "manual_install_macos",
+        "manual_install_windows_title",
+        "manual_install_macos_title",
+        "manual_install_copy_note",
+        "manual_install_back",
+    )
+    for key in keys:
+        rendered = {style: bot.xlex.render(key, style) for style in bot.xlex.STYLES}
+        assert len(set(rendered.values())) == len(bot.xlex.STYLES), key
+
+    callbacks_by_style = {}
+    for style in bot.xlex.STYLES:
+        monkeypatch.setattr(
+            bot.bot_settings,
+            "get",
+            lambda key, default=None, selected=style: selected if key == "ui_style" else default,
+        )
+        keyboard = bot.manual_install_os_keyboard()
+        callbacks_by_style[style] = _callback_data(keyboard)
+        assert all(
+            len(button.text.encode("utf-16-le")) // 2 <= 64
+            for row in keyboard.inline_keyboard
+            for button in row
+        )
+    assert all(callbacks == callbacks_by_style[bot.xlex.STYLES[0]] for callbacks in callbacks_by_style.values())
+
+
+@pytest.mark.parametrize(
+    ("callback_data", "expected_text", "expected_callback"),
+    [
+        (
+            "install:windows",
+            "irm https://invinby.github.io/XIDER/win.ps1 | iex",
+            "install:macos",
+        ),
+        (
+            "install:macos",
+            "curl -fsSL https://invinby.github.io/XIDER/mac | bash",
+            "install:windows",
+        ),
+        ("install:manual", "__picker__", "install:windows"),
+    ],
+)
+def test_manual_install_callback_edits_the_active_card(
+    monkeypatch, callback_data, expected_text, expected_callback
+):
+    from types import SimpleNamespace
+
+    edits = []
+    answers = []
+
+    class FakeCallback:
+        data = callback_data
+        from_user = SimpleNamespace(id=bot.ADMIN_ID)
+
+        async def answer(self, *args, **kwargs):
+            answers.append((args, kwargs))
+
+    async def replace(_cq, text, reply_markup=None):
+        edits.append((text, reply_markup))
+
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    asyncio.run(bot.on_manual_install(FakeCallback()))
+
+    assert len(edits) == 1
+    if expected_text == "__picker__":
+        expected_text = bot._lex("manual_install_pick_os")
+    assert expected_text in edits[0][0]
+    assert expected_callback in _callback_data(edits[0][1])
+    assert answers == [((), {})]
+
+
 def test_primary_navigation_is_grouped_into_compact_dashboard_rows(monkeypatch):
     _setup(monkeypatch, {"dev1": {"name": "Dev"}})
     main_rows = [
