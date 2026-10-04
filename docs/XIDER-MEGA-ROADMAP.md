@@ -2348,8 +2348,10 @@ Go и Rust по упаковке, сопровождению, диагности
   расхождений и неразобранных dynamic action sites. Всё перечисленное —
   локальные тесты/статическая проверка, не Telegram/MQTT или физический девайс.
 - HEAD — `4653b52`; унификация карточек и её тесты закоммичены и опубликованы
-  в ветку `origin/fix/windows-powershell5-bootstrap-signature`. PR не создавался;
-  PR-проверки, tag/release и production VPS в этой проверке не запускались.
+  в ветку `origin/fix/windows-powershell5-bootstrap-signature`. PR
+  [#3](https://github.com/invinby/XIDER/pull/3) открыт в `main`; GitHub CI
+  прошёл: Unix installers, pytest на Python 3.11 и 3.12. Release/tag и
+  production VPS по-прежнему не запускались.
 - При запуске macOS pytest обязательно использовать cwd `XGENT-MCS`; запуск
   этой подпапки из корня репозитория не разрешает её локальный модуль `xgent_mcs`
   и даёт ошибки сбора тестов. Официальный runner создаёт изолированный процесс
