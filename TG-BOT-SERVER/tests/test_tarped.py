@@ -380,6 +380,9 @@ def test_style_switch_previews_saved_copy_and_selected_main_menu(monkeypatch):
     monkeypatch.setattr(bot, "get_user_role", lambda user_id: bot.Role.OWNER)
 
     class Message:
+        chat = SimpleNamespace(id=bot.ADMIN_ID)
+        message_id = 123
+
         async def edit_text(self, text, *, reply_markup):
             shown["text"] = text
             shown["markup"] = reply_markup
@@ -392,6 +395,7 @@ def test_style_switch_previews_saved_copy_and_selected_main_menu(monkeypatch):
         async def answer(self, *args, **kwargs):
             pass
 
+    monkeypatch.setattr(bot.ui_cards, "set_card", lambda *args, **kwargs: None)
     asyncio.run(bot.on_admin_style_set(Callback()))
     assert selected["style"] == "xpikmi"
     assert "Мой сохранённый текст" in shown["text"]

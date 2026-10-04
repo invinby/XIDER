@@ -1631,11 +1631,15 @@ def test_power_confirmation_dispatches_action_payload_without_duplicate_callback
             return None
 
     class FakeMessage:
+        chat = SimpleNamespace(id=10)
+        message_id = 30
+
         async def edit_text(self, text, **kwargs):
             edits.append((text, kwargs))
 
     class FakeCallback:
         data = "power_confirm:reboot"
+        from_user = SimpleNamespace(id=20)
         message = FakeMessage()
 
         async def answer(self, *args, **kwargs):
@@ -1651,6 +1655,7 @@ def test_power_confirmation_dispatches_action_payload_without_duplicate_callback
     monkeypatch.setattr(bot, "HISTORY", {})
     monkeypatch.setattr(bot.transport, "publish_command", fake_transport_publish)
     monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
+    monkeypatch.setattr(bot.ui_cards, "set_card", lambda *_args: None)
 
     asyncio.run(bot.on_power_confirm(FakeCallback()))
 
@@ -3069,6 +3074,78 @@ def test_media_card_disables_old_keyboard_if_delete_fails(monkeypatch):
         ("disable_markup", 10, 30),
         ("store", 31),
     ]
+
+
+def test_callback_result_media_replaces_text_card_and_stores_media_id(monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+
+    class FakeBot:
+        async def delete_message(self, chat_id, message_id):
+            calls.append(("delete", chat_id, message_id))
+
+    class FakeMessage:
+        chat = SimpleNamespace(id=10)
+        message_id = 30
+
+    class FakeCallback:
+        from_user = SimpleNamespace(id=20)
+        message = FakeMessage()
+
+    async def send_media(chat_id, **kwargs):
+        calls.append(("send", chat_id, kwargs["voice"], kwargs["reply_markup"]))
+        return SimpleNamespace(chat=SimpleNamespace(id=chat_id), message_id=31)
+
+    monkeypatch.setattr(bot, "bot", FakeBot())
+    monkeypatch.setattr(bot.ui_cards, "set_card", lambda *args: calls.append(("store", args[2])))
+    audio = object()
+
+    result = asyncio.run(
+        bot._replace_callback_with_media(FakeCallback(), send_media, voice=audio)
+    )
+
+    assert result.message_id == 31
+    assert calls[0] == ("send", 20, audio, bot.back_to_device_kb())
+    assert calls[1:] == [("delete", 10, 30), ("store", 31)]
+
+
+def test_server_chart_replaces_the_previous_card_with_one_media_card(monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+
+    class FakeBot:
+        async def send_photo(self, chat_id, **kwargs):
+            calls.append(("send", chat_id, kwargs["reply_markup"], kwargs["caption"]))
+            return SimpleNamespace(chat=SimpleNamespace(id=chat_id), message_id=31)
+
+        async def delete_message(self, chat_id, message_id):
+            calls.append(("delete", chat_id, message_id))
+
+    class FakeMessage:
+        chat = SimpleNamespace(id=10)
+        message_id = 30
+
+    class FakeCallback:
+        from_user = SimpleNamespace(id=20)
+        message = FakeMessage()
+
+        async def answer(self, *args, **kwargs):
+            calls.append(("callback_answer",))
+
+    monkeypatch.setattr(bot, "bot", FakeBot())
+    monkeypatch.setattr(bot.server_ops, "metrics", lambda: object())
+    monkeypatch.setattr(bot.server_ops, "render_metrics_chart", lambda snapshot: b"png")
+    monkeypatch.setattr(bot.access_store, "append_audit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(bot.ui_cards, "set_card", lambda *args: calls.append(("store", args[2])))
+
+    asyncio.run(bot.on_server_chart(FakeCallback()))
+
+    assert calls[0][0:2] == ("send", 10)
+    assert calls[1] == ("delete", 10, 30)
+    assert calls[2] == ("store", 31)
+    assert calls[3] == ("callback_answer",)
 
 
 def test_callback_card_replacement_requires_stale_confirmation(monkeypatch):
