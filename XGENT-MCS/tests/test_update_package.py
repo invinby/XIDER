@@ -651,3 +651,141 @@ def test_update_recovery_rejects_a_journal_for_another_install_dir(tmp_path):
         package.recover_interrupted_install(state_path, install)
     assert (install / "xgent_mcs.py").read_text(encoding="utf-8") == "new-agent"
     assert (other / "xgent_mcs.py").exists() is False
+
+
+@pytest.mark.parametrize("attempts", [0, True, "1", 2])
+def test_health_cannot_be_confirmed_before_replacement_start(tmp_path, attempts):
+    install = tmp_path / "install"
+    install.mkdir()
+    backup = tmp_path / package.UPDATE_BACKUP_DIR / "previous"
+    backup.mkdir(parents=True)
+    (backup / "xgent_mcs.py").write_text("old", encoding="utf-8")
+    state_path = tmp_path / package.UPDATE_STATE_NAME
+    package._atomic_write_json(state_path, {
+        "schema": 1, "status": "awaiting_health", "install_dir": str(install),
+        "backup_dir": str(backup), "files": ["xgent_mcs.py"],
+        "existing": ["xgent_mcs.py"], "start_attempts": attempts,
+    })
+
+    assert package.mark_agent_update_healthy(state_path, install) is False
+    assert state_path.exists()
+
+
+def test_recovery_cache_activation_failure_preserves_rollback_journal(tmp_path):
+    install = tmp_path / "install"
+    install.mkdir()
+    backup = tmp_path / package.UPDATE_BACKUP_DIR / "previous"
+    backup.mkdir(parents=True)
+    (backup / "xgent_mcs.py").write_text("old", encoding="utf-8")
+    state_path = tmp_path / package.UPDATE_STATE_NAME
+    package._atomic_write_json(state_path, {
+        "schema": 1, "status": "awaiting_health", "install_dir": str(install),
+        "backup_dir": str(backup), "files": ["xgent_mcs.py"],
+        "existing": ["xgent_mcs.py"], "start_attempts": 1, "recovery_slot": "v4.2.0-" + "a" * 64,
+    })
+
+    def reject_cache(_slot):
+        raise ValueError("damaged recovery cache")
+
+    with pytest.raises(ValueError, match="damaged recovery"):
+        package.mark_agent_update_healthy(state_path, install, activate_recovery=reject_cache)
+    assert state_path.exists()
+    package.rollback_unhealthy_agent(state_path, install)
+    assert (install / "xgent_mcs.py").read_text(encoding="utf-8") == "old"
+
+
+def test_requirements_change_fails_before_any_backup_or_swap(tmp_path):
+    source, install = tmp_path / "stage", tmp_path / "install"
+    source.mkdir()
+    install.mkdir()
+    (source / "requirements.txt").write_text("paho-mqtt>=3\n", encoding="utf-8")
+    (source / "xgent_mcs.py").write_text("new", encoding="utf-8")
+    (install / "requirements.txt").write_text("paho-mqtt>=2,<3\n", encoding="utf-8")
+    (install / "xgent_mcs.py").write_text("old", encoding="utf-8")
+    backup = tmp_path / package.UPDATE_BACKUP_DIR / "attempt"
+
+    with pytest.raises(package.DependencyUpdateRequired, match="requirements.txt"):
+        package.install_agent_files(
+            source, install, backup, ("xgent_mcs.py", "requirements.txt"),
+            transaction_path=tmp_path / package.UPDATE_STATE_NAME,
+        )
+
+    assert (install / "xgent_mcs.py").read_text(encoding="utf-8") == "old"
+    assert not backup.exists()
+    assert not (tmp_path / package.UPDATE_STATE_NAME).exists()
+
+
+def test_cosmetic_requirements_comments_do_not_block_source_update(tmp_path):
+    source, install = tmp_path / "stage", tmp_path / "install"
+    source.mkdir()
+    install.mkdir()
+    (source / "requirements.txt").write_text("# new note\n paho-mqtt>=2,<3 \n\n", encoding="utf-8")
+    (install / "requirements.txt").write_text("paho-mqtt>=2,<3\n# old note\n", encoding="utf-8")
+
+    package.validate_source_update_requirements(source, install)
+
+
+def test_source_update_requires_a_known_installed_dependency_inventory(tmp_path):
+    source, install = tmp_path / "stage", tmp_path / "install"
+    source.mkdir()
+    install.mkdir()
+    (source / "requirements.txt").write_text("paho-mqtt>=2,<3\n", encoding="utf-8")
+
+    with pytest.raises(package.DependencyUpdateRequired, match="текущие зависимости"):
+        package.validate_source_update_requirements(source, install)
+
+
+@pytest.mark.parametrize("previous_slot", [None, "v4.1.0-" + "b" * 64])
+def test_crash_after_cache_activation_restores_previous_selection_on_rollback(tmp_path, previous_slot):
+    source, install = tmp_path / "stage", tmp_path / "install"
+    source.mkdir()
+    install.mkdir()
+    (source / "xgent_mcs.py").write_text("new", encoding="utf-8")
+    (install / "xgent_mcs.py").write_text("old", encoding="utf-8")
+    new_slot = "v4.2.0-" + "a" * 64
+    pointer = tmp_path / "recovery" / "current.json"
+    if previous_slot:
+        package._atomic_write_json(pointer, {"schema": 1, "slot": previous_slot})
+    state_path = tmp_path / package.UPDATE_STATE_NAME
+    package.install_agent_files(
+        source, install, tmp_path / package.UPDATE_BACKUP_DIR / "previous", ("xgent_mcs.py",),
+        transaction_path=state_path, recovery_slot=new_slot,
+    )
+    assert package.prepare_agent_update_start(state_path, install) == "pending"
+
+    def select_cache_then_fail(slot):
+        package._atomic_write_json(pointer, {"schema": 1, "slot": slot})
+        raise OSError("crash after selecting recovery cache")
+
+    with pytest.raises(OSError, match="crash after"):
+        package.mark_agent_update_healthy(state_path, install, activate_recovery=select_cache_then_fail)
+
+    assert json.loads(state_path.read_text(encoding="utf-8"))["recovery_previous_slot"] == previous_slot
+    assert json.loads(pointer.read_text(encoding="utf-8"))["slot"] == new_slot
+    assert package.prepare_agent_update_start(state_path, install) == "rolled_back"
+    assert (install / "xgent_mcs.py").read_text(encoding="utf-8") == "old"
+    if previous_slot:
+        assert json.loads(pointer.read_text(encoding="utf-8"))["slot"] == previous_slot
+    else:
+        assert not pointer.exists()
+    assert not state_path.exists()
+
+
+@pytest.mark.parametrize("field", ["recovery_slot", "recovery_previous_slot"])
+def test_invalid_recovery_journal_refuses_rollback_before_file_mutation(tmp_path, field):
+    install = tmp_path / "install"
+    install.mkdir()
+    (install / "xgent_mcs.py").write_text("new", encoding="utf-8")
+    backup = tmp_path / package.UPDATE_BACKUP_DIR / "previous"
+    backup.mkdir(parents=True)
+    (backup / "xgent_mcs.py").write_text("old", encoding="utf-8")
+    state_path = tmp_path / package.UPDATE_STATE_NAME
+    package._atomic_write_json(state_path, {
+        "schema": 1, "status": "awaiting_health", "install_dir": str(install),
+        "backup_dir": str(backup), "files": ["xgent_mcs.py"],
+        "existing": ["xgent_mcs.py"], "start_attempts": 1, field: "../../bad-slot",
+    })
+    with pytest.raises(ValueError, match="recovery cache"):
+        package.rollback_unhealthy_agent(state_path, install)
+    assert (install / "xgent_mcs.py").read_text(encoding="utf-8") == "new"
+    assert state_path.exists()

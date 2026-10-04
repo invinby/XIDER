@@ -115,6 +115,7 @@ if __name__ == "__main__" and not _claim_bootstrap_lock():
     raise SystemExit(1)
 
 from update_package import (
+    DependencyUpdateRequired,
     UPDATE_STATE_NAME,
     download_verified_source_archive,
     extract_agent_files,
@@ -122,6 +123,7 @@ from update_package import (
     mark_agent_update_healthy,
     prepare_agent_update_start,
     rollback_unhealthy_agent,
+    validate_source_update_requirements,
 )
 from release_signature import trusted_release_keys_ready
 
@@ -139,6 +141,8 @@ if __name__ == "__main__" and not getattr(sys, "frozen", False):
         )
         sys.stderr.write(message)
         os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]])
+
+from guardian_recovery import activate_recovery_package, stage_recovery_package, validate_recovery_install
 
 import paho.mqtt.client as mqtt
 import psutil
@@ -380,6 +384,9 @@ class XgentClient:
         self._running = threading.Event()
         self._running.set()
         self._update_health = threading.Event()
+        self._update_lock = threading.Lock()
+        self._lifecycle_lock = threading.RLock()
+        self._update_cancelled = threading.Event()
         self._client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
             client_id=f"xgent-mcs-{DEVICE_ID}",
@@ -561,8 +568,26 @@ class XgentClient:
             set_guardian_desired_running(False)
         except Exception:
             log.exception("Could not persist explicit stop intent for Guardian")
+        try:
+            self._cancel_pending_update()
+        except Exception:
+            log.exception("Не удалось откатить отменённое обновление перед остановкой")
         self._running.clear()
         if self.on_stop_requested: self.on_stop_requested()
+
+    def _cancel_pending_update(self, *, rollback: bool = True) -> None:
+        """Explicit stop/removal wins over a delayed update restart."""
+        with getattr(self, "_lifecycle_lock", threading.RLock()):
+            cancelled = getattr(self, "_update_cancelled", None)
+            if cancelled is not None:
+                cancelled.set()
+            # A live transaction belongs to this worker only while its update
+            # guard is held. Avoid touching unrelated journals in utility clients.
+            guard = getattr(self, "_update_lock", None)
+            if rollback and guard is not None and guard.locked():
+                rollback_unhealthy_agent(
+                    CONFIG_DIR / UPDATE_STATE_NAME, Path(__file__).resolve().parent,
+                )
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
         if reason_code == 0:
@@ -571,16 +596,61 @@ class XgentClient:
             log.info("Подключено к %s:%s", MQTT_BROKER, MQTT_PORT)
             self._publish_status()
             try:
-                if mark_agent_update_healthy(
-                    CONFIG_DIR / UPDATE_STATE_NAME,
-                    Path(__file__).resolve().parent,
-                ):
-                    self._update_health.set()
-                    log.info("Проверка здоровья обновлённого агента прошла: MQTT доступен.")
+                def activate_verified_recovery(slot: str) -> None:
+                    root = CONFIG_DIR / "recovery"
+                    validate_recovery_install(Path(__file__).resolve().parent, root, slot)
+                    activate_recovery_package(root, slot)
+
+                with self._lifecycle_lock:
+                    if self._update_cancelled.is_set():
+                        return
+                    if mark_agent_update_healthy(
+                        CONFIG_DIR / UPDATE_STATE_NAME,
+                        Path(__file__).resolve().parent,
+                        activate_recovery=activate_verified_recovery,
+                    ):
+                        self._update_health.set()
+                        log.info("Проверка здоровья обновлённого агента прошла: MQTT доступен.")
+                        self._restart_existing_guardian_after_update()
             except Exception:
                 log.exception("Не удалось подтвердить здоровье установленного обновления")
         else:
             log.warning("Не удалось подключиться к брокеру: %s", reason_code)
+
+    def _restart_existing_guardian_after_update(self) -> None:
+        """Reload updated Guardian code only in an already loaded launchd job."""
+        with self._lifecycle_lock:
+            if self._update_cancelled.is_set() or not self._running.is_set() or not self._update_health.is_set():
+                return
+            try:
+                label = f"gui/{os.getuid()}/com.xider.guardian"
+                loaded = subprocess.run(
+                    ["launchctl", "print", label], capture_output=True, text=True,
+                    check=False, timeout=10,
+                )
+                if loaded.returncode != 0:
+                    log.info("Guardian не загружен в launchd; обновление не включает его автоматически.")
+                    return
+                if self._update_cancelled.is_set() or not self._running.is_set():
+                    return
+                restarted = subprocess.run(
+                    ["launchctl", "kickstart", "-k", label], capture_output=True,
+                    text=True, check=False, timeout=10,
+                )
+                if restarted.returncode != 0:
+                    raise RuntimeError(restarted.stderr.strip() or "launchctl kickstart завершился с ошибкой")
+                log.info("Загруженный Guardian получил команду перезапуска после подтверждения обновления worker.")
+            except Exception as exc:
+                log.exception("Worker уже обновлён и здоров, но перезапуск Guardian не выполнен")
+                try:
+                    self._publish_response("output", {
+                        "type": "agent_update", "device_id": DEVICE_ID, "ok": True,
+                        "state": "guardian_restart_failed", "health_check": "passed",
+                        "guardian_restart": "failed",
+                        "text": f"⚠️ Обновление агента подтверждено, MQTT работает. Перезапуск Guardian не выполнен: {exc}. Guardian может продолжать работу со старым кодом.",
+                    })
+                except Exception:
+                    log.exception("Не удалось отправить предупреждение о перезапуске Guardian")
 
     def _on_connect_fail(self, client, userdata, reason_code=None):
         log.warning("Попытка подключения к брокеру не удалась (код %s)", reason_code)
@@ -1102,19 +1172,40 @@ class XgentClient:
         self._publish_response("output", {"type": "power", "device_id": DEVICE_ID, "ok": ok, "text": text})
 
     def _do_stop(self, payload: dict) -> None:
+        try:
+            set_guardian_desired_running(False)
+        except Exception as exc:
+            log.exception("Не удалось сохранить явную остановку для Guardian")
+            self._publish_response("output", {
+                "type": "stop", "device_id": DEVICE_ID, "ok": False, "state": "stop_failed",
+                "text": f"❌ Не удалось сохранить намерение остановки для Guardian: {exc}. Агент продолжает работу.",
+            })
+            return
+        try:
+            self._cancel_pending_update()
+        except Exception:
+            log.exception("Не удалось подготовить явную остановку агента")
         # KeepAlive у LaunchAgent иначе мгновенно поднимет процесс обратно.
         # При явной команде «Остановить агента» отключаем автозапуск заранее.
         plist_path = os.path.expanduser("~/Library/LaunchAgents/com.xgent.agent.plist")
         try:
             if os.path.exists(plist_path):
-                subprocess.run(
-                    ["launchctl", "bootout", f"gui/{os.getuid()}", plist_path],
-                    capture_output=True,
-                    check=False,
-                )
                 os.remove(plist_path)
+            label = f"gui/{os.getuid()}/com.xgent.agent"
+            result = subprocess.run(
+                ["launchctl", "bootout", label], capture_output=True, check=False,
+            )
+            if result.returncode != 0 and subprocess.run(
+                ["launchctl", "print", label], capture_output=True, check=False,
+            ).returncode == 0:
+                raise RuntimeError("LaunchAgent остался загружен; остановка процесса вызвала бы повторный запуск.")
         except Exception:
             log.exception("Не удалось отключить LaunchAgent перед остановкой")
+            self._publish_response("output", {
+                "type": "stop", "device_id": DEVICE_ID, "ok": False,
+                "text": "❌ Не удалось выгрузить LaunchAgent. Агент продолжает работу; проверьте agent.log.",
+            })
+            return
         self.request_stop()
 
     # ---------- волна 1: файлы, система, приколы (паритет с WDS) ----------
@@ -2097,17 +2188,42 @@ end tell'''
             })
             return
 
+        if not self._update_lock.acquire(blocking=False):
+            self._publish_response("output", {
+                "type": "agent_update", "device_id": DEVICE_ID, "ok": False,
+                "state": "update_busy", "text": "⏳ Обновление уже выполняется; дождитесь результата.",
+            })
+            return
+        restart_scheduled = False
+        try:
+            with self._lifecycle_lock:
+                if not self._running.is_set() or self._update_cancelled.is_set():
+                    self._publish_response("output", {
+                        "type": "agent_update", "device_id": DEVICE_ID, "ok": False,
+                        "state": "update_cancelled", "text": "Агент остановлен; установка и перезапуск отменены.",
+                    })
+                    return
+            restart_scheduled = self._install_source_update(payload)
+        finally:
+            if not restart_scheduled:
+                self._update_lock.release()
+
+    def _install_source_update(self, payload: dict) -> bool:
+        """Install under the update guard, kept until restart or cancellation."""
+        cmd_id = payload.get("id", getattr(getattr(self, "_command_context", None), "cmd_id", None))
         script_dir = Path(__file__).resolve().parent
         backup_dir = CONFIG_DIR / "agent-backups" / f"{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns()}"
         # Replace the recovery helper and launcher first. If power is lost after
         # that point, the next launch can restore the journal before loading the
         # remaining files.
         files = (
-            "release_signature.py", "update_package.py", "start_agent.sh",
+            "release_signature.py", "update_package.py", "guardian_recovery.py", "start_agent.sh",
             "xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py",
+            "fake_update_screen.py",
             "xider_guardian.py", "requirements.txt", "setup_mac.py",
             "stop_agent.sh", "start_guardian.sh",
         )
+        installed = False
         try:
             with tempfile.TemporaryDirectory(prefix="xgent-update-") as tmp:
                 archive = Path(tmp) / "XIDER-source.zip"
@@ -2122,46 +2238,106 @@ end tell'''
                     candidate = source / name
                     if candidate.suffix == ".py":
                         compile(candidate.read_text(encoding="utf-8"), str(candidate), "exec")
-                backup_dir = install_agent_files(
-                    source,
-                    script_dir,
-                    backup_dir,
-                    files,
-                    transaction_path=CONFIG_DIR / UPDATE_STATE_NAME,
-                )
+                with self._lifecycle_lock:
+                    if self._update_cancelled.is_set() or not self._running.is_set():
+                        raise RuntimeError("Установка отменена командой остановки или удаления.")
+                    validate_source_update_requirements(source, script_dir)
+                    recovery_slot = stage_recovery_package(
+                        manifest, archive, CONFIG_DIR / "recovery", activate=False,
+                    )
+                    backup_dir = install_agent_files(
+                        source,
+                        script_dir,
+                        backup_dir,
+                        files,
+                        transaction_path=CONFIG_DIR / UPDATE_STATE_NAME,
+                        recovery_slot=recovery_slot,
+                    )
+                    installed = True
             text = (
                 f"📦 Файлы агента из релиза {release_tag} установлены после сверки размера и SHA-256 "
                 f"с release manifest. Резервная копия: {backup_dir.name}. Перезапускаю; "
                 "здоровье нового процесса ещё не подтверждено."
             )
-            self._publish_response("output", {
-                "type": "agent_update", "device_id": DEVICE_ID, "ok": True,
-                "state": "restarting", "release_tag": release_tag,
-                "health_check": "pending", "text": text,
-            })
-
-            def _reboot_agent():
-                time.sleep(1.5)
-                guardian_script = script_dir / "start_guardian.sh"
-                if guardian_script.exists():
-                    subprocess.Popen(
-                        ["bash", str(guardian_script)], cwd=str(script_dir),
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                        start_new_session=True,
-                    )
-                subprocess.Popen([sys.executable, str(script_dir / "xgent_mcs.py")], cwd=str(script_dir),
-                                 stdout=open(script_dir / "agent.log", "a", encoding="utf-8"),
-                                 stderr=subprocess.STDOUT, start_new_session=True)
-                os._exit(0)
-            threading.Thread(target=_reboot_agent, daemon=True).start()
+            with self._lifecycle_lock:
+                if self._update_cancelled.is_set() or not self._running.is_set():
+                    raise RuntimeError("Перезапуск отменён командой остановки или удаления.")
+                self._publish_response("output", {
+                    "type": "agent_update", "device_id": DEVICE_ID, "ok": True,
+                    "state": "restarting", "release_tag": release_tag,
+                    "health_check": "pending", "text": text,
+                })
+                threading.Thread(
+                    target=self._restart_after_update, args=(script_dir, cmd_id),
+                    name="xgent-update-restart", daemon=True,
+                ).start()
+            return True
         except Exception as exc:
             log.exception("Agent self-update failed")
-            self._publish_response("output", {"type": "agent_update", "device_id": DEVICE_ID, "ok": False,
-                                               "text": f"❌ Не удалось завершить обновление: {exc}. Проверьте состояние файлов и каталог резервной копии."})
+            if installed:
+                try:
+                    with self._lifecycle_lock:
+                        rollback_unhealthy_agent(CONFIG_DIR / UPDATE_STATE_NAME, script_dir)
+                except Exception:
+                    log.exception("Не удалось завершить откат после ошибки подготовки перезапуска")
+            self._publish_response("output", {
+                "type": "agent_update", "device_id": DEVICE_ID, "ok": False,
+                "state": "dependency_install_required" if isinstance(exc, DependencyUpdateRequired) else "update_failed",
+                "text": f"❌ Не удалось завершить обновление: {exc}. Проверьте состояние файлов и каталог резервной копии.",
+            })
+            return False
+
+    def _restart_after_update(self, script_dir: Path, cmd_id=None) -> None:
+        try:
+            time.sleep(1.5)
+            with self._lifecycle_lock:
+                if self._update_cancelled.is_set() or not self._running.is_set():
+                    return
+                # Exec preserves launchd ownership/PID and releases the old
+                # non-inheritable singleton descriptor before the new prelude.
+                # Starting a child first races its lock against this live worker.
+                os.execv(sys.executable, [
+                    sys.executable, str(script_dir / "xgent_mcs.py"), *sys.argv[1:],
+                ])
+        except Exception as exc:
+            log.exception("Не удалось перезапустить обновлённого агента; возвращаю предыдущие файлы")
+            try:
+                with self._lifecycle_lock:
+                    rollback_unhealthy_agent(CONFIG_DIR / UPDATE_STATE_NAME, script_dir)
+            except Exception:
+                log.exception("Не удалось завершить откат после ошибки перезапуска")
+            self._publish_response("output", {
+                "type": "agent_update", "device_id": DEVICE_ID, "ok": False,
+                "state": "restart_failed", "text": f"❌ Перезапуск не выполнен: {exc}. Предыдущий процесс продолжает работу.",
+                **({"id": cmd_id} if cmd_id is not None else {}),
+            })
+        finally:
+            self._update_lock.release()
+
+    def _rollback_if_update_unhealthy(self, timeout: float = 120) -> None:
+        if self._update_health.wait(timeout):
+            return
+        with self._lifecycle_lock:
+            # Recheck after acquiring the same guard used by MQTT confirmation
+            # and explicit stop. A boundary-time reconnect must win over rollback.
+            if self._update_health.is_set() or self._update_cancelled.is_set() or not self._running.is_set():
+                return
+            try:
+                result = rollback_unhealthy_agent(
+                    CONFIG_DIR / UPDATE_STATE_NAME, Path(__file__).resolve().parent,
+                )
+                if not result["restored"] and not result["removed"]:
+                    return
+                log.error("Новая версия не подключилась к MQTT за %s секунд; возвращаю предыдущую.", timeout)
+                os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]])
+            except Exception:
+                log.exception("Критическая ошибка: откат или перезапуск предыдущего агента не завершён")
 
     def _do_uninstall_agent(self, payload: dict) -> None:
-        """Полное удаление агента с Mac: LaunchAgents, конфиги, логи и завершение."""
-        log.warning("Получена команда полного удаления агента с Mac!")
+        """Снять автозапуск, удалить локальные данные и подготовить завершение."""
+        cmd_id = payload.get("id", getattr(getattr(self, "_command_context", None), "cmd_id", None))
+        log.warning("Получена команда удаления автозапуска и локальных данных агента!")
+        self._cancel_pending_update(rollback=False)
         try:
             set_guardian_desired_running(False)
         except Exception:
@@ -2203,23 +2379,56 @@ end tell'''
 
         # Удалить конфиг директорию
         try:
-            import shutil
             if CONFIG_DIR.exists():
-                shutil.rmtree(CONFIG_DIR, ignore_errors=True)
-        except Exception:
-            pass
+                shutil.rmtree(CONFIG_DIR)
+            if CONFIG_DIR.exists() or CONFIG_DIR.is_symlink():
+                raise RuntimeError("Каталог локальных данных остался после удаления.")
+        except Exception as exc:
+            log.exception("Не удалось удалить локальные данные агента")
+            self._publish_response("output", {
+                "type": "uninstall_agent", "device_id": DEVICE_ID, "ok": False,
+                "state": "uninstall_incomplete",
+                "text": f"❌ Файлы автозапуска удалены, но локальные данные удалены не полностью: {exc}. Процесс продолжает работу.",
+            })
+            return
 
         text = (
-            "🛑 <b>Агент XGENT полностью удалён с Mac!</b>\n"
+            "🛑 <b>Удаление автозапуска XGENT подготовлено</b>\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "• LaunchAgents очищены\n"
-            "• Локальные настройки и логи удалены\n"
-            "• Процесс агента завершает работу."
+            "• Файлы LaunchAgents удалены, Guardian выгружен\n"
+            "• Каталог локальных настроек и данных удалён\n"
+            "• Подготовлены выгрузка worker LaunchAgent и завершение процесса\n"
+            "• Исходники, .env и agent.log в каталоге установки могут оставаться."
         )
-        self._publish_response("output", {"type": "uninstall_agent", "device_id": DEVICE_ID, "ok": True, "text": text})
+        self._publish_response("output", {"type": "uninstall_agent", "device_id": DEVICE_ID, "ok": True,
+                                          "state": "uninstall_prepared", "text": text})
 
         def _bye():
             time.sleep(1.5)
+            # Removing a plist does not unload the existing KeepAlive job.
+            # Unload by label after the MQTT reply has had time to leave; doing
+            # this earlier can terminate the callback before it acknowledges.
+            try:
+                unloaded = subprocess.run(
+                    ["launchctl", "bootout", f"gui/{os.getuid()}/com.xgent.agent"],
+                    capture_output=True, text=True, check=False,
+                )
+                if unloaded.returncode != 0:
+                    still_loaded = subprocess.run(
+                        ["launchctl", "print", f"gui/{os.getuid()}/com.xgent.agent"],
+                        capture_output=True, text=True, check=False,
+                    )
+                    if still_loaded.returncode == 0:
+                        raise RuntimeError("Worker LaunchAgent остался загружен.")
+            except Exception:
+                log.exception("Не удалось выгрузить worker LaunchAgent после удаления")
+                self._publish_response("output", {
+                    "type": "uninstall_agent", "device_id": DEVICE_ID, "ok": False,
+                    "state": "uninstall_incomplete",
+                    "text": "❌ Настройки удалены, но LaunchAgent остался загружен. Процесс сохранён до ручной остановки, чтобы launchd не запустил его снова.",
+                    **({"id": cmd_id} if cmd_id is not None else {}),
+                })
+                return
             os._exit(0)
         threading.Thread(target=_bye, daemon=True).start()
 
@@ -2238,21 +2447,7 @@ def main() -> None:
     client = XgentClient()
     client.start()
     if update_state == "pending":
-        def _rollback_if_unhealthy() -> None:
-            if client._update_health.wait(120):
-                return
-            try:
-                rollback_unhealthy_agent(
-                    CONFIG_DIR / UPDATE_STATE_NAME,
-                    Path(__file__).resolve().parent,
-                )
-            except Exception:
-                log.exception("Критическая ошибка: автоматический откат обновления не завершён")
-                return
-            log.error("Новая версия не подключилась к MQTT за 120 секунд; возвращаю предыдущую.")
-            os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]])
-
-        threading.Thread(target=_rollback_if_unhealthy, name="xgent-update-health", daemon=True).start()
+        threading.Thread(target=client._rollback_if_update_unhealthy, name="xgent-update-health", daemon=True).start()
     try:
         while client.is_running: time.sleep(1)
     except KeyboardInterrupt:

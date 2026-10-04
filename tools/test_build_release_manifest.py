@@ -54,6 +54,10 @@ def test_manifest_includes_exact_bootstrap_and_quickstart_assets(tmp_path):
         "XIDER-bootstrap-windows.ps1.sig": ("bootstrap_signature", "windows"),
         "XIDER-bootstrap-macos.sh.sig": ("bootstrap_signature", "macos"),
         "XIDER-QUICKSTART.txt": ("quickstart", "all"),
+        "XIDER-install-macos.sh": ("installer", "macos"),
+        "XIDER-install-windows.ps1": ("installer", "windows"),
+        "XIDER-install-macos.sh.sig": ("installer_signature", "macos"),
+        "XIDER-install-windows.ps1.sig": ("installer_signature", "windows"),
     }
     for name, (component, platform) in expected.items():
         payload = name.encode()

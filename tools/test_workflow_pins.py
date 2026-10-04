@@ -63,6 +63,10 @@ def test_tagged_release_builds_and_publishes_signed_source_package():
         "XIDER-bootstrap-macos.sh",
         "XIDER-bootstrap-windows.ps1.sig",
         "XIDER-bootstrap-macos.sh.sig",
+        "XIDER-install-windows.ps1",
+        "XIDER-install-macos.sh",
+        "XIDER-install-windows.ps1.sig",
+        "XIDER-install-macos.sh.sig",
         "XIDER-QUICKSTART.txt",
     ):
         assert f"artifacts/{asset}" in published_assets
@@ -88,7 +92,7 @@ def test_tagged_release_publishes_commit_pinned_quickstart_for_both_platforms():
     assert 'python tools/sign_bootstrap.py "${GITHUB_REF_NAME}" "${GITHUB_SHA}" artifacts' in release
     assert 'python tools/build_bootstrap_commands.py "${GITHUB_SHA}" "${GITHUB_REF_NAME}" artifacts/XIDER-QUICKSTART.txt' in release
     assert "artifacts/XIDER-QUICKSTART.txt" in published_assets
-    assert "cp deploy/bootstrap.ps1 artifacts/XIDER-bootstrap-windows.ps1" in release
+    assert "cp deploy/bootstrap-agent.ps1 artifacts/XIDER-bootstrap-windows.ps1" in release
     assert "cp deploy/bootstrap.sh artifacts/XIDER-bootstrap-macos.sh" in release
     assert "XIDER-bootstrap-windows.ps1.sig" in release
     assert "XIDER-bootstrap-macos.sh.sig" in release
@@ -99,7 +103,7 @@ def test_tagged_release_publishes_commit_pinned_quickstart_for_both_platforms():
 
     builder = (ROOT / "tools" / "build_bootstrap_commands.py").read_text(encoding="utf-8")
     assert 'raw_base = f"https://raw.githubusercontent.com/{REPOSITORY}/{ref}"' in builder
-    assert 'for path in ("deploy/bootstrap.ps1", "deploy/bootstrap.sh")' in builder
+    assert 'for path in ("deploy/bootstrap-agent.ps1", "deploy/bootstrap.sh")' in builder
     assert "_committed_file(ref, path)" in builder
     assert '["git", "show", f"{commit_id}:{relative_path}"]' in builder
     assert "core.autocrlf" in builder
@@ -107,7 +111,27 @@ def test_tagged_release_publishes_commit_pinned_quickstart_for_both_platforms():
     assert "shasum -a 256" in builder
     assert "ssh-keygen -Y verify" in builder
     assert "XIDER_REF='{ref}' bash" in builder
-    assert "& $p -Ref '" in builder
+    assert "& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p -Ref '" in builder
+
+
+def test_short_installers_are_generated_and_signed_before_the_asset_manifest():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    release = text.split("  create-release:", 1)[1]
+    generate = 'python tools/build_install_launchers.py "${GITHUB_SHA}" "${GITHUB_REF_NAME}" artifacts --pages-dir artifacts/install-pages'
+    signing = "python tools/sign_installers.py artifacts"
+    inventory = 'python tools/build_release_manifest.py "${GITHUB_REF_NAME}" artifacts --require-signature'
+    assert release.index(generate) < release.index(signing) < release.index(inventory)
+    assert "name: XIDER-install-pages" in release
+    assert "include-hidden-files: true" in release
+
+
+def test_guard_keeper_macos_package_includes_signed_recovery_helpers():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    packaging = text.split("  pack-components:", 1)[1].split("  create-release:", 1)[0]
+    creation = packaging.split("zip -q artifacts/Guard-Keeper-macOS.zip", 1)[1].split("for asset in", 1)[0]
+    for name in ("guardian_recovery.py", "release_signature.py", "update_package.py"):
+        assert f"XGENT-MCS/{name}" in creation
+        assert packaging.count(f"XGENT-MCS/{name}") >= 2
 
 
 def test_release_signing_secret_is_scoped_to_protected_release_environment():

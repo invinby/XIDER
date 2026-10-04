@@ -1987,6 +1987,8 @@ _STATUS_NOTICE_PENDING: dict[str, object] = {}
 _STATUS_NOTICE_LOCK = threading.Lock()
 _STATUS_NOTICE_DELAY_SEC = 8
 _START_NOTIFY_LAST: dict[int, float] = {}
+_LIFECYCLE_NOTICE_LAST: dict[tuple[str, str, str], float] = {}
+_LIFECYCLE_NOTICE_LOCK = threading.Lock()
 _OFFLINE_TIMEOUT_SEC = 150  # два пропущенных heartbeat-а считаем офлайном
 
 LOOP: asyncio.AbstractEventLoop | None = None
@@ -2028,6 +2030,60 @@ def _schedule_admin_notice(text: str, reply_markup=None) -> None:
     future.add_done_callback(
         lambda done: done.exception() if not done.cancelled() else None
     )
+
+
+async def _notify_owner(text: str) -> None:
+    try:
+        await bot.send_message(int(ADMIN_ID), text)
+    except Exception:
+        log.exception("Не удалось отправить владельцу результат операции жизненного цикла")
+
+
+def _schedule_owner_notice(text: str) -> bool:
+    if LOOP is None or LOOP.is_closed():
+        return False
+    future = asyncio.run_coroutine_threadsafe(_notify_owner(text), LOOP)
+    future.add_done_callback(
+        lambda done: done.exception() if not done.cancelled() else None
+    )
+    return True
+
+
+def _schedule_lifecycle_failure_notice(device_id: str, payload: dict) -> None:
+    """Deferred failures must remain visible after a command waiter closes."""
+    kind, state = payload.get("type"), payload.get("state")
+    if not isinstance(kind, str) or not isinstance(state, str):
+        return
+    failures = {
+        ("agent_update", "restart_failed"): False,
+        ("agent_update", "guardian_restart_failed"): True,
+        ("uninstall_agent", "uninstall_incomplete"): False,
+    }
+    expected_ok = failures.get((kind, state))
+    if (kind, state) not in failures or payload.get("ok") is not expected_ok:
+        return
+    if bot_settings.is_blocked(device_id):
+        return
+    command_id = str(payload.get("id") or "")[:128]
+    key = (device_id, command_id, state)
+    now = time.monotonic()
+    with _LIFECYCLE_NOTICE_LOCK:
+        for old_key, seen in list(_LIFECYCLE_NOTICE_LAST.items()):
+            if now - seen >= 600:
+                _LIFECYCLE_NOTICE_LAST.pop(old_key, None)
+        if key in _LIFECYCLE_NOTICE_LAST:
+            return
+        text = _lex_html(
+            "lifecycle_failure_notice", device=target_label(device_id),
+            state=state, text=str(payload.get("text") or state)[:2000],
+        )
+        if not _schedule_owner_notice(text):
+            return
+        if len(_LIFECYCLE_NOTICE_LAST) >= 128:
+            oldest = min(_LIFECYCLE_NOTICE_LAST, key=_LIFECYCLE_NOTICE_LAST.get)
+            _LIFECYCLE_NOTICE_LAST.pop(oldest, None)
+        _LIFECYCLE_NOTICE_LAST[key] = now
+    audit("agent_lifecycle_failure", device_id=device_id, command_id=command_id, state=state)
 
 def _queue_device_status_notice(
     device_id: str,
@@ -2267,6 +2323,7 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             file_collector.submit(device_id, payload)
         else:
             fun_text_collector.submit(device_id, payload)
+            _schedule_lifecycle_failure_notice(device_id, payload)
 
 
 async def _device_offline_watchdog() -> None:
@@ -3098,7 +3155,13 @@ async def on_devmg_uninstall_ok(cq: CallbackQuery):
         return
 
     result_text = str(result.get("text") or _lex("agent_uninstall_no_result"))
-    if result.get("ok") is True:
+    if result.get("ok") is True and result.get("state") in {
+        "uninstall_prepared", "uninstall_pending", "restarting",
+    }:
+        # A prepared reply precedes the worker's delayed launchd unload. Keep
+        # its identity/permissions so an incomplete outcome remains visible.
+        audit("agent_uninstall_prepared", device_id=device_id)
+    elif result.get("ok") is True:
         devices.remove(device_id)
         access_store.revoke_devices([device_id], actor_id=cq.from_user.id)
         if SESSION.get("target") == device_id:
@@ -5206,20 +5269,34 @@ async def on_wallpaper_random_meme(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
-    await cq.answer("🎲 Ищу мем и ставлю на рабочий стол...")
+    await _replace_callback_message(
+        cq,
+        _lex_html("wallpaper_random_waiting", device=target_label(target)),
+        reply_markup=wallpaper_menu(),
+    )
+    await cq.answer()
     fun_text_collector.reset()
     if not publish("wallpaper_set", random_meme=True):
-        await cq.message.answer(_lex("mqtt_publish_failed"), reply_markup=back_to_device_kb())
+        await _replace_callback_message(
+            cq,
+            _lex_html("wallpaper_random_publish_failed", device=target_label(target)),
+            reply_markup=wallpaper_menu(),
+        )
         return
     result = await fun_text_collector.wait(15.0)
     if result and result.get("ok"):
-        await cq.message.answer(f"🎉 <b>Случайный мем успешно установлен на рабочий стол</b>: {target_label(target)}!", reply_markup=wallpaper_menu())
+        text = _lex_html("wallpaper_random_success", device=target_label(target))
     else:
         err = (result or {}).get("error")
         if err:
-            await cq.message.answer(f"⚠️ Ошибка установки: {html.escape(err)}", reply_markup=wallpaper_menu())
+            text = _lex_html(
+                "wallpaper_random_error",
+                device=target_label(target),
+                error=err,
+            )
         else:
-            await cq.message.answer(f"🖼 Обои отправлены на установку для <b>{target_label(target)}</b>!", reply_markup=wallpaper_menu())
+            text = _lex_html("wallpaper_random_sent", device=target_label(target))
+    await _replace_callback_message(cq, text, reply_markup=wallpaper_menu())
 
 
 @router.callback_query(AdminFilter(), F.data == "cmd:wallpaper_photo_guide")
@@ -5228,11 +5305,9 @@ async def on_wallpaper_photo_guide(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
-    await cq.message.answer(
-        f"📸 <b>Установка обоев прямо из фото</b>\n"
-        f"Целевое устройство: <b>{target_label(target)}</b>\n\n"
-        f"Просто <b>прикрепите и отправьте любую фотографию</b> прямо сюда в этот чат Telegram!\n"
-        f"Бот мгновенно перешлёт её на компьютер и сделает новыми обоями рабочего стола.",
+    await _replace_callback_message(
+        cq,
+        _lex_html("wallpaper_photo_guide", device=target_label(target)),
         reply_markup=wallpaper_menu(),
     )
     await cq.answer()
@@ -5242,10 +5317,18 @@ async def on_wallpaper_photo_guide(cq: CallbackQuery):
 async def on_photo_wallpaper_message(message: Message):
     target = SESSION.get("target")
     if not target:
-        await message.answer("⚠️ Сначала выберите целевое устройство в меню /devices, чтобы установить обои!", reply_markup=devices_menu())
+        await _replace_user_card(
+            message,
+            _lex("wallpaper_select_device"),
+            reply_markup=devices_menu(),
+        )
         return
 
-    status_msg = await message.answer(f"⏳ Скачиваю фото и передаю на <b>{target_label(target)}</b>...")
+    await _replace_user_card(
+        message,
+        _lex_html("wallpaper_photo_uploading", device=target_label(target)),
+        reply_markup=wallpaper_menu(),
+    )
     try:
         photo = message.photo[-1]
         file_info = await message.bot.get_file(photo.file_id)
@@ -5256,12 +5339,15 @@ async def on_photo_wallpaper_message(message: Message):
 
         fun_text_collector.reset()
         if not publish("wallpaper_set", b64=b64_img):
-            await status_msg.edit_text(_lex("mqtt_photo_failed"), reply_markup=back_to_device_kb())
+            await _replace_user_card(
+                message, _lex("mqtt_photo_failed"), reply_markup=back_to_device_kb()
+            )
             return
 
         result = await fun_text_collector.wait(20.0)
         if result and result.get("ok"):
-            await status_msg.edit_text(
+            await _replace_user_card(
+                message,
                 _lex_html(
                     "wallpaper_photo_installed",
                     device=target_label(target),
@@ -5270,7 +5356,8 @@ async def on_photo_wallpaper_message(message: Message):
                 reply_markup=wallpaper_menu(),
             )
         else:
-            await status_msg.edit_text(
+            await _replace_user_card(
+                message,
                 _lex_html(
                     "wallpaper_photo_sent",
                     device=target_label(target),
@@ -5280,7 +5367,8 @@ async def on_photo_wallpaper_message(message: Message):
             )
     except Exception as e:
         log.error("Failed to process photo wallpaper: %s", e)
-        await status_msg.edit_text(
+        await _replace_user_card(
+            message,
             _lex_html("wallpaper_photo_error", error=e),
             reply_markup=back_to_device_kb(),
         )

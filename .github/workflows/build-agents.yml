@@ -140,6 +140,9 @@ jobs:
             XGENT-WDS/.env.example
           zip -q artifacts/Guard-Keeper-macOS.zip \
             XGENT-MCS/xider_guardian.py \
+            XGENT-MCS/guardian_recovery.py \
+            XGENT-MCS/release_signature.py \
+            XGENT-MCS/update_package.py \
             XGENT-MCS/start_guardian.sh \
             XGENT-MCS/config.py \
             XGENT-MCS/crypto.py \
@@ -157,6 +160,8 @@ jobs:
           done
           for file in \
             XGENT-MCS/xider_guardian.py XGENT-MCS/start_guardian.sh \
+            XGENT-MCS/guardian_recovery.py XGENT-MCS/release_signature.py \
+            XGENT-MCS/update_package.py \
             XGENT-MCS/config.py XGENT-MCS/crypto.py XGENT-MCS/xgencrypto.py \
             XGENT-MCS/requirements.txt XGENT-MCS/.env.example; do
             unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Fxq "$file"
@@ -211,11 +216,20 @@ jobs:
           cp artifacts/windows/XGENT-WDS.exe artifacts/XGENT-WDS.exe
           cp artifacts/macos/XGENT-MCS-macos-bundle.zip artifacts/XGENT-MCS-macos-bundle.zip
           cp artifacts/components/*.zip artifacts/
-          cp deploy/bootstrap.ps1 artifacts/XIDER-bootstrap-windows.ps1
+          cp deploy/bootstrap-agent.ps1 artifacts/XIDER-bootstrap-windows.ps1
           cp deploy/bootstrap.sh artifacts/XIDER-bootstrap-macos.sh
           python tools/sign_bootstrap.py "${GITHUB_REF_NAME}" "${GITHUB_SHA}" artifacts
           python tools/build_bootstrap_commands.py "${GITHUB_SHA}" "${GITHUB_REF_NAME}" artifacts/XIDER-QUICKSTART.txt
+          python tools/build_install_launchers.py "${GITHUB_SHA}" "${GITHUB_REF_NAME}" artifacts --pages-dir artifacts/install-pages
+          python tools/sign_installers.py artifacts
           python tools/build_release_manifest.py "${GITHUB_REF_NAME}" artifacts --require-signature
+
+      - name: "Upload short installer entry points for GitHub Pages"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: XIDER-install-pages
+          path: artifacts/install-pages/
+          include-hidden-files: true
 
       - name: "Create GitHub Release"
         uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
@@ -231,6 +245,10 @@ jobs:
             artifacts/XIDER-bootstrap-macos.sh
             artifacts/XIDER-bootstrap-windows.ps1.sig
             artifacts/XIDER-bootstrap-macos.sh.sig
+            artifacts/XIDER-install-windows.ps1
+            artifacts/XIDER-install-macos.sh
+            artifacts/XIDER-install-windows.ps1.sig
+            artifacts/XIDER-install-macos.sh.sig
             artifacts/XIDER-QUICKSTART.txt
             artifacts/release-manifest.json
           draft: false

@@ -59,7 +59,8 @@ def _committed_file(commit_id: str, relative_path: str) -> bytes:
         ) from exc
 
 
-def build_commands(commit_id: str, release_tag: str) -> str:
+def build_platform_commands(commit_id: str, release_tag: str) -> dict[str, str]:
+    """Build the two verifier bodies used by quickstart and release installers."""
     if not isinstance(commit_id, str) or not COMMIT_ID.fullmatch(commit_id):
         raise ValueError("A full 40- or 64-character Git commit ID is required.")
     if not isinstance(release_tag, str) or not RELEASE_TAG.fullmatch(release_tag):
@@ -70,20 +71,17 @@ def build_commands(commit_id: str, release_tag: str) -> str:
     release_base = f"https://github.com/{REPOSITORY}/releases/download/{release_tag}"
     # Require a locally available commit that contains both pinned bootstraps;
     # the signed release artifact authenticates the bytes fetched from its URL.
-    for path in ("deploy/bootstrap.ps1", "deploy/bootstrap.sh"):
+    for path in ("deploy/bootstrap-agent.ps1", "deploy/bootstrap.sh"):
         if not _committed_file(ref, path):
             raise ValueError(f"Pinned bootstrap source {path} is empty.")
     allowed_signers_b64 = base64.b64encode(
         _openssh_allowed_signers().encode("ascii")
     ).decode("ascii")
-    return (
-        "XIDER quick install (signed bootstrap; source pinned to this release commit)\n"
-        f"Commit: {ref}\n\n"
-        "Windows PowerShell:\n"
+    windows = (
         "$ErrorActionPreference='Stop'; $d=Join-Path $env:TEMP ('xider-'+[guid]::NewGuid().ToString('N')); "
         "New-Item -ItemType Directory -Path $d|Out-Null; try { "
         "$p=Join-Path $d 'bootstrap.ps1'; $s=Join-Path $d 'bootstrap.sig'; $a=Join-Path $d 'allowed_signers'; $m=Join-Path $d 'message'; "
-        f"iwr -UseBasicParsing -TimeoutSec 90 -Uri '{raw_base}/deploy/bootstrap.ps1' -OutFile $p; "
+        f"iwr -UseBasicParsing -TimeoutSec 90 -Uri '{raw_base}/deploy/bootstrap-agent.ps1' -OutFile $p; "
         f"iwr -UseBasicParsing -TimeoutSec 90 -Uri '{release_base}/XIDER-bootstrap-windows.ps1.sig' -OutFile $s; "
         f"[IO.File]::WriteAllBytes($a,[Convert]::FromBase64String('{allowed_signers_b64}')); "
         "$f=[IO.File]::OpenRead($p); $sha=[Security.Cryptography.SHA256]::Create(); "
@@ -99,8 +97,11 @@ def build_commands(commit_id: str, release_tag: str) -> str:
         "$psi.Arguments='/d /s /c \"\"'+$c+'\"\"'; $psi.UseShellExecute=$false; "
         "$v=New-Object Diagnostics.Process; $v.StartInfo=$psi; [void]$v.Start(); "
         "$v.WaitForExit(); if($v.ExitCode -ne 0){throw 'XIDER bootstrap signature verification failed'}; "
-        f"& $p -Ref '{ref}' }} finally {{ Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue }}\n\n"
-        "macOS Terminal:\n"
+        f"& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p -Ref '{ref}'; "
+        "if($LASTEXITCODE -ne 0){throw 'XIDER Windows agent bootstrap failed'} "
+        "} finally { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue }"
+    )
+    macos = (
         "set -eu; d=\"$(mktemp -d)\"; trap 'rm -rf \"$d\"' EXIT; "
         f"p=\"$d/bootstrap.sh\"; s=\"$d/bootstrap.sig\"; a=\"$d/allowed_signers\"; "
         f"curl -fsSL --max-time 90 '{raw_base}/deploy/bootstrap.sh' -o \"$p\"; "
@@ -109,7 +110,20 @@ def build_commands(commit_id: str, release_tag: str) -> str:
         f"h=\"$(shasum -a 256 \"$p\" | awk '{{print $1}}')\"; "
         f"printf 'XIDER-BOOTSTRAP-SHA256\\nmacos\\n{release_tag}\\n{ref}\\n%s\\n' \"$h\" | "
         f"ssh-keygen -Y verify -f \"$a\" -I {SIGNER_IDENTITY} -n {SIGNATURE_NAMESPACE} -s \"$s\"; "
-        f"XIDER_REF='{ref}' bash \"$p\"\n\n"
+        f"XIDER_RELEASE_TAG='{release_tag}' XIDER_REF='{ref}' bash \"$p\""
+    )
+    return {"windows": windows, "macos": macos}
+
+
+def build_commands(commit_id: str, release_tag: str) -> str:
+    commands = build_platform_commands(commit_id, release_tag)
+    return (
+        "XIDER quick install (signed agent-only bootstrap; source pinned to this release commit)\n"
+        f"Commit: {commit_id.lower()}\n\n"
+        "Windows PowerShell:\n"
+        f"{commands['windows']}\n\n"
+        "macOS Terminal:\n"
+        f"{commands['macos']}\n\n"
         "Both commands verify an OpenSSH Ed25519 signature over the downloaded bootstrap SHA-256, platform, release tag, and commit before execution.\n"
         "The source archive is pinned to the same full commit. OpenSSH ssh-keygen is required on the client.\n"
     )

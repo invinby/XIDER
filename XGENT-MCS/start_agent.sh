@@ -68,7 +68,9 @@ if [ ! -d "$VENV_DIR" ]; then
     python3 -m venv "$VENV_DIR"
 fi
 source "$VENV_DIR/bin/activate"
-pip install -q -r requirements.txt
+if [[ "${XIDER_RUNTIME_PREPARED:-0}" != 1 ]]; then
+    python3 -m pip install --disable-pip-version-check -q -r requirements.txt
+fi
 
 # ──────────────────────────────────────────
 # 3. Создание .env если нет

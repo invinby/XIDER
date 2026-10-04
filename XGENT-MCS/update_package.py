@@ -19,6 +19,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
+from typing import Callable
 
 from release_signature import verify_manifest_signature
 
@@ -39,11 +40,13 @@ _ALLOWED_RELEASE_HOSTS = frozenset({
 })
 _WINDOWS_SHARED_UPDATE_FILES = frozenset({"release_signature.py", "update_package.py"})
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_RECOVERY_SLOT = re.compile(r"^v\d{1,6}\.\d{1,6}\.\d{1,6}-[0-9a-f]{64}$")
 UPDATE_STATE_NAME = "agent-update-state.json"
 UPDATE_BACKUP_DIR = "agent-backups"
 AGENT_UPDATE_FILES = frozenset({
     "xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py",
-    "release_signature.py", "update_package.py", "xider_guardian.py",
+    "release_signature.py", "update_package.py", "guardian_recovery.py", "xider_guardian.py",
+    "fake_update_screen.py",
     "requirements.txt", "setup_mac.py",
     "start_agent.sh", "stop_agent.sh", "start_guardian.sh",
     "xgent_wds.py", "xider_guardian_wds.py",
@@ -136,6 +139,20 @@ def _read_update_state(state_path: Path, expected_install_dir: Path) -> dict | N
         raise ValueError("Список файлов в журнале обновления некорректен.")
     if state.get("status") not in {"installing", "awaiting_health"}:
         raise ValueError("Некорректное состояние транзакции обновления.")
+    if "recovery_slot" in state and (
+        not isinstance(state["recovery_slot"], str)
+        or not _RECOVERY_SLOT.fullmatch(state["recovery_slot"])
+    ):
+        raise ValueError("Некорректный слот recovery cache в журнале.")
+    if "recovery_previous_slot" in state:
+        previous = state["recovery_previous_slot"]
+        if previous is not None and (
+            not isinstance(previous, str) or not _RECOVERY_SLOT.fullmatch(previous)
+        ):
+            raise ValueError("Некорректный предыдущий слот recovery cache в журнале.")
+        recovery_root = state_path.parent / "recovery"
+        if recovery_root.is_symlink() or (recovery_root / "current.json").is_symlink():
+            raise ValueError("Небезопасный путь выбора recovery cache в журнале.")
     for name in existing:
         backup = backup_dir / name
         if backup.is_symlink() or not backup.is_file():
@@ -174,6 +191,22 @@ def _rollback_update(state_path: Path, expected_install_dir: Path) -> dict:
     if problems:
         raise RuntimeError("Автоматический откат неполон: " + "; ".join(problems))
     state_path = Path(state_path)
+    if "recovery_previous_slot" in state:
+        # Cache activation and source commit use separate atomic files. Keep the
+        # previous selection in the durable journal to recover the crash gap.
+        root = state_path.parent / "recovery"
+        pointer = root / "current.json"
+        previous_slot = state["recovery_previous_slot"]
+        if root.is_symlink() or pointer.is_symlink():
+            raise ValueError("Небезопасный путь выбора recovery cache при откате.")
+        if previous_slot is None:
+            pointer.unlink(missing_ok=True)
+            if root.is_dir():
+                _fsync_directory(root)
+        elif isinstance(previous_slot, str) and _RECOVERY_SLOT.fullmatch(previous_slot):
+            _atomic_write_json(pointer, {"schema": 1, "slot": previous_slot})
+        else:
+            raise ValueError("Некорректный предыдущий слот recovery cache при откате.")
     _fsync_directory(install_dir)
     state_path.unlink(missing_ok=True)
     _fsync_directory(state_path.parent)
@@ -199,13 +232,43 @@ def begin_agent_start(state_path: Path, expected_install_dir: Path) -> str:
     return "pending"
 
 
-def mark_agent_update_healthy(state_path: Path, expected_install_dir: Path) -> bool:
+def mark_agent_update_healthy(
+    state_path: Path, expected_install_dir: Path,
+    *, activate_recovery: Callable[[str], object] | None = None,
+) -> bool:
     """Commit the pending update after the new agent establishes MQTT."""
     state = _read_update_state(state_path, expected_install_dir)
     if state is None:
         return False
     if state["status"] != "awaiting_health":
         raise ValueError("Установка ещё не перешла к проверке здоровья.")
+    # The old worker can reconnect while its replacement is awaiting restart.
+    # Only the startup prelude of the replacement may arm health confirmation.
+    attempts = state.get("start_attempts")
+    if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts != 1:
+        return False
+    recovery_slot = state.get("recovery_slot")
+    if recovery_slot is not None:
+        if not isinstance(recovery_slot, str) or not recovery_slot or activate_recovery is None:
+            raise ValueError("Нельзя подтвердить подписанный recovery cache обновления.")
+        if "recovery_previous_slot" not in state:
+            root = Path(state_path).parent / "recovery"
+            pointer = root / "current.json"
+            if root.is_symlink() or pointer.is_symlink():
+                raise ValueError("Небезопасный путь выбора recovery cache обновления.")
+            previous_slot = None
+            if pointer.exists():
+                previous = json.loads(pointer.read_text(encoding="utf-8"))
+                if (
+                    not isinstance(previous, dict) or previous.get("schema") != 1
+                    or not isinstance(previous.get("slot"), str)
+                    or not _RECOVERY_SLOT.fullmatch(previous["slot"])
+                ):
+                    raise ValueError("Некорректный предыдущий выбор recovery cache.")
+                previous_slot = previous["slot"]
+            state["recovery_previous_slot"] = previous_slot
+            _atomic_write_json(Path(state_path), state)
+        activate_recovery(recovery_slot)
     state_path = Path(state_path)
     state_path.unlink()
     _fsync_directory(state_path.parent)
@@ -525,6 +588,7 @@ def install_agent_files(
     files: tuple[str, ...],
     *,
     transaction_path: Path | None = None,
+    recovery_slot: str | None = None,
 ) -> Path:
     """Back up, replace allowlisted files, and leave a restart-health journal.
 
@@ -537,6 +601,10 @@ def install_agent_files(
     install_dir = Path(install_dir).resolve()
     backup_dir = Path(backup_dir).resolve()
     names = tuple(files)
+    if recovery_slot is not None and (
+        not isinstance(recovery_slot, str) or not _RECOVERY_SLOT.fullmatch(recovery_slot)
+    ):
+        raise ValueError("Некорректный слот recovery cache обновления.")
     if (
         not names
         or len(set(names)) != len(names)
@@ -564,6 +632,8 @@ def install_agent_files(
     source_paths = {name: source / name for name in names}
     if any(path.is_symlink() or not path.is_file() for path in source_paths.values()):
         raise ValueError("В подготовленном каталоге отсутствует обязательный обычный файл агента.")
+    if "requirements.txt" in names:
+        validate_source_update_requirements(source, install_dir)
     install_dir.mkdir(parents=True, exist_ok=True)
     existing: set[str] = set()
     for name in names:
@@ -594,6 +664,8 @@ def install_agent_files(
         "existing": [name for name in names if name in existing],
         "start_attempts": 0,
     }
+    if recovery_slot is not None:
+        state["recovery_slot"] = recovery_slot
     _atomic_write_json(transaction_path, state)
 
     try:
@@ -614,3 +686,34 @@ def install_agent_files(
             ) from install_error
         raise
     return backup_dir
+
+
+class DependencyUpdateRequired(ValueError):
+    """The release needs a runtime migration that a file swap cannot undo."""
+
+
+def validate_source_update_requirements(source: Path, install_dir: Path) -> None:
+    """Keep dependency changes out of an in-place, source-only transaction.
+
+    Pip can replace the old runtime's dependencies before a new worker proves
+    healthy, which makes a file-only rollback ineffective. Such releases need
+    the installer to prepare their runtime first; cosmetic comments are safe.
+    """
+    previous = Path(install_dir) / "requirements.txt"
+    candidate = Path(source) / "requirements.txt"
+    if previous.is_symlink() or not previous.is_file():
+        raise DependencyUpdateRequired(
+            "Нельзя подтвердить текущие зависимости; нужен установщик нового релиза."
+        )
+
+    def declarations(path: Path) -> tuple[str, ...]:
+        return tuple(
+            line.strip() for line in path.read_text(encoding="utf-8-sig").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        )
+
+    if declarations(previous) != declarations(candidate):
+        raise DependencyUpdateRequired(
+            "Релиз меняет requirements.txt; сначала установите зависимости через "
+            "установщик релиза. Текущий агент и его окружение сохранены."
+        )

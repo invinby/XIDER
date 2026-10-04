@@ -8,12 +8,14 @@ MQTT-связь, сообщать состояние и по явно включ
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import logging
 import os
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -38,7 +40,14 @@ from config import (
     update_guardian_state,
 )
 from crypto import sign_message, verify_message
+from guardian_recovery import RECOVERY_FILES, restore_missing_agent_files
+from update_package import UPDATE_STATE_NAME, _read_update_state, rollback_unhealthy_agent
 from xgencrypto import decrypt_payload, encrypt_payload
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 
 log = logging.getLogger("xider.guardian")
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -104,6 +113,7 @@ class Guardian:
         self._restart_backoff_seconds = 5.0
         self._next_restart_at = 0.0
         self._last_recovery_error: str | None = None
+        self._intent_file_required = True
         self.client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
             client_id=f"xider-guardian-{DEVICE_ID}",
@@ -223,42 +233,91 @@ class Guardian:
         candidate = SCRIPT_DIR / "venv" / "bin" / "python3"
         return str(candidate if candidate.exists() else Path(sys.executable))
 
+    def _require_running_intent(self) -> None:
+        """Recovery is subordinate to the owner's explicit stop/uninstall."""
+        if getattr(self, "_intent_file_required", False) and not STATE_FILE.is_file():
+            raise RuntimeError("Состояние Guardian удалено; восстановление и запуск отключены.")
+        if hasattr(self, "state"):
+            self._refresh_worker_intent()
+        if not getattr(self, "state", {}).get("desired_running", True):
+            raise RuntimeError("Агент явно остановлен; восстановление и запуск отключены.")
+
     def _restore_missing_agent_files(self) -> list[str]:
-        """Fail closed until a signed, immutable recovery package is installed."""
-        missing = [name for name in (
-            "xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py",
-            "release_signature.py", "update_package.py",
+        """Fill missing source files only from a verified local release package."""
+        self._require_running_intent()
+        required_env = (
+            "SHARED_KEY", "MQTT_BROKER", "MQTT_PORT", "MQTT_PREFIX", "MQTT_TLS",
+            "ENCRYPT_PAYLOAD", "MQTT_USERNAME", "MQTT_PASSWORD",
         )
-                   if not (SCRIPT_DIR / name).is_file()]
-        required_env = ("SHARED_KEY", "MQTT_BROKER", "MQTT_PORT", "MQTT_PREFIX", "MQTT_TLS", "ENCRYPT_PAYLOAD")
         missing_env = [key for key in required_env if not os.environ.get(key, "").strip()]
         if not (SCRIPT_DIR / ".env").is_file() and missing_env:
-            missing.append(".env (нет параметров: " + ", ".join(missing_env) + ")")
-        if not missing:
-            return []
-        raise RuntimeError(
-            "Автовосстановление остановлено: отсутствуют " + ", ".join(missing) +
-            ". Подписанный recovery-пакет ещё не установлен; .env из памяти не пересоздаётся. "
-            "Нужна проверенная повторная установка X-DOCK."
-        )
+            raise RuntimeError(
+                "Автовосстановление остановлено: .env (нет параметров: "
+                + ", ".join(missing_env) + "). Секреты из recovery-пакета не пересоздаются; "
+                "нужна проверенная повторная установка X-DOCK."
+            )
+        with self._recover_missing_worker_transaction():
+            return restore_missing_agent_files(
+                SCRIPT_DIR, CONFIG_DIR / "recovery", RECOVERY_FILES,
+                before_restore=self._require_running_intent,
+            )
+
+    @contextmanager
+    def _recover_missing_worker_transaction(self):
+        """Let an idle interrupted update roll back before cache gap filling.
+
+        A live worker/updater owns this same flock. Its files and journal must
+        remain untouched, even if process-name discovery temporarily misses it.
+        The lock is released before start_agent spawns the replacement worker.
+        """
+        worker_path = SCRIPT_DIR / "xgent_mcs.py"
+        journal = CONFIG_DIR / UPDATE_STATE_NAME
+        if worker_path.is_file() or not (journal.exists() or journal.is_symlink()):
+            yield
+            return
+        if fcntl is None:
+            raise RuntimeError("Не доступен singleton flock агента; откат Guardian отключён.")
+        lock_path = Path(tempfile.gettempdir()) / "xgent_mcs.lock"
+        if lock_path.is_symlink():
+            raise ValueError("Singleton lock агента не может быть symlink.")
+        with lock_path.open("a+") as lock_file:
+            try:
+                fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise RuntimeError("Агент или обновление удерживает singleton lock; файлы не изменены.") from exc
+            try:
+                self._require_running_intent()
+                # Another valid start may have completed before this lock was
+                # claimed. Only the missing-worker journal case is ours to fix.
+                if not worker_path.is_file():
+                    state = _read_update_state(journal, SCRIPT_DIR)
+                    if state is not None:
+                        self._require_running_intent()
+                        result = rollback_unhealthy_agent(journal, SCRIPT_DIR)
+                        log.info("Rolled back interrupted missing-worker update: %s", result)
+                yield
+            finally:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
 
     def start_agent(self) -> int | None:
+        self._require_running_intent()
         pid = self.agent_pid()
         if pid:
             return pid
-        self._restore_missing_agent_files()
+        restored = self._restore_missing_agent_files()
+        if restored:
+            log.info("Restored signed release files: %s", ", ".join(restored))
+        self._require_running_intent()
         env = os.environ.copy()
         env["XIDER_NO_AUTOSTART"] = "1"
         log_path = SCRIPT_DIR / "agent.log"
-        log_handle = open(log_path, "a", encoding="utf-8")
-        proc = subprocess.Popen(
-            [self._worker_python(), str(SCRIPT_DIR / "xgent_mcs.py")],
-            cwd=str(SCRIPT_DIR), env=env,
-            stdout=log_handle, stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-        self.state["desired_running"] = True
-        _save_state(self.state, "desired_running")
+        with log_path.open("a", encoding="utf-8") as log_handle:
+            proc = subprocess.Popen(
+                [self._worker_python(), str(SCRIPT_DIR / "xgent_mcs.py")],
+                cwd=str(SCRIPT_DIR), env=env,
+                stdout=log_handle, stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
         return proc.pid
 
     def _reset_recovery_backoff(self) -> None:

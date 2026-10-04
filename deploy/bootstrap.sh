@@ -5,10 +5,11 @@ INSTALL_ROOT="${XIDER_INSTALL_ROOT:-$HOME/XIDER}"
 ENV_ROOT="${XIDER_ENV_ROOT:-$HOME/XIDER}"
 BRANCH="${XIDER_BRANCH:-main}"
 REF="${XIDER_REF:-}"
-SERVER_HOST="${XIDER_SERVER_HOST:-141.145.152.174}"
+SERVER_HOST="${XIDER_SERVER_HOST:-16.16.200.207}"
 SERVER_USER="${XIDER_SERVER_USER:-ubuntu}"
 TARGET="${INSTALL_ROOT}/git-ver"
 SOURCE_ARCHIVE="${XIDER_SOURCE_ARCHIVE:-}"
+RELEASE_TAG="${XIDER_RELEASE_TAG:-}"
 
 if [[ ! "$BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]; then
   echo "Invalid XIDER_BRANCH" >&2
@@ -18,10 +19,16 @@ if [[ -n "$REF" && ! "$REF" =~ ^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$ ]]; then
   echo "XIDER_REF must be a full 40- or 64-character commit ID" >&2
   exit 2
 fi
+if [[ -n "$RELEASE_TAG" && ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "XIDER_RELEASE_TAG must be vMAJOR.MINOR.PATCH" >&2
+  exit 2
+fi
 command -v curl >/dev/null || { echo "curl is required" >&2; exit 2; }
 command -v unzip >/dev/null || { echo "unzip is required" >&2; exit 2; }
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 2; }
 mkdir -p "$INSTALL_ROOT"
+INSTALL_ROOT="$(cd "$INSTALL_ROOT" && pwd -P)"
+TARGET="${INSTALL_ROOT}/git-ver"
 stage="$(mktemp -d "${INSTALL_ROOT}/.xider-install.XXXXXX")"
 trap 'rm -rf "$stage"' EXIT
 
@@ -245,22 +252,86 @@ chmod 600 "$agent_env"
 new_agent="$stage/new/XGENT-MCS"
 chmod +x "$new_agent/start_agent.sh" "$new_agent/stop_agent.sh" "$new_agent/start_guardian.sh"
 
+# Prepare dependencies before stopping the working version. The venv has a
+# stable absolute path: moving a staged venv would break its activation script
+# and installed entry points. Old runtimes remain available with their backups.
+mkdir -p "$INSTALL_ROOT/runtimes"
+runtime="$(mktemp -d "$INSTALL_ROOT/runtimes/macos.XXXXXX")"
+echo "Подготавливаю Python и зависимости; действующий агент пока не останавливаю."
+if ! python3 -m venv "$runtime" ||
+   ! "$runtime/bin/python3" -m pip install --disable-pip-version-check -r "$new_agent/requirements.txt" ||
+   ! "$runtime/bin/python3" -m compileall -q "$new_agent"; then
+  echo "Подготовка окружения не прошла; прежняя установка не менялась." >&2
+  echo "Диагностическое окружение сохранено: $runtime" >&2
+  exit 5
+fi
+ln -s "$runtime" "$new_agent/venv"
+
+recovery_slot=''
+if [[ -n "$RELEASE_TAG" ]]; then
+  release_url="https://github.com/invinby/XIDER/releases/download/$RELEASE_TAG"
+  echo "Проверяю подписанную резервную копию $RELEASE_TAG для Guard Keeper."
+  curl --fail --silent --show-error --location --max-time 60 --max-filesize 1048576 \
+    "$release_url/release-manifest.json" -o "$stage/release-manifest.json"
+  curl --fail --silent --show-error --location --max-time 120 --max-filesize 104857600 \
+    "$release_url/XIDER-source.zip" -o "$stage/XIDER-source.zip"
+  # Deferred selection keeps the prior cache active if installation rolls back.
+  recovery_slot="$(cd "$new_agent" && "$runtime/bin/python3" - \
+    "$stage/release-manifest.json" "$stage/XIDER-source.zip" "$RELEASE_TAG" <<'PY'
+from pathlib import Path
+import sys
+from guardian_recovery import stage_recovery_package, validate_recovery_install
+
+manifest, archive, expected = sys.argv[1:]
+root = Path.home() / '.xgent' / 'recovery'
+slot = stage_recovery_package(Path(manifest), Path(archive), root, activate=False)
+if not slot.startswith(expected + '-'):
+    raise SystemExit('Подписанная версия не совпадает с выбранным релизом.')
+validate_recovery_install(Path.cwd(), root, slot)
+print(slot)
+PY
+  )" || { echo "Recovery-пакет отклонён; прежняя установка не менялась." >&2; exit 5; }
+else
+  echo "Development-установка: подписанный recovery-пакет не выбран."
+fi
+
 # Keep the prior install for rollback; never recursively delete the live checkout.
 backup="${INSTALL_ROOT}/git-ver.previous.$(date +%Y%m%d%H%M%S).$$"
-launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.xgent.agent.plist" >/dev/null 2>&1 || true
-launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.xider.guardian.plist" >/dev/null 2>&1 || true
+stop_loaded_job() {
+  local label="$1" service="gui/$(id -u)/$1"
+  if launchctl print "$service" >/dev/null 2>&1; then
+    if ! launchctl bootout "$service"; then
+      echo "Не удалось остановить $label; checkout не заменён." >&2
+      return 1
+    fi
+  fi
+}
+# Stop the coordinator first, so it cannot restore/start the old worker in the
+# middle of the directory swap. An unload error is not an absent service.
+if ! stop_loaded_job com.xider.guardian || ! stop_loaded_job com.xgent.agent; then
+  if [[ -f "$TARGET/XGENT-MCS/start_guardian.sh" ]]; then
+    (cd "$TARGET/XGENT-MCS" && bash ./start_guardian.sh || true)
+  fi
+  exit 5
+fi
 if [[ -e "$TARGET" ]]; then mv "$TARGET" "$backup"; fi
 if ! mv "$stage/new" "$TARGET"; then
   [[ ! -e "$backup" ]] || mv "$backup" "$TARGET"
+  if [[ -f "$TARGET/XGENT-MCS/start_agent.sh" ]]; then
+    (cd "$TARGET/XGENT-MCS" && XIDER_RUNTIME_PREPARED=1 bash ./start_agent.sh || true;
+     bash ./start_guardian.sh || true)
+  fi
   echo "Не удалось активировать новую папку; прежняя установка сохранена." >&2
   exit 5
 fi
 
-if ! (cd "$TARGET/XGENT-MCS" && bash ./start_agent.sh && bash ./start_guardian.sh &&
+if ! (cd "$TARGET/XGENT-MCS" && XIDER_RUNTIME_PREPARED=1 bash ./start_agent.sh && bash ./start_guardian.sh &&
       bash ./start_agent.sh --status && bash ./start_guardian.sh --status); then
   echo "Запуск не прошёл; возвращаю предыдущую версию." >&2
-  launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.xgent.agent.plist" >/dev/null 2>&1 || true
-  launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.xider.guardian.plist" >/dev/null 2>&1 || true
+  if ! stop_loaded_job com.xider.guardian || ! stop_loaded_job com.xgent.agent; then
+    echo "Откат остановлен: новая служба не выгрузилась. Папки не перемещал; резервная копия: $backup" >&2
+    exit 6
+  fi
   failed="${TARGET}.failed.$(date +%Y%m%d%H%M%S)"
   if mv "$TARGET" "$failed"; then
     rm -f "$failed/XGENT-MCS/.env" || echo "Предупреждение: не удалось убрать .env из $failed" >&2
@@ -279,6 +350,17 @@ if ! (cd "$TARGET/XGENT-MCS" && bash ./start_agent.sh && bash ./start_guardian.s
   exit 6
 fi
 
+if [[ -n "$recovery_slot" ]]; then
+  (cd "$TARGET/XGENT-MCS" && "$runtime/bin/python3" - "$recovery_slot" <<'PY'
+from pathlib import Path
+import sys
+from guardian_recovery import activate_recovery_package
+print('Guard Keeper recovery: ' + activate_recovery_package(Path.home() / '.xgent' / 'recovery', sys.argv[1]))
+PY
+  ) || { echo "Агент запущен, но выбор recovery-пакета не прошёл; проверь диагностику Guard Keeper." >&2; exit 7; }
+fi
+
 echo "Установка завершена. Исходники: $TARGET"
 [[ ! -e "$backup" ]] || echo "Предыдущая установка сохранена: $backup"
 echo "Проверка: cd \"$TARGET/XGENT-MCS\" && bash ./start_agent.sh --status && bash ./start_guardian.sh --status"
+echo "Запуск процессов подтверждён. Связь MQTT и системные разрешения проверь в карточке устройства в боте."

@@ -42,7 +42,7 @@ def test_generated_windows_quickstart_verifies_before_execution(tmp_path, monkey
     artifacts.mkdir()
     for platform, filename in sign_bootstrap.BOOTSTRAPS.items():
         source = subprocess.check_output(
-            ["git", "show", f"{COMMIT}:deploy/bootstrap.{ 'ps1' if platform == 'windows' else 'sh' }"],
+            ["git", "show", f"{COMMIT}:deploy/{ 'bootstrap-agent.ps1' if platform == 'windows' else 'bootstrap.sh' }"],
             cwd=ROOT,
         )
         (artifacts / filename).write_bytes(source)
@@ -58,7 +58,7 @@ def test_generated_windows_quickstart_verifies_before_execution(tmp_path, monkey
     quickstart = builder.build_commands(COMMIT, TAG)
     windows = quickstart.split("Windows PowerShell:\n", 1)[1].split("\n\nmacOS Terminal:", 1)[0]
     windows = re.sub(
-        r"iwr -UseBasicParsing -TimeoutSec 90 -Uri '[^']+/deploy/bootstrap\.ps1' -OutFile \$p;",
+        r"iwr -UseBasicParsing -TimeoutSec 90 -Uri '[^']+/deploy/bootstrap-agent\.ps1' -OutFile \$p;",
         lambda _match: f"Copy-Item -LiteralPath '{artifacts / sign_bootstrap.BOOTSTRAPS['windows']}' -Destination $p;",
         windows,
         count=1,
@@ -69,7 +69,7 @@ def test_generated_windows_quickstart_verifies_before_execution(tmp_path, monkey
         windows,
         count=1,
     )
-    windows = re.sub(r"& \$p -Ref '[0-9a-f]+'", "Write-Output 'VERIFIER_ACCEPTED'", windows, count=1)
+    windows = re.sub(r"& powershell\.exe -NoProfile -ExecutionPolicy Bypass -File \$p -Ref '[0-9a-f]+'", "$global:LASTEXITCODE=0; Write-Output 'VERIFIER_ACCEPTED'", windows, count=1)
     assert "Copy-Item" in windows and "VERIFIER_ACCEPTED" in windows
 
     script = tmp_path / "verify-quickstart.ps1"
@@ -177,7 +177,7 @@ def test_generated_macos_quickstart_verifies_before_execution(tmp_path, monkeypa
         mac,
         count=1,
     )
-    mac = re.sub(r"XIDER_REF='[0-9a-f]+' bash \"\$p\"", "bash \"$p\"", mac, count=1)
+    mac = re.sub(r"XIDER_RELEASE_TAG='v[0-9.]+' XIDER_REF='[0-9a-f]+' bash \"\$p\"", "bash \"$p\"", mac, count=1)
     mac = (
         "base64(){ if [ \"$1\" = '-D' ]; then shift; command base64 -d \"$@\"; "
         "else command base64 \"$@\"; fi; }; "

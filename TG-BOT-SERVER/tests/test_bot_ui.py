@@ -77,6 +77,135 @@ def test_static_xlex_keys_exist_and_keyboard_labels_are_not_hardcoded():
     assert literal_button_labels == {"◀️", "▶️"}
 
 
+def test_random_wallpaper_feedback_has_six_distinct_voices():
+    keys = (
+        "wallpaper_photo_guide",
+        "wallpaper_select_device",
+        "wallpaper_photo_uploading",
+        "wallpaper_random_waiting",
+        "wallpaper_random_success",
+        "wallpaper_random_sent",
+        "wallpaper_random_publish_failed",
+        "wallpaper_random_error",
+    )
+    for key in keys:
+        assert key in bot.xlex.COPY
+        rendered = {
+            style: bot.xlex.render(key, style, device="Laptop", error="offline")
+            for style in bot.xlex.STYLES
+        }
+        assert len(set(rendered.values())) == len(bot.xlex.STYLES), key
+
+
+def test_wallpaper_photo_flow_reuses_the_user_card_instead_of_sending_status_messages():
+    tree = ast.parse(Path(bot.__file__).read_text(encoding="utf-8"))
+    expected_helpers = {
+        "on_wallpaper_photo_guide": "_replace_callback_message",
+        "on_photo_wallpaper_message": "_replace_user_card",
+    }
+
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        expected_helper = expected_helpers.get(node.name)
+        if not expected_helper:
+            continue
+        calls = [
+            call.func.id
+            for call in ast.walk(node)
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+        ]
+        assert expected_helper in calls, node.name
+        assert not any(
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "answer"
+            and (
+                isinstance(call.func.value, ast.Name)
+                and call.func.value.id == "message"
+                or isinstance(call.func.value, ast.Attribute)
+                and call.func.value.attr == "message"
+            )
+            for call in ast.walk(node)
+        ), node.name
+
+
+@pytest.mark.parametrize(
+    ("publish_ok", "result", "expected_key"),
+    [
+        (True, {"ok": True}, "wallpaper_random_success"),
+        (True, {"ok": False, "error": "<offline>"}, "wallpaper_random_error"),
+        (True, None, "wallpaper_random_sent"),
+        (False, None, "wallpaper_random_publish_failed"),
+    ],
+)
+def test_random_wallpaper_updates_one_card_and_escapes_device_data(
+    monkeypatch, publish_ok, result, expected_key
+):
+    from types import SimpleNamespace
+
+    rendered = []
+    answered = []
+
+    class FakeCollector:
+        def reset(self):
+            pass
+
+        async def wait(self, _timeout):
+            return result
+
+    class FakeMessage:
+        chat = SimpleNamespace(id=1)
+        message_id = 2
+
+        async def answer(self, *_args, **_kwargs):
+            raise AssertionError("random wallpaper must edit the existing card")
+
+    class FakeCallback:
+        data = "cmd:wallpaper_random_meme"
+        from_user = SimpleNamespace(id=3)
+        message = FakeMessage()
+
+        async def answer(self, *args, **kwargs):
+            answered.append((args, kwargs))
+
+    async def replace(_cq, text, **kwargs):
+        rendered.append((text, kwargs))
+
+    monkeypatch.setitem(bot.SESSION, "target", "device-1")
+    monkeypatch.setattr(bot, "target_label", lambda _target: "Laptop <test>")
+    monkeypatch.setattr(bot, "wallpaper_menu", lambda: "wallpaper-menu")
+    monkeypatch.setattr(bot, "publish", lambda *_args, **_kwargs: publish_ok)
+    monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    monkeypatch.setattr(
+        bot.bot_settings,
+        "get",
+        lambda key, default=None: "xtech" if key == "ui_style" else default,
+    )
+
+    asyncio.run(bot.on_wallpaper_random_meme(FakeCallback()))
+
+    assert [text for text, _kwargs in rendered][0].startswith("🎲 <b>")
+    assert len(rendered) == 2
+    final_text, final_kwargs = rendered[-1]
+    assert "&lt;test&gt;" in final_text
+    assert final_kwargs["reply_markup"] == "wallpaper-menu"
+    if expected_key == "wallpaper_random_error":
+        assert "&lt;offline&gt;" in final_text
+    else:
+        assert final_text.startswith(
+            {
+                "wallpaper_random_success": "✅",
+                "wallpaper_random_sent": "📤",
+                "wallpaper_random_publish_failed": "⚠️",
+            }[
+                expected_key
+            ]
+        )
+    assert answered == [((), {})]
+
+
 def test_text_command_flows_reuse_the_existing_chat_card():
     tree = ast.parse(Path(bot.__file__).read_text(encoding="utf-8"))
     target_functions = {
@@ -601,7 +730,8 @@ def test_uninstall_timeout_does_not_remove_device_or_retarget_other_session(monk
     )]
 
 
-def test_uninstall_only_revokes_device_after_correlated_success(monkeypatch):
+@pytest.mark.parametrize("result_state", [None, "uninstall_prepared", "uninstall_pending"])
+def test_uninstall_only_revokes_device_after_correlated_success(monkeypatch, result_state):
     from types import SimpleNamespace
 
     removed = []
@@ -620,7 +750,7 @@ def test_uninstall_only_revokes_device_after_correlated_success(monkeypatch):
     class FakeCollector:
         async def wait_for(self, device_id, action_type, *, timeout, command_id):
             assert (device_id, action_type, command_id) == ("device-1", "uninstall_agent", "ticket-2")
-            return {"type": "uninstall_agent", "ok": True, "text": "Removed", "id": command_id}
+            return {"type": "uninstall_agent", "ok": True, "text": "Removed", "id": command_id, "state": result_state}
 
     class FakeCallback:
         data = "devmg:uninstok:device-1"
@@ -645,9 +775,14 @@ def test_uninstall_only_revokes_device_after_correlated_success(monkeypatch):
 
     asyncio.run(bot.on_devmg_uninstall_ok(FakeCallback()))
 
-    assert removed == ["device-1"]
-    assert revoked == [(["device-1"], 7)]
-    assert bot.SESSION["target"] is None
+    if result_state is None:
+        assert removed == ["device-1"]
+        assert revoked == [(["device-1"], 7)]
+        assert bot.SESSION["target"] is None
+    else:
+        assert removed == []
+        assert revoked == []
+        assert bot.SESSION["target"] == "device-1"
     assert len(rendered) == 1
     assert "Removed" in rendered[0][0]
     assert "Laptop" in rendered[0][0]
@@ -2354,6 +2489,62 @@ def test_successful_file_put_ack_is_routed_to_text_collector(monkeypatch):
         "device-1",
         {"type": "file_put", "ok": True, "path": "~/Downloads/file.bin", "id": "op-123"},
     )]
+
+
+@pytest.mark.parametrize("kind,state,ok", [
+    ("agent_update", "restart_failed", False),
+    ("agent_update", "guardian_restart_failed", True),
+    ("uninstall_agent", "uninstall_incomplete", False),
+])
+def test_deferred_lifecycle_failures_notify_owner_once(monkeypatch, kind, state, ok):
+    notices = []
+    monkeypatch.setattr(bot, "_LIFECYCLE_NOTICE_LAST", {})
+    monkeypatch.setattr(bot.bot_settings, "is_blocked", lambda _device: False)
+    monkeypatch.setattr(bot, "target_label", lambda _device: "Mac <owner>")
+    monkeypatch.setattr(bot, "_schedule_owner_notice", lambda text: notices.append(text) or True)
+    payload = {"type": kind, "state": state, "ok": ok, "id": "op-1", "text": "failure <detail>"}
+    bot._schedule_lifecycle_failure_notice("device-1", payload)
+    bot._schedule_lifecycle_failure_notice("device-1", payload)
+    assert len(notices) == 1
+    assert "&lt;owner&gt;" in notices[0]
+    assert "&lt;detail&gt;" in notices[0]
+    assert state in notices[0]
+
+
+def test_lifecycle_notice_is_not_consumed_without_running_loop(monkeypatch):
+    monkeypatch.setattr(bot, "_LIFECYCLE_NOTICE_LAST", {})
+    monkeypatch.setattr(bot, "LOOP", None)
+    monkeypatch.setattr(bot.bot_settings, "is_blocked", lambda _device: False)
+    bot._schedule_lifecycle_failure_notice("device-1", {
+        "type": "agent_update", "state": "restart_failed", "ok": False, "id": "op-2",
+    })
+    assert not bot._LIFECYCLE_NOTICE_LAST
+
+
+def test_lifecycle_notice_ignores_prepared_and_bounds_duplicate_cache(monkeypatch):
+    notices = []
+    monkeypatch.setattr(bot, "_LIFECYCLE_NOTICE_LAST", {})
+    monkeypatch.setattr(bot.bot_settings, "is_blocked", lambda _device: False)
+    monkeypatch.setattr(bot, "_schedule_owner_notice", lambda text: notices.append(text) or True)
+    bot._schedule_lifecycle_failure_notice("device-1", {
+        "type": "uninstall_agent", "state": "uninstall_prepared", "ok": True,
+    })
+    assert not notices
+    for index in range(140):
+        bot._schedule_lifecycle_failure_notice("device-1", {
+            "type": "agent_update", "state": "restart_failed", "ok": False, "id": str(index),
+        })
+    assert len(bot._LIFECYCLE_NOTICE_LAST) == 128
+
+
+def test_lifecycle_notice_sends_only_to_owner(monkeypatch):
+    sent = []
+    class FakeBot:
+        async def send_message(self, user_id, text):
+            sent.append((user_id, text))
+    monkeypatch.setattr(bot, "bot", FakeBot())
+    asyncio.run(bot._notify_owner("operation failed"))
+    assert sent == [(int(bot.ADMIN_ID), "operation failed")]
 
 
 def test_server_menu_contains_metrics_chart_and_safe_terminal():

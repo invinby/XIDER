@@ -72,12 +72,16 @@ secret or a secret whose public key is not pinned in the tagged source.
 
 The key has been generated and pinned locally. The protected GitHub environment
 secret is configured, but it cannot be read back and is not a recoverable
-backup. A separate encrypted owner-held backup of the private files has not
-been confirmed. Do not create the first public release tag until the owner
-confirms an encrypted backup stored separately. As of
-2026-10-02, `v4.1.0` is not tagged or published; the latest published release is
-`v4.0.0`. The bootstrap-signing step uses the protected environment secret and
-fails closed if the key is missing or does not match the pinned public key. No
-signed `v4.1.0` release is available until its tagged workflow succeeds and its
-signatures and manifest are published. The mutable-branch bootstrap command
-remains a development path and is not made signed by this mechanism.
+backup. An owner-held encrypted offline backup remains an operational task;
+its completion has not been confirmed. The owner has authorized release
+publication. Signing still fails closed if the configured secret is missing
+or does not match the pinned public key. A release is installable only after
+its tagged workflow publishes the assets, signatures, and manifest.
+
+The short `mac` and `win.ps1` GitHub Pages entry points additionally authenticate
+the SHA-256 of a standalone installer with the same pinned publisher key.
+That installer then authenticates the exact bootstrap/tag/commit tuple.
+Initial trust in the short entry point is HTTPS and control of the Pages
+repository; it is not a bypass of TLS or a claim that the endpoint itself is
+independently authenticated. Raw mutable-branch bootstrap commands remain a
+development path and are not made signed by this mechanism.

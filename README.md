@@ -1,10 +1,33 @@
-# ⚡ XIDER 3.3.8: Zero-Trust Endpoint Management, Telemetry & Guardian
+# XIDER · TARPED 4.1.0 — управление устройствами через Telegram
 
-> TARPED is under development, not released or deployed. The agreed module
-> names, version rules and unfinished acceptance checks are recorded in
-> [docs/TARPED.md](docs/TARPED.md). / TARPED пока разрабатывается; это не
-> опубликованная и не установленная версия. План и критерии готовности —
-> в [docs/TARPED.md](docs/TARPED.md).
+> Source version: 4.1.0. Published installable versions are listed in
+> [GitHub Releases](https://github.com/invinby/XIDER/releases); a source version
+> is not proof of a successful device installation. / Версия исходников: 4.1.0.
+> Опубликованные пакеты — в Releases. План, ограничения и незавершённая приёмка:
+> [TARPED](docs/TARPED.md), [подготовка Mac](docs/MAC-REMOTE-UPDATES.md).
+
+## Быстрая установка / Quick installation
+
+После публикации подписанного релиза и GitHub Pages / Requires published signed
+release assets and the repository's GitHub Pages endpoint:
+
+macOS:
+
+```sh
+curl -fsSL https://invinby.github.io/XIDER/mac | bash
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://invinby.github.io/XIDER/win.ps1 | iex
+```
+
+Оба entrypoint проверяют подпись установщика, затем установщик проверяет
+bootstrap, привязанный к точному тегу и commit. Требуются OpenSSH и Python;
+при первой установке — доступ к VPS для конфигурации. Разрешения macOS выдаются
+на самом устройстве. / Both entry points verify a publisher signature before
+running a commit-pinned bootstrap. OS permissions still require local consent.
 
 <p align="center">
   <img src="XDicon.png" alt="XIDER Logo" width="128" height="128" />
@@ -24,10 +47,12 @@
 
 **XIDER** is a high-performance, asynchronous remote endpoint administration and telemetry system. It enables secure, real-time device monitoring, diagnostics, and management through a Telegram Bot interface backed by a hardened, TLS-encrypted MQTT pub/sub message broker.
 
-Version 3.3.8 adds **XIDER Guardian** for macOS: a visible supervisor that
+**Guard Keeper** for macOS is an ordinary supervisor that
 keeps a separate control channel alive, reports agent loss to the VPS, and can
 start, stop, restart, or recover the worker agent from the owner-only Telegram
-panel. Guardian does not bypass local OS controls or access camera, microphone,
+panel. Version 4.1.0 adds publisher-signed local file recovery, serialized source
+updates and a lock-safe restart. Deliberate stop/uninstall remains effective;
+Guardian does not bypass local OS controls or access camera, microphone,
 screen, or location without the operating-system permission.
 
 Designed with a **Zero-Trust** security architecture, XIDER treats the network transport as untrusted: all commands and telemetry are authenticated with **HMAC-SHA256**, protected against replay attacks via **nonce/timestamp deduplication**, and optionally encrypted end-to-end with **AES-256-GCM**.

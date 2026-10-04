@@ -2,7 +2,7 @@
 param(
     [string]$InstallRoot = "$env:LOCALAPPDATA\XIDER",
     [string]$EnvRoot = $env:XIDER_ENV_ROOT,
-    [string]$ServerHost = '141.145.152.174',
+    [string]$ServerHost = '16.16.200.207',
     [string]$ServerUser = 'ubuntu',
     [string]$Branch = 'main',
     [string]$Ref = $env:XIDER_REF,

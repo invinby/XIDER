@@ -29,6 +29,10 @@ COMPONENTS = {
     "XIDER-bootstrap-windows.ps1.sig": ("bootstrap_signature", "windows"),
     "XIDER-bootstrap-macos.sh.sig": ("bootstrap_signature", "macos"),
     "XIDER-QUICKSTART.txt": ("quickstart", "all"),
+    "XIDER-install-macos.sh": ("installer", "macos"),
+    "XIDER-install-windows.ps1": ("installer", "windows"),
+    "XIDER-install-macos.sh.sig": ("installer_signature", "macos"),
+    "XIDER-install-windows.ps1.sig": ("installer_signature", "windows"),
 }
 TAG = re.compile(r"^v\d+\.\d+\.\d+$")
 ROOT = Path(__file__).resolve().parents[1]

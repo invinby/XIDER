@@ -10,6 +10,23 @@ FAKE_BIN="$FIXTURE/bin"
 SOURCE_ROOT="$FIXTURE/source"
 ARCHIVE="$FIXTURE/source.zip"
 mkdir -p "$FAKE_BIN" "$SOURCE_ROOT/XGENT-MCS" "$FIXTURE/home/Library/LaunchAgents"
+REAL_PYTHON="$(command -v python3)"
+export XIDER_TEST_REAL_PYTHON="$REAL_PYTHON"
+cat > "$FAKE_BIN/python3" <<'PYTHON'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == -m && "${2:-}" == venv ]]; then
+  mkdir -p "$3/bin"
+  cp "$0" "$3/bin/python3"
+  exit 0
+fi
+if [[ "${1:-}" == -m && "${2:-}" == pip ]]; then
+  [[ "${XIDER_FAIL_DEPENDENCIES:-0}" != 1 ]] || exit 19
+  exit 0
+fi
+exec "$XIDER_TEST_REAL_PYTHON" "$@"
+PYTHON
+chmod +x "$FAKE_BIN/python3"
 
 printf '#!/usr/bin/env bash\nexit 0\n' > "$FAKE_BIN/launchctl"
 chmod +x "$FAKE_BIN/launchctl"
@@ -80,6 +97,7 @@ exit 0
 KEEPER
 printf '#!/usr/bin/env bash\nexit 0\n' > "$SOURCE_ROOT/XGENT-MCS/stop_agent.sh"
 printf 'new\n' > "$SOURCE_ROOT/XGENT-MCS/new-version.marker"
+printf '# fixture dependencies\n' > "$SOURCE_ROOT/XGENT-MCS/requirements.txt"
 chmod +x "$SOURCE_ROOT/XGENT-MCS/start_agent.sh" \
   "$SOURCE_ROOT/XGENT-MCS/start_guardian.sh" "$SOURCE_ROOT/XGENT-MCS/stop_agent.sh"
 
@@ -214,6 +232,23 @@ backups=("$SUCCESS_ROOT"/git-ver.previous.*)
 [[ -d "${backups[0]}" && -f "${backups[0]}/XGENT-MCS/old-version.marker" ]] || {
   echo 'The previous macOS version was not kept as a rollback copy.' >&2; exit 1;
 }
+[[ -L "$SUCCESS_ROOT/git-ver/XGENT-MCS/venv" &&
+   -x "$SUCCESS_ROOT/git-ver/XGENT-MCS/venv/bin/python3" ]] || {
+  echo 'The prepared runtime was not retained at a stable path.' >&2; exit 1;
+}
+
+DEPENDENCY_ROOT="$FIXTURE/dependency-failure"
+make_old_install "$DEPENDENCY_ROOT"
+if XIDER_FAIL_DEPENDENCIES=1 run_bootstrap "$DEPENDENCY_ROOT" 0 > "$FIXTURE/dependency.log" 2>&1; then
+  echo 'Dependency preflight failure unexpectedly activated a new Mac checkout.' >&2; exit 1;
+fi
+[[ -f "$DEPENDENCY_ROOT/git-ver/XGENT-MCS/old-version.marker" &&
+   ! -e "$DEPENDENCY_ROOT/git-ver/XGENT-MCS/new-version.marker" ]] || {
+  echo 'Dependency preflight failure changed the working installation.' >&2; exit 1;
+}
+if compgen -G "$DEPENDENCY_ROOT/git-ver.previous.*" >/dev/null; then
+  echo 'The working checkout was moved before dependencies passed.' >&2; exit 1;
+fi
 
 PINNED_ROOT="$FIXTURE/pinned-install"
 PINNED_REF="$(printf 'c%.0s' {1..40})"

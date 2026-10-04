@@ -18,7 +18,7 @@ def test_generated_commands_pin_script_and_source_to_the_same_commit(commit_id):
     ref = commit_id.lower()
     text = build_commands(commit_id, RELEASE_TAG)
     windows_bytes = subprocess.check_output(
-        ["git", "show", f"{ref}:deploy/bootstrap.ps1"], cwd=ROOT
+        ["git", "show", f"{ref}:deploy/bootstrap-agent.ps1"], cwd=ROOT
     )
     macos_bytes = subprocess.check_output(
         ["git", "show", f"{ref}:deploy/bootstrap.sh"], cwd=ROOT
@@ -26,12 +26,15 @@ def test_generated_commands_pin_script_and_source_to_the_same_commit(commit_id):
     assert windows_bytes
     assert macos_bytes
 
-    assert f"raw.githubusercontent.com/invinby/XIDER/{ref}/deploy/bootstrap.ps1" in text
+    assert f"raw.githubusercontent.com/invinby/XIDER/{ref}/deploy/bootstrap-agent.ps1" in text
+    assert "/deploy/bootstrap.ps1" not in text
     assert f"raw.githubusercontent.com/invinby/XIDER/{ref}/deploy/bootstrap.sh" in text
     assert f"releases/download/{RELEASE_TAG}/XIDER-bootstrap-windows.ps1.sig" in text
     assert f"releases/download/{RELEASE_TAG}/XIDER-bootstrap-macos.sh.sig" in text
-    assert f"& $p -Ref '{ref}'" in text
+    assert f"& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p -Ref '{ref}'" in text
+    assert "Set-ExecutionPolicy" not in text
     assert f"XIDER_REF='{ref}' bash" in text
+    assert f"XIDER_RELEASE_TAG='{RELEASE_TAG}' XIDER_REF='{ref}'" in text
     assert "iwr -UseBasicParsing -TimeoutSec 90" in text
     assert "curl -fsSL --max-time 90" in text
     assert "[Security.Cryptography.SHA256]::Create()" in text
@@ -45,10 +48,10 @@ def test_generated_commands_pin_script_and_source_to_the_same_commit(commit_id):
 def test_quickstart_bootstrap_source_is_pinned_to_the_exact_git_commit():
     text = build_commands(CURRENT_COMMIT, RELEASE_TAG)
     blob = subprocess.check_output(
-        ["git", "show", f"{CURRENT_COMMIT}:deploy/bootstrap.ps1"], cwd=ROOT
+        ["git", "show", f"{CURRENT_COMMIT}:deploy/bootstrap-agent.ps1"], cwd=ROOT
     )
     assert blob == subprocess.check_output(
-        ["git", "show", f"{CURRENT_COMMIT}:deploy/bootstrap.ps1"], cwd=ROOT
+        ["git", "show", f"{CURRENT_COMMIT}:deploy/bootstrap-agent.ps1"], cwd=ROOT
     )
     assert "ComputeHash($f)" in text
     assert "$m=Join-Path $d 'message'" in text
@@ -60,7 +63,7 @@ def test_quickstart_bootstrap_source_is_pinned_to_the_exact_git_commit():
 
     # This checkout has mixed line endings in the PowerShell file on Windows;
     # the raw GitHub blob must remain the source of truth for the expected hash.
-    worktree = (ROOT / "deploy" / "bootstrap.ps1").read_bytes()
+    worktree = (ROOT / "deploy" / "bootstrap-agent.ps1").read_bytes()
     if worktree != blob:
         assert worktree != blob
 
