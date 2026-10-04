@@ -187,7 +187,7 @@ trap on_error ERR
 trap cleanup EXIT
 
 do_update() {
-  local component unit_backup
+  local component unit_backup source_dir unexpected
   [[ -f "${INCOMING}" ]] || { echo "No release bundle at ${INCOMING}; upload a bundle first." >&2; return 3; }
   [[ -f "${MANIFEST}" ]] || { echo "No signed release manifest at ${MANIFEST}; refusing unsigned update." >&2; return 3; }
   [[ -r "${EXTRACT_HELPER}" ]] || { echo "Missing safe archive extractor: ${EXTRACT_HELPER}" >&2; return 3; }
@@ -207,28 +207,36 @@ do_update() {
   fi
   STAGE="$(mktemp -d "${APP_DIR}/.xider-update.XXXXXX")"
   python3 "${EXTRACT_HELPER}" "${INCOMING}" "${STAGE}"
-  find "${STAGE}" -type f -name '*.sh' -exec sed -i 's/\r$//' {} +
-  sed -i 's/\r$//' "${STAGE}/TG-BOT-SERVER/requirements.txt"
-  [[ -f "${STAGE}/TG-BOT-SERVER/bot.py" && -f "${STAGE}/TG-BOT-SERVER/requirements.txt" ]] || {
+  source_dir="${STAGE}"
+  if [[ -d "${STAGE}/XIDER-source" ]]; then
+    unexpected="$(find "${STAGE}" -mindepth 1 -maxdepth 1 ! -name 'XIDER-source' -print -quit)"
+    [[ -z "${unexpected}" ]] || {
+      echo "Release archive has unexpected content beside its XIDER-source root." >&2; return 5;
+    }
+    source_dir="${STAGE}/XIDER-source"
+  fi
+  find "${source_dir}" -type f -name '*.sh' -exec sed -i 's/\r$//' {} +
+  sed -i 's/\r$//' "${source_dir}/TG-BOT-SERVER/requirements.txt"
+  [[ -f "${source_dir}/TG-BOT-SERVER/bot.py" && -f "${source_dir}/TG-BOT-SERVER/requirements.txt" ]] || {
     echo "Release bundle is missing the Telegram bot." >&2; return 5;
   }
   for component in "${COMPONENTS[@]}"; do
-    [[ -d "${STAGE}/${component}" ]] || { echo "Release bundle is missing ${component}." >&2; return 5; }
+    [[ -d "${source_dir}/${component}" ]] || { echo "Release bundle is missing ${component}." >&2; return 5; }
   done
   for helper in update-server.sh safe_extract.py xider-server-ops.sh; do
-    [[ -f "${STAGE}/deploy/${helper}" ]] || {
+    [[ -f "${source_dir}/deploy/${helper}" ]] || {
       echo "Release bundle is missing the server helper deploy/${helper}." >&2; return 5;
     }
   done
-  if ! cmp -s "${APP_DIR}/TG-BOT-SERVER/requirements.txt" "${STAGE}/TG-BOT-SERVER/requirements.txt"; then
+  if ! cmp -s "${APP_DIR}/TG-BOT-SERVER/requirements.txt" "${source_dir}/TG-BOT-SERVER/requirements.txt"; then
     echo "Dependency changes are not yet supported by this in-place updater; current install is unchanged." >&2
     return 6
   fi
-  python3 -m compileall -q "${STAGE}/TG-BOT-SERVER" "${STAGE}/XGENT-WDS" "${STAGE}/XGENT-MCS"
+  python3 -m compileall -q "${source_dir}/TG-BOT-SERVER" "${source_dir}/XGENT-WDS" "${source_dir}/XGENT-MCS"
 
   MUTATING=1
   systemctl stop "${SERVICE}"
-  overlay_contents "${STAGE}"
+  overlay_contents "${source_dir}"
   install -m 0644 "${APP_DIR}/deploy/xider-bot.service" "${UNIT_FILE}"
   chown -R xider:xider "${APP_DIR}/TG-BOT-SERVER" "${APP_DIR}/XGENT-WDS" "${APP_DIR}/XGENT-MCS" "${APP_DIR}/deploy"
   systemctl daemon-reload
@@ -239,7 +247,7 @@ do_update() {
     MUTATING=0
     return 7
   fi
-  promote_root_helpers "${STAGE}"
+  promote_root_helpers "${source_dir}"
   rm -f -- "${INCOMING}" "${MANIFEST}"
   MUTATING=0
   echo "Update installed; service is enabled, active, and has a MainPID. Backup: ${BACKUP}"

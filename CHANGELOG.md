@@ -1,5 +1,23 @@
 # XIDER release history
 
+## X4.1.2-TARPED+20261005 — X-STAB archive-root fix
+
+### English
+
+- Fixed production updates for the signed GitHub source archive, which contains
+  its files under the `XIDER-source/` directory.
+- Added a regression fixture that exercises that exact archive layout through
+  backup, health check, automatic rollback, and manual rollback paths.
+- Kept the bot and both agents on synchronized version 4.1.2.
+
+### Русский
+
+- Исправлено обновление VPS из подписанного GitHub-архива: файлы релиза лежат
+  внутри папки `XIDER-source/`, и сервер теперь корректно распаковывает её.
+- Регрессионный тест прогоняет именно эту структуру через резервную копию,
+  проверку здоровья, автоматический и ручной откат.
+- Версии бота и обоих агентов синхронизированы на 4.1.2.
+
 ## X4.1.1-TARPED+20261005 — X-DOCK manual setup
 
 ### English

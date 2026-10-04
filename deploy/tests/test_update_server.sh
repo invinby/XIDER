@@ -57,18 +57,19 @@ from pathlib import Path
 from zipfile import ZipFile
 
 with ZipFile(sys.argv[1], "w") as archive:
-    archive.writestr("TG-BOT-SERVER/bot.py", sys.argv[2] + "\n")
+    prefix = "XIDER-source/"
+    archive.writestr(prefix + "TG-BOT-SERVER/bot.py", sys.argv[2] + "\n")
     if sys.argv[2] == "bad":
-        archive.writestr("TG-BOT-SERVER/new-feature.py", "pass\n")
+        archive.writestr(prefix + "TG-BOT-SERVER/new-feature.py", "pass\n")
     # Windows checkouts can put CRLF in this text manifest. The updater must
     # compare requirements by lines, not reject an otherwise identical release.
-    archive.writestr("TG-BOT-SERVER/requirements.txt", "test-dependency==1\r\n")
-    archive.writestr("XGENT-WDS/agent.py", "pass\n")
-    archive.writestr("XGENT-MCS/agent.py", "pass\n")
-    archive.writestr("deploy/xider-bot.service", "[Service]\nExecStart=/new\n")
+    archive.writestr(prefix + "TG-BOT-SERVER/requirements.txt", "test-dependency==1\r\n")
+    archive.writestr(prefix + "XGENT-WDS/agent.py", "pass\n")
+    archive.writestr(prefix + "XGENT-MCS/agent.py", "pass\n")
+    archive.writestr(prefix + "deploy/xider-bot.service", "[Service]\nExecStart=/new\n")
     for helper in ("update-server.sh", "safe_extract.py", "xider-server-ops.sh"):
         with (Path(sys.argv[3]) / "deploy" / helper).open(encoding="utf-8") as source:
-            archive.writestr(f"deploy/{helper}", source.read())
+            archive.writestr(prefix + f"deploy/{helper}", source.read())
 PY
 }
 
