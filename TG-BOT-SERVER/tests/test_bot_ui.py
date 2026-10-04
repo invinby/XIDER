@@ -810,7 +810,8 @@ def test_simple_command_shows_success_when_agent_ack_has_no_text(monkeypatch):
 def test_simple_command_does_not_create_duplicate_after_transient_edit_errors(monkeypatch):
     from types import SimpleNamespace
 
-    edit_attempts = []
+    edit_attempts = 0
+    successful_edits = []
     deleted = []
     answered = []
 
@@ -818,9 +819,12 @@ def test_simple_command_does_not_create_duplicate_after_transient_edit_errors(mo
         chat = SimpleNamespace(id=1)
         message_id = 44
 
-        async def edit_text(self, *_args, **_kwargs):
-            edit_attempts.append(True)
-            raise RuntimeError("temporary network failure")
+        async def edit_text(self, text, **_kwargs):
+            nonlocal edit_attempts
+            edit_attempts += 1
+            if edit_attempts in {1, 3}:
+                raise RuntimeError("temporary network failure")
+            successful_edits.append(text)
 
         async def delete(self):
             deleted.append(True)
@@ -851,7 +855,9 @@ def test_simple_command_does_not_create_duplicate_after_transient_edit_errors(mo
         FakeCallback(), "prank_screamer", "🎬", "Скример", timeout=1.0
     ))
 
-    assert len(edit_attempts) == 2
+    assert edit_attempts == 4
+    assert len(successful_edits) == 2
+    assert bot._lex("device_command_completed") in successful_edits[-1]
     assert deleted == []
     assert answered == []
 
@@ -1095,6 +1101,40 @@ def test_sensitive_callback_hides_result_if_grant_is_revoked_during_wait(
     assert published == [(action, expected_kwargs)]
     assert replacement_cards[-1][0] == bot._lex("action_result_hidden_after_revoke")
     assert media_sends == []
+
+
+def test_sensitive_callback_reports_revocation_before_publish_as_not_sent(monkeypatch):
+    from types import SimpleNamespace
+
+    allowed = True
+    published = []
+    replacement_cards = []
+
+    class FakeMessage:
+        chat = SimpleNamespace(id=77)
+        message_id = 100
+
+    class FakeCallback:
+        data = "cmd:clipboard"
+        from_user = SimpleNamespace(id=77)
+        message = FakeMessage()
+
+        async def answer(self, *_args, **_kwargs):
+            nonlocal allowed
+            allowed = False
+
+    async def replace(_cq, text, reply_markup=None):
+        replacement_cards.append(text)
+
+    monkeypatch.setitem(bot.SESSION, "target", "device-1")
+    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: allowed)
+    monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: published.append((args, kwargs)))
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+
+    asyncio.run(bot.on_cmd_clipboard(FakeCallback()))
+
+    assert published == []
+    assert replacement_cards == [bot._lex("input_access_revoked")]
 
 
 def test_simple_command_keeps_owner_all_device_volume_action_available(monkeypatch):
