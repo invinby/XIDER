@@ -2050,6 +2050,7 @@ def test_buttons_have_colored_styles(monkeypatch):
 
 
 def test_common_process_feedback_uses_selected_xlex_voice(monkeypatch):
+    from types import SimpleNamespace
     class FakeCallback:
         data = "cmd:processes"
         from_user = SimpleNamespace(id=bot.ADMIN_ID)
