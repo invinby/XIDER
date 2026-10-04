@@ -32,6 +32,30 @@ if (-not $KnownHostsPath) {
 }
 $sshOpts = @('-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', "UserKnownHostsFile=$KnownHostsPath", '-o', 'IdentitiesOnly=yes', '-i', $KeyPath)
 
+function Invoke-XiderRemoteCommand {
+    param(
+        [string[]]$Options,
+        [string]$Destination,
+        [string]$RemoteCommand
+    )
+    # PowerShell 5 maps native stderr to ErrorRecords. systemd can emit a
+    # harmless daemon-reload warning during a successful restart; capture it
+    # without letting $ErrorActionPreference='Stop' abort the local workflow.
+    $savedErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $capturedOutput = @(& ssh @Options $Destination $RemoteCommand 2>&1)
+        $capturedExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $savedErrorActionPreference
+    }
+    return [pscustomobject]@{
+        Output = $capturedOutput
+        ExitCode = $capturedExitCode
+    }
+}
+
 try {
     if (-not (Test-Path -LiteralPath $KeyPath)) { throw "SSH key not found: $KeyPath" }
     if (-not (Test-Path -LiteralPath $KnownHostsPath -PathType Leaf)) {
@@ -211,8 +235,9 @@ sudo /usr/local/sbin/xider-server-ops update
     $remote = $remote.Replace('__REMOTE_VERIFIER__', $remoteVerifier)
     $remote = $remote.Replace('__REMOTE_SIGNATURE__', $remoteSignature)
     $remote = $remote.Replace('__REMOTE_OPS__', $remoteOps)
-    $updateOutput = @(& ssh @sshOpts "ubuntu@$ServerIp" $remote 2>&1)
-    $updateExit = $LASTEXITCODE
+    $updateResult = Invoke-XiderRemoteCommand -Options $sshOpts -Destination "ubuntu@$ServerIp" -RemoteCommand $remote
+    $updateOutput = @($updateResult.Output)
+    $updateExit = [int]$updateResult.ExitCode
     $updateOutput | Out-Host
     if ($updateExit -ne 0) { throw 'Safe server update failed; the updater should have restored the previous source. Inspect journalctl -u xider-bot.' }
     $updateText = ($updateOutput | ForEach-Object { [string]$_ }) -join "`n"

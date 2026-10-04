@@ -91,6 +91,40 @@ try {
         -not $uploadSource.Contains('sudo bash -n "$ops"')) {
         throw 'The VPS uploader must normalize CRLF and syntax-check executable server shell helpers before installation.'
     }
+    if ($uploadSource -notmatch "ErrorActionPreference = 'Continue'" -or
+        $uploadSource -notmatch '\$capturedExitCode = \$LASTEXITCODE' -or
+        $uploadSource -notmatch 'Invoke-XiderRemoteCommand') {
+        throw 'The VPS uploader must capture remote stderr without masking the SSH exit code.'
+    }
+    $tokens = $null
+    $errors = $null
+    $uploadAst = [System.Management.Automation.Language.Parser]::ParseInput(
+        $uploadSource, [ref]$tokens, [ref]$errors
+    )
+    if ($errors.Count) { throw 'Could not parse the VPS uploader for its native SSH capture fixture.' }
+    $remoteFunction = $uploadAst.Find({
+        param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Invoke-XiderRemoteCommand'
+    }, $true)
+    if (-not $remoteFunction) { throw 'The remote SSH capture helper is missing.' }
+    Invoke-Expression $remoteFunction.Extent.Text
+    function ssh {
+        Write-Error 'fixture systemd reload warning'
+        Write-Output 'Backup: /var/backups/xider/xider-fixture.tar.gz'
+        $global:LASTEXITCODE = 0
+    }
+    try {
+        $capture = Invoke-XiderRemoteCommand -Options @() -Destination 'ubuntu@fixture' -RemoteCommand 'update'
+        if ($capture.ExitCode -ne 0 -or
+            (($capture.Output | ForEach-Object { [string]$_ }) -join "`n") -notmatch 'fixture systemd reload warning' -or
+            (($capture.Output | ForEach-Object { [string]$_ }) -join "`n") -notmatch 'Backup: /var/backups/xider/') {
+            throw 'A harmless SSH stderr warning masked the captured output or exit status.'
+        }
+    }
+    finally {
+        Remove-Item Function:\ssh -ErrorAction SilentlyContinue
+    }
     $uploadKeyRejected = $false
     try { & $uploadScript }
     catch { $uploadKeyRejected = $_.Exception.Message.Contains($env:XIDER_SSH_KEY) }
