@@ -2239,3 +2239,67 @@ Go и Rust по упаковке, сопровождению, диагности
   маршрута установки: [MAC-REMOTE-UPDATES.md](MAC-REMOTE-UPDATES.md).
 - Нельзя считать весь Mega-план завершённым: новая подпись release, деплой,
   Telegram и реальный Mac update/rollback должны получить собственные результаты.
+
+## 26. Продолжение локальной стабилизации · 2026-10-04
+
+- Закрыта гонка разрешений Telegram FSM: ввод теперь повторно проверяет исходное
+  право, роль и устройство непосредственно перед обработкой. Одноразовая форма
+  фотообоев привязана к отдельному состоянию и устройству; отзыв права во время
+  загрузки Telegram блокирует MQTT-команду. Постороннее фото не считается
+  командой. Запрет/ошибка редактируют карточку вместо создания лишних сообщений.
+- macOS Guard Keeper увеличивает задержку после быстрых падений агента и считает
+  восстановление стабильным только после 60 секунд живого процесса. Windows
+  `start_agent.bat` / `stop_agent.bat` сначала сохраняют намерение владельца в
+  Guardian state, чтобы фоновое восстановление не отменяло явную остановку.
+- Добавлена проверка `bash -n` для всех пяти Mac shell-скриптов. Сверено: Git
+  уже хранит их как LF; прежние CRLF были только локальной особенностью checkout.
+- Свежий `py -3.12 tools/run_tests.py`: **511 passed, 11 skipped** (бот 208,
+  Windows 63, macOS 139, ops 22/1 skipped, release tools 55,
+  deployment/signature 24/10 skipped); Windows PowerShell 5.1 bootstrap,
+  staged-install и rollback fixtures прошли. Отдельно `XGENT-MCS` дал
+  139 passed; signed bootstrap recovery — 8 passed. `ops/x_map_audit.py` остаётся
+  source-only: 119 общих действий Windows/macOS, без missing handler,
+  declared-without-handler или необработанных dynamic action sites. Ни один из
+  этих результатов сам по себе не является live-проверкой физических устройств.
+- FSM-проверка охватывает повторную проверку исходной роли, кнопки и устройства
+  перед MQTT side effect после задержек/скачивания; для файлового ответа она
+  дополнительно запрещает выдачу данных после отзыва доступа. Регрессия
+  `FakeBot.download()` подтверждает, что revoke во время загрузки не публикует
+  `file_put`. Если отзыв произошёл после отправки команды, но пока бот ждал
+  результат, отдельный текст сообщает, что команда уже могла выполниться, а
+  ответ скрыт; тесты покрывают шесть операций `put/list/get/del/open/find`.
+- macOS source-updater подтверждает health только после успешного SUBACK обеих
+  командных подписок; ошибки/отклонённые/устаревшие ACK не фиксируют обновление.
+  Ошибочный запуск откатывается на прежний runtime без повторного `pip` в нём.
+  Windows Agent/Guardian теперь получают согласованный desired-running state при
+  ручных start/stop.
+- X-VAULT setup исправлен на локальных Linux fixtures: uploader читает, но не
+  меняет `authorized_keys` (`root:xvault-upload 0640`), named-user ACL и закрытый
+  `/usr/local/libexec` отвергаются до запуска сервисов; добавлены безопасная
+  миграция только byte-identical legacy key и `--preflight-only`. WSL-проверка:
+  9 setup-permission tests и 8 transport tests прошли, вместе с roundtrip,
+  locking, limits, promotion и retention fixtures. Это не реальный SSH login,
+  не установка на standby и не доказательство backup/restore.
+- GitHub read-only состояние перепроверено: latest release `v4.1.0`, его
+  Build & Release workflow завершился success; secret
+  `XIDER_RELEASE_PRIVATE_KEY_B64` уже присутствует в environment
+  `xider-release-signing`. Это подтверждает конфигурацию signing workflow, но
+  не одобряет и не публикует текущие изменения автоматически.
+- Read-only проверка AWS `16.16.200.207`: `xider-bot.service` active и сообщает
+  сборку `4.1.0` (`BUILD_DATE=2026-10-04`). Хэш установленного `bot.py` не
+  совпадает с текущим TARPED checkout; текущие локальные изменения на VPS не
+  выкладывались. `xider-vault-backup.timer` и `xider-vault-promote.timer` не
+  запущены, `systemctl list-timers` не показывает расписаний X-Vault. Состояние
+  второго VPS и фактическое межсерверное восстановление в этой итерации не
+  проверены.
+- Read-only сравнение показало, что локальный Desktop `main` и опубликованный
+  TARPED `main` имеют независимую историю без общего предка. Desktop-сборка
+  содержит 15 дополнительных действий; их нельзя переносить заменой файлов.
+  Сначала отдельно рассматривать VPN/мониторы/ограниченные системные логи и
+  проверку обновлений ОС; запись/печать/захват экрана и webcam-триггеры требуют
+  самостоятельной реализации и проверок.
+- Локальный diff синхронизирован по `TG-BOT-SERVER/README.md`, корневому README,
+  RBAC и Guard Keeper; feature matrix явно помечена как source-level, а не
+  live-tested. Исправления требуют отдельного PR/CI и не считаются релизом.
+  Перед любым production deploy необходимо сверить установленный `bot.py`,
+  второй VPS, timers и staging restore. Не объявлять текущую ветку развёрнутой.

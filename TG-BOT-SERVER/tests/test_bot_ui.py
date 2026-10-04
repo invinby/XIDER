@@ -77,6 +77,30 @@ def test_static_xlex_keys_exist_and_keyboard_labels_are_not_hardcoded():
     assert literal_button_labels == {"◀️", "▶️"}
 
 
+def test_user_fsm_prompts_bind_the_initiating_action_and_device():
+    tree = ast.parse(Path(bot.__file__).read_text(encoding="utf-8"))
+    bound_states = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        if node.func.id != "_start_authorized_input" or len(node.args) < 2:
+            continue
+        state_arg = node.args[1]
+        if isinstance(state_arg, ast.Attribute) and isinstance(state_arg.value, ast.Name):
+            if state_arg.value.id == "Form":
+                bound_states.add(state_arg.attr)
+
+    # Every user-capable free-text/file input revalidates its original callback
+    # and device when the user submits the next message. Admin-only forms such
+    # as `wait_admin` are intentionally not in this set.
+    assert {
+        "wait_open_app", "wait_url", "wait_text", "wait_sound", "wait_clipset",
+        "wait_path", "wait_find", "wait_fun_text", "wait_fun_hotkey",
+        "wait_fun_wallpaper", "wait_wallpaper_photo", "wait_fun_spam", "wait_shout",
+        "wait_brightness", "wait_prockill",
+    } <= bound_states
+
+
 def test_random_wallpaper_feedback_has_six_distinct_voices():
     keys = (
         "wallpaper_photo_guide",
@@ -98,7 +122,8 @@ def test_random_wallpaper_feedback_has_six_distinct_voices():
 
 
 def test_wallpaper_photo_flow_reuses_the_user_card_instead_of_sending_status_messages():
-    tree = ast.parse(Path(bot.__file__).read_text(encoding="utf-8"))
+    source = Path(bot.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
     expected_helpers = {
         "on_wallpaper_photo_guide": "_replace_callback_message",
         "on_photo_wallpaper_message": "_replace_user_card",
@@ -128,6 +153,177 @@ def test_wallpaper_photo_flow_reuses_the_user_card_instead_of_sending_status_mes
             )
             for call in ast.walk(node)
         ), node.name
+
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    guide_calls = {
+        call.func.id
+        for call in ast.walk(functions["on_wallpaper_photo_guide"])
+        if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+    }
+    assert "_start_authorized_input" in guide_calls
+
+    photo_route = next(
+        decorator
+        for decorator in functions["on_photo_wallpaper_message"].decorator_list
+        if isinstance(decorator, ast.Call)
+    )
+    assert "Form.wait_wallpaper_photo" in ast.get_source_segment(source, photo_route)
+
+    message_handlers = [
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(
+            isinstance(decorator, ast.Call)
+            and isinstance(decorator.func, ast.Attribute)
+            and decorator.func.attr == "message"
+            for decorator in node.decorator_list
+        )
+    ]
+    assert message_handlers[-1] == "on_denied"
+
+
+def test_photo_wallpaper_upload_publishes_to_bound_device_when_access_is_live(monkeypatch):
+    from types import SimpleNamespace
+
+    cards = []
+    published = []
+
+    class FakeState:
+        async def get_data(self):
+            return {
+                "authorization_callback": "cmd:wallpaper_photo_guide",
+                "authorization_target": "device-1",
+            }
+
+        async def clear(self):
+            pass
+
+    class FakeTelegramBot:
+        async def get_file(self, _file_id):
+            return SimpleNamespace(file_path="photo.jpg")
+
+        async def download_file(self, _path, destination):
+            destination.write(b"photo-data")
+
+    class FakeMessage:
+        from_user = SimpleNamespace(id=20)
+        bot = FakeTelegramBot()
+        photo = [SimpleNamespace(file_id="photo-id")]
+
+    class FakeCollector:
+        def reset(self):
+            pass
+
+        async def wait(self, _timeout):
+            return {"ok": True}
+
+    async def replace(_message, text, reply_markup=None):
+        cards.append((text, reply_markup))
+
+    monkeypatch.setattr(bot, "_replace_user_card", replace)
+    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: True)
+    monkeypatch.setattr(bot, "target_label", lambda target: f"Device {target}")
+    monkeypatch.setattr(bot, "wallpaper_menu", lambda: "wallpaper-menu")
+    monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
+    monkeypatch.setattr(
+        bot,
+        "publish",
+        lambda action, **kwargs: published.append((action, kwargs)) or True,
+    )
+
+    asyncio.run(bot.on_photo_wallpaper_message(FakeMessage(), FakeState()))
+
+    assert len(published) == 1
+    action, kwargs = published[0]
+    assert action == "wallpaper_set"
+    assert kwargs["_target"] == "device-1"
+    assert base64.b64decode(kwargs["b64"]) == b"photo-data"
+    assert cards[-1][0] == bot._lex_html(
+        "wallpaper_photo_installed", device="Device device-1", size=0
+    )
+
+
+def test_photo_wallpaper_upload_aborts_if_access_is_revoked_during_download(monkeypatch):
+    from types import SimpleNamespace
+
+    cards = []
+    published = []
+    allowed = True
+
+    class FakeState:
+        async def get_data(self):
+            return {
+                "authorization_callback": "cmd:wallpaper_photo_guide",
+                "authorization_target": "device-1",
+            }
+
+        async def clear(self):
+            pass
+
+    class FakeTelegramBot:
+        async def get_file(self, _file_id):
+            return SimpleNamespace(file_path="photo.jpg")
+
+        async def download_file(self, _path, destination):
+            nonlocal allowed
+            destination.write(b"photo-data")
+            allowed = False
+
+    class FakeMessage:
+        from_user = SimpleNamespace(id=20)
+        bot = FakeTelegramBot()
+        photo = [SimpleNamespace(file_id="photo-id")]
+
+    async def replace(_message, text, reply_markup=None):
+        cards.append((text, reply_markup))
+
+    monkeypatch.setattr(bot, "_replace_user_card", replace)
+    monkeypatch.setattr(
+        bot,
+        "_device_action_still_allowed",
+        lambda *_args: allowed,
+    )
+    monkeypatch.setattr(bot, "target_label", lambda target: f"Device {target}")
+    monkeypatch.setattr(bot, "wallpaper_menu", lambda: "wallpaper-menu")
+    monkeypatch.setattr(
+        bot,
+        "publish",
+        lambda action, **kwargs: published.append((action, kwargs)) or True,
+    )
+
+    asyncio.run(bot.on_photo_wallpaper_message(FakeMessage(), FakeState()))
+
+    assert published == []
+    assert bot._lex("wallpaper_photo_guide_required") in cards[-1][0]
+
+
+def test_unrequested_photo_is_rejected_without_mqtt_publish(monkeypatch):
+    from types import SimpleNamespace
+
+    cards = []
+
+    class FakeMessage:
+        from_user = SimpleNamespace(id=20)
+
+    async def replace(_message, text, reply_markup=None):
+        cards.append((text, reply_markup))
+
+    monkeypatch.setattr(bot, "_replace_user_card", replace)
+    monkeypatch.setattr(
+        bot,
+        "publish",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unsolicited photo must never publish")
+        ),
+    )
+
+    asyncio.run(bot.on_unrequested_photo(FakeMessage()))
+    assert bot._lex("wallpaper_photo_guide_required") in cards[0][0]
 
 
 @pytest.mark.parametrize(
@@ -264,9 +460,15 @@ def test_text_command_flows_reuse_the_existing_chat_card():
         ), name
         if name in prompt_functions:
             assert any(
-                isinstance(call.func, ast.Attribute)
-                and call.func.attr == "update_data"
-                and any(keyword.arg == "command_target" for keyword in call.keywords)
+                (
+                    isinstance(call.func, ast.Attribute)
+                    and call.func.attr == "update_data"
+                    and any(keyword.arg == "command_target" for keyword in call.keywords)
+                )
+                or (
+                    isinstance(call.func, ast.Name)
+                    and call.func.id == "_start_authorized_input"
+                )
                 for call in calls
             ), name
             assert any(
@@ -363,8 +565,13 @@ def test_text_command_inputs_keep_the_device_chosen_when_prompt_opened(
     monkeypatch.setattr(bot, "publish_tracked", publish_tracked)
     monkeypatch.setattr(bot.shell_collector, "wait_for", shell_result)
     monkeypatch.setattr(bot, "fun_text_collector", FakeTextCollector())
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: True)
 
-    message = SimpleNamespace(text=input_text)
+    message = SimpleNamespace(
+        text=input_text,
+        from_user=SimpleNamespace(id=bot.ADMIN_ID),
+    )
     state = FakeState()
     asyncio.run(getattr(bot, handler_name)(message, state))
 
@@ -574,6 +781,7 @@ def test_simple_command_shows_success_when_agent_ack_has_no_text(monkeypatch):
             edits.append(text)
 
     class FakeCallback:
+        data = "cmd:prank_fake_update"
         from_user = SimpleNamespace(id=1)
         message = FakeMessage()
 
@@ -586,6 +794,7 @@ def test_simple_command_shows_success_when_agent_ack_has_no_text(monkeypatch):
 
     monkeypatch.setitem(bot.SESSION, "target", "device-1")
     monkeypatch.setattr(bot, "target_label", lambda _target: "Test device")
+    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: True)
     monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (True, "cmd-1"))
     monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
 
@@ -596,6 +805,266 @@ def test_simple_command_shows_success_when_agent_ack_has_no_text(monkeypatch):
     assert len(edits) == 2
     assert bot._lex("device_command_completed") in edits[-1]
     assert bot._lex("device_no_response") not in edits[-1]
+
+
+def test_simple_command_pins_captured_device_when_session_changes_during_answer(monkeypatch):
+    from types import SimpleNamespace
+
+    published = []
+    authorization_checks = []
+    edits = []
+
+    class FakeMessage:
+        chat = SimpleNamespace(id=1)
+        message_id = 10
+
+        async def edit_text(self, text, **_kwargs):
+            edits.append(text)
+
+    class FakeCallback:
+        data = "cmd:wifi"
+        from_user = SimpleNamespace(id=77)
+        message = FakeMessage()
+
+        async def answer(self, *_args, **_kwargs):
+            # Simulate another callback changing the shared selection while
+            # Telegram's callback acknowledgement is in flight.
+            bot.SESSION["target"] = "device-2"
+
+    class FakeCollector:
+        async def wait_for(self, target, action, *, timeout, command_id):
+            assert (target, action, timeout, command_id) == (
+                "device-1", "net_wifi_passwords", 1.0, "wifi-ticket"
+            )
+            return {"ok": True, "text": "visible result"}
+
+    def publish_tracked(action, **kwargs):
+        published.append((action, kwargs))
+        return True, "wifi-ticket"
+
+    def action_is_allowed(user_id, callback, target):
+        authorization_checks.append((user_id, callback, target))
+        return True
+
+    monkeypatch.setitem(bot.SESSION, "target", "device-1")
+    monkeypatch.setattr(bot, "target_label", lambda target: target)
+    monkeypatch.setattr(bot, "publish_tracked", publish_tracked)
+    monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
+    monkeypatch.setattr(bot, "_device_action_still_allowed", action_is_allowed)
+
+    asyncio.run(bot._simple_command_unlocked(
+        FakeCallback(), "net_wifi_passwords", "📶", "Wi-Fi", timeout=1.0
+    ))
+
+    assert bot.SESSION["target"] == "device-2"
+    assert published == [("net_wifi_passwords", {"_target": "device-1"})]
+    assert authorization_checks == [
+        (77, "cmd:wifi", "device-1"),
+        (77, "cmd:wifi", "device-1"),
+    ]
+    assert "visible result" in edits[-1]
+
+
+def test_simple_command_does_not_publish_if_original_grant_is_revoked_during_answer(monkeypatch):
+    from types import SimpleNamespace
+
+    published = []
+    cards = []
+    checks = []
+    allowed = True
+
+    class FakeMessage:
+        chat = SimpleNamespace(id=1)
+        message_id = 11
+
+    class FakeCallback:
+        data = "cmd:wifi"
+        from_user = SimpleNamespace(id=78)
+        message = FakeMessage()
+
+        async def answer(self, *_args, **_kwargs):
+            nonlocal allowed
+            allowed = False
+
+    async def replace(_cq, text, reply_markup=None):
+        cards.append((text, reply_markup))
+
+    def action_is_allowed(user_id, callback, target):
+        checks.append((user_id, callback, target, allowed))
+        return allowed
+
+    monkeypatch.setitem(bot.SESSION, "target", "device-1")
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: published.append((args, kwargs)))
+    monkeypatch.setattr(bot, "_device_action_still_allowed", action_is_allowed)
+
+    asyncio.run(bot._simple_command_unlocked(
+        FakeCallback(), "net_wifi_passwords", "📶", "Wi-Fi", timeout=1.0
+    ))
+
+    assert checks == [(78, "cmd:wifi", "device-1", False)]
+    assert published == []
+    assert cards[-1][0] == bot._lex("input_access_revoked")
+
+
+def test_simple_command_hides_wifi_password_result_if_grant_revoked_while_waiting(monkeypatch):
+    from types import SimpleNamespace
+
+    published = []
+    checks = []
+    edits = []
+    cards = []
+    allowed = True
+    secret = "Home_WiFi: private-password-8472"
+
+    class FakeMessage:
+        chat = SimpleNamespace(id=1)
+        message_id = 12
+
+        async def edit_text(self, text, **_kwargs):
+            edits.append(text)
+
+    class FakeCallback:
+        data = "cmd:wifi"
+        from_user = SimpleNamespace(id=79)
+        message = FakeMessage()
+
+        async def answer(self, *_args, **_kwargs):
+            pass
+
+    class FakeCollector:
+        async def wait_for(self, target, action, *, timeout, command_id):
+            nonlocal allowed
+            assert (target, action, command_id) == (
+                "device-1", "net_wifi_passwords", "wifi-ticket"
+            )
+            allowed = False
+            return {"ok": True, "text": secret}
+
+    def publish_tracked(action, **kwargs):
+        published.append((action, kwargs))
+        return True, "wifi-ticket"
+
+    def action_is_allowed(user_id, callback, target):
+        checks.append((user_id, callback, target, allowed))
+        return allowed
+
+    async def replace(_cq, text, reply_markup=None):
+        cards.append((text, reply_markup))
+
+    monkeypatch.setitem(bot.SESSION, "target", "device-1")
+    monkeypatch.setattr(bot, "target_label", lambda target: target)
+    monkeypatch.setattr(bot, "publish_tracked", publish_tracked)
+    monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
+    monkeypatch.setattr(bot, "_device_action_still_allowed", action_is_allowed)
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+
+    result = asyncio.run(bot._simple_command_unlocked(
+        FakeCallback(), "net_wifi_passwords", "📶", "Wi-Fi", timeout=1.0
+    ))
+
+    assert published == [("net_wifi_passwords", {"_target": "device-1"})]
+    assert checks == [
+        (79, "cmd:wifi", "device-1", True),
+        (79, "cmd:wifi", "device-1", False),
+    ]
+    assert result is None
+    assert cards[-1][0] == bot._lex("action_result_hidden_after_revoke")
+    assert secret not in "\n".join(edits)
+
+
+def test_simple_command_keeps_owner_all_device_volume_action_available(monkeypatch):
+    from types import SimpleNamespace
+
+    published = []
+    edits = []
+
+    class FakeMessage:
+        chat = SimpleNamespace(id=1)
+        message_id = 13
+
+        async def edit_text(self, text, **_kwargs):
+            edits.append(text)
+
+    class FakeCallback:
+        data = "cmd:volume"
+        from_user = SimpleNamespace(id=bot.ADMIN_ID)
+        message = FakeMessage()
+
+        async def answer(self, *_args, **_kwargs):
+            pass
+
+    class FakeCollector:
+        async def wait_for(self, target, action, *, timeout, command_id):
+            assert (target, action, command_id) == ("all", "volume_toggle", "all-ticket")
+            return {"ok": True, "text": "All devices muted"}
+
+    monkeypatch.setitem(bot.SESSION, "target", "all")
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(
+        bot,
+        "_device_action_still_allowed",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("owner all must not use device grant check")),
+    )
+    monkeypatch.setattr(bot, "target_label", lambda target: target)
+    monkeypatch.setattr(
+        bot,
+        "publish_tracked",
+        lambda action, **kwargs: published.append((action, kwargs)) or (True, "all-ticket"),
+    )
+    monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
+
+    asyncio.run(bot._simple_command_unlocked(
+        FakeCallback(), "volume_toggle", "🔇", "Mute", timeout=1.0
+    ))
+
+    assert published == [("volume_toggle", {"_target": "all"})]
+    assert "All devices muted" in edits[-1]
+
+
+def test_simple_command_rejects_non_owner_all_device_target(monkeypatch):
+    from types import SimpleNamespace
+
+    published = []
+    cards = []
+    grant_checks = []
+
+    class FakeMessage:
+        chat = SimpleNamespace(id=1)
+        message_id = 14
+
+    class FakeCallback:
+        data = "cmd:volume"
+        from_user = SimpleNamespace(id=80)
+        message = FakeMessage()
+
+        async def answer(self, *_args, **_kwargs):
+            pass
+
+    async def replace(_cq, text, reply_markup=None):
+        cards.append(text)
+
+    def device_grant(user_id, callback, target):
+        grant_checks.append((user_id, callback, target))
+        return True
+
+    monkeypatch.setitem(bot.SESSION, "target", "all")
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.USER)
+    monkeypatch.setattr(bot, "_device_action_still_allowed", device_grant)
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    monkeypatch.setattr(
+        bot,
+        "publish_tracked",
+        lambda *args, **kwargs: published.append((args, kwargs)),
+    )
+
+    asyncio.run(bot._simple_command_unlocked(
+        FakeCallback(), "volume_toggle", "🔇", "Mute", timeout=1.0
+    ))
+
+    assert grant_checks == []
+    assert published == []
+    assert cards == [bot._lex("input_access_revoked")]
 
 
 @pytest.mark.parametrize(
@@ -622,6 +1091,7 @@ def test_prompted_prank_input_edits_one_card_and_keeps_captured_target(
 
     class FakeMessage:
         text = "A test phrase"
+        from_user = SimpleNamespace(id=bot.ADMIN_ID)
 
     class FakeCollector:
         async def wait_for(self, *args, **kwargs):
@@ -636,6 +1106,8 @@ def test_prompted_prank_input_edits_one_card_and_keeps_captured_target(
     monkeypatch.setattr(bot, "publish_tracked", lambda name, **kwargs: published.append((name, kwargs)) or (True, "cmd-1"))
     monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
     monkeypatch.setattr(bot, "_replace_user_card", replace_card)
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: True)
 
     asyncio.run(handler(FakeMessage(), FakeState()))
 
@@ -2384,6 +2856,7 @@ def test_file_action_prompt_replaces_current_card(monkeypatch):
             calls.append(("data", data))
 
     class FakeCallback:
+        data = "files:get"
         from_user = SimpleNamespace(id=1)
         message = SimpleNamespace()
 
@@ -2399,7 +2872,15 @@ def test_file_action_prompt_replaces_current_card(monkeypatch):
     asyncio.run(bot.on_files_get(FakeCallback(), FakeState()))
 
     assert calls[0][0] == "state"
-    assert calls[1] == ("data", {"path_mode": "get", "target": "device-1"})
+    assert calls[1] == (
+        "data",
+        {
+            "path_mode": "get",
+            "target": "device-1",
+            "authorization_callback": "files:get",
+            "authorization_target": "device-1",
+        },
+    )
     assert calls[2][0] == "replace"
     assert calls[2][1] == bot._lex("files_prompt_get")
     assert calls[3][0] == "answer"
@@ -2421,7 +2902,12 @@ def test_file_upload_uses_sanitized_filename_in_remote_path(monkeypatch):
 
     class FakeState:
         async def get_data(self):
-            return {"path_mode": "put", "target": "device-1"}
+            return {
+                "path_mode": "put",
+                "target": "device-1",
+                "authorization_callback": "files:put",
+                "authorization_target": "device-1",
+            }
 
         async def clear(self):
             pass
@@ -2439,6 +2925,7 @@ def test_file_upload_uses_sanitized_filename_in_remote_path(monkeypatch):
             return {"ok": True, "path": "~/Downloads/_NUL.txt"}
 
     class FakeMessage:
+        from_user = SimpleNamespace(id=20)
         text = None
         document = SimpleNamespace(file_name=r"..\..\NUL.txt")
 
@@ -2451,6 +2938,8 @@ def test_file_upload_uses_sanitized_filename_in_remote_path(monkeypatch):
     monkeypatch.setattr(bot, "bot", FakeBot())
     monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
     monkeypatch.setattr(bot, "_replace_user_card", replace)
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.USER)
+    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: True)
     monkeypatch.setattr(
         bot,
         "publish",
@@ -2466,6 +2955,199 @@ def test_file_upload_uses_sanitized_filename_in_remote_path(monkeypatch):
     assert published[0][1]["id"]
     assert b".." not in published[0][1]["path"].encode()
     assert rendered
+
+
+def test_file_upload_aborts_if_permission_is_revoked_during_download(monkeypatch):
+    from types import SimpleNamespace
+
+    cards = []
+    published = []
+    checks = []
+    allowed = True
+
+    class FakeState:
+        async def get_data(self):
+            return {
+                "path_mode": "put",
+                "target": "device-1",
+                "authorization_callback": "files:put",
+                "authorization_target": "device-1",
+            }
+
+        async def clear(self):
+            pass
+
+    class FakeBot:
+        async def download(self, _document):
+            nonlocal allowed
+            allowed = False
+            return SimpleNamespace(read=lambda: b"private file contents")
+
+    class FakeMessage:
+        from_user = SimpleNamespace(id=20)
+        text = None
+        document = SimpleNamespace(file_name="upload.txt")
+
+    async def replace(_message, text, **kwargs):
+        cards.append((text, kwargs))
+
+    def action_is_allowed(user_id, callback, target):
+        checks.append((user_id, callback, target))
+        return allowed
+
+    monkeypatch.setattr(bot, "bot", FakeBot())
+    monkeypatch.setattr(bot, "_replace_user_card", replace)
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.USER)
+    monkeypatch.setattr(bot, "_device_action_still_allowed", action_is_allowed)
+    monkeypatch.setattr(
+        bot,
+        "publish",
+        lambda action, **kwargs: published.append((action, kwargs)) or True,
+    )
+
+    asyncio.run(bot.on_path_input(FakeMessage(), FakeState()))
+
+    assert checks == [(20, "files:put", "device-1")]
+    assert published == []
+    assert bot._lex("input_access_revoked") in cards[-1][0]
+
+
+def test_post_publish_revoke_message_is_accurate_in_all_six_styles():
+    messages = {
+        style: bot.xlex.render("action_result_hidden_after_revoke", style)
+        for style in bot.xlex.STYLES
+    }
+
+    assert len(set(messages.values())) == 6
+    for message in messages.values():
+        lowered = message.lower()
+        assert "мог" in lowered or "возможно" in lowered
+        assert "результат" in lowered
+        assert "скрыт" in lowered or "не показываю" in lowered
+        assert "не отправ" not in lowered
+        assert "не ушла" not in lowered
+
+
+@pytest.mark.parametrize("operation", ["put", "list", "get", "del", "open", "find"])
+def test_file_operation_revoke_after_publish_reports_possible_execution_and_hides_result(
+    monkeypatch, operation
+):
+    from types import SimpleNamespace
+
+    cards = []
+    published = []
+    checks = []
+    allowed = True
+    callback = f"files:{operation}"
+
+    class FakeState:
+        async def get_data(self):
+            return {
+                "path_mode": operation,
+                "target": "device-1",
+                "authorization_callback": callback,
+                "authorization_target": "device-1",
+            }
+
+        async def clear(self):
+            pass
+
+    class FakeBot:
+        async def download(self, _document):
+            return SimpleNamespace(read=lambda: b"contents")
+
+    class FakeCollector:
+        async def wait_for(self, *_args, **_kwargs):
+            nonlocal allowed
+            allowed = False
+            return {
+                "ok": True,
+                "text": "private directory listing",
+                "path": "~/Downloads/upload.txt",
+                "data": base64.b64encode(b"private file contents").decode("ascii"),
+                "filename": "private.txt",
+            }
+
+    class FakeMessage:
+        from_user = SimpleNamespace(id=20)
+        text = None if operation == "put" else "Documents/report.txt"
+        document = SimpleNamespace(file_name="upload.txt") if operation == "put" else None
+
+    async def replace(_message, text, **kwargs):
+        cards.append((text, kwargs))
+
+    def action_is_allowed(user_id, granted_callback, target):
+        checks.append((user_id, granted_callback, target, allowed))
+        return allowed
+
+    monkeypatch.setattr(bot, "bot", FakeBot())
+    monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
+    monkeypatch.setattr(bot, "file_collector", FakeCollector())
+    monkeypatch.setattr(bot, "_replace_user_card", replace)
+    monkeypatch.setattr(
+        bot,
+        "_replace_user_card_with_document",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("result must be withheld after permission revocation")
+        ),
+    )
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.USER)
+    monkeypatch.setattr(bot, "_device_action_still_allowed", action_is_allowed)
+    monkeypatch.setattr(
+        bot,
+        "publish_tracked",
+        lambda action, **kwargs: published.append((action, kwargs)) or (True, "op-1"),
+    )
+
+    handler = bot.on_find_input if operation == "find" else bot.on_path_input
+    asyncio.run(handler(FakeMessage(), FakeState()))
+
+    assert len(published) == 1
+    assert [check[3] for check in checks] == [True, False]
+    assert cards[-1][0] == bot._lex("action_result_hidden_after_revoke")
+    assert "не отправ" not in cards[-1][0].lower()
+    assert "мог" in cards[-1][0].lower() or "возможно" in cards[-1][0].lower()
+
+
+def test_user_fsm_handlers_revalidate_before_device_side_effects():
+    tree = ast.parse(Path(bot.__file__).read_text(encoding="utf-8"))
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    guarded_handlers = {
+        "on_open_app_input",
+        "on_url_input",
+        "on_text_input",
+        "on_sound_input",
+        "on_clipset_input",
+        "on_path_input",
+        "on_find_input",
+        "_run_text_prank_input",
+        "on_fun_text_input",
+        "on_fun_hotkey_input",
+        "on_fun_wallpaper_input",
+        "on_photo_wallpaper_message",
+        "on_brightness_input",
+        "on_prockill_input",
+    }
+    for name in guarded_handlers:
+        calls = {
+            call.func.id
+            for call in ast.walk(functions[name])
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+        }
+        assert "_pending_device_input_still_allowed" in calls, name
+
+    # These form wrappers delegate to the common guarded prank-input routine.
+    for name in ("on_fun_spam_input", "on_prank_shout_input"):
+        assert any(
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "_run_text_prank_input"
+            for call in ast.walk(functions[name])
+        ), name
 
 
 def test_successful_file_put_ack_is_routed_to_text_collector(monkeypatch):

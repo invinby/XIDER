@@ -139,6 +139,7 @@ class Form(StatesGroup):
     wait_fun_text = State()
     wait_fun_hotkey = State()
     wait_fun_wallpaper = State()
+    wait_wallpaper_photo = State()
     wait_fun_spam = State()
     wait_shout = State()
     wait_prockill = State()
@@ -146,6 +147,22 @@ class Form(StatesGroup):
     wait_admin_message = State()
     wait_bot_text = State()
     wait_server_command = State()
+
+
+async def _start_authorized_input(
+    state: FSMContext,
+    form_state: State,
+    callback: str,
+    device_id: str,
+    **form_data,
+) -> None:
+    """Bind a pending device command to its initiating grant and device."""
+    await state.set_state(form_state)
+    await state.update_data(
+        **form_data,
+        authorization_callback=str(callback or ""),
+        authorization_target=str(device_id or ""),
+    )
 
 
 # Диспетчер и роутер создаются ДО декораторов хендлеров (иначе NameError при импорте).
@@ -423,8 +440,7 @@ async def on_cmd_open_app(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_open_app)
-    await state.update_data(command_target=target)
+    await _start_authorized_input(state, Form.wait_open_app, cq.data, target, command_target=target)
     await _replace_callback_message(
         cq,
         _lex("open_app_prompt"),
@@ -453,6 +469,9 @@ async def on_open_app_input(message: Message, state: FSMContext):
         await _replace_user_card(
             message, _lex("single_device_only"), reply_markup=back_to_device_kb()
         )
+        return
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await _reject_revoked_device_input(message)
         return
     if publish("open_app", _target=target, app=app):
         await _replace_user_card(
@@ -2489,6 +2508,9 @@ async def on_url_input(message: Message, state: FSMContext):
             message, _lex("single_device_only"), reply_markup=back_to_device_kb()
         )
         return
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await _reject_revoked_device_input(message)
+        return
     if publish("open_url", _target=target, url=url):
         await _replace_user_card(
             message,
@@ -2520,6 +2542,9 @@ async def on_text_input(message: Message, state: FSMContext):
         await _replace_user_card(
             message, _lex("single_device_only"), reply_markup=back_to_device_kb()
         )
+        return
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await _reject_revoked_device_input(message)
         return
     if publish("notify", _target=target, text=text):
         await _replace_user_card(
@@ -2553,6 +2578,9 @@ async def on_sound_input(message: Message, state: FSMContext):
             message, _lex("single_device_only"), reply_markup=back_to_device_kb()
         )
         return
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await _reject_revoked_device_input(message)
+        return
     if publish("sound", _target=target, text=text):
         await _replace_user_card(
             message,
@@ -2563,14 +2591,6 @@ async def on_sound_input(message: Message, state: FSMContext):
         await _replace_user_card(
             message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb()
         )
-
-@router.message(F.from_user.id != ADMIN_ID)
-async def on_denied(message: Message):
-    if get_user_role(message.from_user.id) == Role.BLOCKED:
-        await message.answer("Доступ для этого аккаунта заблокирован.")
-    else:
-        await message.answer("Используй /start, чтобы открыть доступные разделы.")
-
 
 # ---------- XIDER 3: доступ, администрирование и серверная ----------
 
@@ -3408,8 +3428,7 @@ async def on_cmd_url(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_url)
-    await state.update_data(command_target=target)
+    await _start_authorized_input(state, Form.wait_url, cq.data, target, command_target=target)
     await _replace_callback_message(
         cq,
         _lex("url_prompt"),
@@ -3426,8 +3445,7 @@ async def on_cmd_text(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_text)
-    await state.update_data(command_target=target)
+    await _start_authorized_input(state, Form.wait_text, cq.data, target, command_target=target)
     await _replace_callback_message(
         cq,
         _lex("notify_text_prompt"),
@@ -3444,8 +3462,7 @@ async def on_cmd_sound(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_sound)
-    await state.update_data(command_target=target)
+    await _start_authorized_input(state, Form.wait_sound, cq.data, target, command_target=target)
     await _replace_callback_message(
         cq,
         _lex("sound_prompt"),
@@ -4316,8 +4333,7 @@ async def on_cmd_clipset(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_clipset)
-    await state.update_data(command_target=target)
+    await _start_authorized_input(state, Form.wait_clipset, cq.data, target, command_target=target)
     await _replace_callback_message(
         cq,
         "📥 Отправь текст — он попадёт в буфер обмена устройства.",
@@ -4340,6 +4356,9 @@ async def on_clipset_input(message: Message, state: FSMContext):
         return
     if target == "all":
         await _replace_user_card(message, _lex("single_device_only"), reply_markup=back_to_device_kb())
+        return
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await _reject_revoked_device_input(message)
         return
     if publish("clipboard_set", _target=target, text=text):
         await _replace_user_card(message, f"📥 Запрос записи текста в буфер отправлен на <b>{html.escape(target_label(target))}</b>.", reply_markup=back_to_device_kb())
@@ -4639,8 +4658,7 @@ async def on_openapp_ok(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_open_app)
-    await state.update_data(command_target=target)
+    await _start_authorized_input(state, Form.wait_open_app, cq.data, target, command_target=target)
     await _replace_callback_message(
         cq,
         _lex("open_app_prompt"),
@@ -4702,6 +4720,61 @@ def _require_target(cq: CallbackQuery) -> str | None:
     return target
 
 
+def _device_action_still_allowed(user_id: int, callback: str, target: str) -> bool:
+    """Recheck the action and target immediately before publishing to MQTT."""
+    if not target or target == "all" or devices.get(target) is None:
+        return False
+    return access_store.can_use_callback(user_id, callback, ADMIN_ID, target)
+
+
+def _pending_device_input_still_allowed(
+    message: Message,
+    form_data: dict,
+    requested_target: str | None = None,
+) -> bool:
+    """Revalidate a prompted device action after awaits and before its side effect.
+
+    User forms must carry the callback and device captured when the prompt was
+    opened; neither the mutable current selection nor stale FSM state is an
+    authorization source. Owner forms keep their existing full-access path.
+    """
+    if not message.from_user:
+        return False
+    user_id = int(message.from_user.id)
+    callback = str(form_data.get("authorization_callback") or "")
+    bound_target = str(form_data.get("authorization_target") or "")
+    if get_user_role(user_id) == Role.OWNER:
+        bound_target = bound_target or str(
+            requested_target
+            or form_data.get("command_target")
+            or form_data.get("target")
+            or SESSION.get("target")
+            or ""
+        )
+    elif not callback or not bound_target:
+        return False
+    if requested_target and str(requested_target) != bound_target:
+        return False
+    return _device_action_still_allowed(user_id, callback, bound_target)
+
+
+async def _reject_revoked_device_input(message: Message) -> None:
+    await _replace_user_card(
+        message,
+        _lex("input_access_revoked"),
+        reply_markup=back_to_device_kb(),
+    )
+
+
+async def _report_revoked_after_publish(message: Message) -> None:
+    """Hide a response after revocation without implying the command was cancelled."""
+    await _replace_user_card(
+        message,
+        _lex("action_result_hidden_after_revoke"),
+        reply_markup=back_to_device_kb(),
+    )
+
+
 def _safe_transfer_filename(value: object) -> str:
     """Keep Telegram/agent filenames as a single portable Downloads entry."""
     raw = str(value or "file.bin").replace("\\", "/")
@@ -4738,8 +4811,7 @@ async def on_files_list(cq: CallbackQuery, state: FSMContext):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await state.set_state(Form.wait_path)
-    await state.update_data(path_mode="list", target=target)
+    await _start_authorized_input(state, Form.wait_path, cq.data, target, path_mode="list", target=target)
     await _replace_callback_message(
         cq,
         _lex("files_prompt_list"),
@@ -4754,8 +4826,7 @@ async def on_files_find(cq: CallbackQuery, state: FSMContext):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await state.set_state(Form.wait_find)
-    await state.update_data(target=target)
+    await _start_authorized_input(state, Form.wait_find, cq.data, target, target=target)
     await _replace_callback_message(
         cq,
         _lex("files_prompt_find"),
@@ -4770,8 +4841,7 @@ async def on_files_get(cq: CallbackQuery, state: FSMContext):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await state.set_state(Form.wait_path)
-    await state.update_data(path_mode="get", target=target)
+    await _start_authorized_input(state, Form.wait_path, cq.data, target, path_mode="get", target=target)
     await _replace_callback_message(
         cq,
         _lex("files_prompt_get"),
@@ -4786,8 +4856,7 @@ async def on_files_put(cq: CallbackQuery, state: FSMContext):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await state.set_state(Form.wait_path)
-    await state.update_data(path_mode="put", target=target)
+    await _start_authorized_input(state, Form.wait_path, cq.data, target, path_mode="put", target=target)
     await _replace_callback_message(
         cq,
         _lex("files_prompt_put"),
@@ -4802,8 +4871,7 @@ async def on_files_del(cq: CallbackQuery, state: FSMContext):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await state.set_state(Form.wait_path)
-    await state.update_data(path_mode="del", target=target)
+    await _start_authorized_input(state, Form.wait_path, cq.data, target, path_mode="del", target=target)
     await _replace_callback_message(
         cq,
         _lex("files_prompt_delete"),
@@ -4818,8 +4886,7 @@ async def on_files_open(cq: CallbackQuery, state: FSMContext):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await state.set_state(Form.wait_path)
-    await state.update_data(path_mode="open", target=target)
+    await _start_authorized_input(state, Form.wait_path, cq.data, target, path_mode="open", target=target)
     await _replace_callback_message(
         cq,
         _lex("files_prompt_open"),
@@ -4850,6 +4917,11 @@ async def on_path_input(message: Message, state: FSMContext):
         if len(chunk) > 30 * 1024 * 1024:
             await _replace_user_card(message, _lex("files_size_limit", limit="30"), reply_markup=back_to_device_kb())
             return
+        # Telegram's download is an external await: the role, grant, or device
+        # may have changed while it was in flight. Do not publish stale input.
+        if not _pending_device_input_still_allowed(message, data, target):
+            await _reject_revoked_device_input(message)
+            return
         sent, command_id = publish_tracked(
             "file_put",
             _target=target,
@@ -4861,6 +4933,9 @@ async def on_path_input(message: Message, state: FSMContext):
             await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
             return
         result = await fun_text_collector.wait_for(target, "file_put", timeout=25.0, command_id=command_id)
+        if not _pending_device_input_still_allowed(message, data, target):
+            await _report_revoked_after_publish(message)
+            return
         if result and result.get("ok"):
             await _replace_user_card(
                 message,
@@ -4882,11 +4957,17 @@ async def on_path_input(message: Message, state: FSMContext):
         return
 
     if mode == "list":
+        if not _pending_device_input_still_allowed(message, data, target):
+            await _reject_revoked_device_input(message)
+            return
         sent, command_id = publish_tracked("dir_list", _target=target, path=path)
         if not sent:
             await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
             return
         result = await fun_text_collector.wait_for(target, "dir_list", timeout=15.0, command_id=command_id)
+        if not _pending_device_input_still_allowed(message, data, target):
+            await _report_revoked_after_publish(message)
+            return
         text = (result or {}).get("text") or _lex("device_no_response")
         await _replace_user_card(
             message,
@@ -4894,11 +4975,19 @@ async def on_path_input(message: Message, state: FSMContext):
             reply_markup=back_to_device_kb(),
         )
     elif mode == "get":
+        if not _pending_device_input_still_allowed(message, data, target):
+            await _reject_revoked_device_input(message)
+            return
         sent, command_id = publish_tracked("file_get", _target=target, path=path)
         if not sent:
             await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
             return
         result = await file_collector.wait_for(target, "file_get", timeout=30.0, command_id=command_id)
+        # File content is sensitive; if authorization changed while waiting,
+        # do not deliver the returned document to Telegram.
+        if not _pending_device_input_still_allowed(message, data, target):
+            await _report_revoked_after_publish(message)
+            return
         if not result:
             await _replace_user_card(message, _lex("files_download_timeout"), reply_markup=back_to_device_kb())
             return
@@ -4925,11 +5014,17 @@ async def on_path_input(message: Message, state: FSMContext):
             reply_markup=back_to_device_kb(),
         )
     elif mode == "del":
+        if not _pending_device_input_still_allowed(message, data, target):
+            await _reject_revoked_device_input(message)
+            return
         sent, command_id = publish_tracked("file_del", _target=target, path=path)
         if not sent:
             await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
             return
         result = await fun_text_collector.wait_for(target, "file_del", timeout=15.0, command_id=command_id)
+        if not _pending_device_input_still_allowed(message, data, target):
+            await _report_revoked_after_publish(message)
+            return
         if result and result.get("ok"):
             await _replace_user_card(
                 message,
@@ -4943,11 +5038,17 @@ async def on_path_input(message: Message, state: FSMContext):
                 reply_markup=back_to_device_kb(),
             )
     elif mode == "open":
+        if not _pending_device_input_still_allowed(message, data, target):
+            await _reject_revoked_device_input(message)
+            return
         sent, command_id = publish_tracked("path_open", _target=target, path=path)
         if not sent:
             await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
             return
         result = await fun_text_collector.wait_for(target, "path_open", timeout=10.0, command_id=command_id)
+        if not _pending_device_input_still_allowed(message, data, target):
+            await _report_revoked_after_publish(message)
+            return
         if result and result.get("ok"):
             await _replace_user_card(
                 message,
@@ -4974,11 +5075,17 @@ async def on_find_input(message: Message, state: FSMContext):
     if not pattern:
         await _replace_user_card(message, _lex("files_find_empty"), reply_markup=back_to_device_kb())
         return
+    if not _pending_device_input_still_allowed(message, data, target):
+        await _reject_revoked_device_input(message)
+        return
     sent, command_id = publish_tracked("find_file", _target=target, pattern=pattern, root="~")
     if not sent:
         await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
         return
     result = await fun_text_collector.wait_for(target, "find_file", timeout=20.0, command_id=command_id)
+    if not _pending_device_input_still_allowed(message, data, target):
+        await _report_revoked_after_publish(message)
+        return
     text = (result or {}).get("text")
     if not text:
         await _replace_user_card(message, _lex("files_find_no_response"), reply_markup=back_to_device_kb())
@@ -5047,8 +5154,7 @@ async def on_fun_type(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_fun_text)
-    await state.update_data(command_target=target)
+    await _start_authorized_input(state, Form.wait_fun_text, cq.data, target, command_target=target)
     await _replace_callback_message(cq, "⌨️ Введите текст для набора на выбранном устройстве:", reply_markup=back_to_device_kb())
     await cq.answer()
 
@@ -5062,8 +5168,7 @@ async def on_fun_hotkey(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_fun_hotkey)
-    await state.update_data(command_target=target)
+    await _start_authorized_input(state, Form.wait_fun_hotkey, cq.data, target, command_target=target)
     await _replace_callback_message(cq, "⌘ Введите сочетание клавиш через плюс (например: <code>ctrl+c</code>, <code>cmd+space</code>, <code>alt+tab</code>):", reply_markup=back_to_device_kb())
     await cq.answer()
 
@@ -5077,8 +5182,7 @@ async def on_fun_wallpaper(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_fun_wallpaper)
-    await state.update_data(command_target=target)
+    await _start_authorized_input(state, Form.wait_fun_wallpaper, cq.data, target, command_target=target)
     await _replace_callback_message(cq, "🖼 Отправьте прямую ссылку на картинку (.jpg или .png) для установки на рабочий стол:", reply_markup=back_to_device_kb())
     await cq.answer()
 
@@ -5113,6 +5217,9 @@ async def _run_text_prank_input(
         await _replace_user_card(
             message, _lex("empty_text"), reply_markup=back_to_device_kb()
         )
+        return
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await _reject_revoked_device_input(message)
         return
 
     label = _simple_command_label(action, _lex(label_key), {})
@@ -5170,8 +5277,7 @@ async def on_fun_spam(cq: CallbackQuery, state: FSMContext):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
-    await state.update_data(target=target)
-    await state.set_state(Form.wait_fun_spam)
+    await _start_authorized_input(state, Form.wait_fun_spam, cq.data, target, target=target)
     await _replace_callback_message(
         cq,
         _lex("prank_spam_prompt"),
@@ -5195,6 +5301,9 @@ async def on_fun_text_input(message: Message, state: FSMContext):
     if target == "all":
         await _replace_user_card(message, _lex("single_device_only"), reply_markup=back_to_device_kb())
         return
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await _reject_revoked_device_input(message)
+        return
     if publish("type_text", _target=target, text=text):
         await _replace_user_card(message, f"⌨️ Запрос набора текста отправлен на <b>{html.escape(target_label(target))}</b>.", reply_markup=back_to_device_kb())
     else:
@@ -5216,6 +5325,9 @@ async def on_fun_hotkey_input(message: Message, state: FSMContext):
     if target == "all":
         await _replace_user_card(message, _lex("single_device_only"), reply_markup=back_to_device_kb())
         return
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await _reject_revoked_device_input(message)
+        return
     if publish("hotkey", _target=target, keys=keys):
         await _replace_user_card(message, f"⌘ Запрос сочетания <code>{html.escape(keys)}</code> отправлен на <b>{html.escape(target_label(target))}</b>.", reply_markup=back_to_device_kb())
     else:
@@ -5236,6 +5348,9 @@ async def on_fun_wallpaper_input(message: Message, state: FSMContext):
         return
     if target == "all":
         await _replace_user_card(message, _lex("single_device_only"), reply_markup=back_to_device_kb())
+        return
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await _reject_revoked_device_input(message)
         return
     fun_text_collector.reset()
     if not publish("wallpaper_set", _target=target, url=url):
@@ -5300,11 +5415,14 @@ async def on_wallpaper_random_meme(cq: CallbackQuery):
 
 
 @router.callback_query(AdminFilter(), F.data == "cmd:wallpaper_photo_guide")
-async def on_wallpaper_photo_guide(cq: CallbackQuery):
+async def on_wallpaper_photo_guide(cq: CallbackQuery, state: FSMContext):
     target = SESSION.get("target")
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    await _start_authorized_input(
+        state, Form.wait_wallpaper_photo, cq.data, target, target=target
+    )
     await _replace_callback_message(
         cq,
         _lex_html("wallpaper_photo_guide", device=target_label(target)),
@@ -5313,14 +5431,17 @@ async def on_wallpaper_photo_guide(cq: CallbackQuery):
     await cq.answer()
 
 
-@router.message(AdminFilter(), F.photo)
-async def on_photo_wallpaper_message(message: Message):
-    target = SESSION.get("target")
-    if not target:
+@router.message(AdminFilter(), Form.wait_wallpaper_photo, F.photo)
+async def on_photo_wallpaper_message(message: Message, state: FSMContext):
+    form_data = await state.get_data()
+    await state.clear()
+    target = str(form_data.get("authorization_target") or "")
+    callback = str(form_data.get("authorization_callback") or "")
+    if callback != "cmd:wallpaper_photo_guide" or not target or target == "all":
         await _replace_user_card(
             message,
-            _lex("wallpaper_select_device"),
-            reply_markup=devices_menu(),
+            _lex("wallpaper_photo_guide_required"),
+            reply_markup=wallpaper_menu(),
         )
         return
 
@@ -5337,8 +5458,20 @@ async def on_photo_wallpaper_message(message: Message):
         raw_bytes = photo_bytes_io.getvalue()
         b64_img = base64.b64encode(raw_bytes).decode('ascii')
 
+        # The upload can await Telegram while permissions or device membership
+        # change. Recheck immediately before the side-effecting MQTT publish.
+        if not _pending_device_input_still_allowed(
+            message, form_data, target
+        ):
+            await _replace_user_card(
+                message,
+                _lex("wallpaper_photo_guide_required"),
+                reply_markup=wallpaper_menu(),
+            )
+            return
+
         fun_text_collector.reset()
-        if not publish("wallpaper_set", b64=b64_img):
+        if not publish("wallpaper_set", _target=target, b64=b64_img):
             await _replace_user_card(
                 message, _lex("mqtt_photo_failed"), reply_markup=back_to_device_kb()
             )
@@ -5372,6 +5505,16 @@ async def on_photo_wallpaper_message(message: Message):
             _lex_html("wallpaper_photo_error", error=e),
             reply_markup=back_to_device_kb(),
         )
+
+
+@router.message(ReadOnlyFilter(), F.photo)
+async def on_unrequested_photo(message: Message):
+    """Do not treat arbitrary incoming photos as remote wallpaper commands."""
+    await _replace_user_card(
+        message,
+        _lex("wallpaper_photo_guide_required"),
+        reply_markup=None,
+    )
 
 
 @router.message(AdminFilter(), Form.wait_fun_spam)
@@ -5417,8 +5560,7 @@ async def on_prank_shout(cq: CallbackQuery, state: FSMContext):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
-    await state.update_data(target=target)
-    await state.set_state(Form.wait_shout)
+    await _start_authorized_input(state, Form.wait_shout, cq.data, target, target=target)
     await _replace_callback_message(
         cq,
         _lex("prank_shout_prompt"),
@@ -5545,8 +5687,7 @@ async def on_cmd_brightness(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_brightness)
-    await state.update_data(command_target=target)
+    await _start_authorized_input(state, Form.wait_brightness, cq.data, target, command_target=target)
     await _replace_callback_message(cq, "☀️ Введите уровень яркости экрана в процентах (0–100):", reply_markup=back_to_device_kb())
     await cq.answer()
 
@@ -5574,6 +5715,10 @@ async def on_brightness_input(message: Message, state: FSMContext):
         f"⏳ <b>☀️ Яркость экрана</b> · <b>{html.escape(target_label(target))}</b>\n<code>[■□□□□] 25% Настройка яркости {lvl}%...</code>",
         reply_markup=back_to_device_kb(),
     )
+    # The progress-card edit awaits Telegram; recheck before sending the command.
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await _reject_revoked_device_input(message)
+        return
     sent, command_id = publish_tracked("display_brightness", _target=target, level=lvl)
     if not sent:
         await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
@@ -5663,9 +5808,22 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    authorization_callback = str(cq.data or "")
+    user_id = int(cq.from_user.id) if cq.from_user else 0
     label = _simple_command_label(action, label, publish_kwargs)
     await cq.answer(_lex_html("command_started", emoji=emoji, label=label))
-    sent, command_id = publish_tracked(action, **publish_kwargs)
+    # Recheck the original callback grant after Telegram's await and before
+    # the side effect. SESSION may have changed, so authorize against `target`.
+    if not _simple_command_still_allowed(user_id, authorization_callback, target):
+        await _replace_callback_message(
+            cq, _lex("input_access_revoked"), reply_markup=back_to_device_kb()
+        )
+        return None
+    # Another update can change SESSION while answer() is awaiting Telegram.
+    # Pin the target captured before that await into the publish itself.
+    sent, command_id = publish_tracked(
+        action, **{**publish_kwargs, "_target": target}
+    )
     if not sent:
         await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
         return
@@ -5703,6 +5861,18 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
     # edit loop that can hit Telegram rate limits and look like a freeze.
     result = await fun_text_collector.wait_for(target, action, timeout=timeout, command_id=command_id)
 
+    # Results can contain private device data (for example saved Wi-Fi
+    # passwords). Do not deliver or return them if the exact original grant was
+    # revoked while waiting. The MQTT publish already happened, so say that the
+    # action may have executed rather than claiming it was cancelled.
+    if not _simple_command_still_allowed(user_id, authorization_callback, target):
+        await _replace_callback_message(
+            cq,
+            _lex("action_result_hidden_after_revoke"),
+            reply_markup=back_to_device_kb(),
+        )
+        return None
+
     if result is None:
         text = _lex("device_timeout", seconds=str(int(timeout)))
     else:
@@ -5732,6 +5902,19 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
                 pass
             await cq.message.answer(final_text, reply_markup=back_to_device_kb())
     return result
+
+
+_OWNER_ALL_DEVICE_SIMPLE_CALLBACKS = frozenset({"cmd:volume", "cmd:lock"})
+
+
+def _simple_command_still_allowed(user_id: int, callback: str, target: str) -> bool:
+    """Recheck a simple action's exact callback and bound target."""
+    if target == "all":
+        return (
+            get_user_role(user_id) == Role.OWNER
+            and callback in _OWNER_ALL_DEVICE_SIMPLE_CALLBACKS
+        )
+    return _device_action_still_allowed(user_id, callback, target)
 
 
 _SIMPLE_COMMAND_LABELS = {
@@ -5921,8 +6104,7 @@ async def on_cmd_prockillname(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_prockill)
-    await state.update_data(command_target=target)
+    await _start_authorized_input(state, Form.wait_prockill, cq.data, target, command_target=target)
     await _replace_callback_message(cq, "🔪 Введите имя процесса для завершения (например: <code>chrome.exe</code> или <code>Discord</code>):", reply_markup=back_to_device_kb())
     await cq.answer()
 
@@ -5941,6 +6123,9 @@ async def on_prockill_input(message: Message, state: FSMContext):
         return
     if target == "all":
         await _replace_user_card(message, _lex("single_device_only"), reply_markup=back_to_device_kb())
+        return
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await _reject_revoked_device_input(message)
         return
     if publish("proc_kill_name", _target=target, name=name):
         await _replace_user_card(message, f"🔪 Запрос завершения процесса <code>{html.escape(name)}</code> отправлен на <b>{html.escape(target_label(target))}</b>.", reply_markup=back_to_device_kb())
@@ -6499,6 +6684,16 @@ async def on_cmd_net_ping(cq: CallbackQuery):
 @router.callback_query(AnyAccessFilter(), F.data == "cmd:geo_location")
 async def on_cmd_geo_location(cq: CallbackQuery):
     await simple_command(cq, "geo_location", "⚠️", _lex("geo_beta"), timeout=16.0)
+
+
+@router.message(F.from_user.id != ADMIN_ID)
+async def on_denied(message: Message):
+    """Fallback must stay last so authorized FSM handlers get first refusal."""
+    if get_user_role(message.from_user.id) == Role.BLOCKED:
+        text = "Доступ для этого аккаунта заблокирован."
+    else:
+        text = "Используй /start, чтобы открыть доступные разделы."
+    await _replace_user_card(message, text, reply_markup=None)
 
 
 # =====================================================================

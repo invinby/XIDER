@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import access_store as store
@@ -144,3 +145,123 @@ def test_message_redaction_handles_env_credentials_bearer_and_private_keys():
     assert "abc.def.ghi" not in safe
     assert "private-material" not in safe
     assert "[PRIVATE KEY REDACTED]" in safe
+
+
+class _FakeState:
+    def __init__(self, data=None, current="Form:wait_open_app"):
+        self.data = dict(data or {})
+        self.current = current
+        self.cleared = False
+
+    async def get_data(self):
+        return dict(self.data)
+
+    async def get_state(self):
+        return self.current
+
+    async def clear(self):
+        self.cleared = True
+        self.data.clear()
+        self.current = None
+
+
+class _FakeMessage(SimpleNamespace):
+    pass
+
+
+def _message(user_id: int, text: str = "launch"):
+    return _FakeMessage(from_user=SimpleNamespace(id=user_id), text=text)
+
+
+def test_pending_user_input_rechecks_the_original_device_and_action_grant(
+    monkeypatch, tmp_path
+):
+    _isolate(monkeypatch, tmp_path)
+    store.register_start(_user(200))
+    assert store.set_role(100, 200, store.Role.USER, 100)
+    assert store.toggle_device(100, 200, "mac-1", 100) is True
+    assert store.toggle_callback(100, 200, "full_device", 100) is True
+    monkeypatch.setattr(roles, "ADMIN_ID", 100)
+    monkeypatch.setattr(roles, "Message", _FakeMessage)
+    monkeypatch.setattr(roles, "_device_store", lambda: SimpleNamespace(get=lambda _id: object()))
+
+    state = _FakeState({
+        "authorization_callback": "cmd:open_app",
+        "authorization_target": "mac-1",
+    })
+    admin_filter = roles.AdminFilter()
+    assert asyncio.run(admin_filter(_message(200), state=state)) is True
+
+    # Revoking the action grant while the text prompt is open must invalidate
+    # that already-open form; the input cannot still reach MQTT.
+    assert store.toggle_callback(100, 200, "full_device", 100) is False
+    assert asyncio.run(admin_filter(_message(200), state=state)) is False
+    assert state.cleared is True
+
+
+def test_pending_user_input_fails_closed_for_removed_device_and_unknown_form(
+    monkeypatch, tmp_path
+):
+    _isolate(monkeypatch, tmp_path)
+    store.register_start(_user(200))
+    assert store.set_role(100, 200, store.Role.USER, 100)
+    assert store.toggle_device(100, 200, "mac-1", 100) is True
+    assert store.toggle_callback(100, 200, "full_device", 100) is True
+    monkeypatch.setattr(roles, "ADMIN_ID", 100)
+    monkeypatch.setattr(roles, "Message", _FakeMessage)
+    monkeypatch.setattr(roles, "_device_store", lambda: SimpleNamespace(get=lambda _id: None))
+
+    state = _FakeState({
+        "authorization_callback": "cmd:open_app",
+        "authorization_target": "mac-1",
+    })
+    admin_filter = roles.AdminFilter()
+    assert asyncio.run(admin_filter(_message(200), state=state)) is False
+    assert state.cleared is True
+
+    missing = _FakeState({})
+    assert asyncio.run(admin_filter(_message(200), state=missing)) is False
+    assert missing.cleared is True
+
+
+def test_wallpaper_photo_state_is_invalidated_when_full_device_access_is_revoked(
+    monkeypatch, tmp_path
+):
+    _isolate(monkeypatch, tmp_path)
+    store.register_start(_user(200))
+    assert store.set_role(100, 200, store.Role.USER, 100)
+    assert store.toggle_device(100, 200, "mac-1", 100) is True
+    assert store.toggle_callback(100, 200, "full_device", 100) is True
+    monkeypatch.setattr(roles, "ADMIN_ID", 100)
+    monkeypatch.setattr(roles, "Message", _FakeMessage)
+    monkeypatch.setattr(roles, "_device_store", lambda: SimpleNamespace(get=lambda _id: object()))
+
+    state = _FakeState(
+        {
+            "authorization_callback": "cmd:wallpaper_photo_guide",
+            "authorization_target": "mac-1",
+        },
+        current="Form:wait_wallpaper_photo",
+    )
+    admin_filter = roles.AdminFilter()
+    assert asyncio.run(admin_filter(_message(200, text=None), state=state)) is True
+
+    # Pressing the guide is not a permanent ticket: revocation before the
+    # photo message invalidates this pending one-shot upload state.
+    assert store.toggle_callback(100, 200, "full_device", 100) is False
+    assert asyncio.run(admin_filter(_message(200, text=None), state=state)) is False
+    assert state.cleared is True
+
+
+def test_pending_input_cancel_is_allowed_and_owner_remains_unrestricted(
+    monkeypatch, tmp_path
+):
+    _isolate(monkeypatch, tmp_path)
+    store.register_start(_user(200))
+    assert store.set_role(100, 200, store.Role.USER, 100)
+    monkeypatch.setattr(roles, "ADMIN_ID", 100)
+    monkeypatch.setattr(roles, "Message", _FakeMessage)
+    admin_filter = roles.AdminFilter()
+
+    assert asyncio.run(admin_filter(_message(200, "/cancel@xider_bot"))) is True
+    assert asyncio.run(admin_filter(_message(100), state=None)) is True

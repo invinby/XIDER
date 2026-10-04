@@ -12,6 +12,7 @@ ARCHIVE="$FIXTURE/source.zip"
 mkdir -p "$FAKE_BIN" "$SOURCE_ROOT/XGENT-MCS" "$FIXTURE/home/Library/LaunchAgents"
 REAL_PYTHON="$(command -v python3)"
 export XIDER_TEST_REAL_PYTHON="$REAL_PYTHON"
+export XIDER_TEST_PIP_LOG="$FIXTURE/pip-invocations.log"
 cat > "$FAKE_BIN/python3" <<'PYTHON'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -21,6 +22,7 @@ if [[ "${1:-}" == -m && "${2:-}" == venv ]]; then
   exit 0
 fi
 if [[ "${1:-}" == -m && "${2:-}" == pip ]]; then
+  printf '%s\n' "$0" >> "$XIDER_TEST_PIP_LOG"
   [[ "${XIDER_FAIL_DEPENDENCIES:-0}" != 1 ]] || exit 19
   exit 0
 fi
@@ -117,7 +119,19 @@ make_old_install() {
   local install_root="$1"
   mkdir -p "$install_root/git-ver/XGENT-MCS"
   printf 'old\n' > "$install_root/git-ver/XGENT-MCS/old-version.marker"
-  printf '#!/usr/bin/env bash\n[[ "${1:-}" == --status ]] && exit 0\nexit 0\n' > "$install_root/git-ver/XGENT-MCS/start_agent.sh"
+  mkdir -p "$install_root/runtimes/old/bin"
+  cp "$FAKE_BIN/python3" "$install_root/runtimes/old/bin/python3"
+  ln -s "$install_root/runtimes/old" "$install_root/git-ver/XGENT-MCS/venv"
+  cat > "$install_root/git-ver/XGENT-MCS/start_agent.sh" <<'OLD_AGENT'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")"
+[[ "${1:-}" == --status ]] && exit 0
+if [[ "${XIDER_RUNTIME_PREPARED:-0}" != 1 ]]; then
+  ./venv/bin/python3 -m pip install -r requirements.txt
+fi
+touch old-worker-restarted.marker
+OLD_AGENT
   printf '#!/usr/bin/env bash\nexit 0\n' > "$install_root/git-ver/XGENT-MCS/start_guardian.sh"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$install_root/git-ver/XGENT-MCS/stop_agent.sh"
   printf 'SHARED_KEY=old-local-secret\nMQTT_BROKER=broker.example.invalid\nMQTT_PORT=8883\nMQTT_PREFIX=xgent/v1\nMQTT_TLS=true\nMQTT_USERNAME=test-user\nMQTT_PASSWORD=test-password-not-real\nENCRYPT_PAYLOAD=true\nXIDER_UPDATE_BRANCH=main\n' > "$install_root/git-ver/XGENT-MCS/.env"
@@ -197,6 +211,7 @@ ARCHIVE="$SAFE_ARCHIVE"
 
 ROLLBACK_ROOT="$FIXTURE/rollback-install"
 make_old_install "$ROLLBACK_ROOT"
+: > "$XIDER_TEST_PIP_LOG"
 if run_bootstrap "$ROLLBACK_ROOT" 1 > "$FIXTURE/rollback.log" 2>&1; then
   echo 'The simulated Mac activation error unexpectedly succeeded.' >&2
   exit 1
@@ -204,6 +219,13 @@ fi
 [[ -f "$ROLLBACK_ROOT/git-ver/XGENT-MCS/old-version.marker" ]] || {
   echo 'The old macOS checkout was not restored.' >&2; exit 1;
 }
+[[ -f "$ROLLBACK_ROOT/git-ver/XGENT-MCS/old-worker-restarted.marker" ]] || {
+  echo 'The old worker was not restarted after activation rollback.' >&2; exit 1;
+}
+if grep -Fq '/venv/bin/python3' "$XIDER_TEST_PIP_LOG" ||
+   grep -Fq '/runtimes/old/' "$XIDER_TEST_PIP_LOG"; then
+  echo 'Rollback invoked pip in the previously working runtime.' >&2; exit 1;
+fi
 grep -qx 'SHARED_KEY=old-local-secret' "$ROLLBACK_ROOT/git-ver/XGENT-MCS/.env" &&
 grep -qx 'MQTT_PREFIX=xgent/v1' "$ROLLBACK_ROOT/git-ver/XGENT-MCS/.env" || {
   echo 'The previous macOS configuration was not restored.' >&2; exit 1;

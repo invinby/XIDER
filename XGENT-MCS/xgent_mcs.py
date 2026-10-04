@@ -387,6 +387,8 @@ class XgentClient:
         self._update_lock = threading.Lock()
         self._lifecycle_lock = threading.RLock()
         self._update_cancelled = threading.Event()
+        self._pending_command_subacks: set[int] = set()
+        self._command_subscriptions_failed = False
         self._client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
             client_id=f"xgent-mcs-{DEVICE_ID}",
@@ -394,6 +396,7 @@ class XgentClient:
         )
         self._client.reconnect_delay_set(min_delay=1, max_delay=120)
         self._client.on_connect = self._on_connect
+        self._client.on_subscribe = self._on_subscribe
         self._client.on_connect_fail = self._on_connect_fail
         self._client.on_disconnect = self._on_disconnect
         self._client.on_message = self._on_message
@@ -590,32 +593,61 @@ class XgentClient:
                 )
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
+        with self._lifecycle_lock:
+            self._pending_command_subacks.clear()
+            self._command_subscriptions_failed = reason_code != 0
         if reason_code == 0:
-            client.subscribe(f"{MQTT_PREFIX}/{DEVICE_ID}/cmd", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/all/cmd", qos=0)
+            with self._lifecycle_lock:
+                for topic in (f"{MQTT_PREFIX}/{DEVICE_ID}/cmd", f"{MQTT_PREFIX}/all/cmd"):
+                    try:
+                        result, mid = client.subscribe(topic, qos=0)
+                        if (
+                            result != mqtt.MQTT_ERR_SUCCESS or type(mid) is not int
+                            or mid <= 0 or mid in self._pending_command_subacks
+                        ):
+                            raise RuntimeError(f"subscribe отклонён: rc={result}, mid={mid}")
+                        self._pending_command_subacks.add(mid)
+                    except Exception:
+                        self._command_subscriptions_failed = True
+                        log.exception("Не удалось запросить командную MQTT-подписку %s", topic)
             log.info("Подключено к %s:%s", MQTT_BROKER, MQTT_PORT)
             self._publish_status()
-            try:
-                def activate_verified_recovery(slot: str) -> None:
-                    root = CONFIG_DIR / "recovery"
-                    validate_recovery_install(Path(__file__).resolve().parent, root, slot)
-                    activate_recovery_package(root, slot)
-
-                with self._lifecycle_lock:
-                    if self._update_cancelled.is_set():
-                        return
-                    if mark_agent_update_healthy(
-                        CONFIG_DIR / UPDATE_STATE_NAME,
-                        Path(__file__).resolve().parent,
-                        activate_recovery=activate_verified_recovery,
-                    ):
-                        self._update_health.set()
-                        log.info("Проверка здоровья обновлённого агента прошла: MQTT доступен.")
-                        self._restart_existing_guardian_after_update()
-            except Exception:
-                log.exception("Не удалось подтвердить здоровье установленного обновления")
         else:
             log.warning("Не удалось подключиться к брокеру: %s", reason_code)
+
+    def _on_subscribe(self, client, userdata, mid, reason_codes, properties=None):
+        with self._lifecycle_lock:
+            if mid not in self._pending_command_subacks:
+                return
+            self._pending_command_subacks.remove(mid)
+            grants = [getattr(reason, "value", reason) for reason in (reason_codes or ())]
+            if len(grants) != 1 or any(type(grant) is not int or grant not in (0, 1, 2) for grant in grants):
+                self._command_subscriptions_failed = True
+                log.error("MQTT не подтвердил командную подписку: mid=%s, grants=%s; журнал обновления сохранён.", mid, grants)
+                return
+            if not self._pending_command_subacks and not self._command_subscriptions_failed:
+                self._confirm_update_health()
+
+    def _confirm_update_health(self) -> None:
+        try:
+            def activate_verified_recovery(slot: str) -> None:
+                root = CONFIG_DIR / "recovery"
+                validate_recovery_install(Path(__file__).resolve().parent, root, slot)
+                activate_recovery_package(root, slot)
+
+            with self._lifecycle_lock:
+                if self._update_cancelled.is_set() or self._command_subscriptions_failed or self._pending_command_subacks:
+                    return
+                if mark_agent_update_healthy(
+                    CONFIG_DIR / UPDATE_STATE_NAME,
+                    Path(__file__).resolve().parent,
+                    activate_recovery=activate_verified_recovery,
+                ):
+                    self._update_health.set()
+                    log.info("Проверка здоровья обновлённого агента прошла: MQTT подтвердил обе командные подписки.")
+                    self._restart_existing_guardian_after_update()
+        except Exception:
+            log.exception("Не удалось подтвердить здоровье установленного обновления")
 
     def _restart_existing_guardian_after_update(self) -> None:
         """Reload updated Guardian code only in an already loaded launchd job."""
@@ -656,6 +688,9 @@ class XgentClient:
         log.warning("Попытка подключения к брокеру не удалась (код %s)", reason_code)
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
+        with self._lifecycle_lock:
+            self._pending_command_subacks.clear()
+            self._command_subscriptions_failed = True
         if not self._running.is_set(): return
         log.warning("Отключено от брокера (код %s); переподключение…", reason_code)
 

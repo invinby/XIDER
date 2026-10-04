@@ -52,6 +52,7 @@ except ImportError:
 log = logging.getLogger("xider.guardian")
 SCRIPT_DIR = Path(__file__).resolve().parent
 STATE_FILE = CONFIG_DIR / "guardian.json"
+AGENT_STABLE_SECONDS = 60.0
 
 
 def _load_state() -> dict:
@@ -113,6 +114,8 @@ class Guardian:
         self._restart_backoff_seconds = 5.0
         self._next_restart_at = 0.0
         self._last_recovery_error: str | None = None
+        self._observed_agent_pid: int | None = None
+        self._observed_agent_since = 0.0
         self._intent_file_required = True
         self.client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
@@ -325,6 +328,38 @@ class Guardian:
         self._next_restart_at = 0.0
         self._last_recovery_error = None
 
+    def _observe_agent_process(self, pid: int | None, now: float | None = None) -> None:
+        """Back off after short-lived worker crashes; reset only after stability.
+
+        A successful ``Popen`` only proves that macOS created a process. It
+        does not prove that the worker loaded its config or stayed alive. Keep
+        the failed process duration so a broken install cannot trigger a tight
+        restart loop or a stream of misleading "recovered" notifications.
+        """
+        if now is None:
+            now = time.monotonic()
+        previous_pid = getattr(self, "_observed_agent_pid", None)
+        started_at = getattr(self, "_observed_agent_since", 0.0)
+        if pid is None:
+            if previous_pid is None:
+                return
+            self._observed_agent_pid = None
+            self._observed_agent_since = 0.0
+            if now - started_at < AGENT_STABLE_SECONDS:
+                self._record_recovery_failure(
+                    RuntimeError(f"агент PID {previous_pid} завершился до стабильного запуска")
+                )
+            else:
+                self._reset_recovery_backoff()
+            return
+
+        if previous_pid != pid:
+            self._observed_agent_pid = pid
+            self._observed_agent_since = now
+            return
+        if now - started_at >= AGENT_STABLE_SECONDS:
+            self._reset_recovery_backoff()
+
     def _record_recovery_failure(self, exc: Exception) -> None:
         message = str(exc)
         delay = self._restart_backoff_seconds
@@ -419,12 +454,20 @@ class Guardian:
             with self.lock:
                 self._refresh_worker_intent()
                 if self.state.get("auto_restart") and self.state.get("desired_running"):
-                    if time.monotonic() < self._next_restart_at or self.agent_pid():
+                    now = time.monotonic()
+                    pid = self.agent_pid()
+                    self._observe_agent_process(pid, now)
+                    if pid or now < self._next_restart_at:
                         continue
                     try:
                         pid = self.start_agent()
-                        self._reset_recovery_backoff()
-                        self._publish({"ok": True, "text": f"🛡 Guardian восстановил агент (PID {pid or '?'})"})
+                        if not pid:
+                            raise RuntimeError("процесс агента не появился после команды запуска")
+                        self._observe_agent_process(pid, time.monotonic())
+                        self._publish({
+                            "ok": True,
+                            "text": f"🛡 Guardian запустил агент (PID {pid}); проверяю, что он остаётся активен.",
+                        })
                     except Exception as exc:
                         self._record_recovery_failure(exc)
 

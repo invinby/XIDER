@@ -1,7 +1,8 @@
 # XIDER TARPED — product and release contract
 
-TARPED is the name reserved for the next major XIDER release. This document is
-the design contract, **not** evidence that TARPED is installed or complete.
+TARPED is the working name for XIDER's broad upgrade sequence. This document is
+the design contract, **not** evidence that a tagged build is installed or
+complete; the name does not imply a particular SemVer increment.
 The currently published bot version remains defined in
 `TG-BOT-SERVER/version.py` until the release checklist is satisfied.
 
@@ -97,7 +98,8 @@ edited per-voice copy remain compatible without being deleted.
 - [ ] Bot pages edit an existing card where possible; duplicate messages and
       endless decorative progress loops are removed.
 - [ ] Offline tests and live Telegram/MQTT/Windows/macOS/VPS evidence recorded;
-      backup and rollback rehearsal complete before `4.0.0` is tagged.
+      backup and rollback rehearsal complete before any release is described as
+      fully accepted.
 
 ## Current implementation status
 
