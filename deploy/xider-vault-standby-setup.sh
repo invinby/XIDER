@@ -2,6 +2,13 @@
 set -Eeuo pipefail
 umask 077
 
+preflight_only=0
+if [[ "${1:-}" == --preflight-only ]]; then
+  preflight_only=1
+  shift
+fi
+[[ "$#" -eq 1 ]] || { printf 'Usage: %s [--preflight-only] /path/to/upload-key.pub\n' "$0" >&2; exit 1; }
+
 readonly public_key_file="${1:-}"
 readonly vault_root="/srv/xider-vault"
 readonly incoming="${vault_root}/incoming"
@@ -13,6 +20,7 @@ readonly sshd_fragment="/etc/ssh/sshd_config.d/90-xider-vault-upload.conf"
 readonly helper="/usr/local/sbin/xider-vault-promote"
 readonly helper_dir="/usr/local/libexec/xider"
 readonly env_file="/etc/xider/x-vault-standby.env"
+readonly upload_helper_parent="/usr/local/libexec"
 readonly upload_helper_dir="/usr/local/libexec/xider-vault-upload"
 readonly upload_transport="${upload_helper_dir}/x_vault_transport.py"
 readonly upload_lock="/run/xider-vault-upload.lock"
@@ -26,6 +34,7 @@ ensure_directory() {
     fail "directory path is unsafe: ${path}"
   fi
   if [[ ! -e "${path}" ]]; then
+    [[ "${preflight_only}" == 0 ]] || fail "required directory is missing: ${path}"
     install -d -o "${owner}" -g "${group}" -m "${mode}" "${path}"
   fi
   [[ "$(stat -c '%U:%G' -- "${path}")" == "${owner}:${group}" \
@@ -33,6 +42,58 @@ ensure_directory() {
     || fail "existing directory ownership/mode differs; refusing to take it over: ${path}"
 }
 
+# sshd opens AuthorizedKeysFile after switching to the authenticating user.
+# Root ownership protects the key, but root:root 0600 makes it unreadable there.
+verify_authorized_key() {
+  local path="$1" user="$2" expected_line="$3" group_id
+  [[ -f "${path}" && ! -L "${path}" ]] || fail "authorized key file is missing or unsafe: ${path}"
+  group_id="$(id -g "${user}")" || fail "cannot inspect uploader group"
+  [[ "$(stat -c '%u:%g:%a' -- "${path}")" == "0:${group_id}:640" ]] \
+    || fail "uploader authorized_keys must be root:${user} mode 0640"
+  cmp -s <(printf '%s\n' "${expected_line}") "${path}" \
+    || fail "uploader key already exists and differs; refusing to rotate it implicitly"
+  command -v runuser >/dev/null || fail "runuser is required to verify SSH key access"
+  runuser -u "${user}" -- /bin/sh -c \
+    'test -r "$1" && test ! -w "$1" && dd if="$1" of=/dev/null bs=4096 count=1 status=none' \
+    sh "${path}" || fail "uploader must be able to read, but not write, authorized_keys; inspect path permissions and ACLs"
+}
+
+configure_authorized_key() {
+  local path="$1" user="$2" expected_line="$3" current_policy group_id
+  [[ ! -L "${path}" ]] || fail "authorized key path is a symlink"
+  group_id="$(id -g "${user}")" || fail "cannot inspect uploader group"
+  if [[ -e "${path}" ]]; then
+    [[ -f "${path}" ]] || fail "authorized key path is not a regular file"
+    cmp -s <(printf '%s\n' "${expected_line}") "${path}" \
+      || fail "uploader key already exists and differs; refusing to rotate it implicitly"
+    current_policy="$(stat -c '%u:%g:%a' -- "${path}")"
+    if [[ "${current_policy}" == 0:0:600 && "${preflight_only}" == 0 ]]; then
+      # Migrate only the old, root-protected, byte-identical key. Never adopt a
+      # user-owned key or silently rotate an existing authorization.
+      chown "root:${user}" "${path}"
+      chmod 0640 "${path}"
+    else
+      [[ "${current_policy}" == "0:${group_id}:640" ]] \
+        || fail "uploader authorized_keys must be root:${user} mode 0640"
+    fi
+  else
+    [[ "${preflight_only}" == 0 ]] || fail "authorized key file is missing: ${path}"
+    install -o root -g "${user}" -m 0640 /dev/null "${path}"
+    printf '%s\n' "${expected_line}" >"${path}"
+  fi
+  verify_authorized_key "${path}" "${user}" "${expected_line}"
+}
+
+verify_receiver_access() {
+  [[ -f "${upload_transport}" && ! -L "${upload_transport}" \
+    && "$(stat -c '%u:%G:%a' -- "${upload_transport}")" == "0:${account}:550" ]] \
+    || fail "bounded receiver must be installed root:${account} mode 0550"
+  runuser -u "${account}" -- /bin/sh -c \
+    'test -r "$1" && test ! -w "$1" && dd if="$1" of=/dev/null bs=4096 count=1 status=none' \
+    sh "${upload_transport}" || fail "uploader must be able to read, but not write, the bounded receiver; inspect path permissions and ACLs"
+}
+
+# Setup entrypoint; permission helpers above are exercised without live services.
 [[ "${EUID}" -eq 0 ]] || fail "run as root"
 [[ -n "${public_key_file}" && -f "${public_key_file}" && ! -L "${public_key_file}" ]] || fail "pass a regular SSH public-key file"
 [[ "$(head -n1 "${public_key_file}")" =~ ^ssh-ed25519[[:space:]]+[A-Za-z0-9+/]+={0,3}([[:space:]].*)?$ ]] || fail "upload key must be ssh-ed25519"
@@ -50,9 +111,11 @@ for file in \
 done
 
 if ! getent group "${account}" >/dev/null; then
+  [[ "${preflight_only}" == 0 ]] || fail "restricted uploader group is missing"
   groupadd --system "${account}"
 fi
 if ! id -u "${account}" >/dev/null 2>&1; then
+  [[ "${preflight_only}" == 0 ]] || fail "restricted uploader account is missing"
   useradd --system --gid "${account}" --home-dir /incoming --no-create-home \
     --shell /bin/sh "${account}"
 else
@@ -65,10 +128,12 @@ fi
 ensure_directory "${vault_root}" root root 755
 ensure_directory "${incoming}" "${account}" "${account}" 700
 ensure_directory "${archive_dir}" root root 700
+ensure_directory "${upload_helper_parent}" root root 755
 ensure_directory "${upload_helper_dir}" root "${account}" 750
 
 [[ ! -L "${upload_lock}" ]] || fail "X-VAULT upload lock is a symlink"
 if [[ ! -e "${upload_lock}" ]]; then
+  [[ "${preflight_only}" == 0 ]] || fail "X-VAULT upload lock is missing"
   install -o root -g "${account}" -m 0660 /dev/null "${upload_lock}"
 fi
 [[ -f "${upload_lock}" \
@@ -82,33 +147,27 @@ if [[ -e "${tmpfiles_rule}" ]]; then
     && grep -Fxq "${tmpfiles_line}" "${tmpfiles_rule}" \
     || fail "existing X-VAULT tmpfiles rule differs; inspect it before replacing"
 else
+  [[ "${preflight_only}" == 0 ]] || fail "X-VAULT tmpfiles rule is missing"
   printf '%s\n' "${tmpfiles_line}" >"${tmpfiles_rule}"
   chown root:root "${tmpfiles_rule}"
   chmod 0644 "${tmpfiles_rule}"
 fi
-systemd-tmpfiles --create "${tmpfiles_rule}"
+if [[ "${preflight_only}" == 0 ]]; then
+  systemd-tmpfiles --create "${tmpfiles_rule}"
+fi
 
 ensure_directory "${authorized_dir}" root root 755
-candidate="$(mktemp "${authorized_dir}/.xvault-key.XXXXXX")"
-trap 'rm -f -- "${candidate}"' EXIT
-printf 'restrict,command="/usr/bin/python3 %s receive" %s\n' \
+authorized_key_line="$(printf 'restrict,command="/usr/bin/python3 %s receive" %s' \
   "${upload_transport}" \
-  "$(awk 'NR==1 {print $1, $2, "xider-vault-upload"}' "${public_key_file}")" >"${candidate}"
-chmod 0600 "${candidate}"
-[[ ! -L "${authorized_file}" ]] || fail "authorized key path is a symlink"
-if [[ -e "${authorized_file}" ]]; then
-  [[ -f "${authorized_file}" && "$(stat -c '%u:%g:%a' -- "${authorized_file}")" == "0:0:600" ]] \
-    || fail "existing uploader authorized_keys must be root-owned mode 0600"
-  cmp -s "${candidate}" "${authorized_file}" || fail "uploader key already exists and differs; refusing to rotate it implicitly"
-else
-  install -o root -g root -m 0600 "${candidate}" "${authorized_file}"
-fi
+  "$(awk 'NR==1 {print $1, $2, "xider-vault-upload"}' "${public_key_file}")")"
+configure_authorized_key "${authorized_file}" "${account}" "${authorized_key_line}"
 
 [[ ! -L "${sshd_fragment}" ]] || fail "sshd fragment path is a symlink"
 if [[ -e "${sshd_fragment}" ]]; then
   cmp -s "${app_dir}/deploy/xider-vault-upload.sshd.conf" "${sshd_fragment}" \
     || fail "sshd fragment already exists and differs; inspect it before replacing"
 else
+  [[ "${preflight_only}" == 0 ]] || fail "restricted sshd fragment is missing"
   install -o root -g root -m 0644 \
     "${app_dir}/deploy/xider-vault-upload.sshd.conf" "${sshd_fragment}"
 fi
@@ -124,11 +183,18 @@ if [[ -e "${env_file}" ]]; then
   [[ "${owner}" == 0 ]] && (( (8#${mode} & 077) == 0 )) \
     || fail "existing standby config must be root-owned and private"
 else
+  [[ "${preflight_only}" == 0 ]] || fail "standby config is missing"
   install -d -o root -g root -m 0750 /etc/xider
   printf 'XIDER_VAULT_RETENTION_DAYS=60\nXIDER_VAULT_MAX_ARCHIVE_BYTES=1073741824\nXIDER_VAULT_MAX_TOTAL_BYTES=10737418240\n' \
     >"${env_file}"
   chown root:root "${env_file}"
   chmod 0600 "${env_file}"
+fi
+
+if [[ "${preflight_only}" == 1 ]]; then
+  verify_receiver_access
+  printf 'X-VAULT standby local preflight passed, including uploader read-only authorized_keys access; no SSH login was attempted.\n'
+  exit 0
 fi
 
 install -d -o root -g root -m 0750 "${helper_dir}"
@@ -138,6 +204,7 @@ install -o root -g root -m 0750 \
   "${app_dir}/deploy/x-vault-promote.sh" "${helper}"
 install -o root -g "${account}" -m 0550 \
   "${app_dir}/ops/x_vault_transport.py" "${upload_transport}"
+verify_receiver_access
 install -o root -g root -m 0644 \
   "${app_dir}/deploy/xider-vault-promote.service" \
   /etc/systemd/system/xider-vault-promote.service

@@ -21,8 +21,19 @@ def _make_client():
     client._lifecycle_lock = threading.RLock()
     client._update_cancelled = threading.Event()
     client._command_context = threading.local()
+    client._pending_command_subacks = set()
+    client._command_subscriptions_failed = False
     client.on_stop_requested = None
     return client
+
+
+def _ack_command_subscriptions(client):
+    mqtt_client = MagicMock()
+    mqtt_client.subscribe.side_effect = [(mcs.mqtt.MQTT_ERR_SUCCESS, 41), (mcs.mqtt.MQTT_ERR_SUCCESS, 42)]
+    client._on_connect(mqtt_client, None, None, 0)
+    client._on_subscribe(mqtt_client, None, 41, [0])
+    client._on_subscribe(mqtt_client, None, 42, [0])
+    return mqtt_client
 
 
 def test_agent_update_passes_release_tag_to_verifier_and_fails_closed(monkeypatch, tmp_path):
@@ -122,7 +133,7 @@ def test_frozen_agent_update_fails_closed_without_mutating_bundle(monkeypatch, t
     assert list(tmp_path.iterdir()) == []
 
 
-def test_mqtt_connection_commits_pending_update_health(monkeypatch, tmp_path):
+def test_mqtt_health_requires_both_successful_command_subacks(monkeypatch, tmp_path):
     client = _make_client()
     client._update_health = threading.Event()
     client._publish_status = lambda: None
@@ -142,6 +153,7 @@ def test_mqtt_connection_commits_pending_update_health(monkeypatch, tmp_path):
         "start_attempts": 1,
     }), encoding="utf-8")
     mqtt_client = MagicMock()
+    mqtt_client.subscribe.side_effect = [(0, 41), (0, 42)]
     guardian_restarts = []
 
     def restart_after_commit():
@@ -152,6 +164,16 @@ def test_mqtt_connection_commits_pending_update_health(monkeypatch, tmp_path):
     client._restart_existing_guardian_after_update = restart_after_commit
 
     client._on_connect(mqtt_client, None, None, 0)
+
+    assert not client._update_health.is_set()
+    assert state_path.exists()
+    assert guardian_restarts == []
+    client._on_subscribe(mqtt_client, None, 999, [0])
+    client._on_subscribe(mqtt_client, None, 41, [0])
+    client._on_subscribe(mqtt_client, None, 41, [0])
+    assert state_path.exists()
+    assert not client._update_health.is_set()
+    client._on_subscribe(mqtt_client, None, 42, [0])
 
     assert client._update_health.is_set()
     assert not state_path.exists()
@@ -302,7 +324,7 @@ def test_old_worker_reconnect_cannot_commit_pending_update(source_update):
     client._publish_status = lambda: None
     client._do_agent_update({"release_tag": "v4.2.0"})
 
-    client._on_connect(MagicMock(), None, None, 0)
+    _ack_command_subscriptions(client)
 
     assert not client._update_health.is_set()
     assert (state_root / package.UPDATE_STATE_NAME).exists()
@@ -319,7 +341,7 @@ def test_new_worker_health_activates_cache_before_committing(source_update, monk
     monkeypatch.setattr(mcs, "validate_recovery_install", lambda *_args: "v4.2.0")
     monkeypatch.setattr(mcs, "activate_recovery_package", lambda root, slot: activations.append((root, slot)))
 
-    new._on_connect(MagicMock(), None, None, 0)
+    _ack_command_subscriptions(new)
 
     assert activations == [(state_root / "recovery", "v4.2.0-" + "a" * 64)]
     assert new._update_health.is_set()
@@ -495,7 +517,7 @@ def test_cache_verification_failure_does_not_commit_new_agent(source_update, mon
     monkeypatch.setattr(mcs, "activate_recovery_package", lambda *_args: pytest.fail("do not select unverified cache"))
     monkeypatch.setattr(mcs.os, "execv", lambda *_args: None)
 
-    new._on_connect(MagicMock(), None, None, 0)
+    _ack_command_subscriptions(new)
 
     assert state_path.exists()
     assert not new._update_health.is_set()
@@ -603,3 +625,100 @@ def test_failed_guardian_stop_intent_keeps_network_agent_reachable(monkeypatch):
     assert client._running.is_set()
     assert not client._update_cancelled.is_set()
     assert sent[-1]["ok"] is False and sent[-1]["state"] == "stop_failed"
+
+
+@pytest.mark.parametrize("rejection", [[128], [], [0, 0], [MagicMock(value=128)]])
+def test_rejected_suback_keeps_journal_until_old_source_is_restored(source_update, monkeypatch, rejection):
+    old, install, state_root, _, _, _, _ = source_update
+    old._do_agent_update({"release_tag": "v4.2.0"})
+    state_path = state_root / package.UPDATE_STATE_NAME
+    package.prepare_agent_update_start(state_path, install)
+    new = _make_client()
+    new._publish_status = lambda: None
+    mqtt_client = MagicMock()
+    mqtt_client.subscribe.side_effect = [(0, 41), (0, 42)]
+    monkeypatch.setattr(mcs, "activate_recovery_package", lambda *_args: pytest.fail("rejected subscription cannot select new cache"))
+    execs = []
+    monkeypatch.setattr(mcs.os, "execv", lambda *args: execs.append(args))
+
+    new._on_connect(mqtt_client, None, None, 0)
+    new._on_subscribe(mqtt_client, None, 41, [0])
+    new._on_subscribe(mqtt_client, None, 42, rejection)
+
+    assert state_path.exists() and not new._update_health.is_set()
+    new._rollback_if_update_unhealthy(timeout=0)
+    assert not state_path.exists()
+    assert (install / "xgent_mcs.py").read_bytes() == b"# previous source\n"
+    assert len(execs) == 1
+
+
+@pytest.mark.parametrize("failed_topic", [0, 1])
+def test_subscribe_send_failure_cannot_confirm_health(source_update, monkeypatch, failed_topic):
+    old, install, state_root, _, _, _, _ = source_update
+    old._do_agent_update({"release_tag": "v4.2.0"})
+    state_path = state_root / package.UPDATE_STATE_NAME
+    package.prepare_agent_update_start(state_path, install)
+    new = _make_client()
+    new._publish_status = lambda: None
+    mqtt_client = MagicMock()
+    subscriptions = [(0, 41), (0, 42)]
+    subscriptions[failed_topic] = (mcs.mqtt.MQTT_ERR_NO_CONN, None)
+    mqtt_client.subscribe.side_effect = subscriptions
+    monkeypatch.setattr(mcs.os, "execv", lambda *_args: None)
+
+    new._on_connect(mqtt_client, None, None, 0)
+    new._on_subscribe(mqtt_client, None, 42 if failed_topic == 0 else 41, [0])
+
+    assert state_path.exists() and not new._update_health.is_set()
+    new._rollback_if_update_unhealthy(timeout=0)
+    assert not state_path.exists()
+    assert (install / "xgent_mcs.py").read_bytes() == b"# previous source\n"
+
+
+def test_disconnect_discards_old_subacks_and_requires_new_confirmations(source_update, monkeypatch):
+    old, install, state_root, _, _, _, _ = source_update
+    old._do_agent_update({"release_tag": "v4.2.0"})
+    state_path = state_root / package.UPDATE_STATE_NAME
+    package.prepare_agent_update_start(state_path, install)
+    new = _make_client()
+    new._publish_status = lambda: None
+    new._restart_existing_guardian_after_update = lambda: None
+    monkeypatch.setattr(mcs, "validate_recovery_install", lambda *_args: "v4.2.0")
+    monkeypatch.setattr(mcs, "activate_recovery_package", lambda *_args: "v4.2.0")
+    mqtt_client = MagicMock()
+    mqtt_client.subscribe.side_effect = [(0, 41), (0, 42), (0, 43), (0, 44)]
+
+    new._on_connect(mqtt_client, None, None, 0)
+    new._on_disconnect(mqtt_client, None, None, 1)
+    new._on_subscribe(mqtt_client, None, 41, [0])
+    new._on_subscribe(mqtt_client, None, 42, [0])
+    assert state_path.exists()
+    new._on_connect(mqtt_client, None, None, 0)
+    new._on_subscribe(mqtt_client, None, 41, [0])
+    new._on_subscribe(mqtt_client, None, 43, [MagicMock(value=0)])
+    assert state_path.exists()
+    new._on_subscribe(mqtt_client, None, 44, [1])
+
+    assert new._update_health.is_set()
+    assert not state_path.exists()
+
+
+def test_explicit_stop_during_suback_wait_prevents_commit(source_update, monkeypatch):
+    old, install, state_root, _, _, _, _ = source_update
+    old._do_agent_update({"release_tag": "v4.2.0"})
+    state_path = state_root / package.UPDATE_STATE_NAME
+    package.prepare_agent_update_start(state_path, install)
+    new = _make_client()
+    new._publish_status = lambda: None
+    mqtt_client = MagicMock()
+    mqtt_client.subscribe.side_effect = [(0, 41), (0, 42)]
+    monkeypatch.setattr(mcs, "set_guardian_desired_running", lambda _running: None)
+    monkeypatch.setattr(mcs, "activate_recovery_package", lambda *_args: pytest.fail("stop must prevent cache selection"))
+
+    new._on_connect(mqtt_client, None, None, 0)
+    new.request_stop()
+    new._on_subscribe(mqtt_client, None, 41, [0])
+    new._on_subscribe(mqtt_client, None, 42, [0])
+
+    assert state_path.exists()
+    assert not new._update_health.is_set()

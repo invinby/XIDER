@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import os
@@ -335,6 +336,22 @@ class Guardian:
             self.client.disconnect()
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="XIDER Windows Guardian")
+    parser.add_argument(
+        "--set-desired-running",
+        choices=("start", "stop"),
+        help="Persist the owner's worker start/stop intent, then exit without starting Guardian.",
+    )
+    args = parser.parse_args(argv)
+    if args.set_desired_running:
+        set_guardian_desired_running(args.set_desired_running == "start")
+        return 0
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     Guardian().run()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,7 +1,9 @@
 """Offline checks for the TARPED catalogue, handbook and text styles."""
 
 import asyncio
+import ast
 from types import SimpleNamespace
+from pathlib import Path
 
 import bot
 import info_book
@@ -188,6 +190,24 @@ def test_release_manifest_updater_requires_a_known_supported_agent_version():
     assert not ledger.supports_release_manifest_update("3.3.8")
     assert not ledger.supports_release_manifest_update("")
     assert not ledger.supports_release_manifest_update("unknown")
+
+
+def test_bot_and_agent_source_versions_stay_aligned():
+    root = Path(__file__).resolve().parents[2]
+
+    def read_version(relative_path):
+        module = ast.parse((root / relative_path).read_text(encoding="utf-8"))
+        for node in module.body:
+            if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == "VERSION"
+                for target in node.targets
+            ):
+                if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                    return node.value.value
+        raise AssertionError(f"VERSION is missing in {relative_path}")
+
+    assert read_version("XGENT-WDS/config.py") == bot.VERSION
+    assert read_version("XGENT-MCS/config.py") == bot.VERSION
 
 
 def test_release_catalog_cache_does_not_fetch_on_every_open():
@@ -380,6 +400,9 @@ def test_style_switch_previews_saved_copy_and_selected_main_menu(monkeypatch):
     monkeypatch.setattr(bot, "get_user_role", lambda user_id: bot.Role.OWNER)
 
     class Message:
+        chat = SimpleNamespace(id=bot.ADMIN_ID)
+        message_id = 123
+
         async def edit_text(self, text, *, reply_markup):
             shown["text"] = text
             shown["markup"] = reply_markup
@@ -392,6 +415,7 @@ def test_style_switch_previews_saved_copy_and_selected_main_menu(monkeypatch):
         async def answer(self, *args, **kwargs):
             pass
 
+    monkeypatch.setattr(bot.ui_cards, "set_card", lambda *args, **kwargs: None)
     asyncio.run(bot.on_admin_style_set(Callback()))
     assert selected["style"] == "xpikmi"
     assert "Мой сохранённый текст" in shown["text"]

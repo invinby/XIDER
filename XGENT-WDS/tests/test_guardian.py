@@ -164,6 +164,54 @@ def test_explicit_worker_stop_persists_guardian_intent(guardian_module, monkeypa
     assert not client._running.is_set()
 
 
+def test_local_stop_cli_persists_intent_without_starting_guardian(guardian_module, monkeypatch):
+    module = guardian_module
+    saved = []
+    monkeypatch.setattr(module, "set_guardian_desired_running", saved.append)
+    monkeypatch.setattr(
+        module.Guardian,
+        "run",
+        lambda _self: pytest.fail("stop intent must not start the Guardian MQTT loop"),
+    )
+
+    assert module.main(["--set-desired-running", "stop"]) == 0
+    assert saved == [False]
+
+
+def test_local_start_cli_persists_intent_without_starting_guardian(guardian_module, monkeypatch):
+    module = guardian_module
+    saved = []
+    monkeypatch.setattr(module, "set_guardian_desired_running", saved.append)
+    monkeypatch.setattr(
+        module.Guardian,
+        "run",
+        lambda _self: pytest.fail("start intent must not start a second Guardian MQTT loop"),
+    )
+
+    assert module.main(["--set-desired-running", "start"]) == 0
+    assert saved == [True]
+
+
+def test_stop_agent_batch_persists_intent_before_ending_worker(guardian_module):
+    batch = Path(guardian_module.__file__).resolve().parent / "stop_agent.bat"
+    source = batch.read_text(encoding="utf-8")
+    intent = source.index("--set-desired-running stop")
+    stop_task = source.index('schtasks /End /TN "XIDER Agent"')
+    failure_guard = source.index("if errorlevel 1", intent)
+
+    assert intent < failure_guard < stop_task
+
+
+def test_start_agent_batch_persists_intent_before_starting_worker(guardian_module):
+    batch = Path(guardian_module.__file__).resolve().parent / "start_agent.bat"
+    source = batch.read_text(encoding="utf-8")
+    intent = source.index("--set-desired-running start")
+    start_task = source.index('schtasks /Run /TN "XIDER Agent"')
+    failure_guard = source.index("if errorlevel 1", intent)
+
+    assert intent < failure_guard < start_task
+
+
 def test_autorun_toggle_is_separate_from_current_worker_state(
     guardian_module, monkeypatch, tmp_path
 ):

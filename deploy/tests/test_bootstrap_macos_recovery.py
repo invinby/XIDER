@@ -168,6 +168,14 @@ exit 93
     (old_agent / "old.marker").write_text("old source\n", encoding="utf-8")
     for name in ("start_agent.sh", "start_guardian.sh"):
         _script(old_agent / name, f'#!/usr/bin/env bash\necho old-{name} >> "$XIDER_TEST_TRACE"\nexit 0\n')
+    _script(old_agent / "start_agent.sh", '''#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${XIDER_RUNTIME_PREPARED:-0}" != 1 ]]; then
+  echo old-runtime-pip-mutation >> "$XIDER_TEST_TRACE"
+  python3 -m pip install -r requirements.txt
+fi
+echo old-start_agent.sh >> "$XIDER_TEST_TRACE"
+''')
     (old_agent / ".env").write_text(
         "SHARED_KEY=offline-test-only-secret\nMQTT_BROKER=broker.example.invalid\nMQTT_PORT=8883\n"
         "MQTT_PREFIX=xgent/v1\nMQTT_TLS=true\nMQTT_USERNAME=test-user\n"
@@ -266,6 +274,9 @@ def test_failed_process_status_rolls_back_without_activating_new_recovery(signed
     events = fixture["trace"].read_text(encoding="utf-8").splitlines()
     assert "cache-stage" in events and "agent-status" in events
     assert "cache-activate" not in events
+    assert "old-start_agent.sh" in events
+    assert "old-runtime-pip-mutation" not in events
+    assert events.count("dependencies") == 1
 
 
 def test_guardian_unload_failure_aborts_before_directory_swap(signed_bootstrap):

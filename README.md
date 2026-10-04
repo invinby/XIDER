@@ -1,8 +1,8 @@
-# XIDER · TARPED 4.1.0 — управление устройствами через Telegram
+# XIDER · TARPED 4.1.1 — управление устройствами через Telegram
 
-> Source version: 4.1.0. Published installable versions are listed in
+> Source version: 4.1.1. Published installable versions are listed in
 > [GitHub Releases](https://github.com/invinby/XIDER/releases); a source version
-> is not proof of a successful device installation. / Версия исходников: 4.1.0.
+> is not proof of a successful device installation. / Версия исходников: 4.1.1.
 > Опубликованные пакеты — в Releases. План, ограничения и незавершённая приёмка:
 > [TARPED](docs/TARPED.md), [подготовка Mac](docs/MAC-REMOTE-UPDATES.md).
 
@@ -29,6 +29,10 @@ bootstrap, привязанный к точному тегу и commit. Треб
 на самом устройстве. / Both entry points verify a publisher signature before
 running a commit-pinned bootstrap. OS permissions still require local consent.
 
+В Telegram ручная установка доступна владельцу: **Устройства → Установка · одна команда**,
+затем выберите Windows или macOS и скопируйте одну строку в терминал устройства.
+The same two copy-ready commands are available in the owner's device list in the bot.
+
 <p align="center">
   <img src="XDicon.png" alt="XIDER Logo" width="128" height="128" />
 </p>
@@ -47,13 +51,13 @@ running a commit-pinned bootstrap. OS permissions still require local consent.
 
 **XIDER** is a high-performance, asynchronous remote endpoint administration and telemetry system. It enables secure, real-time device monitoring, diagnostics, and management through a Telegram Bot interface backed by a hardened, TLS-encrypted MQTT pub/sub message broker.
 
-**Guard Keeper** for macOS is an ordinary supervisor that
-keeps a separate control channel alive, reports agent loss to the VPS, and can
-start, stop, restart, or recover the worker agent from the owner-only Telegram
-panel. Version 4.1.0 adds publisher-signed local file recovery, serialized source
-updates and a lock-safe restart. Deliberate stop/uninstall remains effective;
-Guardian does not bypass local OS controls or access camera, microphone,
-screen, or location without the operating-system permission.
+**Guard Keeper** is the platform supervisor for Windows and macOS. It reports
+worker status and can start, stop, restart, or recover the agent from the
+owner-only Telegram panel. Version 4.1.0 added signed macOS file recovery,
+serialized source updates, and a lock-safe restart; 4.1.1 adds a copy-ready
+one-command Windows/macOS installer picker in Telegram. Deliberate stop/uninstall
+remains effective; Guard Keeper does not bypass local OS controls or access
+camera, microphone, screen, or location without the required OS permission.
 
 Designed with a **Zero-Trust** security architecture, XIDER treats the network transport as untrusted: all commands and telemetry are authenticated with **HMAC-SHA256**, protected against replay attacks via **nonce/timestamp deduplication**, and optionally encrypted end-to-end with **AES-256-GCM**.
 
@@ -72,7 +76,7 @@ graph TD
     subgraph Endpoints [Managed Devices]
         Broker <-->|HMAC-SHA256 + AES-256-GCM| WDS[XGENT-WDS<br/>Windows Endpoint Agent]
         Broker <-->|HMAC-SHA256 + AES-256-GCM| MCS[XGENT-MCS<br/>macOS Endpoint Agent]
-        Broker <-->|HMAC-SHA256 + AES-256-GCM| Guardian[XIDER Guardian<br/>macOS Supervisor]
+        Broker <-->|HMAC-SHA256 + AES-256-GCM| Guardian[Guard Keeper<br/>Windows/macOS Supervisor]
     end
 
     classDef server fill:#2b3a42,stroke:#4f5d75,stroke-width:2px,color:#fff;
@@ -95,18 +99,26 @@ Detailed specification is available in [SECURITY.md](SECURITY.md).
 * **Anti-Replay Attack Protection**: All messages contain an ISO timestamp and unique cryptographic nonce. Nonces are tracked in a circular cache; messages older than 120s are rejected.
 * **End-to-End Payload Encryption**: AES-256-GCM authenticated encryption derived via HKDF-SHA256 prevents traffic snooping on all telemetry and file transfers.
 * **MQTT Last Will and Testament (LWT)**: Endpoints register a cryptographically signed LWT message upon connect. If a machine crashes or loses network connectivity, the broker immediately broadcasts its offline status to the bot.
-* **Role-Based Access Control (RBAC)**: Strict role tiers (`ADMIN`, `TRUSTED`, `VIEWER`) regulate access to privileged commands (shell, power, input).
+* **Role-Based Access Control (RBAC)**: `OWNER`, `USER`, `GUEST`, and `BLOCKED` roles; users receive per-device and per-action grants. The owner is fixed by `ADMIN_ID` and cannot be demoted or blocked through the user database.
 * **Comprehensive Audit Trail**: Security-critical actions are logged with timestamp and user identity in `audit.log`.
 
 ---
 
 ## ⚡ Feature Matrix
 
+This matrix describes source-declared capability paths, not a successful live
+test on every OS version or device. A check mark does not confirm current
+hardware permissions, MQTT reachability, or feature reliability. See the
+[X-MAP acceptance checklist](docs/TARPED.md#tarped-acceptance-checklist) and
+release notes for tested status. Media capture requires an explicit command
+from an account authorized for that device/action and any required
+operating-system permission.
+
 | Feature Category | Capability | Windows (`XGENT-WDS`) | macOS (`XGENT-MCS`) |
 | :--- | :--- | :---: | :---: |
 | **Permissioned Media & Privacy** | Screen capture (all monitors) | ✅ | ✅ |
 | | Webcam snapshot / video record | ✅ | ✅ |
-| | Microphone audio surveillance | ✅ | ✅ |
+| | Microphone audio capture | ✅ | ✅ |
 | | Text-to-Speech (TTS) broadcast | ✅ | ✅ |
 | | Master Volume control & Toggle Mute | ✅ | ✅ |
 | **Hardware & Display** | Hardware Display Brightness | ✅ (WMI/VCP) | ✅ (AppleScript/CLI) |
@@ -121,7 +133,7 @@ Detailed specification is available in [SECURITY.md](SECURITY.md).
 | | Command line (PowerShell / Bash) | ✅ | ✅ |
 | | Desktop Wallpaper change & restore | ✅ | ✅ |
 | | Wake-on-LAN (Magic Packet) | ✅ | ✅ |
-| | Visible supervisor / autostart | ✅ (Registry/Task) | ✅ (LaunchAgent + Guardian) |
+| | Registered supervisor / autostart | ✅ (Task Scheduler) | ✅ (LaunchAgent) |
 
 ---
 
@@ -211,15 +223,17 @@ This software is developed strictly for educational purposes, defensive security
 Telegram и MQTT. Команды подписываются HMAC-SHA256, при необходимости
 шифруются AES-256-GCM, а сервер получает уведомления о heartbeat и LWT.
 
-### XIDER Guardian 3.3.8
+### Guard Keeper · Windows and macOS
 
-Guardian — отдельный видимый supervisor для macOS. Он:
+Guard Keeper — локальный supervisor, запускаемый средствами самой ОС
+(Windows Task Scheduler или macOS LaunchAgent). Он:
 
 - сообщает VPS, что устройство и рабочий агент живы;
 - показывает статус Guardian в Telegram;
 - запускает, останавливает и перезапускает рабочий агент;
 - умеет включать или отключать автоматическое восстановление;
-- оставляет локальный контроль пользователю и не скрывается в системе.
+- оставляет локальный контроль пользователю: его можно остановить и удалить
+  штатными системными средствами; он не маскируется под системный компонент.
 
 Установка на Mac одной командой:
 

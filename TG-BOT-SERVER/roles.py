@@ -7,6 +7,7 @@ runtime JSON file can demote, block or replace that owner.
 from __future__ import annotations
 
 from aiogram.filters import BaseFilter
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 import access_store
@@ -49,7 +50,11 @@ class OwnerFilter(BaseFilter):
 class AdminFilter(BaseFilter):
     """Owner full access; user gets only explicitly granted actions."""
 
-    async def __call__(self, obj: Message | CallbackQuery) -> bool:
+    async def __call__(
+        self,
+        obj: Message | CallbackQuery,
+        state: FSMContext | None = None,
+    ) -> bool:
         if not obj.from_user:
             return False
         user_id = int(obj.from_user.id)
@@ -57,10 +62,40 @@ class AdminFilter(BaseFilter):
         if role == Role.OWNER:
             return True
         if role != Role.USER:
+            if isinstance(obj, Message) and state is not None:
+                await state.clear()
             return False
         if isinstance(obj, Message):
-            # A user can reach an FSM input state only through a callback that
-            # was already permission-checked for this same Telegram account.
+            # A callback can start an input flow, but the user may lose their
+            # role/device/button grant before sending the next message. Recheck
+            # the original action and device at the point the command is sent.
+            # /cancel is intentionally always available to clear a pending form.
+            text = (obj.text or "").strip()
+            command = text.split(maxsplit=1)[0].split("@", 1)[0] if text else ""
+            if command == "/cancel":
+                return True
+            if state is None:
+                return False
+            try:
+                pending = await state.get_data()
+                callback = str(pending.get("authorization_callback") or "")
+                target = str(pending.get("authorization_target") or "")
+                current_state = await state.get_state()
+            except Exception:
+                return False
+            if (
+                not current_state
+                or not callback
+                or not target
+                or target == "all"
+                or not access_store.can_use_callback(user_id, callback, ADMIN_ID, target)
+            ):
+                await state.clear()
+                return False
+            devices = _device_store()
+            if not devices or devices.get(target) is None:
+                await state.clear()
+                return False
             return True
         callback = obj.data or ""
         try:
@@ -79,6 +114,15 @@ class AdminFilter(BaseFilter):
         # A grant must still refer to a device that exists. This closes stale
         # grants left behind by old databases or a concurrent remove/block.
         return bool(selected_device and devices and devices.get(selected_device) is not None)
+
+
+def _device_store():
+    """Load the live device registry without creating a module import cycle."""
+    try:
+        from bot import devices
+    except Exception:
+        return None
+    return devices
 
 
 class ReadOnlyFilter(BaseFilter):

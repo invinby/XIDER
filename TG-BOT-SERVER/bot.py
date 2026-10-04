@@ -139,6 +139,7 @@ class Form(StatesGroup):
     wait_fun_text = State()
     wait_fun_hotkey = State()
     wait_fun_wallpaper = State()
+    wait_wallpaper_photo = State()
     wait_fun_spam = State()
     wait_shout = State()
     wait_prockill = State()
@@ -146,6 +147,22 @@ class Form(StatesGroup):
     wait_admin_message = State()
     wait_bot_text = State()
     wait_server_command = State()
+
+
+async def _start_authorized_input(
+    state: FSMContext,
+    form_state: State,
+    callback: str,
+    device_id: str,
+    **form_data,
+) -> None:
+    """Bind a pending device command to its initiating grant and device."""
+    await state.set_state(form_state)
+    await state.update_data(
+        **form_data,
+        authorization_callback=str(callback or ""),
+        authorization_target=str(device_id or ""),
+    )
 
 
 # Диспетчер и роутер создаются ДО декораторов хендлеров (иначе NameError при импорте).
@@ -222,8 +239,13 @@ async def on_cmd_clipboard(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await cq.answer("📋 Запрашиваю буфер обмена...")
-    sent, command_id = publish_tracked("clipboard")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("clipboard", _target=target)
     if not sent:
         await _replace_callback_message(cq,
             _lex("mqtt_disconnected"),
@@ -231,6 +253,8 @@ async def on_cmd_clipboard(cq: CallbackQuery):
         )
         return
     result = await clipboard_collector.wait_for(target, "clipboard", 10.0, command_id)
+    if not await _callback_result_access_or_report(cq, target, published=True):
+        return
     if result is None:
         await _replace_callback_message(cq,
             _lex("device_timeout", seconds="10"),
@@ -258,8 +282,13 @@ async def on_cmd_processes(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await cq.answer("⚙️ Запрашиваю процессы (Топ-5)...")
-    sent, command_id = publish_tracked("processes")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("processes", _target=target)
     if not sent:
         await _replace_callback_message(cq,
             _lex("mqtt_disconnected"),
@@ -267,6 +296,8 @@ async def on_cmd_processes(cq: CallbackQuery):
         )
         return
     result = await processes_collector.wait_for(target, "processes", 15.0, command_id)
+    if not await _callback_result_access_or_report(cq, target, published=True):
+        return
     if result is None:
         await _replace_callback_message(cq,
             _lex("device_timeout", seconds="15"),
@@ -293,8 +324,13 @@ async def on_cmd_mic(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await cq.answer("🎙 Идет запись звука (5 сек)...")
-    sent, command_id = publish_tracked("mic")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("mic", _target=target)
     if not sent:
         await _replace_callback_message(cq,
             _lex("mqtt_disconnected"),
@@ -302,6 +338,8 @@ async def on_cmd_mic(cq: CallbackQuery):
         )
         return
     result = await mic_collector.wait_for(target, "mic", 20.0, command_id)
+    if not await _callback_result_access_or_report(cq, target, published=True):
+        return
     if result is None:
         await _replace_callback_message(cq,
             "⏳ Звук не получен за 20 сек — устройство офлайн или нет микрофона.",
@@ -423,8 +461,7 @@ async def on_cmd_open_app(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_open_app)
-    await state.update_data(command_target=target)
+    await _start_authorized_input(state, Form.wait_open_app, cq.data, target, command_target=target)
     await _replace_callback_message(
         cq,
         _lex("open_app_prompt"),
@@ -453,6 +490,9 @@ async def on_open_app_input(message: Message, state: FSMContext):
         await _replace_user_card(
             message, _lex("single_device_only"), reply_markup=back_to_device_kb()
         )
+        return
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await _reject_revoked_device_input(message)
         return
     if publish("open_app", _target=target, app=app):
         await _replace_user_card(
@@ -874,14 +914,58 @@ def devices_menu(user_id: int | None = None):
         )
     if is_owner:
         kb.button(text=_lex("devices_add_button"), callback_data="devmg:manualadd", style="primary")
+        kb.button(text=_lex("manual_install_button"), callback_data="install:manual", style="success")
         kb.button(text=_lex("devices_blocked_button"), callback_data="devmg:blocked", style="danger")
         kb.button(text=_lex("devices_clear_button"), callback_data="devmg:clear_all", style="danger")
     kb.button(text=_nav("refresh"), callback_data="menu:devices", style="success")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     dev_count = len(devs)
-    adjust_pattern = [1] * dev_count + ([2, 1, 2] if is_owner else [1, 1])
+    adjust_pattern = [1] * dev_count + ([2, 2, 2] if is_owner else [1, 1])
     kb.adjust(*adjust_pattern)
     return kb.as_markup()
+
+
+def manual_install_os_keyboard(*, selected_os: str | None = None):
+    """Owner-only OS picker for copyable one-line agent installation commands."""
+    kb = InlineKeyboardBuilder()
+    if selected_os != "windows":
+        kb.button(
+            text=_lex("manual_install_windows"),
+            callback_data="install:windows",
+            style="primary",
+        )
+    if selected_os != "macos":
+        kb.button(
+            text=_lex("manual_install_macos"),
+            callback_data="install:macos",
+            style="primary",
+        )
+    kb.button(text=_lex("manual_install_back"), callback_data="menu:devices", style="primary")
+    kb.adjust(2, 1)
+    return kb.as_markup()
+
+
+def manual_install_command_screen(selected_os: str) -> str:
+    """Render the published, signed one-line installer for the selected OS."""
+    commands = {
+        "windows": (
+            "manual_install_windows_title",
+            "irm https://invinby.github.io/XIDER/win.ps1 | iex",
+        ),
+        "macos": (
+            "manual_install_macos_title",
+            "curl -fsSL https://invinby.github.io/XIDER/mac | bash",
+        ),
+    }
+    item = commands.get(selected_os)
+    if item is None:
+        raise ValueError("Unsupported XIDER installer OS")
+    title_key, command = item
+    return (
+        f"<b>{_lex(title_key)}</b>\n\n"
+        f"<code>{html.escape(command)}</code>\n\n"
+        f"{_lex('manual_install_copy_note')}"
+    )
 
 
 def device_menu(device_id: str, user_id: int | None = None):
@@ -1803,29 +1887,152 @@ async def _stale_card_allows_replacement(chat_id: int, message_id: int, exc: Exc
         return False
 
 
+async def _edit_card_with_retry(message: Message, text: str, reply_markup=None):
+    """Retry one transient Telegram edit failure; return a terminal error otherwise."""
+    stale_markers = (
+        "message to edit not found",
+        "message can't be edited",
+        "message_id_invalid",
+        "message identifier is not specified",
+    )
+    for attempt in range(2):
+        try:
+            await message.edit_text(text, reply_markup=reply_markup)
+            return None
+        except Exception as exc:
+            detail = str(exc).lower()
+            if "not modified" in detail:
+                return None
+            if attempt == 0 and not any(marker in detail for marker in stale_markers):
+                await asyncio.sleep(0.15)
+                continue
+            return exc
+    return None
+
+
+def _message_has_media(message: Message) -> bool:
+    """Telegram cannot turn a photo/voice/document message into a text message by editing it."""
+    return any(
+        getattr(message, field, None)
+        for field in ("photo", "animation", "audio", "document", "video", "video_note", "voice", "sticker")
+    )
+
+
+def _is_media_text_edit_error(exc: Exception) -> bool:
+    detail = str(exc).lower()
+    return "there is no text in the message to edit" in detail or "message is not a text message" in detail
+
+
+async def _replace_media_card_with_text(
+    message: Message,
+    user_id: int,
+    text: str,
+    reply_markup=None,
+    *,
+    old_message_id: int | None = None,
+):
+    """Replace a media card with a text card, then remove the old media card."""
+    media_message_id = old_message_id or message.message_id
+    sent = await message.answer(text, reply_markup=reply_markup)
+    try:
+        await bot.delete_message(message.chat.id, media_message_id)
+    except Exception:
+        # Keep the new card usable and neutralize stale buttons if deletion is unavailable.
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=message.chat.id,
+                message_id=media_message_id,
+                reply_markup=None,
+            )
+        except Exception:
+            log.warning(
+                "Не удалось удалить или отключить media-карточку %s после замены",
+                media_message_id,
+                exc_info=True,
+            )
+    try:
+        ui_cards.set_card(sent.chat.id, user_id, sent.message_id)
+    except OSError:
+        log.exception("Не удалось сохранить ID текстовой карточки после media")
+    return sent
+
+
+async def _replace_callback_with_media(
+    cq: CallbackQuery, sender, *, chat_id: int | None = None, **media_kwargs
+):
+    """Make returned media the current card and remove/neutralize the prior card."""
+    media_kwargs.setdefault("reply_markup", back_to_device_kb())
+    sent = await sender(chat_id if chat_id is not None else cq.from_user.id, **media_kwargs)
+    try:
+        await bot.delete_message(cq.message.chat.id, cq.message.message_id)
+    except Exception:
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=cq.message.chat.id,
+                message_id=cq.message.message_id,
+                reply_markup=None,
+            )
+        except Exception:
+            log.warning(
+                "Не удалось удалить или отключить предыдущую карточку %s после media",
+                cq.message.message_id,
+                exc_info=True,
+            )
+    try:
+        ui_cards.set_card(sent.chat.id, cq.from_user.id, sent.message_id)
+    except OSError:
+        log.exception("Не удалось сохранить ID карточки с media")
+    return sent
+
+
 async def _replace_callback_message(cq: CallbackQuery, text: str, reply_markup=None):
     """Edit the current card; avoid duplicates on transient Telegram failures."""
-    try:
-        await cq.message.edit_text(text, reply_markup=reply_markup)
+    if _message_has_media(cq.message):
+        return await _replace_media_card_with_text(
+            cq.message, cq.from_user.id, text, reply_markup
+        )
+    exc = await _edit_card_with_retry(cq.message, text, reply_markup)
+    if exc is None:
         try:
             ui_cards.set_card(cq.message.chat.id, cq.from_user.id, cq.message.message_id)
         except OSError:
             log.exception("Не удалось сохранить ID карточки")
-    except Exception as exc:
-        # Telegram возвращает эту ошибку, когда текст уже такой же. В этом
-        # случае нельзя удалять карточку и создавать дубль.
-        if "not modified" in str(exc).lower():
-            return
-        if not await _stale_card_allows_replacement(
-            cq.message.chat.id, cq.message.message_id, exc
-        ):
-            log.warning("Не удалось обновить карточку %s: %s", cq.message.message_id, exc)
-            return
-        sent = await cq.message.answer(text, reply_markup=reply_markup)
+        return cq.message
+    if not await _stale_card_allows_replacement(
+        cq.message.chat.id, cq.message.message_id, exc
+    ):
+        log.warning("Не удалось обновить карточку %s: %s", cq.message.message_id, exc)
+        return cq.message
+    sent = await cq.message.answer(text, reply_markup=reply_markup)
+    try:
+        ui_cards.set_card(sent.chat.id, cq.from_user.id, sent.message_id)
+    except OSError:
+        log.exception("Не удалось сохранить ID новой карточки")
+    return sent
+
+
+async def _replace_message_card(message: Message, user_id: int, text: str, reply_markup=None):
+    """Replace one known operation card, creating a new one only if old is proven stale."""
+    if _message_has_media(message):
+        return await _replace_media_card_with_text(message, user_id, text, reply_markup)
+    exc = await _edit_card_with_retry(message, text, reply_markup)
+    if exc is None:
         try:
-            ui_cards.set_card(sent.chat.id, cq.from_user.id, sent.message_id)
+            ui_cards.set_card(message.chat.id, user_id, message.message_id)
         except OSError:
-            log.exception("Не удалось сохранить ID новой карточки")
+            log.exception("Не удалось сохранить ID карточки")
+        return message
+    if not await _stale_card_allows_replacement(
+        message.chat.id, message.message_id, exc
+    ):
+        log.warning("Не удалось обновить карточку %s: %s", message.message_id, exc)
+        return message
+    sent = await message.answer(text, reply_markup=reply_markup)
+    try:
+        ui_cards.set_card(sent.chat.id, user_id, sent.message_id)
+    except OSError:
+        log.exception("Не удалось сохранить ID новой карточки")
+    return sent
 
 
 async def _replace_user_card(message: Message, text: str, reply_markup=None) -> int:
@@ -1846,6 +2053,11 @@ async def _replace_user_card(message: Message, text: str, reply_markup=None) -> 
             detail = str(exc).lower()
             if "not modified" in detail:
                 return card_id
+            if _is_media_text_edit_error(exc):
+                sent = await _replace_media_card_with_text(
+                    message, user_id, text, reply_markup, old_message_id=card_id
+                )
+                return sent.message_id
             if not await _stale_card_allows_replacement(chat_id, card_id, exc):
                 log.warning("Не удалось обновить карточку %s: %s", card_id, exc)
                 return card_id
@@ -2489,6 +2701,9 @@ async def on_url_input(message: Message, state: FSMContext):
             message, _lex("single_device_only"), reply_markup=back_to_device_kb()
         )
         return
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await _reject_revoked_device_input(message)
+        return
     if publish("open_url", _target=target, url=url):
         await _replace_user_card(
             message,
@@ -2520,6 +2735,9 @@ async def on_text_input(message: Message, state: FSMContext):
         await _replace_user_card(
             message, _lex("single_device_only"), reply_markup=back_to_device_kb()
         )
+        return
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await _reject_revoked_device_input(message)
         return
     if publish("notify", _target=target, text=text):
         await _replace_user_card(
@@ -2553,6 +2771,9 @@ async def on_sound_input(message: Message, state: FSMContext):
             message, _lex("single_device_only"), reply_markup=back_to_device_kb()
         )
         return
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await _reject_revoked_device_input(message)
+        return
     if publish("sound", _target=target, text=text):
         await _replace_user_card(
             message,
@@ -2564,19 +2785,11 @@ async def on_sound_input(message: Message, state: FSMContext):
             message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb()
         )
 
-@router.message(F.from_user.id != ADMIN_ID)
-async def on_denied(message: Message):
-    if get_user_role(message.from_user.id) == Role.BLOCKED:
-        await message.answer("Доступ для этого аккаунта заблокирован.")
-    else:
-        await message.answer("Используй /start, чтобы открыть доступные разделы.")
-
-
 # ---------- XIDER 3: доступ, администрирование и серверная ----------
 
 @router.callback_query(ReadOnlyFilter(), F.data == "menu:server")
 async def on_menu_server(cq: CallbackQuery):
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         server_overview_text(
             approval=bool(bot_settings.get("require_device_approval", True)),
             connected=transport.connected.is_set(),
@@ -2590,7 +2803,7 @@ async def on_menu_server(cq: CallbackQuery):
 async def on_server_approval(cq: CallbackQuery):
     value = bot_settings.toggle("require_device_approval")
     access_store.append_audit("device_approval_policy", actor_id=cq.from_user.id, detail=str(value))
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         server_overview_text(approval=bool(value), connected=transport.connected.is_set()),
         reply_markup=server_menu(cq.from_user.id),
     )
@@ -2600,7 +2813,7 @@ async def on_server_approval(cq: CallbackQuery):
 @router.callback_query(OwnerFilter(), F.data.in_({"server:restart", "server:update", "server:rollback"}))
 async def on_server_dangerous_request(cq: CallbackQuery):
     action = cq.data.split(":", 1)[1]
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         server_confirmation_text(action),
         reply_markup=server_confirm_menu(action),
     )
@@ -2611,7 +2824,7 @@ async def on_server_dangerous_request(cq: CallbackQuery):
 async def on_server_status(cq: CallbackQuery):
     result = await asyncio.to_thread(server_ops.status)
     access_store.append_audit("server_status", actor_id=cq.from_user.id, detail=f"ok={result.ok}")
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         f"<b>{html.escape(_lex('server_status_title'))}</b>\n<pre>{html.escape(result.text)}</pre>",
         reply_markup=server_menu(cq.from_user.id),
     )
@@ -2622,7 +2835,7 @@ async def on_server_status(cq: CallbackQuery):
 async def on_server_logs(cq: CallbackQuery):
     result = await asyncio.to_thread(server_ops.logs, 45)
     access_store.append_audit("server_logs", actor_id=cq.from_user.id, detail=f"ok={result.ok}")
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         f"<b>{html.escape(_lex('server_logs_title'))}</b>\n<pre>{html.escape(result.text[-3600:])}</pre>",
         reply_markup=server_menu(cq.from_user.id),
     )
@@ -2633,7 +2846,7 @@ async def on_server_logs(cq: CallbackQuery):
 async def on_server_metrics(cq: CallbackQuery):
     snapshot = await asyncio.to_thread(server_ops.metrics)
     access_store.append_audit("server_metrics", actor_id=cq.from_user.id, detail="snapshot")
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         server_metrics_text(snapshot),
         reply_markup=server_menu(cq.from_user.id),
     )
@@ -2644,7 +2857,7 @@ async def on_server_metrics(cq: CallbackQuery):
 async def on_server_specs(cq: CallbackQuery):
     result = await asyncio.to_thread(server_ops.specs)
     access_store.append_audit("server_specs", actor_id=cq.from_user.id, detail=f"ok={result.ok}")
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         f"<b>{html.escape(_lex('server_specs_title'))}</b>\n<pre>{html.escape(result.text[-3600:])}</pre>",
         reply_markup=server_menu(cq.from_user.id),
     )
@@ -2656,14 +2869,16 @@ async def on_server_chart(cq: CallbackQuery):
     snapshot = await asyncio.to_thread(server_ops.metrics)
     image = await asyncio.to_thread(server_ops.render_metrics_chart, snapshot)
     access_store.append_audit("server_chart", actor_id=cq.from_user.id, detail="snapshot")
-    await cq.message.edit_text(
-        f"<b>{html.escape(_lex('server_chart_title'))}</b>\n"
-        f"{html.escape(_lex('server_metrics_hint'))}",
+    await _replace_callback_with_media(
+        cq,
+        bot.send_photo,
+        chat_id=cq.message.chat.id,
+        photo=BufferedInputFile(image, filename="xider-server-load.png"),
+        caption=(
+            f"<b>{html.escape(_lex('server_chart_title'))}</b>\n"
+            f"{html.escape(_lex('server_chart_caption'))}"
+        ),
         reply_markup=server_menu(cq.from_user.id),
-    )
-    await cq.message.answer_photo(
-        BufferedInputFile(image, filename="xider-server-load.png"),
-        caption=_lex("server_chart_caption"),
     )
     await cq.answer(_lex("server_done"))
 
@@ -2671,7 +2886,7 @@ async def on_server_chart(cq: CallbackQuery):
 @router.callback_query(OwnerFilter(), F.data == "server:terminal")
 async def on_server_terminal(cq: CallbackQuery, state: FSMContext):
     await state.set_state(Form.wait_server_command)
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         server_terminal_text(),
         reply_markup=server_menu(cq.from_user.id),
     )
@@ -2709,10 +2924,10 @@ async def on_server_confirm(cq: CallbackQuery):
     if operation is None:
         await cq.answer(_lex("server_unknown_action"), show_alert=True)
         return
-    await cq.message.edit_text(_lex("server_operation_pending"))
+    await _replace_callback_message(cq, _lex("server_operation_pending"))
     result = await asyncio.to_thread(operation)
     access_store.append_audit("server_operation", actor_id=cq.from_user.id, detail=f"action={action}; ok={result.ok}; code={result.code}")
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         f"<b>{html.escape(_lex('server_operation_title', action=_lex(f'server_action_short_{action}')))}</b>\n"
         f"{html.escape(_lex('server_result_line', state=_lex('server_result_success' if result.ok else 'server_result_error')))}\n"
         f"<pre>{html.escape(result.text[-3500:])}</pre>",
@@ -2725,7 +2940,7 @@ async def on_server_confirm(cq: CallbackQuery):
 async def on_guest_devices(cq: CallbackQuery):
     devs = devices.all()
     online = sum(1 for info in devs.values() if _status_dot(info) in ("🟢", "🟡"))
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex("guest_devices_overview", online=str(online), total=str(len(devs))),
         reply_markup=guest_devices_menu(),
     )
@@ -2739,7 +2954,7 @@ async def on_guest_readonly(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data == "menu:admin")
 async def on_menu_admin(cq: CallbackQuery):
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         f"<b>{html.escape(_lex('admin_title'))}</b>\n"
         f"{html.escape(_lex('admin_intro'))}",
         reply_markup=admin_menu(),
@@ -2750,7 +2965,7 @@ async def on_menu_admin(cq: CallbackQuery):
 @router.callback_query(OwnerFilter(), F.data == "admin:users")
 async def on_admin_users(cq: CallbackQuery):
     users = access_store.list_users()
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         f"<b>{html.escape(_nav('admin_users'))}</b>\n"
         f"{html.escape(_lex('users_intro', total=str(len(users))))}",
         reply_markup=admin_users_menu(),
@@ -2761,7 +2976,7 @@ async def on_admin_users(cq: CallbackQuery):
 @router.callback_query(OwnerFilter(), F.data == "admin:texts")
 async def on_admin_texts(cq: CallbackQuery):
     mode = xlex.normalize_style(bot_settings.get("ui_style", "technical"))
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         f"<b>X-LEX · {html.escape(xlex.STYLE_NAMES[mode])}</b>\n"
         f"{html.escape(_lex('texts_intro'))}",
         reply_markup=admin_texts_menu(),
@@ -2880,7 +3095,7 @@ async def on_admin_devices(cq: CallbackQuery):
     if not raw.isdigit():
         await cq.answer(_lex("admin_invalid_user"), show_alert=True)
         return
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex("admin_device_access_intro"),
         reply_markup=admin_devices_menu(int(raw)),
     )
@@ -2903,7 +3118,7 @@ async def on_admin_device_toggle(cq: CallbackQuery):
         device=target_label(device_id),
         action="выдан" if enabled else "отозван",
     ))
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex("admin_device_access_intro"),
         reply_markup=admin_devices_menu(user_id),
     )
@@ -2915,7 +3130,7 @@ async def on_admin_permissions(cq: CallbackQuery):
     if not raw.isdigit():
         await cq.answer(_lex("admin_invalid_user"), show_alert=True)
         return
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex("admin_permissions_intro"),
         reply_markup=admin_permissions_menu(int(raw)),
     )
@@ -2939,7 +3154,7 @@ async def on_admin_permission_toggle(cq: CallbackQuery):
         permission=callback,
         action="выдано" if enabled else "отозвано",
     ))
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex("admin_permissions_intro"),
         reply_markup=admin_permissions_menu(user_id),
     )
@@ -2989,7 +3204,7 @@ async def on_admin_audit(cq: CallbackQuery):
             detail = html.escape(str(row.get("detail") or ""))
             lines.append(f"<code>{moment}</code> {html.escape(str(row.get('kind') or 'event'))} [{actor}] {detail}")
         text = "<b>Журнал действий</b>\n" + "\n".join(lines)
-    await cq.message.edit_text(text[:3900], reply_markup=admin_menu())
+    await _replace_callback_message(cq, text[:3900], reply_markup=admin_menu())
     await cq.answer()
 
 
@@ -3002,7 +3217,7 @@ async def on_admin_style(cq: CallbackQuery):
         kb.button(text=_limit_button_label(prefix + xlex.STYLE_NAMES[style]), callback_data=f"admin:style:set:{style}", style="success" if style == current else "primary")
     kb.button(text=_nav("back"), callback_data="menu:admin", style="primary")
     kb.adjust(1)
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex("style_select_intro"),
         reply_markup=kb.as_markup(),
     )
@@ -3017,7 +3232,7 @@ async def on_admin_style_set(cq: CallbackQuery):
         return
     bot_settings.set_key("ui_style", style)
     access_store.append_audit("ui_style_set", actor_id=cq.from_user.id, detail=style)
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         f"<b>X-LEX · {html.escape(xlex.STYLE_NAMES[style])}</b>\n"
         f"{html.escape(text_store.get_for_style('start_owner', style))}\n\n"
         + _lex("style_enabled_notice"),
@@ -3318,7 +3533,7 @@ async def on_manualadd_input(message: Message, state: FSMContext):
 @router.callback_query(ReadOnlyFilter(), F.data == "menu:main")
 async def on_menu_main(cq: CallbackQuery):
     SESSION["target"] = None
-    await cq.message.edit_text(html.escape(_lex("main_title")), reply_markup=main_menu(cq.from_user.id))
+    await _replace_callback_message(cq, html.escape(_lex("main_title")), reply_markup=main_menu(cq.from_user.id))
     await cq.answer()
 
 @router.callback_query(AdminFilter(), F.data == "menu:devices")
@@ -3343,18 +3558,40 @@ async def on_menu_devices(cq: CallbackQuery):
     await _replace_callback_message(cq, text, reply_markup=devices_menu(cq.from_user.id))
     await cq.answer()
 
+
+@router.callback_query(OwnerFilter(), F.data.startswith("install:"))
+async def on_manual_install(cq: CallbackQuery):
+    selected = cq.data.split(":", 1)[1]
+    if selected == "manual":
+        await _replace_callback_message(
+            cq,
+            _lex("manual_install_pick_os"),
+            reply_markup=manual_install_os_keyboard(),
+        )
+        await cq.answer()
+        return
+    if selected not in {"windows", "macos"}:
+        await cq.answer(_lex("versions_bad_request"), show_alert=True)
+        return
+    await _replace_callback_message(
+        cq,
+        manual_install_command_screen(selected),
+        reply_markup=manual_install_os_keyboard(selected_os=selected),
+    )
+    await cq.answer()
+
 @router.callback_query(OwnerFilter(), F.data == "menu:target")
 async def on_menu_target(cq: CallbackQuery):
     if not devices.all():
         kb = InlineKeyboardBuilder()
         kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
-        await cq.message.edit_text(
+        await _replace_callback_message(cq,
             _lex("no_devices_yet"),
             reply_markup=kb.as_markup(),
         )
         await cq.answer()
         return
-    await cq.message.edit_text(_lex("device_required"), reply_markup=devices_menu())
+    await _replace_callback_message(cq, _lex("device_required"), reply_markup=devices_menu())
     await cq.answer()
 
 @router.callback_query(AdminFilter(), F.data.startswith("dev:"))
@@ -3364,7 +3601,7 @@ async def on_dev(cq: CallbackQuery):
         await cq.answer("Устройство уже недоступно.", show_alert=True)
         return
     SESSION["target"] = device_id
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         device_card(device_id),
         reply_markup=device_menu(device_id),
     )
@@ -3387,9 +3624,9 @@ async def on_back_to_device(cq: CallbackQuery):
         SESSION["target"] = None
         target = None
     if not target:
-        await cq.message.edit_text(f"<b>{html.escape(_lex('main_title'))}</b>", reply_markup=main_menu())
+        await _replace_callback_message(cq, f"<b>{html.escape(_lex('main_title'))}</b>", reply_markup=main_menu())
     else:
-        await cq.message.edit_text(
+        await _replace_callback_message(cq,
             device_card(target),
             reply_markup=device_menu(target),
         )
@@ -3408,8 +3645,7 @@ async def on_cmd_url(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_url)
-    await state.update_data(command_target=target)
+    await _start_authorized_input(state, Form.wait_url, cq.data, target, command_target=target)
     await _replace_callback_message(
         cq,
         _lex("url_prompt"),
@@ -3426,8 +3662,7 @@ async def on_cmd_text(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_text)
-    await state.update_data(command_target=target)
+    await _start_authorized_input(state, Form.wait_text, cq.data, target, command_target=target)
     await _replace_callback_message(
         cq,
         _lex("notify_text_prompt"),
@@ -3444,8 +3679,7 @@ async def on_cmd_sound(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_sound)
-    await state.update_data(command_target=target)
+    await _start_authorized_input(state, Form.wait_sound, cq.data, target, command_target=target)
     await _replace_callback_message(
         cq,
         _lex("sound_prompt"),
@@ -3463,7 +3697,9 @@ async def on_cmd_screenshot(cq: CallbackQuery):
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
     await cq.answer("📸 Делаю скриншот...")
-    sent, command_id = publish_tracked("screenshot")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("screenshot", _target=target)
     if not sent:
         await _replace_callback_message(
             cq,
@@ -3472,6 +3708,8 @@ async def on_cmd_screenshot(cq: CallbackQuery):
         )
         return
     result = await screenshot_collector.wait_for(target, "screenshot", 15.0, command_id)
+    if not await _callback_result_access_or_report(cq, target, published=True):
+        return
     if result is None:
         await _replace_callback_message(
             cq,
@@ -3492,22 +3730,12 @@ async def on_cmd_screenshot(cq: CallbackQuery):
     try:
         img_bytes = base64.b64decode(img_b64)
         photo = BufferedInputFile(img_bytes, filename="screenshot.png")
-        sent_photo = await bot.send_photo(
-            cq.from_user.id,
+        await _replace_callback_with_media(
+            cq,
+            bot.send_photo,
             photo=photo,
             caption=f"📸 <b>{target_label(target)}</b>",
-            reply_markup=back_to_device_kb(),
         )
-        # Фото Telegram нельзя встроить в исходную текстовую карточку;
-        # удаляем её после отправки, чтобы в чате не оставался дубль.
-        try:
-            await cq.message.delete()
-        except Exception:
-            pass
-        try:
-            ui_cards.set_card(sent_photo.chat.id, cq.from_user.id, sent_photo.message_id)
-        except OSError:
-            log.exception("Не удалось сохранить ID карточки скриншота")
     except Exception:
         log.exception("Ошибка декодирования скриншота")
         await _replace_callback_message(
@@ -3527,7 +3755,9 @@ async def on_cmd_webcam(cq: CallbackQuery):
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
     await cq.answer("📷 Делаю снимок с вебки (может занять пару секунд)...")
-    sent, command_id = publish_tracked("webcam")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("webcam", _target=target)
     if not sent:
         await _replace_callback_message(
             cq,
@@ -3536,6 +3766,8 @@ async def on_cmd_webcam(cq: CallbackQuery):
         )
         return
     result = await webcam_collector.wait_for(target, "webcam", 20.0, command_id)
+    if not await _callback_result_access_or_report(cq, target, published=True):
+        return
     if result is None:
         await _replace_callback_message(
             cq,
@@ -3554,20 +3786,12 @@ async def on_cmd_webcam(cq: CallbackQuery):
     try:
         img_bytes = base64.b64decode(img_b64)
         photo = BufferedInputFile(img_bytes, filename="webcam.jpg")
-        sent_photo = await bot.send_photo(
-            cq.from_user.id,
+        await _replace_callback_with_media(
+            cq,
+            bot.send_photo,
             photo=photo,
             caption=f"📷 <b>{target_label(target)}</b>",
-            reply_markup=back_to_device_kb(),
         )
-        try:
-            await cq.message.delete()
-        except Exception:
-            pass
-        try:
-            ui_cards.set_card(sent_photo.chat.id, cq.from_user.id, sent_photo.message_id)
-        except OSError:
-            log.exception("Не удалось сохранить ID карточки веб-камеры")
     except Exception:
         log.exception("Ошибка декодирования снимка вебки")
         await _replace_callback_message(
@@ -3583,12 +3807,19 @@ async def on_cmd_battery(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await cq.answer("🔋 Запрашиваю батарею...")
-    sent, command_id = publish_tracked("battery")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("battery", _target=target)
     if not sent:
         await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
         return
     res = await battery_collector.wait_for(target, "battery", 15.0, command_id)
+    if not await _callback_result_access_or_report(cq, target, published=True):
+        return
     if not res:
         await _replace_callback_message(cq, _lex("device_no_response"), reply_markup=back_to_device_kb())
         return
@@ -3606,12 +3837,19 @@ async def on_cmd_network(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await cq.answer("🌐 Запрашиваю сеть...")
-    sent, command_id = publish_tracked("network")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("network", _target=target)
     if not sent:
         await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
         return
     res = await network_collector.wait_for(target, "network", 15.0, command_id)
+    if not await _callback_result_access_or_report(cq, target, published=True):
+        return
     if not res:
         await _replace_callback_message(cq, _lex("device_no_response"), reply_markup=back_to_device_kb())
         return
@@ -3628,12 +3866,19 @@ async def on_cmd_services(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await cq.answer("🛠 Запрашиваю службы...")
-    sent, command_id = publish_tracked("services")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("services", _target=target)
     if not sent:
         await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
         return
     res = await services_collector.wait_for(target, "services", 15.0, command_id)
+    if not await _callback_result_access_or_report(cq, target, published=True):
+        return
     if not res:
         await _replace_callback_message(cq, _lex("device_no_response"), reply_markup=back_to_device_kb())
         return
@@ -3647,12 +3892,19 @@ async def on_cmd_capabilities(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await cq.answer("📊 Запрашиваю возможности...")
-    sent, command_id = publish_tracked("capabilities")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("capabilities", _target=target)
     if not sent:
         await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
         return
     res = await capabilities_collector.wait_for(target, "capabilities", 15.0, command_id)
+    if not await _callback_result_access_or_report(cq, target, published=True):
+        return
     if not res:
         await _replace_callback_message(cq, _lex("device_no_response"), reply_markup=back_to_device_kb())
         return
@@ -3735,7 +3987,9 @@ async def on_cmd_sysinfo(cq: CallbackQuery):
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
     await cq.answer("💻 Запрашиваю...")
-    sent, command_id = publish_tracked("sysinfo")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("sysinfo", _target=target)
     if not sent:
         await _replace_callback_message(
             cq,
@@ -3744,6 +3998,8 @@ async def on_cmd_sysinfo(cq: CallbackQuery):
         )
         return
     result = await sysinfo_collector.wait_for(target, "sysinfo", 12.0, command_id)
+    if not await _callback_result_access_or_report(cq, target, published=True):
+        return
     if result is None:
         await _replace_callback_message(
             cq,
@@ -3818,7 +4074,9 @@ async def on_cmd_status(cq: CallbackQuery):
                 reply_markup=system_menu(),
             )
         return
-    sent, command_id = publish_tracked("status_request")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("status_request", _target=target)
     if not sent:
         await _replace_callback_message(
             cq,
@@ -3827,13 +4085,15 @@ async def on_cmd_status(cq: CallbackQuery):
         )
         return
     try:
-        await cq.message.edit_text(
+        await _replace_callback_message(cq,
             _lex_html("status_waiting", device=target_label(target)),
             reply_markup=system_menu(),
         )
     except Exception:
         pass
     status = await status_collector.wait_for(target, "status", 12.0, command_id)
+    if not await _callback_result_access_or_report(cq, target, published=True):
+        return
     if status is None:
         await _replace_callback_message(
             cq,
@@ -3854,7 +4114,7 @@ async def on_cmd_power_menu(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex_html("power_menu_intro", device=target_label(target)),
         reply_markup=power_menu_new(),
     )
@@ -3874,7 +4134,7 @@ async def on_power_action(cq: CallbackQuery):
         "sleep": "power_action_sleep",
     }.get(action)
     label = _lex(action_key) if action_key else action.upper()
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex_html("power_confirm_prompt", action=label, device=target_label(target)),
         reply_markup=confirm_power_menu(action),
     )
@@ -3897,12 +4157,12 @@ async def on_power_confirm(cq: CallbackQuery):
         await cq.answer(f"{emoji} {label} запущена...")
         res = await fun_text_collector.wait(5.0)
         msg = (res or {}).get("text") or f"{emoji} {label} отправлена: <b>{target_label(target)}</b>"
-        await cq.message.edit_text(
+        await _replace_callback_message(cq,
             _lex_html("power_action_result", text=msg),
             reply_markup=back_to_device_kb(),
         )
     else:
-        await cq.message.edit_text(
+        await _replace_callback_message(cq,
             _lex("mqtt_disconnected"),
             reply_markup=back_to_device_kb(),
         )
@@ -3926,7 +4186,7 @@ async def on_cat_media(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex_html("category_media", device=target_label(target)),
         reply_markup=media_menu(cq.from_user.id if cq.from_user else None),
     )
@@ -3939,7 +4199,7 @@ async def on_cat_screen(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex_html("category_screen", device=target_label(target)),
         reply_markup=screen_menu(),
     )
@@ -3952,7 +4212,7 @@ async def on_cat_input(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex_html("category_input", device=target_label(target)),
         reply_markup=input_menu(),
     )
@@ -3965,7 +4225,7 @@ async def on_cat_system(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex_html("category_system", device=target_label(target)),
         reply_markup=system_menu(cq.from_user.id if cq.from_user else None),
     )
@@ -3978,7 +4238,7 @@ async def on_cat_network(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex_html("category_network", device=target_label(target)),
         reply_markup=network_menu(),
     )
@@ -3991,7 +4251,7 @@ async def on_cat_files(cq: CallbackQuery):
     if not target or target == "all":
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex_html("files_menu_title", device=target_label(target))
         + "\n"
         + _lex("files_menu_description"),
@@ -4006,7 +4266,7 @@ async def on_cat_terminal(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex_html("category_terminal", device=target_label(target)),
         reply_markup=terminal_menu(),
     )
@@ -4019,7 +4279,7 @@ async def on_cat_power(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex_html("category_power", device=target_label(target)),
         reply_markup=power_menu_new(cq.from_user.id if cq.from_user else None),
     )
@@ -4032,7 +4292,7 @@ async def on_cat_pranks(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex_html("category_pranks", device=target_label(target)),
         reply_markup=pranks_menu(),
     )
@@ -4045,7 +4305,7 @@ async def on_cat_device(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex_html("category_device_settings", device=target_label(target)),
         reply_markup=device_settings_menu(),
     )
@@ -4068,11 +4328,14 @@ async def on_proc_page(cq: CallbackQuery):
         await cq.answer("⚙️ Запрашиваю процессы...")
         processes_collector.reset()
         if not transport.publish_command(target, "processes", top_n=15):
-            await cq.message.answer(_lex("mqtt_disconnected"))
+            await _replace_callback_message(
+                cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb()
+            )
             return
         res = await processes_collector.wait(15.0)
         if not res:
-            await cq.message.answer(
+            await _replace_callback_message(
+                cq,
                 _lex("device_no_response"),
                 reply_markup=back_to_device_kb(),
             )
@@ -4099,17 +4362,15 @@ async def on_proc_page(cq: CallbackQuery):
     kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
     kb.adjust(1)
     text = f"⚙️ <b>Процессы</b> · {html.escape(target_label(target))} (топ-{len(items)})"
-    try:
-        await cq.message.edit_text(text, reply_markup=kb.as_markup())
-    except Exception:
-        await cq.message.answer(text, reply_markup=kb.as_markup())
+    await _replace_callback_message(cq, text, reply_markup=kb.as_markup())
     await cq.answer()
 
 
 @router.callback_query(AdminFilter(), F.data.startswith("killq:"))
 async def on_kill_confirm(cq: CallbackQuery):
     pid = cq.data.split(":", 1)[1]
-    await cq.message.answer(
+    await _replace_callback_message(
+        cq,
         f"🔪 Убить процесс <code>{html.escape(pid)}</code>?",
         reply_markup=confirm_kb(
             f"kill:{pid}", yes_text=_lex("confirm_kill_process_button")
@@ -4126,9 +4387,15 @@ async def on_kill(cq: CallbackQuery):
         return
     pid = cq.data.split(":", 1)[1]
     if publish("kill_process", pid=pid):
-        await cq.message.answer(f"🔪 Команда kill отправлена (pid {pid}).")
+        await _replace_callback_message(
+            cq,
+            f"🔪 Команда kill отправлена (pid {html.escape(pid)}).",
+            reply_markup=back_to_device_kb(),
+        )
     else:
-        await cq.message.answer(_lex("mqtt_disconnected"))
+        await _replace_callback_message(
+            cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb()
+        )
     await cq.answer()
 
 
@@ -4138,7 +4405,9 @@ async def on_kill(cq: CallbackQuery):
 async def on_all_status(cq: CallbackQuery):
     multi_status.reset()
     if not transport.publish_command("all", "status_request"):
-        await cq.message.answer(_lex("mqtt_disconnected"))
+        await _replace_callback_message(
+            cq, _lex("mqtt_disconnected"), reply_markup=devices_menu()
+        )
         await cq.answer()
         return
     await cq.answer("📡 Опрашиваю все устройства...")
@@ -4158,7 +4427,7 @@ async def on_all_status(cq: CallbackQuery):
         f"🖥 <b>Сводка</b> — ответили {answered}/{len(known)}\n\n"
         + "\n".join(lines if lines else ["Нет известных устройств."])
     )
-    await cq.message.answer(text, reply_markup=devices_menu())
+    await _replace_callback_message(cq, text, reply_markup=devices_menu())
     await cq.answer()
 
 
@@ -4166,7 +4435,9 @@ async def on_all_status(cq: CallbackQuery):
 async def on_all_screenshot(cq: CallbackQuery):
     multi_screenshot.reset()
     if not transport.publish_command("all", "screenshot"):
-        await cq.message.answer(_lex("mqtt_disconnected"))
+        await _replace_callback_message(
+            cq, _lex("mqtt_disconnected"), reply_markup=devices_menu()
+        )
         await cq.answer()
         return
     await cq.answer("📸 Собираю скриншоты...")
@@ -4186,7 +4457,9 @@ async def on_all_screenshot(cq: CallbackQuery):
             sent += 1
         except Exception:
             log.exception("Не удалось отправить скриншот")
-    await cq.message.answer(f"📸 Скриншоты собраны: {sent}.", reply_markup=devices_menu())
+    await _replace_callback_message(
+        cq, f"📸 Скриншоты собраны: {sent}.", reply_markup=devices_menu()
+    )
     await cq.answer()
 
 
@@ -4204,7 +4477,9 @@ async def on_cmd_wol(cq: CallbackQuery):
         await cq.answer("MAC неизвестен — запрашиваю у устройства...")
         sysinfo_collector.reset()
         if not transport.publish_command(target, "sysinfo"):
-            await cq.message.answer(_lex("mqtt_disconnected"))
+            await _replace_callback_message(
+                cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb()
+            )
             await cq.answer()
             return
         res = await sysinfo_collector.wait(12.0)
@@ -4212,18 +4487,28 @@ async def on_cmd_wol(cq: CallbackQuery):
         if mac:
             devices.upsert(target, {"mac": mac})
     if not mac:
-        await cq.message.answer("❌ MAC-адрес неизвестен: устройство ни разу не отвечало.")
+        await _replace_callback_message(
+            cq,
+            "❌ MAC-адрес неизвестен: устройство ни разу не отвечало.",
+            reply_markup=back_to_device_kb(),
+        )
         await cq.answer()
         return
     try:
         send_wol(mac)
     except ValueError:
-        await cq.message.answer(f"❌ Некорректный MAC: <code>{html.escape(str(mac))}</code>")
+        await _replace_callback_message(
+            cq,
+            f"❌ Некорректный MAC: <code>{html.escape(str(mac))}</code>",
+            reply_markup=back_to_device_kb(),
+        )
         await cq.answer()
         return
     audit("wol", device_id=target, mac=mac)
-    await cq.message.answer(
-        f"🌐 Magic packet отправлен на <b>{html.escape(target_label(target))}</b> ({mac})."
+    await _replace_callback_message(
+        cq,
+        f"🌐 Magic packet отправлен на <b>{html.escape(target_label(target))}</b> ({html.escape(str(mac))}).",
+        reply_markup=back_to_device_kb(),
     )
     await cq.answer()
 
@@ -4235,25 +4520,30 @@ async def on_cmd_disks(cq: CallbackQuery):
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
     await cq.answer("🗂 Запрашиваю диски...")
-    sent, command_id = publish_tracked("disks")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("disks", _target=target)
     if not sent:
-        await cq.message.answer(_lex("mqtt_disconnected"))
-        await cq.answer()
+        await _replace_callback_message(
+            cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb()
+        )
         return
     res = await disks_collector.wait_for(target, "disks", 15.0, command_id)
+    if not await _callback_result_access_or_report(cq, target, published=True):
+        return
     if not res:
-        await cq.message.answer(_lex("device_no_response"), reply_markup=back_to_device_kb())
-        await cq.answer()
+        await _replace_callback_message(
+            cq, _lex("device_no_response"), reply_markup=back_to_device_kb()
+        )
         return
     lines = res.get("lines", [])
     text = "🗂 <b>Диски</b>:\n" + "\n".join(html.escape(l) for l in lines)
-    await cq.message.answer(text, reply_markup=back_to_device_kb())
-    await cq.answer()
+    await _replace_callback_message(cq, text, reply_markup=back_to_device_kb())
 
 
 @router.callback_query(AdminFilter(), F.data == "vol:opts")
 async def on_vol_opts(cq: CallbackQuery):
-    await cq.message.edit_text(_lex("volume_options_title"), reply_markup=vol_options_menu())
+    await _replace_callback_message(cq, _lex("volume_options_title"), reply_markup=vol_options_menu())
     await cq.answer()
 
 
@@ -4269,7 +4559,7 @@ async def on_vol_set(cq: CallbackQuery):
 
 @router.callback_query(AdminFilter(), F.data == "mic:opts")
 async def on_mic_opts(cq: CallbackQuery):
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex("mic_duration_prompt"),
         reply_markup=mic_options_menu(),
     )
@@ -4284,26 +4574,39 @@ async def on_mic_dur(cq: CallbackQuery):
         return
     dur = int(cq.data.split(":", 1)[1] or 5)
     await cq.answer(f"🎙 Запись {dur} сек...")
-    sent, command_id = publish_tracked("mic", duration=dur)
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("mic", _target=target, duration=dur)
     if not sent:
-        await cq.message.answer(_lex("mqtt_disconnected"))
+        await _replace_callback_message(
+            cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb()
+        )
         await cq.answer()
         return
     res = await mic_collector.wait_for(target, "mic", dur + 12.0, command_id)
+    if not await _callback_result_access_or_report(cq, target, published=True):
+        return
     if not res or not res.get("audio"):
-        await cq.message.answer("⏳ Звук не получен — офлайн или нет микрофона.")
+        await _replace_callback_message(
+            cq,
+            "⏳ Звук не получен — офлайн или нет микрофона.",
+            reply_markup=back_to_device_kb(),
+        )
         await cq.answer()
         return
     try:
         audio = BufferedInputFile(base64.b64decode(res.get("audio")), filename="mic.ogg")
-        await bot.send_voice(
-            cq.from_user.id,
+        await _replace_callback_with_media(
+            cq,
+            bot.send_voice,
             voice=audio,
             caption=f"🎙 {html.escape(target_label(target))} · {dur}с",
         )
     except Exception:
         log.exception("Не удалось отправить аудио")
-        await cq.message.answer(_lex("mqtt_publish_failed"))
+        await _replace_callback_message(
+            cq, _lex("mqtt_publish_failed"), reply_markup=back_to_device_kb()
+        )
     await cq.answer()
 
 
@@ -4316,8 +4619,7 @@ async def on_cmd_clipset(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_clipset)
-    await state.update_data(command_target=target)
+    await _start_authorized_input(state, Form.wait_clipset, cq.data, target, command_target=target)
     await _replace_callback_message(
         cq,
         "📥 Отправь текст — он попадёт в буфер обмена устройства.",
@@ -4341,6 +4643,9 @@ async def on_clipset_input(message: Message, state: FSMContext):
     if target == "all":
         await _replace_user_card(message, _lex("single_device_only"), reply_markup=back_to_device_kb())
         return
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await _reject_revoked_device_input(message)
+        return
     if publish("clipboard_set", _target=target, text=text):
         await _replace_user_card(message, f"📥 Запрос записи текста в буфер отправлен на <b>{html.escape(target_label(target))}</b>.", reply_markup=back_to_device_kb())
     else:
@@ -4353,7 +4658,7 @@ async def on_clipset_input(message: Message, state: FSMContext):
 async def on_server_autostart_toggle(cq: CallbackQuery):
     is_on, msg = toggle_server_autostart()
     await cq.answer(msg, show_alert=True)
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex("events_menu_intro"),
         reply_markup=events_menu(),
     )
@@ -4361,7 +4666,7 @@ async def on_server_autostart_toggle(cq: CallbackQuery):
 
 @router.callback_query(AdminFilter(), F.data == "ev:menu")
 async def on_ev_menu(cq: CallbackQuery):
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex("events_menu_intro"),
         reply_markup=events_menu(),
     )
@@ -4373,7 +4678,7 @@ async def on_ev_toggle(cq: CallbackQuery):
     key = cq.data.split(":", 2)[2]
     new_val = bot_settings.toggle(key)
     audit("settings_toggle", key=key, value=new_val)
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex("events_menu_intro"),
         reply_markup=events_menu(),
     )
@@ -4384,7 +4689,7 @@ async def on_ev_toggle(cq: CallbackQuery):
 
 @router.callback_query(AdminFilter(), F.data == "ev:quiet")
 async def on_ev_quiet(cq: CallbackQuery):
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex("quiet_hours_intro"),
         reply_markup=quiet_hours_menu(),
     )
@@ -4403,7 +4708,7 @@ async def on_quiet_set(cq: CallbackQuery):
         await cq.answer("🌙 Тихие часы выключены")
     else:
         await cq.answer(f"🌙 Тихие часы: {fr}:00 – {to}:00")
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex("quiet_hours_intro"),
         reply_markup=quiet_hours_menu(),
     )
@@ -4411,7 +4716,7 @@ async def on_quiet_set(cq: CallbackQuery):
 
 @router.callback_query(AdminFilter(), F.data == "ev:digest")
 async def on_ev_digest(cq: CallbackQuery):
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex("digest_menu_intro"),
         reply_markup=digest_menu(),
     )
@@ -4424,7 +4729,7 @@ async def on_digest_set(cq: CallbackQuery):
     bot_settings.set_key("report_hour", val)
     audit("digest_hour_set", hour=val)
     await cq.answer("🗞 Дайджест установлен" if val else "🗞 Дайджест выключен")
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex("digest_menu_intro"),
         reply_markup=digest_menu(),
     )
@@ -4432,7 +4737,7 @@ async def on_digest_set(cq: CallbackQuery):
 
 @router.callback_query(AdminFilter(), F.data == "ev:admins")
 async def on_ev_admins(cq: CallbackQuery):
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex("admins_menu_intro"),
         reply_markup=admins_menu(),
     )
@@ -4486,7 +4791,7 @@ async def on_adm_rm(cq: CallbackQuery):
     raw = cq.data.split(":", 2)[2]
     if raw.isdigit() and bot_settings.remove_admin(int(raw)):
         audit("admin_removed", user_id=raw)
-        await cq.message.edit_text(
+        await _replace_callback_message(cq,
             _lex("admins_menu_intro"),
             reply_markup=admins_menu(),
         )
@@ -4504,7 +4809,7 @@ async def on_fav_menu(cq: CallbackQuery):
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
     favs = devices.get_favorites(target)
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex_html("favorites_page_intro", device=target_label(target)),
         reply_markup=_favorites_kb(target, favs),
     )
@@ -4520,7 +4825,7 @@ async def on_fav_toggle(cq: CallbackQuery):
     action = cq.data.split(":", 2)[2]
     added = devices.toggle_favorite(target, action)
     favs = devices.get_favorites(target)
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex_html("favorites_page_intro", device=target_label(target)),
         reply_markup=_favorites_kb(target, favs),
     )
@@ -4555,7 +4860,7 @@ async def on_history(cq: CallbackQuery):
             )
     kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
     kb.adjust(1)
-    await cq.message.answer(text, reply_markup=kb.as_markup())
+    await _replace_callback_message(cq, text, reply_markup=kb.as_markup())
     await cq.answer()
 
 
@@ -4578,7 +4883,9 @@ async def on_repeat(cq: CallbackQuery):
     if transport.publish_command(target, action, **kwargs):
         await cq.answer(f"↻ Повторяю: {ACTION_LABELS.get(action, action)}")
     else:
-        await cq.message.answer(_lex("mqtt_disconnected"))
+        await _replace_callback_message(
+            cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb()
+        )
         await cq.answer()
 
 
@@ -4604,7 +4911,8 @@ async def on_confirm_action(cq: CallbackQuery):
         await cq.answer(_lex("target_required"), show_alert=True)
         return
     text, yes_cb = CONFIRM_PROMPTS[kind]
-    await cq.message.answer(
+    await _replace_callback_message(
+        cq,
         f"⚠️ {text}",
         reply_markup=confirm_kb(yes_cb, yes_text=_lex("confirm_yes_button")),
     )
@@ -4639,8 +4947,7 @@ async def on_openapp_ok(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_open_app)
-    await state.update_data(command_target=target)
+    await _start_authorized_input(state, Form.wait_open_app, cq.data, target, command_target=target)
     await _replace_callback_message(
         cq,
         _lex("open_app_prompt"),
@@ -4702,6 +5009,80 @@ def _require_target(cq: CallbackQuery) -> str | None:
     return target
 
 
+def _device_action_still_allowed(user_id: int, callback: str, target: str) -> bool:
+    """Recheck the action and target immediately before publishing to MQTT."""
+    if not target or target == "all" or devices.get(target) is None:
+        return False
+    return access_store.can_use_callback(user_id, callback, ADMIN_ID, target)
+
+
+async def _callback_result_access_or_report(
+    cq: CallbackQuery, target: str, *, published: bool = False
+) -> bool:
+    """Recheck an exact grant; choose wording that matches dispatch state."""
+    user_id = int(cq.from_user.id) if cq.from_user else 0
+    callback = str(cq.data or "")
+    if _simple_command_still_allowed(user_id, callback, target):
+        return True
+    await _replace_callback_message(
+        cq,
+        _lex(
+            "action_result_hidden_after_revoke"
+            if published else "input_access_revoked"
+        ),
+        reply_markup=back_to_device_kb(),
+    )
+    return False
+
+
+def _pending_device_input_still_allowed(
+    message: Message,
+    form_data: dict,
+    requested_target: str | None = None,
+) -> bool:
+    """Revalidate a prompted device action after awaits and before its side effect.
+
+    User forms must carry the callback and device captured when the prompt was
+    opened; neither the mutable current selection nor stale FSM state is an
+    authorization source. Owner forms keep their existing full-access path.
+    """
+    if not message.from_user:
+        return False
+    user_id = int(message.from_user.id)
+    callback = str(form_data.get("authorization_callback") or "")
+    bound_target = str(form_data.get("authorization_target") or "")
+    if get_user_role(user_id) == Role.OWNER:
+        bound_target = bound_target or str(
+            requested_target
+            or form_data.get("command_target")
+            or form_data.get("target")
+            or SESSION.get("target")
+            or ""
+        )
+    elif not callback or not bound_target:
+        return False
+    if requested_target and str(requested_target) != bound_target:
+        return False
+    return _device_action_still_allowed(user_id, callback, bound_target)
+
+
+async def _reject_revoked_device_input(message: Message) -> None:
+    await _replace_user_card(
+        message,
+        _lex("input_access_revoked"),
+        reply_markup=back_to_device_kb(),
+    )
+
+
+async def _report_revoked_after_publish(message: Message) -> None:
+    """Hide a response after revocation without implying the command was cancelled."""
+    await _replace_user_card(
+        message,
+        _lex("action_result_hidden_after_revoke"),
+        reply_markup=back_to_device_kb(),
+    )
+
+
 def _safe_transfer_filename(value: object) -> str:
     """Keep Telegram/agent filenames as a single portable Downloads entry."""
     raw = str(value or "file.bin").replace("\\", "/")
@@ -4725,7 +5106,7 @@ async def on_files_menu(cq: CallbackQuery):
     if not _require_target(cq):
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex_html("files_menu_title", device=target_label(SESSION["target"])),
         reply_markup=files_menu(),
     )
@@ -4738,8 +5119,7 @@ async def on_files_list(cq: CallbackQuery, state: FSMContext):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await state.set_state(Form.wait_path)
-    await state.update_data(path_mode="list", target=target)
+    await _start_authorized_input(state, Form.wait_path, cq.data, target, path_mode="list", target=target)
     await _replace_callback_message(
         cq,
         _lex("files_prompt_list"),
@@ -4754,8 +5134,7 @@ async def on_files_find(cq: CallbackQuery, state: FSMContext):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await state.set_state(Form.wait_find)
-    await state.update_data(target=target)
+    await _start_authorized_input(state, Form.wait_find, cq.data, target, target=target)
     await _replace_callback_message(
         cq,
         _lex("files_prompt_find"),
@@ -4770,8 +5149,7 @@ async def on_files_get(cq: CallbackQuery, state: FSMContext):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await state.set_state(Form.wait_path)
-    await state.update_data(path_mode="get", target=target)
+    await _start_authorized_input(state, Form.wait_path, cq.data, target, path_mode="get", target=target)
     await _replace_callback_message(
         cq,
         _lex("files_prompt_get"),
@@ -4786,8 +5164,7 @@ async def on_files_put(cq: CallbackQuery, state: FSMContext):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await state.set_state(Form.wait_path)
-    await state.update_data(path_mode="put", target=target)
+    await _start_authorized_input(state, Form.wait_path, cq.data, target, path_mode="put", target=target)
     await _replace_callback_message(
         cq,
         _lex("files_prompt_put"),
@@ -4802,8 +5179,7 @@ async def on_files_del(cq: CallbackQuery, state: FSMContext):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await state.set_state(Form.wait_path)
-    await state.update_data(path_mode="del", target=target)
+    await _start_authorized_input(state, Form.wait_path, cq.data, target, path_mode="del", target=target)
     await _replace_callback_message(
         cq,
         _lex("files_prompt_delete"),
@@ -4818,8 +5194,7 @@ async def on_files_open(cq: CallbackQuery, state: FSMContext):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await state.set_state(Form.wait_path)
-    await state.update_data(path_mode="open", target=target)
+    await _start_authorized_input(state, Form.wait_path, cq.data, target, path_mode="open", target=target)
     await _replace_callback_message(
         cq,
         _lex("files_prompt_open"),
@@ -4850,6 +5225,11 @@ async def on_path_input(message: Message, state: FSMContext):
         if len(chunk) > 30 * 1024 * 1024:
             await _replace_user_card(message, _lex("files_size_limit", limit="30"), reply_markup=back_to_device_kb())
             return
+        # Telegram's download is an external await: the role, grant, or device
+        # may have changed while it was in flight. Do not publish stale input.
+        if not _pending_device_input_still_allowed(message, data, target):
+            await _reject_revoked_device_input(message)
+            return
         sent, command_id = publish_tracked(
             "file_put",
             _target=target,
@@ -4861,6 +5241,9 @@ async def on_path_input(message: Message, state: FSMContext):
             await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
             return
         result = await fun_text_collector.wait_for(target, "file_put", timeout=25.0, command_id=command_id)
+        if not _pending_device_input_still_allowed(message, data, target):
+            await _report_revoked_after_publish(message)
+            return
         if result and result.get("ok"):
             await _replace_user_card(
                 message,
@@ -4882,11 +5265,17 @@ async def on_path_input(message: Message, state: FSMContext):
         return
 
     if mode == "list":
+        if not _pending_device_input_still_allowed(message, data, target):
+            await _reject_revoked_device_input(message)
+            return
         sent, command_id = publish_tracked("dir_list", _target=target, path=path)
         if not sent:
             await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
             return
         result = await fun_text_collector.wait_for(target, "dir_list", timeout=15.0, command_id=command_id)
+        if not _pending_device_input_still_allowed(message, data, target):
+            await _report_revoked_after_publish(message)
+            return
         text = (result or {}).get("text") or _lex("device_no_response")
         await _replace_user_card(
             message,
@@ -4894,11 +5283,19 @@ async def on_path_input(message: Message, state: FSMContext):
             reply_markup=back_to_device_kb(),
         )
     elif mode == "get":
+        if not _pending_device_input_still_allowed(message, data, target):
+            await _reject_revoked_device_input(message)
+            return
         sent, command_id = publish_tracked("file_get", _target=target, path=path)
         if not sent:
             await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
             return
         result = await file_collector.wait_for(target, "file_get", timeout=30.0, command_id=command_id)
+        # File content is sensitive; if authorization changed while waiting,
+        # do not deliver the returned document to Telegram.
+        if not _pending_device_input_still_allowed(message, data, target):
+            await _report_revoked_after_publish(message)
+            return
         if not result:
             await _replace_user_card(message, _lex("files_download_timeout"), reply_markup=back_to_device_kb())
             return
@@ -4925,11 +5322,17 @@ async def on_path_input(message: Message, state: FSMContext):
             reply_markup=back_to_device_kb(),
         )
     elif mode == "del":
+        if not _pending_device_input_still_allowed(message, data, target):
+            await _reject_revoked_device_input(message)
+            return
         sent, command_id = publish_tracked("file_del", _target=target, path=path)
         if not sent:
             await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
             return
         result = await fun_text_collector.wait_for(target, "file_del", timeout=15.0, command_id=command_id)
+        if not _pending_device_input_still_allowed(message, data, target):
+            await _report_revoked_after_publish(message)
+            return
         if result and result.get("ok"):
             await _replace_user_card(
                 message,
@@ -4943,11 +5346,17 @@ async def on_path_input(message: Message, state: FSMContext):
                 reply_markup=back_to_device_kb(),
             )
     elif mode == "open":
+        if not _pending_device_input_still_allowed(message, data, target):
+            await _reject_revoked_device_input(message)
+            return
         sent, command_id = publish_tracked("path_open", _target=target, path=path)
         if not sent:
             await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
             return
         result = await fun_text_collector.wait_for(target, "path_open", timeout=10.0, command_id=command_id)
+        if not _pending_device_input_still_allowed(message, data, target):
+            await _report_revoked_after_publish(message)
+            return
         if result and result.get("ok"):
             await _replace_user_card(
                 message,
@@ -4974,11 +5383,17 @@ async def on_find_input(message: Message, state: FSMContext):
     if not pattern:
         await _replace_user_card(message, _lex("files_find_empty"), reply_markup=back_to_device_kb())
         return
+    if not _pending_device_input_still_allowed(message, data, target):
+        await _reject_revoked_device_input(message)
+        return
     sent, command_id = publish_tracked("find_file", _target=target, pattern=pattern, root="~")
     if not sent:
         await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
         return
     result = await fun_text_collector.wait_for(target, "find_file", timeout=20.0, command_id=command_id)
+    if not _pending_device_input_still_allowed(message, data, target):
+        await _report_revoked_after_publish(message)
+        return
     text = (result or {}).get("text")
     if not text:
         await _replace_user_card(message, _lex("files_find_no_response"), reply_markup=back_to_device_kb())
@@ -5047,8 +5462,7 @@ async def on_fun_type(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_fun_text)
-    await state.update_data(command_target=target)
+    await _start_authorized_input(state, Form.wait_fun_text, cq.data, target, command_target=target)
     await _replace_callback_message(cq, "⌨️ Введите текст для набора на выбранном устройстве:", reply_markup=back_to_device_kb())
     await cq.answer()
 
@@ -5062,8 +5476,7 @@ async def on_fun_hotkey(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_fun_hotkey)
-    await state.update_data(command_target=target)
+    await _start_authorized_input(state, Form.wait_fun_hotkey, cq.data, target, command_target=target)
     await _replace_callback_message(cq, "⌘ Введите сочетание клавиш через плюс (например: <code>ctrl+c</code>, <code>cmd+space</code>, <code>alt+tab</code>):", reply_markup=back_to_device_kb())
     await cq.answer()
 
@@ -5077,8 +5490,7 @@ async def on_fun_wallpaper(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_fun_wallpaper)
-    await state.update_data(command_target=target)
+    await _start_authorized_input(state, Form.wait_fun_wallpaper, cq.data, target, command_target=target)
     await _replace_callback_message(cq, "🖼 Отправьте прямую ссылку на картинку (.jpg или .png) для установки на рабочий стол:", reply_markup=back_to_device_kb())
     await cq.answer()
 
@@ -5113,6 +5525,9 @@ async def _run_text_prank_input(
         await _replace_user_card(
             message, _lex("empty_text"), reply_markup=back_to_device_kb()
         )
+        return
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await _reject_revoked_device_input(message)
         return
 
     label = _simple_command_label(action, _lex(label_key), {})
@@ -5170,8 +5585,7 @@ async def on_fun_spam(cq: CallbackQuery, state: FSMContext):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
-    await state.update_data(target=target)
-    await state.set_state(Form.wait_fun_spam)
+    await _start_authorized_input(state, Form.wait_fun_spam, cq.data, target, target=target)
     await _replace_callback_message(
         cq,
         _lex("prank_spam_prompt"),
@@ -5195,6 +5609,9 @@ async def on_fun_text_input(message: Message, state: FSMContext):
     if target == "all":
         await _replace_user_card(message, _lex("single_device_only"), reply_markup=back_to_device_kb())
         return
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await _reject_revoked_device_input(message)
+        return
     if publish("type_text", _target=target, text=text):
         await _replace_user_card(message, f"⌨️ Запрос набора текста отправлен на <b>{html.escape(target_label(target))}</b>.", reply_markup=back_to_device_kb())
     else:
@@ -5215,6 +5632,9 @@ async def on_fun_hotkey_input(message: Message, state: FSMContext):
         return
     if target == "all":
         await _replace_user_card(message, _lex("single_device_only"), reply_markup=back_to_device_kb())
+        return
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await _reject_revoked_device_input(message)
         return
     if publish("hotkey", _target=target, keys=keys):
         await _replace_user_card(message, f"⌘ Запрос сочетания <code>{html.escape(keys)}</code> отправлен на <b>{html.escape(target_label(target))}</b>.", reply_markup=back_to_device_kb())
@@ -5237,6 +5657,9 @@ async def on_fun_wallpaper_input(message: Message, state: FSMContext):
     if target == "all":
         await _replace_user_card(message, _lex("single_device_only"), reply_markup=back_to_device_kb())
         return
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await _reject_revoked_device_input(message)
+        return
     fun_text_collector.reset()
     if not publish("wallpaper_set", _target=target, url=url):
         await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
@@ -5256,7 +5679,7 @@ async def on_menu_wallpaper(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex_html("wallpaper_guide", device=target_label(target)),
         reply_markup=wallpaper_menu(),
     )
@@ -5300,11 +5723,14 @@ async def on_wallpaper_random_meme(cq: CallbackQuery):
 
 
 @router.callback_query(AdminFilter(), F.data == "cmd:wallpaper_photo_guide")
-async def on_wallpaper_photo_guide(cq: CallbackQuery):
+async def on_wallpaper_photo_guide(cq: CallbackQuery, state: FSMContext):
     target = SESSION.get("target")
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    await _start_authorized_input(
+        state, Form.wait_wallpaper_photo, cq.data, target, target=target
+    )
     await _replace_callback_message(
         cq,
         _lex_html("wallpaper_photo_guide", device=target_label(target)),
@@ -5313,14 +5739,17 @@ async def on_wallpaper_photo_guide(cq: CallbackQuery):
     await cq.answer()
 
 
-@router.message(AdminFilter(), F.photo)
-async def on_photo_wallpaper_message(message: Message):
-    target = SESSION.get("target")
-    if not target:
+@router.message(AdminFilter(), Form.wait_wallpaper_photo, F.photo)
+async def on_photo_wallpaper_message(message: Message, state: FSMContext):
+    form_data = await state.get_data()
+    await state.clear()
+    target = str(form_data.get("authorization_target") or "")
+    callback = str(form_data.get("authorization_callback") or "")
+    if callback != "cmd:wallpaper_photo_guide" or not target or target == "all":
         await _replace_user_card(
             message,
-            _lex("wallpaper_select_device"),
-            reply_markup=devices_menu(),
+            _lex("wallpaper_photo_guide_required"),
+            reply_markup=wallpaper_menu(),
         )
         return
 
@@ -5337,8 +5766,20 @@ async def on_photo_wallpaper_message(message: Message):
         raw_bytes = photo_bytes_io.getvalue()
         b64_img = base64.b64encode(raw_bytes).decode('ascii')
 
+        # The upload can await Telegram while permissions or device membership
+        # change. Recheck immediately before the side-effecting MQTT publish.
+        if not _pending_device_input_still_allowed(
+            message, form_data, target
+        ):
+            await _replace_user_card(
+                message,
+                _lex("wallpaper_photo_guide_required"),
+                reply_markup=wallpaper_menu(),
+            )
+            return
+
         fun_text_collector.reset()
-        if not publish("wallpaper_set", b64=b64_img):
+        if not publish("wallpaper_set", _target=target, b64=b64_img):
             await _replace_user_card(
                 message, _lex("mqtt_photo_failed"), reply_markup=back_to_device_kb()
             )
@@ -5372,6 +5813,16 @@ async def on_photo_wallpaper_message(message: Message):
             _lex_html("wallpaper_photo_error", error=e),
             reply_markup=back_to_device_kb(),
         )
+
+
+@router.message(ReadOnlyFilter(), F.photo)
+async def on_unrequested_photo(message: Message):
+    """Do not treat arbitrary incoming photos as remote wallpaper commands."""
+    await _replace_user_card(
+        message,
+        _lex("wallpaper_photo_guide_required"),
+        reply_markup=None,
+    )
 
 
 @router.message(AdminFilter(), Form.wait_fun_spam)
@@ -5417,8 +5868,7 @@ async def on_prank_shout(cq: CallbackQuery, state: FSMContext):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
-    await state.update_data(target=target)
-    await state.set_state(Form.wait_shout)
+    await _start_authorized_input(state, Form.wait_shout, cq.data, target, target=target)
     await _replace_callback_message(
         cq,
         _lex("prank_shout_prompt"),
@@ -5545,8 +5995,7 @@ async def on_cmd_brightness(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_brightness)
-    await state.update_data(command_target=target)
+    await _start_authorized_input(state, Form.wait_brightness, cq.data, target, command_target=target)
     await _replace_callback_message(cq, "☀️ Введите уровень яркости экрана в процентах (0–100):", reply_markup=back_to_device_kb())
     await cq.answer()
 
@@ -5574,6 +6023,10 @@ async def on_brightness_input(message: Message, state: FSMContext):
         f"⏳ <b>☀️ Яркость экрана</b> · <b>{html.escape(target_label(target))}</b>\n<code>[■□□□□] 25% Настройка яркости {lvl}%...</code>",
         reply_markup=back_to_device_kb(),
     )
+    # The progress-card edit awaits Telegram; recheck before sending the command.
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await _reject_revoked_device_input(message)
+        return
     sent, command_id = publish_tracked("display_brightness", _target=target, level=lvl)
     if not sent:
         await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
@@ -5613,12 +6066,12 @@ async def on_cmd_nightlight(cq: CallbackQuery):
     ok = bool(result and result.get("ok", False))
     if ok:
         SESSION[f"nightlight_{target}"] = new_state
-        try:
-            await cq.message.edit_reply_markup(reply_markup=screen_menu(target=target))
-        except Exception:
-            pass
     text = (result or {}).get("text") or ("Ночной свет переключён." if ok else "⚠️ Агент не подтвердил переключение ночного света.")
-    await cq.message.answer(html.escape(str(text)), reply_markup=back_to_device_kb())
+    await _replace_callback_message(
+        cq,
+        html.escape(str(text)),
+        reply_markup=screen_menu(target=target) if ok else back_to_device_kb(),
+    )
 
 
 @router.callback_query(AdminFilter(), F.data == "cmd:rotate")
@@ -5628,7 +6081,8 @@ async def on_cmd_rotate(cq: CallbackQuery):
         await cq.answer(_lex("target_required"), show_alert=True)
         return
     await cq.answer()
-    await cq.message.answer(
+    await _replace_callback_message(
+        cq,
         f"🔄 <b>Выберите угол поворота экрана для</b> {target_label(target)}:",
         reply_markup=rotate_menu(),
     )
@@ -5663,17 +6117,29 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    authorization_callback = str(cq.data or "")
+    user_id = int(cq.from_user.id) if cq.from_user else 0
     label = _simple_command_label(action, label, publish_kwargs)
     await cq.answer(_lex_html("command_started", emoji=emoji, label=label))
-    sent, command_id = publish_tracked(action, **publish_kwargs)
+    # Recheck the original callback grant after Telegram's await and before
+    # the side effect. SESSION may have changed, so authorize against `target`.
+    if not _simple_command_still_allowed(user_id, authorization_callback, target):
+        await _replace_callback_message(
+            cq, _lex("input_access_revoked"), reply_markup=back_to_device_kb()
+        )
+        return None
+    # Another update can change SESSION while answer() is awaiting Telegram.
+    # Pin the target captured before that await into the publish itself.
+    sent, command_id = publish_tracked(
+        action, **{**publish_kwargs, "_target": target}
+    )
     if not sent:
         await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
         return
 
     # Одна карточка на всю операцию: меню -> прогресс -> результат.
-    status_msg = cq.message
-    try:
-        await status_msg.edit_text(
+    status_msg = await _replace_callback_message(
+        cq,
         _lex_html(
             "command_waiting",
             emoji=emoji,
@@ -5681,27 +6147,23 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
             device=target_label(target),
         ),
         reply_markup=back_to_device_kb(),
-        )
-    except Exception:
-        # Если Telegram не разрешил редактирование (например, старое медиа),
-        # удаляем старую карточку и создаём ровно одну новую.
-        try:
-            await cq.message.delete()
-        except Exception:
-            pass
-        status_msg = await cq.message.answer(
-            _lex_html(
-                "command_waiting",
-                emoji=emoji,
-                label=label,
-                device=target_label(target),
-            ),
-            reply_markup=back_to_device_kb(),
-        )
+    )
 
     # A single real progress state is more reliable than a rapid, decorative
     # edit loop that can hit Telegram rate limits and look like a freeze.
     result = await fun_text_collector.wait_for(target, action, timeout=timeout, command_id=command_id)
+
+    # Results can contain private device data (for example saved Wi-Fi
+    # passwords). Do not deliver or return them if the exact original grant was
+    # revoked while waiting. The MQTT publish already happened, so say that the
+    # action may have executed rather than claiming it was cancelled.
+    if not _simple_command_still_allowed(user_id, authorization_callback, target):
+        await _replace_callback_message(
+            cq,
+            _lex("action_result_hidden_after_revoke"),
+            reply_markup=back_to_device_kb(),
+        )
+        return None
 
     if result is None:
         text = _lex("device_timeout", seconds=str(int(timeout)))
@@ -5720,18 +6182,26 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
         device=target_label(target),
         text=str(text)[:3800],
     )
-    try:
-        await status_msg.edit_text(final_text, reply_markup=back_to_device_kb())
-    except Exception as exc:
-        # Не создаём копию сообщения при безобидной ошибке
-        # «message is not modified» (так бывает при быстром повторном клике).
-        if "not modified" not in str(exc).lower():
-            try:
-                await status_msg.delete()
-            except Exception:
-                pass
-            await cq.message.answer(final_text, reply_markup=back_to_device_kb())
+    await _replace_message_card(
+        status_msg,
+        user_id,
+        final_text,
+        reply_markup=back_to_device_kb(),
+    )
     return result
+
+
+_OWNER_ALL_DEVICE_SIMPLE_CALLBACKS = frozenset({"cmd:volume", "cmd:lock"})
+
+
+def _simple_command_still_allowed(user_id: int, callback: str, target: str) -> bool:
+    """Recheck a simple action's exact callback and bound target."""
+    if target == "all":
+        return (
+            get_user_role(user_id) == Role.OWNER
+            and callback in _OWNER_ALL_DEVICE_SIMPLE_CALLBACKS
+        )
+    return _device_action_still_allowed(user_id, callback, target)
 
 
 _SIMPLE_COMMAND_LABELS = {
@@ -5921,8 +6391,7 @@ async def on_cmd_prockillname(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_prockill)
-    await state.update_data(command_target=target)
+    await _start_authorized_input(state, Form.wait_prockill, cq.data, target, command_target=target)
     await _replace_callback_message(cq, "🔪 Введите имя процесса для завершения (например: <code>chrome.exe</code> или <code>Discord</code>):", reply_markup=back_to_device_kb())
     await cq.answer()
 
@@ -5941,6 +6410,9 @@ async def on_prockill_input(message: Message, state: FSMContext):
         return
     if target == "all":
         await _replace_user_card(message, _lex("single_device_only"), reply_markup=back_to_device_kb())
+        return
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await _reject_revoked_device_input(message)
         return
     if publish("proc_kill_name", _target=target, name=name):
         await _replace_user_card(message, f"🔪 Запрос завершения процесса <code>{html.escape(name)}</code> отправлен на <b>{html.escape(target_label(target))}</b>.", reply_markup=back_to_device_kb())
@@ -5967,7 +6439,7 @@ async def on_prank_page(cq: CallbackQuery):
         5: "Мемы & Ультра-Троллинг",
     }
     p_name = page_names.get(page, f"Стр. {page}")
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex_html(
             "prank_page_intro",
             page=p_name,
@@ -6005,7 +6477,11 @@ async def on_cmd_standby_sleep(cq: CallbackQuery):
     text = (res or {}).get("text") or "💤 Агент переведен в режим сна (Watchdog)."
     if target != "all" and target in devices:
         devices[target]["standby"] = True
-    await cq.message.answer(f"💤 <b>{target_label(target)}:</b>\n{html.escape(str(text))}", reply_markup=back_to_device_kb())
+    await _replace_callback_message(
+        cq,
+        f"💤 <b>{target_label(target)}:</b>\n{html.escape(str(text))}",
+        reply_markup=back_to_device_kb(),
+    )
 
 
 @router.callback_query(AdminFilter(), F.data == "cmd:wake")
@@ -6021,7 +6497,11 @@ async def on_cmd_wake(cq: CallbackQuery):
     text = (res or {}).get("text") or "☀️ Агент успешно пробужден!"
     if target != "all" and target in devices:
         devices[target]["standby"] = False
-    await cq.message.answer(f"☀️ <b>{target_label(target)}:</b>\n{html.escape(str(text))}", reply_markup=back_to_device_kb())
+    await _replace_callback_message(
+        cq,
+        f"☀️ <b>{target_label(target)}:</b>\n{html.escape(str(text))}",
+        reply_markup=back_to_device_kb(),
+    )
 
 
 # =====================================================================
@@ -6049,7 +6529,7 @@ async def on_cmd_guardian_menu(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    await cq.message.edit_text(
+    await _replace_callback_message(cq,
         _lex_html("guardian_menu_intro", device=target_label(target)),
         reply_markup=guardian_menu(),
     )
@@ -6499,6 +6979,16 @@ async def on_cmd_net_ping(cq: CallbackQuery):
 @router.callback_query(AnyAccessFilter(), F.data == "cmd:geo_location")
 async def on_cmd_geo_location(cq: CallbackQuery):
     await simple_command(cq, "geo_location", "⚠️", _lex("geo_beta"), timeout=16.0)
+
+
+@router.message(F.from_user.id != ADMIN_ID)
+async def on_denied(message: Message):
+    """Fallback must stay last so authorized FSM handlers get first refusal."""
+    if get_user_role(message.from_user.id) == Role.BLOCKED:
+        text = "Доступ для этого аккаунта заблокирован."
+    else:
+        text = "Используй /start, чтобы открыть доступные разделы."
+    await _replace_user_card(message, text, reply_markup=None)
 
 
 # =====================================================================

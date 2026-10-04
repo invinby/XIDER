@@ -344,7 +344,7 @@ if ! (cd "$TARGET/XGENT-MCS" && XIDER_RUNTIME_PREPARED=1 bash ./start_agent.sh &
     fi
   fi
   if [[ -x "$TARGET/XGENT-MCS/start_agent.sh" ]]; then
-    (cd "$TARGET/XGENT-MCS" && bash ./start_agent.sh || true; bash ./start_guardian.sh || true)
+    (cd "$TARGET/XGENT-MCS" && XIDER_RUNTIME_PREPARED=1 bash ./start_agent.sh || true; bash ./start_guardian.sh || true)
   fi
   [[ ! -e "$backup" ]] || echo "Предыдущая версия возвращена: $TARGET"
   exit 6

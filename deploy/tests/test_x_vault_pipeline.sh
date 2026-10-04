@@ -36,6 +36,7 @@ chmod 0600 "${tmp}/upload-key"
 printf 'standby.example ssh-ed25519 AAAA\n' >"${tmp}/known_hosts"
 
 python3 "${ROOT}/deploy/tests/test_x_vault_transport.py"
+python3 "${ROOT}/deploy/tests/test_x_vault_setup_permissions.py"
 python3 "${ROOT}/ops/x_vault.py" keygen --directory "${tmp}/offline-key" >"${tmp}/keygen.out"
 public_key="${tmp}/offline-key/vault-recipient-public.pem"
 private_key="${tmp}/offline-key/vault-recipient-private.pem"

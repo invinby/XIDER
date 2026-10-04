@@ -124,6 +124,73 @@ def test_guardian_backoff_limits_duplicate_recovery_notifications(guardian_modul
     assert guardian._last_recovery_error is None
 
 
+def test_short_lived_agent_exit_increases_guardian_backoff(guardian_module, monkeypatch):
+    guardian = object.__new__(guardian_module.Guardian)
+    guardian._restart_backoff_seconds = 5.0
+    guardian._next_restart_at = 0.0
+    guardian._last_recovery_error = None
+    guardian._observed_agent_pid = 42
+    guardian._observed_agent_since = 100.0
+    published = []
+    monkeypatch.setattr(guardian_module.time, "monotonic", lambda: 104.0)
+    monkeypatch.setattr(guardian, "_publish", published.append)
+
+    guardian._observe_agent_process(None, 104.0)
+
+    assert guardian._observed_agent_pid is None
+    assert guardian._next_restart_at == 109.0
+    assert guardian._restart_backoff_seconds == 10.0
+    assert len(published) == 1
+    assert "завершился до стабильного запуска" in published[0]["text"]
+
+
+def test_stable_agent_process_resets_guardian_crash_backoff(guardian_module):
+    guardian = object.__new__(guardian_module.Guardian)
+    guardian._restart_backoff_seconds = 80.0
+    guardian._next_restart_at = 200.0
+    guardian._last_recovery_error = "previous worker crash"
+    guardian._observed_agent_pid = 42
+    guardian._observed_agent_since = 100.0
+
+    guardian._observe_agent_process(42, 160.0)
+
+    assert guardian._next_restart_at == 0.0
+    assert guardian._restart_backoff_seconds == 5.0
+    assert guardian._last_recovery_error is None
+
+
+def test_guardian_monitor_waits_before_retrying_a_crashed_worker(guardian_module, monkeypatch):
+    guardian = object.__new__(guardian_module.Guardian)
+    guardian.state = {"auto_restart": True, "desired_running": True}
+    guardian.lock = threading.RLock()
+    guardian.stop_event = Mock()
+    guardian._next_restart_at = 0.0
+    guardian._restart_backoff_seconds = 5.0
+    guardian._last_recovery_error = None
+    clock = [100.0]
+
+    def wait(_seconds):
+        clock[0] += 5.0
+        return clock[0] >= 120.0
+
+    guardian.stop_event.wait.side_effect = wait
+    starts = Mock(side_effect=[123, 124])
+    published = []
+    monkeypatch.setattr(guardian_module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(guardian, "agent_pid", lambda: None)
+    monkeypatch.setattr(guardian, "start_agent", starts)
+    monkeypatch.setattr(guardian, "_publish", published.append)
+
+    guardian.monitor()
+
+    # The first launch dies before the next poll. One five-second backoff is
+    # observed before a retry; the process is not declared recovered on Popen.
+    assert starts.call_count == 2
+    assert guardian._restart_backoff_seconds == 10.0
+    assert any("завершился до стабильного запуска" in item["text"] for item in published)
+    assert all("восстановил агент" not in item["text"] for item in published)
+
+
 def test_old_guardian_state_enables_recovery_but_preserves_explicit_stop(
     guardian_module, monkeypatch, tmp_path
 ):
