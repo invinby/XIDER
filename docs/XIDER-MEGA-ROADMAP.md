@@ -2350,13 +2350,16 @@ Go и Rust по упаковке, сопровождению, диагности
 - Кодовая часть унификации зафиксирована в `4653b52` и опубликована в ветку
   `origin/fix/windows-powershell5-bootstrap-signature`. PR
   [#3](https://github.com/invinby/XIDER/pull/3) открыт в `main`; GitHub CI
-  прошёл: Unix installers, pytest на Python 3.11 и 3.12. Release/tag и
-  production VPS по-прежнему не запускались.
+  прошёл: Unix installers, pytest на Python 3.11 и 3.12. Ручной запуск
+  `build-agents.yml` (**37235474260**) успешно собрал Windows EXE, macOS
+  standalone и пакет Guard Keeper/server; шаги release-test / publish-release
+  пропущены ожидаемо, так как запуск не был по тегу `v*`. Публичный release/tag
+  и production VPS по-прежнему не запускались.
 - При запуске macOS pytest обязательно использовать cwd `XGENT-MCS`; запуск
   этой подпапки из корня репозитория не разрешает её локальный модуль `xgent_mcs`
   и даёт ошибки сбора тестов. Официальный runner создаёт изолированный процесс
   с правильным cwd и прошёл.
 - Не закрыты ворота TARPED из [TARPED.md](TARPED.md): проверка на физических
-  устройствах, live Telegram/MQTT, publish/CI, реальный update + rollback,
-  VPS/второй VPS и staging restore. Зелёный локальный runner не закрывает эти
-  пункты.
+  устройствах, live Telegram/MQTT, публичный release, реальный update + rollback,
+  production VPS/второй VPS и staging restore. Локальные тесты и CI не закрывают
+  эти пункты.
