@@ -2320,3 +2320,39 @@ Go и Rust по упаковке, сопровождению, диагности
   live-tested. Исправления требуют отдельного PR/CI и не считаются релизом.
   Перед любым production deploy необходимо сверить установленный `bot.py`,
   второй VPS, timers и staging restore. Не объявлять текущую ветку развёрнутой.
+
+## 27. Повторная локальная проверка · 2026-10-05
+
+- На ветке `fix/windows-powershell5-bootstrap-signature` проверен коммит
+  `c31a7a5`: он добавляет отсутствующий локальный импорт `SimpleNamespace` в
+  один UI-тест; это не новая функция и не исправление runtime-поведения бота.
+- Дополнительно исправлен переход UI после media-результатов: следующие
+  callback-и больше не пытаются редактировать фото/voice/document как текст.
+  Helper заменяет media-карточку текстовой, удаляет старую и обновляет registry;
+  обработан также зарегистрированный media-card flow. Добавлены два теста на
+  callback- и user-card переходы. Это сохраняет одну активную карточку при
+  успешном удалении media-сообщения; если Telegram откажется удалить старое,
+  бот оставляет новую карточку работоспособной и пытается отключить кнопки
+  старой, чтобы исключить второй активный экран.
+- После правки запущен официальный `py -3.12 tools/run_tests.py`:
+  **529 passed, 11 skipped**, exit code 0. Разбивка: Telegram 226; Windows
+  agent 63; macOS agent 139; ops 22 passed / 1 skipped; release tools 55;
+  deployment/signature
+  24 passed / 10 skipped. Windows bootstrap preflight, installer-selection,
+  staged-install/rollback и full-bootstrap transaction fixtures прошли.
+  Отдельный запуск X-MAP сообщает 119 общих действий без declared/handler
+  расхождений и без неразобранных dynamic action sites. Всё перечисленное —
+  локальные тесты/статическая проверка, не Telegram/MQTT или физический девайс.
+- HEAD остаётся `c31a7a5`; кроме тестового фикса в коммите есть незакоммиченные
+  изменения media-card перехода и этой записи. До коммита повторно пройти diff
+  review и `git diff --check`. Локальная ветка на четыре коммита опережает
+  `origin/main`; Push, PR-проверки на GitHub, tag/release и production VPS в
+  этой проверке не запускались.
+- При запуске macOS pytest обязательно использовать cwd `XGENT-MCS`; запуск
+  этой подпапки из корня репозитория не разрешает её локальный модуль `xgent_mcs`
+  и даёт ошибки сбора тестов. Официальный runner создаёт изолированный процесс
+  с правильным cwd и прошёл.
+- Не закрыты ворота TARPED из [TARPED.md](TARPED.md): проверка на физических
+  устройствах, live Telegram/MQTT, publish/CI, реальный update + rollback,
+  VPS/второй VPS и staging restore. Зелёный локальный runner не закрывает эти
+  пункты.

@@ -2908,6 +2908,41 @@ def test_user_card_does_not_duplicate_on_transient_edit_error(monkeypatch):
     assert asyncio.run(bot._replace_user_card(FakeMessage(), "Updated")) == 30
 
 
+def test_user_card_replaces_media_card_when_text_edit_is_unsupported(monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+
+    class FakeBot:
+        async def edit_message_text(self, *args, **kwargs):
+            raise RuntimeError("there is no text in the message to edit")
+
+        async def delete_message(self, chat_id, message_id):
+            calls.append(("delete", chat_id, message_id))
+
+    class FakeMessage:
+        chat = SimpleNamespace(id=10)
+        from_user = SimpleNamespace(id=20)
+        message_id = 21
+
+        async def answer(self, text, **kwargs):
+            calls.append(("send", text, kwargs.get("reply_markup")))
+            return SimpleNamespace(chat=self.chat, message_id=31)
+
+    monkeypatch.setattr(bot, "bot", FakeBot())
+    monkeypatch.setattr(bot.ui_cards, "get", lambda *args: 30)
+    monkeypatch.setattr(bot.ui_cards, "set_card", lambda *args: calls.append(("store", args[2])))
+
+    result = asyncio.run(bot._replace_user_card(FakeMessage(), "Next page", reply_markup="kb"))
+
+    assert result == 31
+    assert calls == [
+        ("send", "Next page", "kb"),
+        ("delete", 10, 30),
+        ("store", 31),
+    ]
+
+
 def test_user_card_replaces_only_a_proven_stale_card(monkeypatch):
     from types import SimpleNamespace
 
@@ -2954,6 +2989,86 @@ def test_callback_card_does_not_duplicate_on_transient_edit_error(monkeypatch):
         message = FakeMessage()
 
     asyncio.run(bot._replace_callback_message(FakeCallback(), "Updated"))
+
+
+def test_callback_media_card_transitions_to_text_without_leaving_old_card(monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+
+    class FakeBot:
+        async def delete_message(self, chat_id, message_id):
+            calls.append(("delete", chat_id, message_id))
+
+    class FakeMessage:
+        chat = SimpleNamespace(id=10)
+        message_id = 30
+        photo = [object()]
+
+        async def edit_text(self, *args, **kwargs):
+            raise AssertionError("A media card must be replaced instead of edited as text")
+
+        async def answer(self, text, **kwargs):
+            calls.append(("send", text, kwargs.get("reply_markup")))
+            return SimpleNamespace(chat=self.chat, message_id=31)
+
+    class FakeCallback:
+        from_user = SimpleNamespace(id=20)
+        message = FakeMessage()
+
+    monkeypatch.setattr(bot, "bot", FakeBot())
+    monkeypatch.setattr(bot.ui_cards, "set_card", lambda *args: calls.append(("store", args[2])))
+
+    result = asyncio.run(
+        bot._replace_callback_message(FakeCallback(), "Device menu", reply_markup="kb")
+    )
+
+    assert result.message_id == 31
+    assert calls == [
+        ("send", "Device menu", "kb"),
+        ("delete", 10, 30),
+        ("store", 31),
+    ]
+
+
+def test_media_card_disables_old_keyboard_if_delete_fails(monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+
+    class FakeBot:
+        async def delete_message(self, chat_id, message_id):
+            calls.append(("delete", chat_id, message_id))
+            raise RuntimeError("temporary delete failure")
+
+        async def edit_message_reply_markup(self, **kwargs):
+            calls.append(("disable_markup", kwargs["chat_id"], kwargs["message_id"]))
+
+    class FakeMessage:
+        chat = SimpleNamespace(id=10)
+        message_id = 30
+        photo = [object()]
+
+        async def answer(self, text, **kwargs):
+            calls.append(("send", text))
+            return SimpleNamespace(chat=self.chat, message_id=31)
+
+    class FakeCallback:
+        from_user = SimpleNamespace(id=20)
+        message = FakeMessage()
+
+    monkeypatch.setattr(bot, "bot", FakeBot())
+    monkeypatch.setattr(bot.ui_cards, "set_card", lambda *args: calls.append(("store", args[2])))
+
+    result = asyncio.run(bot._replace_callback_message(FakeCallback(), "Next"))
+
+    assert result.message_id == 31
+    assert calls == [
+        ("send", "Next"),
+        ("delete", 10, 30),
+        ("disable_markup", 10, 30),
+        ("store", 31),
+    ]
 
 
 def test_callback_card_replacement_requires_stale_confirmation(monkeypatch):

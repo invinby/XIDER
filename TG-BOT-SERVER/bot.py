@@ -1866,8 +1866,59 @@ async def _edit_card_with_retry(message: Message, text: str, reply_markup=None):
     return None
 
 
+def _message_has_media(message: Message) -> bool:
+    """Telegram cannot turn a photo/voice/document message into a text message by editing it."""
+    return any(
+        getattr(message, field, None)
+        for field in ("photo", "animation", "audio", "document", "video", "video_note", "voice", "sticker")
+    )
+
+
+def _is_media_text_edit_error(exc: Exception) -> bool:
+    detail = str(exc).lower()
+    return "there is no text in the message to edit" in detail or "message is not a text message" in detail
+
+
+async def _replace_media_card_with_text(
+    message: Message,
+    user_id: int,
+    text: str,
+    reply_markup=None,
+    *,
+    old_message_id: int | None = None,
+):
+    """Replace a media card with a text card, then remove the old media card."""
+    media_message_id = old_message_id or message.message_id
+    sent = await message.answer(text, reply_markup=reply_markup)
+    try:
+        await bot.delete_message(message.chat.id, media_message_id)
+    except Exception:
+        # Keep the new card usable and neutralize stale buttons if deletion is unavailable.
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=message.chat.id,
+                message_id=media_message_id,
+                reply_markup=None,
+            )
+        except Exception:
+            log.warning(
+                "Не удалось удалить или отключить media-карточку %s после замены",
+                media_message_id,
+                exc_info=True,
+            )
+    try:
+        ui_cards.set_card(sent.chat.id, user_id, sent.message_id)
+    except OSError:
+        log.exception("Не удалось сохранить ID текстовой карточки после media")
+    return sent
+
+
 async def _replace_callback_message(cq: CallbackQuery, text: str, reply_markup=None):
     """Edit the current card; avoid duplicates on transient Telegram failures."""
+    if _message_has_media(cq.message):
+        return await _replace_media_card_with_text(
+            cq.message, cq.from_user.id, text, reply_markup
+        )
     exc = await _edit_card_with_retry(cq.message, text, reply_markup)
     if exc is None:
         try:
@@ -1890,6 +1941,8 @@ async def _replace_callback_message(cq: CallbackQuery, text: str, reply_markup=N
 
 async def _replace_message_card(message: Message, user_id: int, text: str, reply_markup=None):
     """Replace one known operation card, creating a new one only if old is proven stale."""
+    if _message_has_media(message):
+        return await _replace_media_card_with_text(message, user_id, text, reply_markup)
     exc = await _edit_card_with_retry(message, text, reply_markup)
     if exc is None:
         try:
@@ -1928,6 +1981,11 @@ async def _replace_user_card(message: Message, text: str, reply_markup=None) -> 
             detail = str(exc).lower()
             if "not modified" in detail:
                 return card_id
+            if _is_media_text_edit_error(exc):
+                sent = await _replace_media_card_with_text(
+                    message, user_id, text, reply_markup, old_message_id=card_id
+                )
+                return sent.message_id
             if not await _stale_card_allows_replacement(chat_id, card_id, exc):
                 log.warning("Не удалось обновить карточку %s: %s", card_id, exc)
                 return card_id
