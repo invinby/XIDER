@@ -2347,8 +2347,8 @@ Go и Rust по упаковке, сопровождению, диагности
   `missing_on_windows` / `missing_on_macos` пусты, нет declared/handler
   расхождений и неразобранных dynamic action sites. Всё перечисленное —
   локальные тесты/статическая проверка, не Telegram/MQTT или физический девайс.
-- HEAD — `4653b52`; унификация карточек и её тесты закоммичены и опубликованы
-  в ветку `origin/fix/windows-powershell5-bootstrap-signature`. PR
+- Кодовая часть унификации зафиксирована в `4653b52` и опубликована в ветку
+  `origin/fix/windows-powershell5-bootstrap-signature`. PR
   [#3](https://github.com/invinby/XIDER/pull/3) открыт в `main`; GitHub CI
   прошёл: Unix installers, pytest на Python 3.11 и 3.12. Release/tag и
   production VPS по-прежнему не запускались.
