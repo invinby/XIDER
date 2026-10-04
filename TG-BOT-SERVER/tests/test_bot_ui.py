@@ -807,6 +807,55 @@ def test_simple_command_shows_success_when_agent_ack_has_no_text(monkeypatch):
     assert bot._lex("device_no_response") not in edits[-1]
 
 
+def test_simple_command_does_not_create_duplicate_after_transient_edit_errors(monkeypatch):
+    from types import SimpleNamespace
+
+    edit_attempts = []
+    deleted = []
+    answered = []
+
+    class FakeMessage:
+        chat = SimpleNamespace(id=1)
+        message_id = 44
+
+        async def edit_text(self, *_args, **_kwargs):
+            edit_attempts.append(True)
+            raise RuntimeError("temporary network failure")
+
+        async def delete(self):
+            deleted.append(True)
+
+        async def answer(self, *args, **_kwargs):
+            answered.append(args)
+            return self
+
+    class FakeCallback:
+        data = "cmd:prank_fake_update"
+        from_user = SimpleNamespace(id=bot.ADMIN_ID)
+        message = FakeMessage()
+
+        async def answer(self, *_args, **_kwargs):
+            pass
+
+    class FakeCollector:
+        async def wait_for(self, *_args, **_kwargs):
+            return {"ok": True}
+
+    monkeypatch.setitem(bot.SESSION, "target", "device-1")
+    monkeypatch.setattr(bot, "target_label", lambda _target: "Test device")
+    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: True)
+    monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (True, "ticket"))
+    monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
+
+    asyncio.run(bot._simple_command_unlocked(
+        FakeCallback(), "prank_screamer", "🎬", "Скример", timeout=1.0
+    ))
+
+    assert len(edit_attempts) == 2
+    assert deleted == []
+    assert answered == []
+
+
 def test_simple_command_pins_captured_device_when_session_changes_during_answer(monkeypatch):
     from types import SimpleNamespace
 
@@ -971,6 +1020,81 @@ def test_simple_command_hides_wifi_password_result_if_grant_revoked_while_waitin
     assert result is None
     assert cards[-1][0] == bot._lex("action_result_hidden_after_revoke")
     assert secret not in "\n".join(edits)
+
+
+@pytest.mark.parametrize(
+    ("handler_name", "collector_name", "action", "callback_data", "payload"),
+    [
+        ("on_cmd_clipboard", "clipboard_collector", "clipboard", "cmd:clipboard", {"text": "private clipboard"}),
+        ("on_cmd_mic", "mic_collector", "mic", "cmd:mic", {"audio": "eA=="}),
+        ("on_cmd_screenshot", "screenshot_collector", "screenshot", "cmd:screenshot", {"image": "eA=="}),
+        ("on_cmd_webcam", "webcam_collector", "webcam", "cmd:webcam", {"image": "eA=="}),
+        ("on_cmd_processes", "processes_collector", "processes", "cmd:processes", {"lines": ["worker"]}),
+        ("on_cmd_battery", "battery_collector", "battery", "cmd:battery", {"available": True, "percent": 42}),
+        ("on_cmd_network", "network_collector", "network", "cmd:network", {"interfaces": []}),
+        ("on_cmd_services", "services_collector", "services", "cmd:services", {"total": 4, "running": 2}),
+        ("on_cmd_capabilities", "capabilities_collector", "capabilities", "cmd:capabilities", {}),
+        ("on_cmd_sysinfo", "sysinfo_collector", "sysinfo", "cmd:sysinfo", {"device_id": "device-1"}),
+        ("on_cmd_status", "status_collector", "status_request", "cmd:status", {}),
+        ("on_cmd_disks", "disks_collector", "disks", "cmd:disks", {"lines": ["C: 1 GB"]}),
+        ("on_mic_dur", "mic_collector", "mic", "micdur:5", {"audio": "eA=="}),
+    ],
+)
+def test_sensitive_callback_hides_result_if_grant_is_revoked_during_wait(
+    monkeypatch, handler_name, collector_name, action, callback_data, payload
+):
+    from types import SimpleNamespace
+
+    allowed = True
+    published = []
+    replacement_cards = []
+    media_sends = []
+
+    class FakeMessage:
+        chat = SimpleNamespace(id=77)
+        message_id = 99
+
+        async def edit_text(self, *_args, **_kwargs):
+            pass
+
+    class FakeCallback:
+        from_user = SimpleNamespace(id=77)
+        message = FakeMessage()
+
+        async def answer(self, *_args, **_kwargs):
+            pass
+
+    class FakeCollector:
+        async def wait_for(self, *_args, **_kwargs):
+            nonlocal allowed
+            allowed = False
+            return payload
+
+    def publish_tracked(sent_action, **kwargs):
+        published.append((sent_action, kwargs))
+        return True, "ticket-1"
+
+    async def replace(_cq, text, reply_markup=None):
+        replacement_cards.append((text, reply_markup))
+
+    monkeypatch.setitem(bot.SESSION, "target", "device-1")
+    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: allowed)
+    monkeypatch.setattr(bot, "publish_tracked", publish_tracked)
+    monkeypatch.setattr(bot, collector_name, FakeCollector())
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    monkeypatch.setattr(bot.bot, "send_photo", lambda *args, **kwargs: media_sends.append((args, kwargs)))
+    monkeypatch.setattr(bot.bot, "send_voice", lambda *args, **kwargs: media_sends.append((args, kwargs)))
+
+    callback = FakeCallback()
+    callback.data = callback_data
+    asyncio.run(getattr(bot, handler_name)(callback))
+
+    expected_kwargs = {"_target": "device-1"}
+    if callback_data == "micdur:5":
+        expected_kwargs["duration"] = 5
+    assert published == [(action, expected_kwargs)]
+    assert replacement_cards[-1][0] == bot._lex("action_result_hidden_after_revoke")
+    assert media_sends == []
 
 
 def test_simple_command_keeps_owner_all_device_volume_action_available(monkeypatch):
@@ -1811,6 +1935,7 @@ def test_screenshot_displays_agent_error_without_html_injection(monkeypatch):
     from types import SimpleNamespace
 
     class FakeCallback:
+        data = "cmd:screenshot"
         from_user = SimpleNamespace(id=1)
 
         async def answer(self, *args, **kwargs):
@@ -1829,6 +1954,7 @@ def test_screenshot_displays_agent_error_without_html_injection(monkeypatch):
     monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (True, "cmd-1"))
     monkeypatch.setattr(bot, "screenshot_collector", FakeCollector())
     monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: True)
 
     asyncio.run(bot.on_cmd_screenshot(FakeCallback()))
     assert "Screen Recording &lt;denied&gt;" in shown[0]
@@ -1847,6 +1973,7 @@ def test_photo_response_becomes_current_navigation_card(monkeypatch, action):
             pass
 
     class FakeCallback:
+        data = f"cmd:{action}"
         from_user = SimpleNamespace(id=1)
         message = FakeMessage()
 
@@ -1866,6 +1993,7 @@ def test_photo_response_becomes_current_navigation_card(monkeypatch, action):
     monkeypatch.setattr(bot, f"{action}_collector", FakeCollector())
     monkeypatch.setattr(bot, "bot", SimpleNamespace(send_photo=send_photo))
     monkeypatch.setattr(bot.ui_cards, "set_card", lambda *args: cards.append(args))
+    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: True)
 
     asyncio.run(getattr(bot, f"on_cmd_{action}")(FakeCallback()))
     assert cards == [(1, 1, 18)]
@@ -1883,6 +2011,8 @@ def test_buttons_have_colored_styles(monkeypatch):
 
 def test_common_process_feedback_uses_selected_xlex_voice(monkeypatch):
     class FakeCallback:
+        data = "cmd:processes"
+        from_user = SimpleNamespace(id=bot.ADMIN_ID)
         def __init__(self):
             self.answers = []
 
@@ -1899,6 +2029,7 @@ def test_common_process_feedback_uses_selected_xlex_voice(monkeypatch):
             return None
 
     monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: True)
     monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (False, "test"))
 
     for style in bot.xlex.STYLES:

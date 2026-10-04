@@ -239,8 +239,13 @@ async def on_cmd_clipboard(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await cq.answer("📋 Запрашиваю буфер обмена...")
-    sent, command_id = publish_tracked("clipboard")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("clipboard", _target=target)
     if not sent:
         await _replace_callback_message(cq,
             _lex("mqtt_disconnected"),
@@ -248,6 +253,8 @@ async def on_cmd_clipboard(cq: CallbackQuery):
         )
         return
     result = await clipboard_collector.wait_for(target, "clipboard", 10.0, command_id)
+    if not await _callback_result_access_or_report(cq, target):
+        return
     if result is None:
         await _replace_callback_message(cq,
             _lex("device_timeout", seconds="10"),
@@ -275,8 +282,13 @@ async def on_cmd_processes(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await cq.answer("⚙️ Запрашиваю процессы (Топ-5)...")
-    sent, command_id = publish_tracked("processes")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("processes", _target=target)
     if not sent:
         await _replace_callback_message(cq,
             _lex("mqtt_disconnected"),
@@ -284,6 +296,8 @@ async def on_cmd_processes(cq: CallbackQuery):
         )
         return
     result = await processes_collector.wait_for(target, "processes", 15.0, command_id)
+    if not await _callback_result_access_or_report(cq, target):
+        return
     if result is None:
         await _replace_callback_message(cq,
             _lex("device_timeout", seconds="15"),
@@ -310,8 +324,13 @@ async def on_cmd_mic(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await cq.answer("🎙 Идет запись звука (5 сек)...")
-    sent, command_id = publish_tracked("mic")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("mic", _target=target)
     if not sent:
         await _replace_callback_message(cq,
             _lex("mqtt_disconnected"),
@@ -319,6 +338,8 @@ async def on_cmd_mic(cq: CallbackQuery):
         )
         return
     result = await mic_collector.wait_for(target, "mic", 20.0, command_id)
+    if not await _callback_result_access_or_report(cq, target):
+        return
     if result is None:
         await _replace_callback_message(cq,
             "⏳ Звук не получен за 20 сек — устройство офлайн или нет микрофона.",
@@ -1830,21 +1851,48 @@ async def _replace_callback_message(cq: CallbackQuery, text: str, reply_markup=N
             ui_cards.set_card(cq.message.chat.id, cq.from_user.id, cq.message.message_id)
         except OSError:
             log.exception("Не удалось сохранить ID карточки")
+        return cq.message
     except Exception as exc:
         # Telegram возвращает эту ошибку, когда текст уже такой же. В этом
         # случае нельзя удалять карточку и создавать дубль.
         if "not modified" in str(exc).lower():
-            return
+            return cq.message
         if not await _stale_card_allows_replacement(
             cq.message.chat.id, cq.message.message_id, exc
         ):
             log.warning("Не удалось обновить карточку %s: %s", cq.message.message_id, exc)
-            return
+            return cq.message
         sent = await cq.message.answer(text, reply_markup=reply_markup)
         try:
             ui_cards.set_card(sent.chat.id, cq.from_user.id, sent.message_id)
         except OSError:
             log.exception("Не удалось сохранить ID новой карточки")
+        return sent
+
+
+async def _replace_message_card(message: Message, user_id: int, text: str, reply_markup=None):
+    """Replace one known operation card, creating a new one only if old is proven stale."""
+    try:
+        await message.edit_text(text, reply_markup=reply_markup)
+        try:
+            ui_cards.set_card(message.chat.id, user_id, message.message_id)
+        except OSError:
+            log.exception("Не удалось сохранить ID карточки")
+        return message
+    except Exception as exc:
+        if "not modified" in str(exc).lower():
+            return message
+        if not await _stale_card_allows_replacement(
+            message.chat.id, message.message_id, exc
+        ):
+            log.warning("Не удалось обновить карточку %s: %s", message.message_id, exc)
+            return message
+        sent = await message.answer(text, reply_markup=reply_markup)
+        try:
+            ui_cards.set_card(sent.chat.id, user_id, sent.message_id)
+        except OSError:
+            log.exception("Не удалось сохранить ID новой карточки")
+        return sent
 
 
 async def _replace_user_card(message: Message, text: str, reply_markup=None) -> int:
@@ -3480,7 +3528,9 @@ async def on_cmd_screenshot(cq: CallbackQuery):
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
     await cq.answer("📸 Делаю скриншот...")
-    sent, command_id = publish_tracked("screenshot")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("screenshot", _target=target)
     if not sent:
         await _replace_callback_message(
             cq,
@@ -3489,6 +3539,8 @@ async def on_cmd_screenshot(cq: CallbackQuery):
         )
         return
     result = await screenshot_collector.wait_for(target, "screenshot", 15.0, command_id)
+    if not await _callback_result_access_or_report(cq, target):
+        return
     if result is None:
         await _replace_callback_message(
             cq,
@@ -3544,7 +3596,9 @@ async def on_cmd_webcam(cq: CallbackQuery):
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
     await cq.answer("📷 Делаю снимок с вебки (может занять пару секунд)...")
-    sent, command_id = publish_tracked("webcam")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("webcam", _target=target)
     if not sent:
         await _replace_callback_message(
             cq,
@@ -3553,6 +3607,8 @@ async def on_cmd_webcam(cq: CallbackQuery):
         )
         return
     result = await webcam_collector.wait_for(target, "webcam", 20.0, command_id)
+    if not await _callback_result_access_or_report(cq, target):
+        return
     if result is None:
         await _replace_callback_message(
             cq,
@@ -3600,12 +3656,19 @@ async def on_cmd_battery(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await cq.answer("🔋 Запрашиваю батарею...")
-    sent, command_id = publish_tracked("battery")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("battery", _target=target)
     if not sent:
         await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
         return
     res = await battery_collector.wait_for(target, "battery", 15.0, command_id)
+    if not await _callback_result_access_or_report(cq, target):
+        return
     if not res:
         await _replace_callback_message(cq, _lex("device_no_response"), reply_markup=back_to_device_kb())
         return
@@ -3623,12 +3686,19 @@ async def on_cmd_network(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await cq.answer("🌐 Запрашиваю сеть...")
-    sent, command_id = publish_tracked("network")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("network", _target=target)
     if not sent:
         await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
         return
     res = await network_collector.wait_for(target, "network", 15.0, command_id)
+    if not await _callback_result_access_or_report(cq, target):
+        return
     if not res:
         await _replace_callback_message(cq, _lex("device_no_response"), reply_markup=back_to_device_kb())
         return
@@ -3645,12 +3715,19 @@ async def on_cmd_services(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await cq.answer("🛠 Запрашиваю службы...")
-    sent, command_id = publish_tracked("services")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("services", _target=target)
     if not sent:
         await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
         return
     res = await services_collector.wait_for(target, "services", 15.0, command_id)
+    if not await _callback_result_access_or_report(cq, target):
+        return
     if not res:
         await _replace_callback_message(cq, _lex("device_no_response"), reply_markup=back_to_device_kb())
         return
@@ -3664,12 +3741,19 @@ async def on_cmd_capabilities(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
     await cq.answer("📊 Запрашиваю возможности...")
-    sent, command_id = publish_tracked("capabilities")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("capabilities", _target=target)
     if not sent:
         await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
         return
     res = await capabilities_collector.wait_for(target, "capabilities", 15.0, command_id)
+    if not await _callback_result_access_or_report(cq, target):
+        return
     if not res:
         await _replace_callback_message(cq, _lex("device_no_response"), reply_markup=back_to_device_kb())
         return
@@ -3752,7 +3836,9 @@ async def on_cmd_sysinfo(cq: CallbackQuery):
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
     await cq.answer("💻 Запрашиваю...")
-    sent, command_id = publish_tracked("sysinfo")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("sysinfo", _target=target)
     if not sent:
         await _replace_callback_message(
             cq,
@@ -3761,6 +3847,8 @@ async def on_cmd_sysinfo(cq: CallbackQuery):
         )
         return
     result = await sysinfo_collector.wait_for(target, "sysinfo", 12.0, command_id)
+    if not await _callback_result_access_or_report(cq, target):
+        return
     if result is None:
         await _replace_callback_message(
             cq,
@@ -3835,7 +3923,9 @@ async def on_cmd_status(cq: CallbackQuery):
                 reply_markup=system_menu(),
             )
         return
-    sent, command_id = publish_tracked("status_request")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("status_request", _target=target)
     if not sent:
         await _replace_callback_message(
             cq,
@@ -3851,6 +3941,8 @@ async def on_cmd_status(cq: CallbackQuery):
     except Exception:
         pass
     status = await status_collector.wait_for(target, "status", 12.0, command_id)
+    if not await _callback_result_access_or_report(cq, target):
+        return
     if status is None:
         await _replace_callback_message(
             cq,
@@ -4252,20 +4344,25 @@ async def on_cmd_disks(cq: CallbackQuery):
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
     await cq.answer("🗂 Запрашиваю диски...")
-    sent, command_id = publish_tracked("disks")
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("disks", _target=target)
     if not sent:
-        await cq.message.answer(_lex("mqtt_disconnected"))
-        await cq.answer()
+        await _replace_callback_message(
+            cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb()
+        )
         return
     res = await disks_collector.wait_for(target, "disks", 15.0, command_id)
+    if not await _callback_result_access_or_report(cq, target):
+        return
     if not res:
-        await cq.message.answer(_lex("device_no_response"), reply_markup=back_to_device_kb())
-        await cq.answer()
+        await _replace_callback_message(
+            cq, _lex("device_no_response"), reply_markup=back_to_device_kb()
+        )
         return
     lines = res.get("lines", [])
     text = "🗂 <b>Диски</b>:\n" + "\n".join(html.escape(l) for l in lines)
-    await cq.message.answer(text, reply_markup=back_to_device_kb())
-    await cq.answer()
+    await _replace_callback_message(cq, text, reply_markup=back_to_device_kb())
 
 
 @router.callback_query(AdminFilter(), F.data == "vol:opts")
@@ -4301,12 +4398,16 @@ async def on_mic_dur(cq: CallbackQuery):
         return
     dur = int(cq.data.split(":", 1)[1] or 5)
     await cq.answer(f"🎙 Запись {dur} сек...")
-    sent, command_id = publish_tracked("mic", duration=dur)
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    sent, command_id = publish_tracked("mic", _target=target, duration=dur)
     if not sent:
         await cq.message.answer(_lex("mqtt_disconnected"))
         await cq.answer()
         return
     res = await mic_collector.wait_for(target, "mic", dur + 12.0, command_id)
+    if not await _callback_result_access_or_report(cq, target):
+        return
     if not res or not res.get("audio"):
         await cq.message.answer("⏳ Звук не получен — офлайн или нет микрофона.")
         await cq.answer()
@@ -4725,6 +4826,20 @@ def _device_action_still_allowed(user_id: int, callback: str, target: str) -> bo
     if not target or target == "all" or devices.get(target) is None:
         return False
     return access_store.can_use_callback(user_id, callback, ADMIN_ID, target)
+
+
+async def _callback_result_access_or_report(cq: CallbackQuery, target: str) -> bool:
+    """Recheck the exact callback grant after awaits before dispatching or returning data."""
+    user_id = int(cq.from_user.id) if cq.from_user else 0
+    callback = str(cq.data or "")
+    if _simple_command_still_allowed(user_id, callback, target):
+        return True
+    await _replace_callback_message(
+        cq,
+        _lex("action_result_hidden_after_revoke"),
+        reply_markup=back_to_device_kb(),
+    )
+    return False
 
 
 def _pending_device_input_still_allowed(
@@ -5829,9 +5944,8 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
         return
 
     # Одна карточка на всю операцию: меню -> прогресс -> результат.
-    status_msg = cq.message
-    try:
-        await status_msg.edit_text(
+    status_msg = await _replace_callback_message(
+        cq,
         _lex_html(
             "command_waiting",
             emoji=emoji,
@@ -5839,23 +5953,7 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
             device=target_label(target),
         ),
         reply_markup=back_to_device_kb(),
-        )
-    except Exception:
-        # Если Telegram не разрешил редактирование (например, старое медиа),
-        # удаляем старую карточку и создаём ровно одну новую.
-        try:
-            await cq.message.delete()
-        except Exception:
-            pass
-        status_msg = await cq.message.answer(
-            _lex_html(
-                "command_waiting",
-                emoji=emoji,
-                label=label,
-                device=target_label(target),
-            ),
-            reply_markup=back_to_device_kb(),
-        )
+    )
 
     # A single real progress state is more reliable than a rapid, decorative
     # edit loop that can hit Telegram rate limits and look like a freeze.
@@ -5890,17 +5988,12 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
         device=target_label(target),
         text=str(text)[:3800],
     )
-    try:
-        await status_msg.edit_text(final_text, reply_markup=back_to_device_kb())
-    except Exception as exc:
-        # Не создаём копию сообщения при безобидной ошибке
-        # «message is not modified» (так бывает при быстром повторном клике).
-        if "not modified" not in str(exc).lower():
-            try:
-                await status_msg.delete()
-            except Exception:
-                pass
-            await cq.message.answer(final_text, reply_markup=back_to_device_kb())
+    await _replace_message_card(
+        status_msg,
+        user_id,
+        final_text,
+        reply_markup=back_to_device_kb(),
+    )
     return result
 
 
