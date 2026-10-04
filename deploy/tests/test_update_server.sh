@@ -29,6 +29,7 @@ chmod 0777 "${BACKUP_DIR}"
 APP_DIR_MODE="$(stat -c '%a' "${APP_DIR}")"
 cp "${FIXTURES}/mock-systemctl.sh" "${MOCK_BIN}/systemctl"
 cp "${FIXTURES}/mock-chown.sh" "${MOCK_BIN}/chown"
+sed -i 's/\r$//' "${MOCK_BIN}/systemctl" "${MOCK_BIN}/chown"
 cp "${ROOT}/deploy/safe_extract.py" "${APP_DIR}/deploy/safe_extract.py"
 cp "${ROOT}/deploy/safe_extract.py" "${ROOT_HELPER_DIR}/safe_extract.py"
 cat >"${ROOT_HELPER_DIR}/verify_server_bundle.py" <<'PY'
@@ -59,7 +60,9 @@ with ZipFile(sys.argv[1], "w") as archive:
     archive.writestr("TG-BOT-SERVER/bot.py", sys.argv[2] + "\n")
     if sys.argv[2] == "bad":
         archive.writestr("TG-BOT-SERVER/new-feature.py", "pass\n")
-    archive.writestr("TG-BOT-SERVER/requirements.txt", "test-dependency==1\n")
+    # Windows checkouts can put CRLF in this text manifest. The updater must
+    # compare requirements by lines, not reject an otherwise identical release.
+    archive.writestr("TG-BOT-SERVER/requirements.txt", "test-dependency==1\r\n")
     archive.writestr("XGENT-WDS/agent.py", "pass\n")
     archive.writestr("XGENT-MCS/agent.py", "pass\n")
     archive.writestr("deploy/xider-bot.service", "[Service]\nExecStart=/new\n")

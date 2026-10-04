@@ -184,6 +184,11 @@ sudo python3 -c 'import cryptography.hazmat.primitives.asymmetric.ed25519' || {
   echo 'System Python is missing python3-cryptography; run the signed server installer first.' >&2
   exit 4
 }
+# Git for Windows can deliver CRLF shell helpers over SCP. Normalize the two
+# executable helpers before install so Linux does not look for "bash\r".
+sudo sed -i 's/\r$//' "$updater" "$ops"
+sudo bash -n "$updater"
+sudo bash -n "$ops"
 sudo install -d -o root -g root -m 0750 /usr/local/libexec/xider
 sudo install -o root -g root -m 0750 "$updater" /usr/local/libexec/xider/update-server.sh
 sudo install -o root -g root -m 0640 "$extractor" /usr/local/libexec/xider/safe_extract.py

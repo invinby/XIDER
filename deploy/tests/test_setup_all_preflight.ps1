@@ -86,6 +86,11 @@ try {
         $uploadSource -notmatch '\.ssh\\known_hosts') {
         throw 'The VPS uploader must require a previously pinned SSH host key.'
     }
+    if (-not $uploadSource.Contains('sudo sed -i ''s/\r$//'' "$updater" "$ops"') -or
+        -not $uploadSource.Contains('sudo bash -n "$updater"') -or
+        -not $uploadSource.Contains('sudo bash -n "$ops"')) {
+        throw 'The VPS uploader must normalize CRLF and syntax-check executable server shell helpers before installation.'
+    }
     $uploadKeyRejected = $false
     try { & $uploadScript }
     catch { $uploadKeyRejected = $_.Exception.Message.Contains($env:XIDER_SSH_KEY) }

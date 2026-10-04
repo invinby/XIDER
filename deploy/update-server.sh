@@ -208,6 +208,7 @@ do_update() {
   STAGE="$(mktemp -d "${APP_DIR}/.xider-update.XXXXXX")"
   python3 "${EXTRACT_HELPER}" "${INCOMING}" "${STAGE}"
   find "${STAGE}" -type f -name '*.sh' -exec sed -i 's/\r$//' {} +
+  sed -i 's/\r$//' "${STAGE}/TG-BOT-SERVER/requirements.txt"
   [[ -f "${STAGE}/TG-BOT-SERVER/bot.py" && -f "${STAGE}/TG-BOT-SERVER/requirements.txt" ]] || {
     echo "Release bundle is missing the Telegram bot." >&2; return 5;
   }
