@@ -1,5 +1,23 @@
 # XIDER release history
 
+## X4.1.4-TARPED+20261006 — X-DOCK legacy recovery command
+
+### English
+
+- When an old or packaged agent cannot use the transactional in-bot updater,
+  the update screen now shows the signed one-line installer for that device's OS.
+- The bot still refuses to run an unsupported remote update; the owner chooses
+  whether to copy and run the recovery command on the device.
+- Kept Windows, macOS, and bot version identity synchronized at 4.1.4.
+
+### Русский
+
+- Если старый агент или EXE-сборка не поддерживает транзакционное обновление
+  из бота, экран теперь сразу показывает подписанную команду установки для его ОС.
+- Бот по-прежнему не запускает неподдерживаемое обновление сам: владелец решает,
+  копировать ли команду и запускать её на устройстве.
+- Версии бота, Windows- и macOS-агентов синхронизированы на 4.1.4.
+
 ## X4.1.3-TARPED+20261006 — XIDER LINK rejection diagnostics
 
 ### English
