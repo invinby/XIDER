@@ -170,6 +170,16 @@ def test_release_catalog_requires_a_real_component_asset():
     assert not ledger.is_older("4.0.0", releases[0])
 
 
+def test_release_catalog_preserves_complete_release_notes():
+    notes = "X" * 7000 + "END-OF-NOTES"
+
+    [release] = ledger.parse_releases([
+        {"tag_name": "v4.2.0", "name": "Long notes", "body": notes, "assets": []},
+    ])
+
+    assert release.notes == notes
+
+
 def test_release_source_update_requires_platform_bundle_archive_and_manifest():
     release = ledger.Release(
         tag="v4.1.0", version=(4, 1, 0), name="release", published_at="", notes="",

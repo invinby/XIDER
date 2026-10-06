@@ -74,7 +74,7 @@ def parse_releases(payload: object) -> list[Release]:
             version=tuple(map(int, match.groups())),
             name=str(item.get("name") or tag)[:100],
             published_at=str(item.get("published_at") or "")[:32],
-            notes=str(item.get("body") or "")[:6000],
+            notes=str(item.get("body") or ""),
             asset_names=names,
         ))
     return sorted(result, key=lambda release: release.version, reverse=True)
