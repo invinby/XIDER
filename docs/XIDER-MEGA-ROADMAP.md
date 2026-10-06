@@ -2363,3 +2363,22 @@ Go и Rust по упаковке, сопровождению, диагности
   устройствах, live Telegram/MQTT, публичный release, реальный update + rollback,
   production VPS/второй VPS и staging restore. Локальные тесты и CI не закрывают
   эти пункты.
+
+## 28. X-MAP: реестр поддержки, разрешений и проверенности · 2026-10-06
+
+- Статический X-MAP расширен до схемы `x-map-static-audit-v5`. Snapshot
+  `docs/x-map-command-matrix.json` содержит 119 worker-команд и 5 команд Guard
+  Keeper для Windows и macOS. Для каждой пары команда/ОС указаны source support,
+  профиль прав и состояние проверенности.
+- Профили отдельно помечают screen recording, camera, microphone, IP-based
+  approximate location, clipboard, файловые ACL, process control, системные
+  действия, ввод/Accessibility, автозапуск и Guardian. Формулировки описывают
+  известные ограничения из исходников и не обещают наличие выданного разрешения.
+- Все обычные строки имеют `source_only_unverified`: наличие handler — не
+  доказательство live-работы. Mac screenshot и geolocation сохранены как
+  `reported_issue_not_retested`, поскольку старые сообщения о сбое не
+  перепроверялись на текущем release. GPS не заявляется.
+- Добавлены генерация `--matrix-only`, проверка профилей и source gaps, а также
+  тест равенства committed JSON текущему AST-аудиту. Это закрывает именно
+  документирование X-MAP; физическая проверка кнопок и выдачи разрешений остаётся
+  отдельным release gate.

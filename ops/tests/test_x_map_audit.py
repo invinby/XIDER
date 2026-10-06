@@ -135,7 +135,20 @@ def test_cli_writes_json_report(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["x-map-audit", "--root", str(tmp_path), "--output", str(output)])
 
     assert main() == 0
-    assert json.loads(output.read_text(encoding="utf-8"))["schema"] == "x-map-static-audit-v4"
+    assert json.loads(output.read_text(encoding="utf-8"))["schema"] == "x-map-static-audit-v5"
+
+
+def test_cli_writes_matrix_only(tmp_path, monkeypatch):
+    _project(tmp_path)
+    output = tmp_path / "report" / "matrix.json"
+    monkeypatch.setattr(
+        sys, "argv", ["x-map-audit", "--root", str(tmp_path), "--matrix-only", "--output", str(output)]
+    )
+
+    assert main() == 0
+    matrix = json.loads(output.read_text(encoding="utf-8"))
+    assert matrix["worker_command_count"] == 4
+    assert "schema" not in matrix
 
 
 def test_current_repo_has_no_declared_worker_action_gaps():
@@ -165,3 +178,74 @@ def test_current_repo_has_no_declared_worker_action_gaps():
         assert report["feature_status"]["platforms"][platform]["missing_features"] == []
         assert report["feature_status"]["platforms"][platform]["unexpected_features"] == []
         assert report["feature_status"]["platforms"][platform]["unrecognized_states"] == []
+
+
+def test_command_matrix_records_source_support_permissions_and_stability_for_every_command():
+    report = build_report(ROOT)
+    matrix = report["command_matrix"]
+    expected_worker = (
+        (set(report["bot_actions"]) - {"guardian"})
+        | set(report["platforms"]["windows"]["supported"])
+        | set(report["platforms"]["windows"]["handlers"])
+        | set(report["platforms"]["macos"]["supported"])
+        | set(report["platforms"]["macos"]["handlers"])
+    )
+    rows = {row["command"]: row for row in matrix["worker_commands"]}
+
+    assert matrix["source_only"] is True
+    assert matrix["worker_command_count"] == len(expected_worker) == len(rows)
+    assert set(rows) == expected_worker
+    assert matrix["guardian_command_count"] == 5
+    assert matrix["permission_profile_gaps"] == []
+    for row in (*matrix["worker_commands"], *matrix["guardian_commands"]):
+        assert set(row["platforms"]) == {"windows", "macos"}
+        for platform_row in row["platforms"].values():
+            assert platform_row["permission_profile_ids"]
+            assert set(platform_row["permission_profile_ids"]) <= set(matrix["permission_profiles"])
+            assert platform_row["stability"]["state"] in {
+                "source_only_unverified", "reported_issue_not_retested",
+                "known_source_limited", "dependency_gated_unverified", "source_gap",
+            }
+            assert platform_row["source_behavior"]["state"]
+            assert platform_row["source_behavior"]["evidence"]
+            assert platform_row["stability"]["evidence"]
+
+    assert "screen_capture" in rows["screenshot"]["platforms"]["macos"]["permission_profile_ids"]
+    assert "filesystem_delete" in rows["file_del"]["platforms"]["windows"]["permission_profile_ids"]
+    assert "command_execution" in rows["shell"]["platforms"]["macos"]["permission_profile_ids"]
+    assert "accessibility_input" in rows["type_text"]["platforms"]["macos"]["permission_profile_ids"]
+    assert "app_automation" in rows["type_text"]["platforms"]["macos"]["permission_profile_ids"]
+    assert rows["screenshot"]["platforms"]["macos"]["stability"]["state"] == "reported_issue_not_retested"
+    assert rows["geo_location"]["platforms"]["macos"]["stability"]["state"] == "reported_issue_not_retested"
+    assert rows["display_night_light"]["platforms"]["macos"]["source_behavior"]["state"] == "explicitly_unsupported"
+    assert rows["display_night_light"]["platforms"]["macos"]["stability"]["state"] == "known_source_limited"
+    assert rows["prank_random_clicks"]["platforms"]["macos"]["stability"]["state"] == "known_source_limited"
+    assert rows["prank_invert_screen"]["platforms"]["macos"]["source_behavior"]["state"] == "fallback_only"
+    assert rows["display_brightness"]["platforms"]["macos"]["stability"]["state"] == "dependency_gated_unverified"
+
+    guardian_rows = {row["command"]: row for row in matrix["guardian_commands"]}
+    assert set(guardian_rows) == {"auto_restart", "restart", "start", "status", "stop"}
+    assert guardian_rows["stop"]["platforms"]["windows"]["source_support"] == "source_branch_present"
+
+
+def test_source_limitation_overrides_still_match_mac_handlers():
+    source = (ROOT / "XGENT-MCS" / "xgent_mcs.py").read_text(encoding="utf-8")
+
+    for marker in (
+        '"brightness"',
+        '"displayplacer"',
+        "Ночной свет macOS не имеет стабильного публичного CLI",
+        "Для движения курсора нужен PyObjC Quartz и разрешение Accessibility",
+        "Реальная инверсия экрана не применена",
+        "Случайные клики не выполняются: функция не реализована безопасно",
+        "Смена кнопок мыши отключена",
+        "Глючный курсор отключён",
+        "Кружение курсора недоступно в текущей сборке macOS",
+    ):
+        assert marker in source
+
+
+def test_committed_command_matrix_snapshot_matches_current_sources():
+    snapshot = ROOT / "docs" / "x-map-command-matrix.json"
+
+    assert json.loads(snapshot.read_text(encoding="utf-8")) == build_report(ROOT)["command_matrix"]
