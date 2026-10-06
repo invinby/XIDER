@@ -7,6 +7,7 @@
 import collections
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -22,6 +23,17 @@ from release_signature import release_key_id, sign_manifest
 # ---------------------------------------------------------------------------
 #  Чистые функции форматирования
 # ---------------------------------------------------------------------------
+
+def test_windows_executable_metadata_matches_the_agent_release_version():
+    import config
+
+    resource = Path(wds.__file__).with_name("version_info.txt").read_text(encoding="utf-8")
+    expected = ".".join([config.VERSION, "0"])
+    parts = tuple(int(part) for part in (*config.VERSION.split("."), "0"))
+    assert re.search(r"filevers=\(" + r"\s*,\s*".join(map(str, parts)) + r"\)", resource)
+    assert f"StringStruct(u'FileVersion', u'{expected}')" in resource
+    assert f"StringStruct(u'ProductVersion', u'{expected}')" in resource
+
 
 def test_runtime_health_marker_is_atomic_and_contains_no_credentials(monkeypatch, tmp_path):
     import config
@@ -290,8 +302,8 @@ def test_dispatch_unknown_command(client):
 
 
 def test_dispatch_known_command_acks_received_and_ok(client, monkeypatch):
-    # open_url не требует оборудования, кроме webbrowser.open — замокаем.
-    monkeypatch.setattr(wds.webbrowser, "open", lambda u: None)
+    # open_url не требует оборудования, кроме webbrowser.open_new_tab — замокаем.
+    monkeypatch.setattr(wds.webbrowser, "open_new_tab", lambda u: True)
     monkeypatch.setattr(wds, "ctypes_windll_user32_message_box", lambda t: None)
 
     client._dispatch({"type": "open_url", "id": "x1", "url": "https://example.com"})
@@ -314,6 +326,28 @@ def test_dispatch_known_command_acks_received_and_ok(client, monkeypatch):
             break
         time.sleep(0.05)
     assert any(p["status"] == "ok" for p in _acks())
+
+
+def test_open_url_opens_the_requested_number_of_web_tabs(client, monkeypatch):
+    opened = []
+    monkeypatch.setattr(wds.webbrowser, "open_new_tab", lambda url: opened.append(url) or True)
+    monkeypatch.setattr(client, "_notify_text", lambda _text: None)
+
+    client._do_open_url({"url": "https://example.com/path", "count": 3})
+
+    assert opened == ["https://example.com/path"] * 3
+
+
+@pytest.mark.parametrize("payload", [
+    {"url": "javascript:alert(1)"},
+    {"url": "file:///C:/Windows/win.ini"},
+    {"url": "https://example.com", "count": 0},
+    {"url": "https://example.com", "count": 6},
+])
+def test_open_url_rejects_non_web_schemes_and_out_of_range_counts(client, monkeypatch, payload):
+    monkeypatch.setattr(wds.webbrowser, "open_new_tab", lambda _url: pytest.fail("must not open"))
+    with pytest.raises(ValueError):
+        client._do_open_url(payload)
 
 
 def test_handler_map_covers_supported_commands(client):

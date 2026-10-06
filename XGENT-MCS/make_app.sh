@@ -10,6 +10,11 @@ APP_DIR="${APP_NAME}.app"
 CONTENTS_DIR="${APP_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
+AGENT_VERSION="$(sed -n 's/^VERSION = "\([0-9.]*\)"/\1/p' config.py | head -n 1)"
+if [[ ! "$AGENT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Could not read the agent version from config.py." >&2
+  exit 1
+fi
 
 echo "🍎 Сборка $APP_DIR..."
 
@@ -35,9 +40,9 @@ cat > "${CONTENTS_DIR}/Info.plist" <<EOF
     <key>CFBundleIconFile</key>
     <string>icon</string>
     <key>CFBundleShortVersionString</key>
-    <string>2.0</string>
+    <string>${AGENT_VERSION}</string>
     <key>CFBundleVersion</key>
-    <string>3.3.5</string>
+    <string>${AGENT_VERSION}</string>
     <key>LSUIElement</key>
     <true/> <!-- Приложение работает в фоне, без иконки в Dock -->
     <key>NSAppleEventsUsageDescription</key>

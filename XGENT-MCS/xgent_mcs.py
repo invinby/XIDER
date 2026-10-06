@@ -21,11 +21,38 @@ import tempfile
 import threading
 import time
 import urllib.request
+import webbrowser
+from urllib.parse import urlsplit
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 
 MAX_FILE_PUT_BYTES = 30 * 1024 * 1024
 MAX_FILE_PUT_B64_CHARS = 4 * ((MAX_FILE_PUT_BYTES + 2) // 3)
+
+
+def _validated_open_url(payload: dict) -> tuple[str, int]:
+    url = payload.get("url")
+    if not isinstance(url, str) or not url or len(url) > 2048:
+        raise ValueError("URL is empty or too long")
+    if any(char in url for char in "\r\n\t\x00"):
+        raise ValueError("URL contains control characters")
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("URL authority is invalid") from exc
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname or not parsed.netloc:
+        raise ValueError("Only HTTP(S) URLs with a host are allowed")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("Credentials in URLs are not allowed")
+    if any(char.isspace() for char in parsed.netloc):
+        raise ValueError("Whitespace in URL host is not allowed")
+    if port is not None and not 1 <= port <= 65535:
+        raise ValueError("URL port is invalid")
+    count = payload.get("count", 1)
+    if type(count) is not int or not 1 <= count <= 5:
+        raise ValueError("Open count must be an integer from 1 to 5")
+    return url, count
 
 
 def _decode_file_put_payload(payload: dict) -> bytes:
@@ -801,10 +828,11 @@ class XgentClient:
                 self._publish_status()
 
     def _do_open_url(self, payload: dict) -> None:
-        url = payload.get("url", "")
-        if url:
-            subprocess.run(["open", url], check=False)
-            self._notify_text(f"Открываю: {url}")
+        url, count = _validated_open_url(payload)
+        for _ in range(count):
+            if webbrowser.open_new_tab(url) is False:
+                raise RuntimeError("Default browser refused the URL")
+        self._notify_text(f"Открыто запросов: {count} · {url}")
 
     def _do_notify(self, payload: dict) -> None:
         self._notify_text(payload.get("text", ""))

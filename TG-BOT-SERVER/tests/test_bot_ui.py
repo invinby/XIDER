@@ -94,7 +94,8 @@ def test_user_fsm_prompts_bind_the_initiating_action_and_device():
     # and device when the user submits the next message. Admin-only forms such
     # as `wait_admin` are intentionally not in this set.
     assert {
-        "wait_open_app", "wait_url", "wait_text", "wait_sound", "wait_clipset",
+        "wait_open_app", "wait_url", "wait_url_count", "wait_url_favorite_name",
+        "wait_text", "wait_sound", "wait_clipset",
         "wait_path", "wait_find", "wait_fun_text", "wait_fun_hotkey",
         "wait_fun_wallpaper", "wait_wallpaper_photo", "wait_fun_spam", "wait_shout",
         "wait_brightness", "wait_prockill",
@@ -503,7 +504,6 @@ def test_text_command_flows_reuse_the_existing_chat_card():
     [
         ("on_shell_input", "shell", "whoami"),
         ("on_open_app_input", "open_app", "Calculator"),
-        ("on_url_input", "open_url", "https://example.com"),
         ("on_text_input", "notify", "hello"),
         ("on_sound_input", "sound", "beep"),
         ("on_clipset_input", "clipboard_set", "note for clipboard"),
@@ -596,6 +596,151 @@ def test_about_chapter_button_uses_each_xlex_voice():
 
     assert all(title in label for label in labels.values())
     assert len(set(labels.values())) == len(bot.xlex.STYLES)
+
+
+def test_about_chapter_page_uses_selected_voice_for_title_and_body(monkeypatch):
+    shown = []
+    monkeypatch.setattr(bot.bot_settings, "get", lambda key, default=None: "xpikmi" if key == "ui_style" else default)
+
+    async def replace_callback(_cq, text, reply_markup=None):
+        shown.append((text, reply_markup))
+
+    monkeypatch.setattr(bot, "_replace_callback_message", replace_callback)
+
+    class Callback:
+        data = "about:chapter:overview"
+
+        async def answer(self, *args, **kwargs):
+            pass
+
+    asyncio.run(bot.on_about_chapter(Callback()))
+    _, title, body = bot.info_book.chapter("overview", "xpikmi")
+    assert shown[0][0] == f"<b>{title}</b>\n\n{body}"
+
+
+def test_url_input_waits_for_an_explicit_open_count_and_dispatches_selected_count(monkeypatch):
+    class FakeState:
+        def __init__(self):
+            self.data = {
+                "command_target": "device-1",
+                "authorization_callback": "cmd:url",
+                "authorization_target": "device-1",
+            }
+            self.current = bot.Form.wait_url
+            self.cleared = False
+
+        async def get_data(self):
+            return dict(self.data)
+
+        async def update_data(self, **values):
+            self.data.update(values)
+
+        async def set_state(self, state):
+            self.current = state
+
+        async def get_state(self):
+            return self.current
+
+        async def clear(self):
+            self.cleared = True
+            self.current = None
+
+    state = FakeState()
+    shown = []
+    published = []
+    monkeypatch.setattr(bot, "_pending_device_input_still_allowed", lambda *_args: True)
+
+    async def replace_user(_message, text, reply_markup=None):
+        shown.append((text, reply_markup))
+
+    async def replace_callback(_cq, text, reply_markup=None):
+        shown.append((text, reply_markup))
+
+    monkeypatch.setattr(bot, "_replace_user_card", replace_user)
+    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: True)
+    monkeypatch.setattr(bot, "target_label", lambda target: target)
+    monkeypatch.setattr(bot, "publish", lambda action, **kwargs: published.append((action, kwargs)) or True)
+    monkeypatch.setattr(bot, "_replace_callback_message", replace_callback)
+
+    class Message:
+        text = "example.com/docs"
+        from_user = type("User", (), {"id": bot.ADMIN_ID})()
+
+    asyncio.run(bot.on_url_input(Message(), state))
+    assert not published
+    assert not state.cleared
+    assert state.current == bot.Form.wait_url_count
+    callbacks = _callback_data(shown[-1][1])
+    assert {"url:count:1", "url:count:2", "url:count:3", "url:count:5"} <= set(callbacks)
+
+    class Callback:
+        data = "url:count:3"
+        from_user = type("User", (), {"id": bot.ADMIN_ID})()
+
+        async def answer(self, *args, **kwargs):
+            pass
+
+    asyncio.run(bot.on_url_count_select(Callback(), state))
+    assert published == [("open_url", {"_target": "device-1", "url": "https://example.com/docs", "count": 3})]
+    assert state.cleared
+
+
+def test_url_count_keyboard_is_bounded_and_saving_is_owner_only():
+    owner_callbacks = set(_callback_data(bot.url_count_keyboard(is_owner=True)))
+    user_callbacks = set(_callback_data(bot.url_count_keyboard(is_owner=False)))
+    assert {"url:count:1", "url:count:2", "url:count:3", "url:count:5", "url:cancel"} <= owner_callbacks
+    assert "url:fav:save" in owner_callbacks
+    assert "url:fav:save" not in user_callbacks
+    assert "url:count:4" not in owner_callbacks
+
+
+def test_network_menu_shows_link_tools_to_owner():
+    callbacks = set(_callback_data(bot.network_menu()))
+    assert "cmd:url" in callbacks
+    assert "url:favorites" in callbacks
+
+
+def test_saved_url_opens_count_picker_on_selected_device(monkeypatch):
+    favorite = {"id": "0123456789ab", "name": "Docs", "url": "https://example.com/docs"}
+    monkeypatch.setattr(bot.bot_settings, "get", lambda key, default=None: [favorite] if key == "url_favorites" else default)
+    monkeypatch.setattr(bot, "devices", FakeDevices({"device-1": {"name": "Test", "os": "macOS"}}))
+    session = bot.SessionRegistry()
+    session["target"] = "device-1"
+    monkeypatch.setattr(bot, "SESSION", session)
+    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: True)
+    monkeypatch.setattr(bot, "target_label", lambda target: target)
+    shown = []
+
+    async def replace(_cq, text, reply_markup=None):
+        shown.append((text, reply_markup))
+
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+
+    class FakeState:
+        def __init__(self):
+            self.data = {}
+            self.current = None
+
+        async def set_state(self, value):
+            self.current = value
+
+        async def update_data(self, **values):
+            self.data.update(values)
+
+    class Callback:
+        from_user = type("User", (), {"id": bot.ADMIN_ID})()
+        data = "url:fav:open:0123456789ab"
+
+        async def answer(self, *args, **kwargs):
+            pass
+
+    state = FakeState()
+    asyncio.run(bot.on_url_favorite_open(Callback(), state))
+    assert state.current == bot.Form.wait_url_count
+    assert state.data["authorization_target"] == "device-1"
+    assert state.data["authorization_callback"] == "cmd:url"
+    assert state.data["url"] == favorite["url"]
+    assert {"url:count:1", "url:count:2", "url:count:3", "url:count:5"} <= set(_callback_data(shown[0][1]))
 
 
 def test_completed_xlex_screen_copy_has_six_distinct_voices():
