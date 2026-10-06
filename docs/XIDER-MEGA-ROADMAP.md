@@ -2394,9 +2394,10 @@ Go и Rust по упаковке, сопровождению, диагности
 - Кнопка «Установка · одна команда» уже есть в опубликованном интерфейсе v4.1.4;
   дубликат не создаётся. Она предлагает Windows `irm https://invinby.github.io/XIDER/win.ps1 | iex`
   либо macOS `curl -fsSL https://invinby.github.io/XIDER/mac | bash`.
-- Полный `py -3.12 tools/run_tests.py`: bot **238 passed**, Windows **63**,
-  macOS **139**, ops **26 passed / 1 skipped**, release tools **55**,
-  deployment/signature **24 passed / 10 skipped**; Windows staged install,
+- Полный `py -3.12 tools/run_tests.py`: **546 passed, 11 skipped** — bot
+  **238**, Windows **63**, macOS **139**, ops **26 passed / 1 skipped**,
+  release tools **56**, deployment/signature **24 passed / 10 skipped**;
+  Windows staged install,
   full bootstrap и rollback fixtures прошли.
 - Это проверка исходника и фикстур. Полная совместимость компонентов,
   опубликованный новый release и live-деплой этого исправления остаются
