@@ -161,6 +161,7 @@ from config import (
     PLATFORM,
     SHARED_KEY,
     VERSION,
+    write_runtime_health,
 )
 from crypto import sign_message, verify_message
 from xgencrypto import decrypt_payload, encrypt_payload
@@ -1042,6 +1043,10 @@ class XgentClient:
             client.subscribe(f"{MQTT_PREFIX}/{DEVICE_ID}/cmd", qos=0)
             client.subscribe(f"{MQTT_PREFIX}/all/cmd", qos=0)
             log.info("Подключено к %s:%s", MQTT_BROKER, MQTT_PORT)
+            try:
+                write_runtime_health("agent", True)
+            except Exception:
+                log.exception("Не удалось записать локальное подтверждение MQTT агента")
             # Подписки восстанавливаются при каждом переподключении.
             self._publish_status()
             if not getattr(sys, "frozen", False):
@@ -1056,6 +1061,10 @@ class XgentClient:
                     log.exception("Не удалось подтвердить здоровье обновлённого Windows-агента")
         else:
             log.warning("Не удалось подключиться к брокеру: %s", reason_code)
+            try:
+                write_runtime_health("agent", False)
+            except Exception:
+                log.exception("Не удалось обновить локальное состояние MQTT агента")
 
     def _on_connect_fail(self, client, userdata, reason_code=None):
         log.warning(
@@ -1064,6 +1073,10 @@ class XgentClient:
         )
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
+        try:
+            write_runtime_health("agent", False)
+        except Exception:
+            log.exception("Не удалось сбросить локальное состояние MQTT агента")
         if not self._running.is_set():
             log.info("Отключение по команде остановки")
             return
@@ -1277,13 +1290,18 @@ class XgentClient:
         data = None
         provider = ""
         errors = []
+        deadline = time.monotonic() + 7.0
         for name, url in (
             ("ipapi.co", "https://ipapi.co/json/"),
             ("ipinfo.io", "https://ipinfo.io/json"),
         ):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                errors.append("общий тайм-аут геолокации")
+                break
             try:
                 request = urllib.request.Request(url, headers={"User-Agent": "XIDER-Agent/3"})
-                with urllib.request.urlopen(request, timeout=6) as response:
+                with urllib.request.urlopen(request, timeout=min(4.0, remaining)) as response:
                     candidate = json.loads(response.read(16_385).decode("utf-8", "replace"))
                 if not isinstance(candidate, dict) or candidate.get("error") or not (candidate.get("ip") or candidate.get("city")):
                     raise ValueError("нет пригодного ответа")
@@ -1315,13 +1333,6 @@ class XgentClient:
             "ok": ok,
             "text": info,
         })
-        self._publish_response("output", {
-            "type": "geo_location",
-            "device_id": DEVICE_ID,
-            "ok": ok,
-            "text": info,
-        })
-
     def _do_webcam(self, payload: dict) -> None:
         """Сделать фото с веб-камеры и отправить base64 JPEG в MQTT."""
         import cv2

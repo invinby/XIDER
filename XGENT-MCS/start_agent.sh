@@ -34,16 +34,20 @@ if [[ "${1:-}" == "--status" || "${1:-}" == "-s" ]]; then
             echo "[OK] XIDER Agent работает через LaunchAgent"
             echo "[LOG] $(pwd)/$LOGFILE"
             exit 0
-        elif [ -n "$LAUNCH_STATE" ]; then
-            echo "[STOPPED] LaunchAgent загружен, но процесс агента не запущен"
-            echo "[LOG] $(pwd)/$LOGFILE"
-            exit 1
         fi
     fi
     if [[ -f "$PIDFILE" ]]; then
         PID="$(cat "$PIDFILE" 2>/dev/null || true)"
         if [[ -n "$PID" ]] && ps -p "$PID" >/dev/null 2>&1; then
             echo "[OK] XIDER Agent работает (PID: $PID)"
+            echo "[LOG] $(pwd)/$LOGFILE"
+            exit 0
+        fi
+    fi
+    if command -v pgrep >/dev/null 2>&1; then
+        PID="$(pgrep -f "$ENTRY" 2>/dev/null | head -n 1 || true)"
+        if [[ -n "$PID" ]] && ps -p "$PID" >/dev/null 2>&1; then
+            echo "[OK] XIDER Agent работает под Guardian/LaunchAgent (PID: $PID)"
             echo "[LOG] $(pwd)/$LOGFILE"
             exit 0
         fi

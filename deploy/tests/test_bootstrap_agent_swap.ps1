@@ -9,6 +9,7 @@ $global:XiderMockInstallerResult = 'fail'
 $global:XiderMockInstallerCalls = 0
 $global:XiderMockTasksRunning = $false
 $global:XiderMockAgentDir = $null
+$global:XiderMockHealthStatus = 'missing'
 $global:XiderMockOldTasks = $true
 $global:XiderMockOldRunning = @{ 'XIDER Agent' = $true; 'XIDER Guardian' = $true }
 $global:XiderMockRestored = @()
@@ -32,7 +33,14 @@ function Get-ScheduledTask {
     return $null
 }
 function Export-ScheduledTask { param($TaskName) return "<Task>$TaskName</Task>" }
-function Stop-ScheduledTask { param($TaskName) $global:XiderMockOldRunning[$TaskName] = $false }
+function Stop-ScheduledTask {
+    param($TaskName)
+    if ($global:XiderMockTasksRunning) {
+        $global:XiderMockTasksRunning = $false
+    } else {
+        $global:XiderMockOldRunning[$TaskName] = $false
+    }
+}
 function Register-ScheduledTask {
     param($TaskName, $Xml, [switch]$Force)
     $global:XiderMockRestored += $TaskName
@@ -48,6 +56,18 @@ function powershell.exe {
         $agentIndex = [Array]::IndexOf($args, '-AgentDir')
         $global:XiderMockAgentDir = $args[$agentIndex + 1]
         $global:XiderMockTasksRunning = $true
+        if ($global:XiderMockHealthStatus -ne 'missing') {
+            $healthDir = Join-Path $env:USERPROFILE '.xgent'
+            New-Item -ItemType Directory -Path $healthDir -Force | Out-Null
+            $stamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000
+            if ($global:XiderMockHealthStatus -eq 'stale') { $stamp -= 120 }
+            [IO.File]::WriteAllText((Join-Path $healthDir 'agent-health.json'), (@{
+                component = 'agent'; connected = $true; updated_at = $stamp; pid = 1111; version = 'fixture'
+            } | ConvertTo-Json -Compress), $utf8)
+            [IO.File]::WriteAllText((Join-Path $healthDir 'guardian-health.json'), (@{
+                component = 'guardian'; connected = $true; updated_at = $stamp; pid = 2222; version = 'fixture'
+            } | ConvertTo-Json -Compress), $utf8)
+        }
         $global:LASTEXITCODE = 0
     } else {
         $global:LASTEXITCODE = 17
@@ -70,10 +90,18 @@ function New-OldInstall($installRoot) {
     ), $utf8)
 }
 
+function Get-Process {
+    param([int]$Id, $ErrorAction)
+    if ($Id -in @(1111, 2222)) { return [pscustomobject]@{ Id = $Id } }
+    return $null
+}
+
 try {
+    $originalUserProfile = $env:USERPROFILE
+    $env:USERPROFILE = Join-Path $fixture 'profile'
     New-Item -ItemType Directory -Path $agentSource -Force | Out-Null
-    foreach ($name in @('xgent_wds.py','xider_guardian_wds.py','install_agent.ps1','install_guardian.ps1','requirements.txt')) {
-        $body = if ($name -eq 'requirements.txt') { '' } else { 'fixture' }
+    foreach ($name in @('config.py','xgent_wds.py','xider_guardian_wds.py','install_agent.ps1','install_guardian.ps1','requirements.txt')) {
+        $body = if ($name -eq 'requirements.txt') { '' } elseif ($name -eq 'config.py') { 'VERSION = "fixture"' } else { 'fixture' }
         [IO.File]::WriteAllText((Join-Path $agentSource $name), $body, $utf8)
     }
     [IO.File]::WriteAllText((Join-Path $agentSource 'new-marker.txt'), 'new-version', $utf8)
@@ -83,7 +111,7 @@ try {
     New-OldInstall $rollbackRoot
     $failedAsExpected = $false
     $failureMessage = ''
-    try { & $bootstrap -InstallRoot $rollbackRoot -SourceArchive $archive }
+    try { & $bootstrap -InstallRoot $rollbackRoot -SourceArchive $archive -HealthTimeoutSeconds 1 }
     catch {
         $failureMessage = $_.Exception.Message
         $failedAsExpected = -not [string]::IsNullOrWhiteSpace($failureMessage)
@@ -109,11 +137,27 @@ try {
         throw 'Previous Scheduled Tasks or their running state were not restored.'
     }
 
+    foreach ($healthStatus in @('missing', 'stale')) {
+        $healthRoot = Join-Path $fixture "${healthStatus}-health-install"
+        New-OldInstall $healthRoot
+        $global:XiderMockInstallerResult = 'success'
+        $global:XiderMockHealthStatus = $healthStatus
+        $global:XiderMockOldTasks = $false
+        $rejectedAsUnhealthy = $false
+        try { & $bootstrap -InstallRoot $healthRoot -SourceArchive $archive -HealthTimeoutSeconds 1 }
+        catch { $rejectedAsUnhealthy = $_.Exception.Message -match 'MQTT|соединен|connection|health|здоров' }
+        if (-not $rejectedAsUnhealthy -or
+            -not (Test-Path -LiteralPath (Join-Path $healthRoot 'git-ver\XGENT-WDS\old-marker.txt'))) {
+            throw "Bootstrap accepted $healthStatus MQTT health or failed to restore the previous checkout."
+        }
+    }
+
     $successRoot = Join-Path $fixture 'success-install'
     New-OldInstall $successRoot
     $global:XiderMockInstallerResult = 'success'
+    $global:XiderMockHealthStatus = 'connected'
     $global:XiderMockOldTasks = $false
-    & $bootstrap -InstallRoot $successRoot -SourceArchive $archive
+    & $bootstrap -InstallRoot $successRoot -SourceArchive $archive -HealthTimeoutSeconds 3
     if (-not (Test-Path -LiteralPath (Join-Path $successRoot 'git-ver\XGENT-WDS\new-marker.txt'))) {
         throw 'The new checkout was not activated.'
     }
@@ -124,10 +168,11 @@ try {
     Write-Host 'Windows staged install and rollback fixture passed.'
 }
 finally {
+    if ($originalUserProfile) { $env:USERPROFILE = $originalUserProfile }
     if ((Test-Path -LiteralPath $fixture) -and
         $fixture.StartsWith([IO.Path]::GetFullPath($env:TEMP), [StringComparison]::OrdinalIgnoreCase) -and
         (Split-Path $fixture -Leaf) -like 'xider-bootstrap-swap-*') {
         Remove-Item -LiteralPath $fixture -Recurse -Force
     }
-    Remove-Variable XiderMockInstallerResult,XiderMockInstallerCalls,XiderMockTasksRunning,XiderMockAgentDir,XiderMockOldTasks,XiderMockOldRunning,XiderMockRestored,XiderMockRestarted -Scope Global -ErrorAction SilentlyContinue
+    Remove-Variable XiderMockInstallerResult,XiderMockInstallerCalls,XiderMockTasksRunning,XiderMockAgentDir,XiderMockHealthStatus,XiderMockOldTasks,XiderMockOldRunning,XiderMockRestored,XiderMockRestarted -Scope Global -ErrorAction SilentlyContinue
 }

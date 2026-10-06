@@ -36,6 +36,43 @@ def _ack_command_subscriptions(client):
     return mqtt_client
 
 
+def test_geo_location_has_one_bounded_response(monkeypatch):
+    import io
+    import urllib.request
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            self.close()
+
+    clock = [100.0]
+    timeouts = []
+    published = []
+
+    def fake_monotonic():
+        return clock[0]
+
+    def fake_urlopen(request, timeout):
+        timeouts.append(timeout)
+        clock[0] += timeout
+        raise TimeoutError("fixture timeout")
+
+    client = _make_client()
+    client._publish_response = lambda topic, payload: published.append((topic, payload))
+    monkeypatch.setattr(mcs.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    client._do_geo_location({"id": "geo-123"})
+
+    assert timeouts == [4.0, 3.0]
+    assert len(published) == 1
+    assert published[0][0] == "geo_location"
+    assert published[0][1]["type"] == "geo_location"
+    assert published[0][1]["ok"] is False
+
+
 def test_agent_update_passes_release_tag_to_verifier_and_fails_closed(monkeypatch, tmp_path):
     client = _make_client()
     sent = []

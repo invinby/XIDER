@@ -35,6 +35,7 @@ from config import (
     set_guardian_desired_running,
     set_guardian_startup_enabled,
     update_guardian_state,
+    write_runtime_health,
 )
 from crypto import sign_message, verify_message
 from xgencrypto import decrypt_payload, encrypt_payload
@@ -148,13 +149,25 @@ class Guardian:
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
         if reason_code != 0:
             log.warning("Guardian MQTT connection failed: %s", reason_code)
+            try:
+                write_runtime_health("guardian", False)
+            except Exception:
+                log.exception("Could not update local Guardian MQTT health")
             return
         client.subscribe(f"{MQTT_PREFIX}/{DEVICE_ID}/cmd", qos=1)
         client.subscribe(f"{MQTT_PREFIX}/all/cmd", qos=1)
         self._publish(self.status_payload())
+        try:
+            write_runtime_health("guardian", True)
+        except Exception:
+            log.exception("Could not write local Guardian MQTT health")
         log.info("Windows Guardian connected to %s:%s", MQTT_BROKER, MQTT_PORT)
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
+        try:
+            write_runtime_health("guardian", False)
+        except Exception:
+            log.exception("Could not reset local Guardian MQTT health")
         log.warning("Windows Guardian MQTT disconnected: %s", reason_code)
 
     def _on_message(self, client, userdata, message):

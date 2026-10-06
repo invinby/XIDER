@@ -174,7 +174,7 @@ def set_guardian_startup_enabled(enabled: bool) -> None:
     update_guardian_state(**updates)
 
 # Версия клиента и строка платформы для статусов.
-VERSION = "4.1.6"
+VERSION = "4.1.7"
 PLATFORM = f"Windows {platform.win32_ver()[0]}"
 
 
@@ -201,3 +201,42 @@ def _load_or_create() -> dict:
 DEVICE = _load_or_create()
 DEVICE_ID = DEVICE["device_id"]
 DEVICE_NAME = DEVICE["name"]
+
+
+def write_runtime_health(component: str, connected: bool) -> Path:
+    """Atomically publish a small local MQTT-connectivity marker for installers."""
+    filenames = {
+        "agent": "agent-health.json",
+        "guardian": "guardian-health.json",
+    }
+    if component not in filenames:
+        raise ValueError("Unknown XIDER runtime health component.")
+    if not isinstance(connected, bool):
+        raise TypeError("Runtime health connectivity must be a bool.")
+
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    destination = CONFIG_DIR / filenames[component]
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f"{component}-health.", suffix=".tmp", dir=CONFIG_DIR,
+    )
+    try:
+        if hasattr(os, "fchmod"):
+            os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump({
+                "component": component,
+                "connected": connected,
+                "device_id": DEVICE_ID,
+                "pid": os.getpid(),
+                "version": VERSION,
+                "updated_at": time.time(),
+            }, stream, separators=(",", ":"))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_name, destination)
+    finally:
+        try:
+            os.unlink(temporary_name)
+        except FileNotFoundError:
+            pass
+    return destination

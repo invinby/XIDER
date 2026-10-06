@@ -23,6 +23,35 @@ from release_signature import release_key_id, sign_manifest
 #  Чистые функции форматирования
 # ---------------------------------------------------------------------------
 
+def test_runtime_health_marker_is_atomic_and_contains_no_credentials(monkeypatch, tmp_path):
+    import config
+
+    monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
+
+    path = config.write_runtime_health("agent", True)
+    marker = json.loads(path.read_text(encoding="utf-8"))
+
+    assert path == tmp_path / "agent-health.json"
+    assert marker["component"] == "agent"
+    assert marker["connected"] is True
+    assert marker["pid"] == os.getpid()
+    assert marker["device_id"] == config.DEVICE_ID
+    assert marker["version"] == config.VERSION
+    assert marker["updated_at"] > 0
+    assert not list(tmp_path.glob("*.tmp"))
+    assert not {"SHARED_KEY", "MQTT_USERNAME", "MQTT_PASSWORD"}.intersection(marker)
+
+
+def test_agent_mqtt_callbacks_write_connected_and_disconnected_health(client, monkeypatch):
+    written = []
+    monkeypatch.setattr(wds, "write_runtime_health", lambda component, connected: written.append((component, connected)))
+    monkeypatch.setattr(wds.sys, "frozen", True, raising=False)
+
+    client._on_connect(client._client, None, None, 0)
+    client._on_disconnect(client._client, None, None, 7)
+
+    assert written == [("agent", True), ("agent", False)]
+
 def test_humanize_seconds():
     assert wds._humanize_seconds(0) == "0мин"
     assert wds._humanize_seconds(60) == "1мин"
@@ -606,6 +635,32 @@ def test_geoip_uses_https_fallback_and_reports_approximation(client, monkeypatch
     assert results and results[-1]["ok"] is True
     assert "не GPS" in results[-1]["text"]
     assert calls == ["https://ipapi.co/json/", "https://ipinfo.io/json"]
+    assert len([payload for topic, payload in _publish_calls(client) if topic.endswith("/output") and payload.get("type") == "geo_location"]) == 0
+
+
+def test_geoip_lookup_obeys_total_deadline_and_publishes_once(client, monkeypatch):
+    import urllib.request
+
+    clock = [100.0]
+    timeouts = []
+    publications = []
+
+    def fake_urlopen(request, timeout):
+        timeouts.append(timeout)
+        clock[0] += timeout
+        raise TimeoutError("fixture timeout")
+
+    monkeypatch.setattr(wds.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(client, "_publish_response", lambda topic, payload: publications.append((topic, payload)))
+
+    client._do_geo_location({"id": "geo-456"})
+
+    assert timeouts == [4.0, 3.0]
+    assert len(publications) == 1
+    assert publications[0][0] == "geo_location"
+    assert publications[0][1]["type"] == "geo_location"
+    assert publications[0][1]["ok"] is False
 
 
 def test_config_fails_closed_without_key(tmp_path):

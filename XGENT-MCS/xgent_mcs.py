@@ -1337,10 +1337,15 @@ class XgentClient:
         data = None
         provider = None
         errors = []
+        deadline = time.monotonic() + 7.0
         for name, url in providers:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                errors.append("общий тайм-аут геолокации")
+                break
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "XIDER-Agent/3"})
-                with urllib.request.urlopen(req, timeout=6) as response:
+                with urllib.request.urlopen(req, timeout=min(4.0, remaining)) as response:
                     candidate = json.loads(response.read(16_385).decode("utf-8", "replace"))
                 if not isinstance(candidate, dict):
                     raise RuntimeError("provider returned invalid data")
@@ -1373,9 +1378,6 @@ class XgentClient:
             "device_id": DEVICE_ID,
             "ok": ok,
             "text": info,
-        })
-        self._publish_response("output", {
-            "type": "geo_location", "device_id": DEVICE_ID, "ok": ok, "text": info,
         })
 
     def _do_wallpaper_set(self, payload: dict) -> None:

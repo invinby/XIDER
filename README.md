@@ -1,8 +1,8 @@
-# XIDER · TARPED 4.1.6 — управление устройствами через Telegram
+# XIDER · TARPED 4.1.7 — управление устройствами через Telegram
 
-> Source version: 4.1.6. Published installable versions are listed in
+> Source version: 4.1.7. Published installable versions are listed in
 > [GitHub Releases](https://github.com/invinby/XIDER/releases); a source version
-> is not proof of a successful device installation. / Версия исходников: 4.1.6.
+> is not proof of a successful device installation. / Версия исходников: 4.1.7.
 > Опубликованные пакеты — в Releases. План, ограничения и незавершённая приёмка:
 > [TARPED](docs/TARPED.md), [подготовка Mac](docs/MAC-REMOTE-UPDATES.md).
 
@@ -60,6 +60,10 @@ signed source archives. Version 4.1.5 fixed long-note pagination in X-LEDGER
 and moved note preparation off the bot event loop. Version 4.1.6 serializes
 long-running device actions per Telegram card so two different buttons cannot
 race to overwrite one operation's progress and result.
+Version 4.1.7 waits for fresh MQTT confirmations from both Windows Agent and
+Guardian before accepting an install; otherwise the staged update rolls back.
+It also fixes a macOS status false-negative and bounds geolocation lookup to one
+response on both platforms.
 Deliberate stop/uninstall remains effective; Guard Keeper does
 not bypass local OS controls or access camera, microphone, screen, or location
 without the required OS permission.

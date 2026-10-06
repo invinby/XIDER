@@ -1,9 +1,13 @@
 $ErrorActionPreference = 'Stop'
 $installer = (Resolve-Path (Join-Path $PSScriptRoot '..\..\XGENT-WDS\install_agent.ps1')).Path
+$guardianInstaller = (Resolve-Path (Join-Path $PSScriptRoot '..\..\XGENT-WDS\install_guardian.ps1')).Path
 $fixture = Join-Path $env:TEMP ('xider-install-agent-test-' + [guid]::NewGuid().ToString('N'))
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 
-function icacls { $global:XiderAclCallCount++; $global:LASTEXITCODE = 0 }
+function icacls {
+    $global:XiderAclCallCount++
+    $global:LASTEXITCODE = if ($global:XiderAclCallCount -eq $global:XiderAclFailCall) { 1 } else { 0 }
+}
 function New-ScheduledTaskAction {
     param($Execute, $Argument, $WorkingDirectory)
     return [pscustomobject]@{ Execute = $Execute; Argument = $Argument; WorkingDirectory = $WorkingDirectory }
@@ -124,6 +128,33 @@ try {
         throw 'Repeat installation did not register and start both tasks.'
     }
 
+    foreach ($installerCase in @(
+        @{ Name = 'agent ACL'; Script = $installer; Task = 'XIDER ACL Agent Fixture'; FailCalls = @(1, 2) },
+        @{ Name = 'Guardian ACL'; Script = $guardianInstaller; Task = 'XIDER ACL Guardian Fixture'; FailCalls = @(1, 2) }
+    )) {
+        foreach ($failCall in $installerCase.FailCalls) {
+            $global:XiderAclCallCount = 0
+            $global:XiderAclFailCall = $failCall
+            $registerBeforeAclFailure = $global:XiderRegisterCount
+            $startBeforeAclFailure = $global:XiderStartCount
+            $aclFailureRejected = $false
+            try {
+                if ($installerCase.Name -eq 'agent ACL') {
+                    & $installerCase.Script -AgentDir $fixture -TaskName $installerCase.Task -PreferPython
+                } else {
+                    & $installerCase.Script -AgentDir $fixture -TaskName $installerCase.Task
+                }
+            } catch {
+                $aclFailureRejected = $_.Exception.Message -match 'icacls|ACL'
+            }
+            if (-not $aclFailureRejected -or $global:XiderRegisterCount -ne $registerBeforeAclFailure -or
+                $global:XiderStartCount -ne $startBeforeAclFailure) {
+                throw "$($installerCase.Name) failure at icacls call $failCall did not stop before task registration/start."
+            }
+        }
+    }
+    $global:XiderAclFailCall = 0
+
     $registerBeforeSecurityCheck = $global:XiderRegisterCount
     foreach ($case in @(
         @{ Name = 'MQTT_TLS'; Lines = @($secureEnv | Where-Object { $_ -notmatch '^MQTT_TLS=' }) + 'MQTT_TLS=false' },
@@ -155,4 +186,7 @@ finally {
     }
     Remove-Item Function:\icacls,Function:\New-ScheduledTaskAction,Function:\New-ScheduledTaskTrigger,Function:\New-ScheduledTaskSettingsSet,Function:\New-ScheduledTaskPrincipal,Function:\Register-ScheduledTask,Function:\Start-ScheduledTask,Function:\Get-ScheduledTask,Function:\Stop-ScheduledTask,Function:\Unregister-ScheduledTask,Function:\Get-ItemProperty,Function:\Remove-ItemProperty -ErrorAction SilentlyContinue
     Remove-Variable XiderTestActions,XiderAclCallCount,XiderRegisterCount,XiderStartCount,XiderLegacyTaskStopped,XiderLegacyTaskRemoved,XiderRemovedLegacyValues -Scope Global -ErrorAction SilentlyContinue
+    # The fixture intentionally mocks failed native icacls calls; do not leak
+    # their LASTEXITCODE into GitHub's `pwsh -command` test runner.
+    $global:LASTEXITCODE = 0
 }
