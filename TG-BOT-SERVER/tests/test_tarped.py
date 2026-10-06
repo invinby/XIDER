@@ -170,6 +170,16 @@ def test_release_catalog_requires_a_real_component_asset():
     assert not ledger.is_older("4.0.0", releases[0])
 
 
+def test_release_catalog_preserves_complete_release_notes():
+    notes = "X" * 7000 + "END-OF-NOTES"
+
+    [release] = ledger.parse_releases([
+        {"tag_name": "v4.2.0", "name": "Long notes", "body": notes, "assets": []},
+    ])
+
+    assert release.notes == notes
+
+
 def test_release_source_update_requires_platform_bundle_archive_and_manifest():
     release = ledger.Release(
         tag="v4.1.0", version=(4, 1, 0), name="release", published_at="", notes="",
@@ -328,6 +338,74 @@ def test_version_screens_follow_six_voices_and_keep_release_callbacks(monkeypatc
 
     assert len(rendered_lists) > 1
     assert len(rendered_details) > 1
+
+
+def test_release_detail_can_navigate_past_page_twenty(monkeypatch):
+    notes = "release-note-line\n" * 5000
+    release = ledger.Release(
+        tag="v4.2.1",
+        version=(4, 2, 1),
+        name="Long release",
+        published_at="2026-10-06T12:00:00Z",
+        notes=notes,
+        asset_names=frozenset({"XGENT-WDS-Windows.zip"}),
+    )
+
+    class FakeDevices:
+        def get(self, device_id):
+            return {"os": "Windows", "version": "4.1.4"}
+
+    class Callback:
+        from_user = SimpleNamespace(id=123)
+
+        def __init__(self, data):
+            self.data = data
+
+        async def answer(self, *args, **kwargs):
+            pass
+
+    session = bot.SessionRegistry()
+    session["target"] = "device1"
+    monkeypatch.setattr(bot, "SESSION", session)
+    monkeypatch.setattr(bot, "devices", FakeDevices())
+    monkeypatch.setattr(bot.release_catalog.catalog, "list", lambda: [release])
+    monkeypatch.setattr(
+        bot.bot_settings,
+        "get",
+        lambda key, default=None: "xtech" if key == "ui_style" else default,
+    )
+    shown = {}
+
+    async def replace_card(_cq, text, reply_markup=None):
+        shown["text"] = text
+        shown["markup"] = reply_markup
+
+    monkeypatch.setattr(bot, "_replace_callback_message", replace_card)
+
+    async def render_all_pages():
+        rendered = []
+        for page in range(100):
+            await bot.on_versions_detail(
+                Callback(f"versions:detail:agent:v4.2.1:{page}")
+            )
+            rendered.append(
+                shown["text"].split("<pre>", 1)[1].split("</pre>", 1)[0]
+            )
+            callbacks = {
+                button.callback_data
+                for row in shown["markup"].inline_keyboard
+                for button in row
+            }
+            next_page = f"versions:detail:agent:v4.2.1:{page + 1}"
+            if next_page not in callbacks:
+                break
+        return rendered
+
+    rendered = asyncio.run(render_all_pages())
+
+    expected_chunks = bot._split_html_escaped_text(notes.strip())
+    assert len(expected_chunks) > 21
+    assert rendered == expected_chunks
 
 
 def test_book_chapters_fit_telegram_and_device_menu_links_to_versions(monkeypatch):
