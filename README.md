@@ -55,8 +55,9 @@ The same two copy-ready commands are available in the owner's device list in the
 worker status and can start, stop, restart, or recover the agent from the
 owner-only Telegram panel. Version 4.1.0 added signed macOS file recovery,
 serialized source updates, and a lock-safe restart; 4.1.1 adds a copy-ready
-one-command Windows/macOS installer picker in Telegram. Version 4.1.5 fixes
-server updates for the signed source archive layout used by GitHub Releases.
+one-command Windows/macOS installer picker in Telegram. The VPS updater verifies
+signed source archives. Version 4.1.5 fixes long-note pagination in X-LEDGER and
+moves note preparation off the bot event loop.
 Deliberate stop/uninstall remains effective; Guard Keeper does
 not bypass local OS controls or access camera, microphone, screen, or location
 without the required OS permission.
