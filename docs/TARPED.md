@@ -84,7 +84,10 @@ edited per-voice copy remain compatible without being deleted.
 - [ ] macOS LaunchAgent, Windows task, and Guard Keeper start/stop/status tested
       on real devices; no duplicate online/offline notifications.
 - [ ] Six voices cover every visible button and response, validated by tests.
-- [ ] X-MAP records OS support, permissions, and stability for every command.
+- [x] X-MAP records source support, permission profiles, and verification state
+      for every worker and Guardian command; physical-device reliability remains
+      unverified wherever the matrix says so. See [X-MAP](X-MAP.md) and the
+      [generated command matrix](x-map-command-matrix.json).
 - [ ] Geolocation returns truthful approximate IP location or a clear error on
       both platforms; it is never represented as precise GPS.
 - [ ] X-LEDGER shows all published releases, exact applicable assets, full

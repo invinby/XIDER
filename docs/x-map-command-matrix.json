@@ -1,0 +1,4540 @@
+{
+  "source_only": true,
+  "worker_command_count": 119,
+  "guardian_command_count": 5,
+  "permission_profile_gaps": [],
+  "permission_profiles": {
+    "agent_account": {
+      "label": "Контекст учётной записи агента",
+      "windows": "Работа от имени пользователя агента; действуют обычные ACL/UAC. Повышение привилегий не выполняется.",
+      "macos": "Работа от имени пользователя агента; действуют обычные ACL и ограничения текущего сеанса. Повышение привилегий не выполняется."
+    },
+    "interactive_session": {
+      "label": "Активный пользовательский сеанс",
+      "windows": "Для видимого UI/ввода нужен интерактивный сеанс пользователя; закрытый экран или иной desktop могут ограничить действие.",
+      "macos": "Для видимого UI/ввода нужен активный графический сеанс пользователя."
+    },
+    "screen_capture": {
+      "label": "Захват экрана",
+      "windows": "Нужен доступ к активному desktop; политика и состояние сеанса могут запретить захват.",
+      "macos": "Локально выданное разрешение Screen Recording; само наличие handler не подтверждает разрешение."
+    },
+    "camera": {
+      "label": "Камера",
+      "windows": "Нужен доступ desktop-приложений к камере в настройках Privacy; устройство может быть занято.",
+      "macos": "Локально выданное разрешение Camera; само наличие handler не подтверждает разрешение."
+    },
+    "microphone": {
+      "label": "Микрофон",
+      "windows": "Нужен доступ desktop-приложений к микрофону в настройках Privacy; устройство может быть занято.",
+      "macos": "Локально выданное разрешение Microphone; само наличие handler не подтверждает разрешение."
+    },
+    "approximate_location": {
+      "label": "Приблизительная IP-геолокация",
+      "windows": "Нужен исходящий доступ к провайдеру IP-геолокации; GPS/точная координата из этого профиля не следует.",
+      "macos": "Нужен исходящий доступ к провайдеру IP-геолокации; GPS/точная координата из этого профиля не следует."
+    },
+    "clipboard": {
+      "label": "Буфер обмена",
+      "windows": "Доступ к буферу текущей учётной записи и интерактивного сеанса; политики Windows могут ограничивать доступ.",
+      "macos": "Доступ к pasteboard текущего пользователя; системное поведение/подтверждение зависит от версии macOS и требует проверки на устройстве."
+    },
+    "filesystem_read": {
+      "label": "Чтение файлов",
+      "windows": "Обычные файловые ACL; защищённые каталоги и чужие профили могут быть недоступны.",
+      "macos": "Обычные файловые ACL; защищённые каталоги могут требовать локально выданного Full Disk Access."
+    },
+    "filesystem_write": {
+      "label": "Запись файлов",
+      "windows": "Запись только там, где её разрешают ACL текущей учётной записи; повышение прав не выполняется.",
+      "macos": "Запись только там, где её разрешают ACL текущей учётной записи; защищённые каталоги могут требовать локального разрешения."
+    },
+    "filesystem_delete": {
+      "label": "Удаление файлов",
+      "windows": "Удаление подчиняется файловым ACL; защищённые файлы не обходятся.",
+      "macos": "Удаление подчиняется файловым ACL; защищённые файлы не обходятся."
+    },
+    "process_read": {
+      "label": "Сведения о процессах",
+      "windows": "Видимость процессов зависит от учётной записи; защищённые процессы могут скрывать детали.",
+      "macos": "Видимость процессов зависит от учётной записи; защищённые процессы могут скрывать детали."
+    },
+    "process_control": {
+      "label": "Управление процессами",
+      "windows": "Остановка подчиняется правам процесса и учётной записи; защищённые/чужие процессы могут отказать.",
+      "macos": "Остановка подчиняется правам процесса и учётной записи; защищённые/чужие процессы могут отказать."
+    },
+    "network_outbound": {
+      "label": "Исходящая сеть",
+      "windows": "Нужен доступ сети/брандмауэра к внешнему адресу или сервису.",
+      "macos": "Нужен доступ сети к внешнему адресу или сервису."
+    },
+    "accessibility_input": {
+      "label": "Системный ввод и Accessibility",
+      "windows": "Нужен доступ к активному desktop; UIPI, блокировка сеанса и политики ввода могут ограничить действие.",
+      "macos": "Синтетический ввод/управление указателем требует локального разрешения Accessibility; выдача не проверяется статически."
+    },
+    "app_automation": {
+      "label": "Управление приложениями/Apple Events",
+      "windows": "Действие работает только в пользовательском desktop-сеансе и может быть ограничено UIPI/политиками ОС.",
+      "macos": "Управление другим приложением через Apple Events может требовать локального разрешения Automation; выдача не проверяется статически."
+    },
+    "audio_output": {
+      "label": "Аудиовывод",
+      "windows": "Нужен доступный аудиовыход активного пользовательского сеанса.",
+      "macos": "Нужен доступный аудиовыход активного пользовательского сеанса."
+    },
+    "system_control": {
+      "label": "Системное действие",
+      "windows": "Действуют привилегии Windows и политика устройства; привилегии не повышаются автоматически.",
+      "macos": "Действуют привилегии macOS и политика устройства; привилегии не повышаются автоматически."
+    },
+    "agent_lifecycle": {
+      "label": "Жизненный цикл агента",
+      "windows": "Действие меняет состояние собственного агента; запуск/остановка Guardian и Task Scheduler подчиняются сохранённому намерению владельца.",
+      "macos": "Действие меняет состояние собственного агента; LaunchAgent и Guardian подчиняются сохранённому намерению владельца."
+    },
+    "sensitive_data": {
+      "label": "Чувствительные данные пользователя/устройства",
+      "windows": "Вывод может содержать приватные сведения; действуют ACL и права Telegram/X-CORE, обход ограничений ОС не выполняется.",
+      "macos": "Вывод может содержать приватные сведения; действуют ACL и права Telegram/X-CORE, обход ограничений ОС не выполняется."
+    },
+    "command_execution": {
+      "label": "Выполнение команды владельца",
+      "windows": "Команда исполняется с правами процесса агента; UAC не обходится, произвольное повышение прав не выполняется.",
+      "macos": "Команда исполняется с правами процесса агента; системные ограничения и права macOS не обходятся."
+    },
+    "startup_management": {
+      "label": "Автозапуск агента",
+      "windows": "Изменение собственной задачи Task Scheduler подчиняется правам её владельца; глобальные задачи не обходятся.",
+      "macos": "Изменение собственного LaunchAgent подчиняется правам пользователя; системные LaunchDaemon не создаются."
+    },
+    "guardian_service": {
+      "label": "Управление Guardian",
+      "windows": "Управление собственной зарегистрированной задачей Guardian; установка/права ОС должны быть разрешены владельцем устройства.",
+      "macos": "Управление собственным пользовательским LaunchAgent Guardian; установка/права ОС должны быть разрешены владельцем устройства."
+    }
+  },
+  "worker_commands": [
+    {
+      "command": "agent_update",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "agent_lifecycle",
+            "filesystem_write"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "agent_lifecycle",
+            "filesystem_write"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "autorun_disable",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "startup_management"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "startup_management"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "autorun_enable",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "startup_management"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "startup_management"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "autorun_status",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "startup_management"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "startup_management"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "battery",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "capabilities",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "clipboard",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "clipboard",
+            "interactive_session",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "clipboard",
+            "interactive_session",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "clipboard_set",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "clipboard",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "clipboard",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "dir_list",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_read"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_read"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "disks",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_read"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_read"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "display_brightness",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "dependency_gated",
+            "evidence": "Handler requires the external `brightness` executable; missing dependency returns failure."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "dependency_gated_unverified",
+            "evidence": "Handler requires the external `brightness` executable; missing dependency returns failure."
+          }
+        }
+      }
+    },
+    {
+      "command": "display_night_light",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "explicitly_unsupported",
+            "evidence": "Handler always returns that macOS has no stable public CLI for Night Light."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "known_source_limited",
+            "evidence": "Handler always returns that macOS has no stable public CLI for Night Light."
+          }
+        }
+      }
+    },
+    {
+      "command": "display_rotate",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "dependency_gated",
+            "evidence": "Handler requires the external `displayplacer` executable; missing dependency returns failure."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "dependency_gated_unverified",
+            "evidence": "Handler requires the external `displayplacer` executable; missing dependency returns failure."
+          }
+        }
+      }
+    },
+    {
+      "command": "download_url",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_write",
+            "network_outbound"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_write",
+            "network_outbound"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "env_get",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_read",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_read",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "ext_ip",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "network_outbound"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "network_outbound"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "file_del",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_delete"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_delete"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "file_get",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_read",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_read",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "file_put",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_write"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_write"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "find_file",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_read"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_read"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "geo_location",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "approximate_location",
+            "network_outbound",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "approximate_location",
+            "network_outbound",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "reported_issue_not_retested",
+            "evidence": "Mac geolocation was previously reported failing; not retested on this release."
+          }
+        }
+      }
+    },
+    {
+      "command": "hotkey",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "accessibility_input",
+            "agent_account",
+            "app_automation",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "accessibility_input",
+            "agent_account",
+            "app_automation",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "kill_process",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "process_control"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "process_control"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "lock",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "mic",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session",
+            "microphone",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session",
+            "microphone",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "msgbox_spam",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "net_bluetooth_list",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "net_ping",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "network_outbound"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "network_outbound"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "net_wifi_passwords",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "netstat",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "network",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "notify",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "open_app",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "open_url",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session",
+            "network_outbound"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session",
+            "network_outbound"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "path_open",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_read"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_read"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "power",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "system_control"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "system_control"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_alert_loop",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "app_automation",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "app_automation",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_beep_morse",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_black_screen",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_bsod",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_caps_disco",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_cat_invaders",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_change_wallpaper",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "app_automation",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "app_automation",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_confetti_winner",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_crazy_cursor",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "accessibility_input",
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "dependency_and_permission_gated",
+            "evidence": "Handler requires PyObjC Quartz and Accessibility; otherwise it returns a clear failure."
+          },
+          "permission_profile_ids": [
+            "accessibility_input",
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "dependency_gated_unverified",
+            "evidence": "Handler requires PyObjC Quartz and Accessibility; otherwise it returns a clear failure."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_cursor_circle",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "explicitly_unavailable",
+            "evidence": "Handler always returns that the feature is unavailable in the current macOS build."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "known_source_limited",
+            "evidence": "Handler always returns that the feature is unavailable in the current macOS build."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_dancing_windows",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "app_automation",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "app_automation",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_earthquake",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_fake_delete_sys32",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_fake_error_spam",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_fake_ransom_cats",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_fake_update",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_fake_virus",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_fbi_lock",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_ghost_typer",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_glitch_cursor",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "explicitly_disabled",
+            "evidence": "Handler always returns that cursor drawing is disabled without Quartz/Accessibility."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "known_source_limited",
+            "evidence": "Handler always returns that cursor drawing is disabled without Quartz/Accessibility."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_hacker_typer",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_hide_desktop",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_invert_screen",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "fallback_only",
+            "evidence": "Handler shows a joke dialog and explicitly reports that real display inversion was not applied."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "known_source_limited",
+            "evidence": "Handler shows a joke dialog and explicitly reports that real display inversion was not applied."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_keyboard_disco",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_laugh_track",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_low_battery_fake",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_matrix",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "app_automation",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "app_automation",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_meme_wallpaper",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_minimize_all",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "app_automation",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "app_automation",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_nyan_stream",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_open_browser_memes",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session",
+            "network_outbound"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session",
+            "network_outbound"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_open_calc_spam",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_open_cd",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_open_notepad_type",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "app_automation",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "app_automation",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_paste_clipboard_spam",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "clipboard",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "clipboard",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_random_beeps",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_random_clicks",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "explicitly_unimplemented",
+            "evidence": "Handler always returns that random clicks are not implemented safely."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "known_source_limited",
+            "evidence": "Handler always returns that random clicks are not implemented safely."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_random_site",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session",
+            "network_outbound"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session",
+            "network_outbound"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_restore_wallpaper",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "app_automation",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "app_automation",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_rickroll",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session",
+            "network_outbound"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session",
+            "network_outbound"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_rickroll_terminal",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "app_automation",
+            "interactive_session",
+            "network_outbound"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "app_automation",
+            "interactive_session",
+            "network_outbound"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_say_whisper",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_screamer",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_screen_off_brief",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_shake_window",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "app_automation",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "app_automation",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_shout_tts",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_siren",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_slow_mouse",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_sound_fart",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_sound_spooky",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_speak_time",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_stop_all",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_swap_mouse",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "explicitly_disabled",
+            "evidence": "Handler always returns that remote mouse-button swapping is disabled."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "known_source_limited",
+            "evidence": "Handler always returns that remote mouse-button swapping is disabled."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_toast_spam",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_type_reversed",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "prank_volume_jump",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "proc_kill_name",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "process_control"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "process_control"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "processes",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "process_read",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "process_read",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "screen_off",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "screensaver_on",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "screenshot",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session",
+            "screen_capture",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "interactive_session",
+            "screen_capture",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "reported_issue_not_retested",
+            "evidence": "Mac screenshot was previously reported failing; not retested on this release."
+          }
+        }
+      }
+    },
+    {
+      "command": "services",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "shell",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "command_execution",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "command_execution",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "sound",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "standby_sleep",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "system_control"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "system_control"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "startup_list",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_read"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_read"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "status_request",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "stop",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "agent_lifecycle"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "agent_lifecycle"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "storage_smart",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_read"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_read"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "sys_clean_temp",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_delete"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_delete"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "sys_history_cmd",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_read",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_read",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "sys_installed_apps",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_read"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "filesystem_read"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "sys_uptime",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "sysinfo",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "type_text",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "accessibility_input",
+            "agent_account",
+            "app_automation",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "accessibility_input",
+            "agent_account",
+            "app_automation",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "uninstall_agent",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "agent_lifecycle",
+            "filesystem_delete",
+            "startup_management"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "agent_lifecycle",
+            "filesystem_delete",
+            "startup_management"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "usb_devices",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "volume_set",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "volume_toggle",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "audio_output",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "wake",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "system_control"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "system_control"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "wallpaper_set",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "app_automation",
+            "filesystem_write",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "app_automation",
+            "filesystem_write",
+            "interactive_session"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "webcam",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "camera",
+            "interactive_session",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "camera",
+            "interactive_session",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "wifi_info",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "sensitive_data"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    }
+  ],
+  "guardian_commands": [
+    {
+      "command": "auto_restart",
+      "platforms": {
+        "windows": {
+          "source_support": "source_branch_present",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "AST found the platform Guardian command branch; runtime behavior remains unverified."
+          },
+          "permission_profile_ids": [
+            "guardian_service"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms a literal Guardian command branch only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "source_branch_present",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "AST found the platform Guardian command branch; runtime behavior remains unverified."
+          },
+          "permission_profile_ids": [
+            "guardian_service"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms a literal Guardian command branch only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "restart",
+      "platforms": {
+        "windows": {
+          "source_support": "source_branch_present",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "AST found the platform Guardian command branch; runtime behavior remains unverified."
+          },
+          "permission_profile_ids": [
+            "guardian_service"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms a literal Guardian command branch only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "source_branch_present",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "AST found the platform Guardian command branch; runtime behavior remains unverified."
+          },
+          "permission_profile_ids": [
+            "guardian_service"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms a literal Guardian command branch only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "start",
+      "platforms": {
+        "windows": {
+          "source_support": "source_branch_present",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "AST found the platform Guardian command branch; runtime behavior remains unverified."
+          },
+          "permission_profile_ids": [
+            "guardian_service"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms a literal Guardian command branch only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "source_branch_present",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "AST found the platform Guardian command branch; runtime behavior remains unverified."
+          },
+          "permission_profile_ids": [
+            "guardian_service"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms a literal Guardian command branch only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "status",
+      "platforms": {
+        "windows": {
+          "source_support": "source_branch_present",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "AST found the platform Guardian command branch; runtime behavior remains unverified."
+          },
+          "permission_profile_ids": [
+            "guardian_service"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms a literal Guardian command branch only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "source_branch_present",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "AST found the platform Guardian command branch; runtime behavior remains unverified."
+          },
+          "permission_profile_ids": [
+            "guardian_service"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms a literal Guardian command branch only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "stop",
+      "platforms": {
+        "windows": {
+          "source_support": "source_branch_present",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "AST found the platform Guardian command branch; runtime behavior remains unverified."
+          },
+          "permission_profile_ids": [
+            "guardian_service"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms a literal Guardian command branch only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "source_branch_present",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "AST found the platform Guardian command branch; runtime behavior remains unverified."
+          },
+          "permission_profile_ids": [
+            "guardian_service"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms a literal Guardian command branch only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    }
+  ]
+}
