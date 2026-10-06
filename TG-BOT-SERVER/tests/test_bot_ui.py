@@ -862,6 +862,58 @@ def test_simple_command_does_not_create_duplicate_after_transient_edit_errors(mo
     assert answered == []
 
 
+def test_simple_command_serializes_different_actions_for_same_card(monkeypatch):
+    from types import SimpleNamespace
+
+    async def scenario():
+        started = asyncio.Event()
+        release = asyncio.Event()
+        dispatched = []
+        monkeypatch.setattr(bot, "_ACTIVE_UI_COMMANDS", set())
+
+        async def run_command(_cq, action, *_args, **_kwargs):
+            dispatched.append(action)
+            if action == "wifi_info":
+                started.set()
+                await release.wait()
+            return action
+
+        monkeypatch.setattr(bot, "_simple_command_unlocked", run_command)
+
+        class FakeCallback:
+            def __init__(self):
+                self.from_user = SimpleNamespace(id=bot.ADMIN_ID)
+                self.message = SimpleNamespace(
+                    chat=SimpleNamespace(id=1), message_id=44
+                )
+                self.answers = []
+
+            async def answer(self, *args, **kwargs):
+                self.answers.append((args, kwargs))
+
+        first = FakeCallback()
+        second = FakeCallback()
+        first_result = asyncio.create_task(
+            bot.simple_command(first, "wifi_info", "📶", "Wi-Fi")
+        )
+        await started.wait()
+
+        second_result = await bot.simple_command(
+            second, "battery_status", "🔋", "Battery"
+        )
+
+        assert second_result is None
+        assert dispatched == ["wifi_info"]
+        assert second.answers == [
+            ((bot._lex("command_already_running"),), {"show_alert": True})
+        ]
+        release.set()
+        assert await first_result == "wifi_info"
+        assert bot._ACTIVE_UI_COMMANDS == set()
+
+    asyncio.run(scenario())
+
+
 def test_simple_command_pins_captured_device_when_session_changes_during_answer(monkeypatch):
     from types import SimpleNamespace
 

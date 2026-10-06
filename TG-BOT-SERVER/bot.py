@@ -2135,7 +2135,7 @@ multi_status = MultiCollector()
 multi_screenshot = MultiCollector()
 # Защита от двойного клика: одна Telegram-карточка не должна одновременно
 # обслуживаться несколькими долгими командами.
-_ACTIVE_UI_COMMANDS: set[tuple[int, int, int, str]] = set()
+_ACTIVE_UI_COMMANDS: set[tuple[int, int, int]] = set()
 _PROMPTED_TEXT_ACTIONS = frozenset({"msgbox_spam", "prank_shout_tts"})
 _PENDING_VERSION_INSTALLS: dict[int, dict[str, object]] = {}
 _PENDING_VERSION_INSTALLS_LOCK = threading.Lock()
@@ -6302,7 +6302,6 @@ async def simple_command(cq: CallbackQuery, action: str, emoji: str, label: str,
         int(cq.from_user.id),
         int(message.chat.id),
         int(message.message_id),
-        str(action),
     )
     if key in _ACTIVE_UI_COMMANDS:
         await cq.answer(_lex("command_already_running"), show_alert=True)

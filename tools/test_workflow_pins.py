@@ -75,7 +75,7 @@ def test_tagged_release_builds_and_publishes_signed_source_package():
 def test_tagged_release_uses_version_specific_bilingual_release_notes():
     text = WORKFLOW.read_text(encoding="utf-8")
     release = text.split("  create-release:", 1)[1]
-    release_notes = ROOT / "docs" / "releases" / "v4.1.5.md"
+    release_notes = ROOT / "docs" / "releases" / "v4.1.6.md"
 
     assert release_notes.is_file()
     assert "body_path: ${{ github.workspace }}/docs/releases/${{ github.ref_name }}.md" in release

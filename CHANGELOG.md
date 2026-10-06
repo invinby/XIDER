@@ -1,5 +1,23 @@
 # XIDER release history
 
+## X4.1.6-TARPED+20261007 — X-STAB: one card, one command
+
+### English
+
+- Serialize long-running actions by Telegram user, chat, and card so different
+  buttons cannot race to overwrite the same progress/result message.
+- Keep the owner-only one-line Windows/macOS installation picker in Devices;
+  the commands remain copy-and-run actions, not remote installs.
+- Align bot and agent release identity at 4.1.6 for the signed full release set.
+
+### Русский
+
+- Долгие команды теперь сериализуются по пользователю, чату и карточке Telegram:
+  разные кнопки не перетирают прогресс и результат друг друга.
+- В разделе «Устройства» остаётся кнопка владельца с короткой командой установки
+  Windows/macOS; это копирование команды, а не удалённая установка.
+- Версия бота и агентов синхронизирована на 4.1.6 для полного подписанного релиза.
+
 ## X4.1.4-TARPED+20261006 — X-DOCK legacy recovery command
 
 ### English
