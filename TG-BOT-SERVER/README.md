@@ -1,4 +1,4 @@
-# XIDER — TG-BOT-SERVER 4.1.2 TARPED
+# XIDER — TG-BOT-SERVER 4.1.3 TARPED
 
 Telegram-бот, через который вы управляете своими устройствами.
 Владелец задаётся `ADMIN_ID` в `.env` и не может быть заблокирован через базу

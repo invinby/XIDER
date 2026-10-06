@@ -1,5 +1,27 @@
 # XIDER release history
 
+## X4.1.3-TARPED+20261006 — XIDER LINK rejection diagnostics
+
+### English
+
+- The bot now distinguishes malformed MQTT envelopes, HMAC mismatches, stale
+  timestamps, missing nonces, and replayed messages in its local logs.
+- Diagnostic logs include no message payload, signature, or key material.
+- Windows and macOS behavior is unchanged; all components share the 4.1.3
+  release identity required by the device compatibility checks.
+- The existing owner-only one-line Windows/macOS installer and signed VPS
+  update/rollback flow remain unchanged.
+
+### Русский
+
+- Бот отдельно показывает в локальном журнале повреждённый MQTT-конверт,
+  несовпадение HMAC, устаревшее время, отсутствие nonce и повтор сообщения.
+- В диагностический журнал не попадают тело сообщения, подпись или ключи.
+- Поведение агентов Windows и macOS не менялось; у компонентов общая версия 4.1.3,
+  требуемая проверками совместимости устройств.
+- Кнопка владельца с одной командой установки и подписанное обновление/откат
+  VPS остаются без изменений.
+
 ## X4.1.2-TARPED+20261005 — X-STAB archive-root fix
 
 ### English
