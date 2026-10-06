@@ -1827,6 +1827,7 @@ def test_check_update_blocks_old_mac_without_sending_update_or_shell(monkeypatch
     assert "4.0.0" in shown[0][0]
     assert "4.0.1" in shown[0][0]
     assert "Ничего не запускал" in shown[0][0]
+    assert "<code>curl -fsSL https://invinby.github.io/XIDER/mac | bash</code>" in shown[0][0]
 
 
 def test_check_update_allows_mac_release_protocol_version(monkeypatch):
@@ -1875,6 +1876,7 @@ def test_check_update_blocks_old_windows_before_sending_update(monkeypatch):
     assert "4.0.0" in shown[0][0]
     assert "4.0.1" in shown[0][0]
     assert "Ничего не запускал" in shown[0][0]
+    assert "<code>irm https://invinby.github.io/XIDER/win.ps1 | iex</code>" in shown[0][0]
 
 
 def test_check_update_allows_current_windows_source_agent(monkeypatch):
@@ -2072,6 +2074,12 @@ def test_check_update_blocks_frozen_packages_without_sending_command(monkeypatch
 
     assert not sent
     assert shown and "транзакцион" in shown[0][0]
+    command = (
+        "curl -fsSL https://invinby.github.io/XIDER/mac | bash"
+        if "mac" in os_name.lower()
+        else "irm https://invinby.github.io/XIDER/win.ps1 | iex"
+    )
+    assert f"<code>{command}</code>" in shown[0][0]
 
 
 def test_guardian_broadcast_stop_uses_guardian_protocol():

@@ -6323,6 +6323,7 @@ async def on_cmd_check_update(cq: CallbackQuery):
     target_os = str(info.get("os") or "").lower()
     if "mac" in target_os or "darwin" in target_os or "windows" in target_os:
         current = str(info.get("version") or "не определена")
+        install_os = "macos" if ("mac" in target_os or "darwin" in target_os) else "windows"
         if not release_catalog.supports_release_manifest_update(current):
             await cq.answer()
             await _replace_callback_message(
@@ -6331,7 +6332,9 @@ async def on_cmd_check_update(cq: CallbackQuery):
                     "versions_update_requires_agent",
                     current=current,
                     minimum="4.0.1",
-                ),
+                )
+                + "\n\n"
+                + manual_install_command_screen(install_os),
                 reply_markup=back_to_device_kb(),
             )
             return
@@ -6339,7 +6342,9 @@ async def on_cmd_check_update(cq: CallbackQuery):
             await cq.answer()
             await _replace_callback_message(
                 cq,
-                _lex_html("versions_update_package_unsupported", current=current),
+                _lex_html("versions_update_package_unsupported", current=current)
+                + "\n\n"
+                + manual_install_command_screen(install_os),
                 reply_markup=back_to_device_kb(),
             )
             return
