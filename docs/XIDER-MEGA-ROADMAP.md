@@ -2388,7 +2388,13 @@ Go и Rust по упаковке, сопровождению, диагности
 - Удалено локальное усечение GitHub release notes на 6 000 символах: каталог
   сохраняет полный `body`, а карточка X-LEDGER показывает заметки постранично.
   Добавлен regression test на 7 012 символов с контрольным хвостом.
-- Полный `py -3.12 tools/run_tests.py`: bot **237 passed**, Windows **63**,
+- Дополнительно устранён предел навигации в 21 страницу: владелец может пройти
+  заметку целиком; подготовка HTML-страниц вынесена из event loop. Handler-test
+  проходит заметку длиной более 21 страницы и сверяет каждый фрагмент.
+- Кнопка «Установка · одна команда» уже есть в опубликованном интерфейсе v4.1.4;
+  дубликат не создаётся. Она предлагает Windows `irm https://invinby.github.io/XIDER/win.ps1 | iex`
+  либо macOS `curl -fsSL https://invinby.github.io/XIDER/mac | bash`.
+- Полный `py -3.12 tools/run_tests.py`: bot **238 passed**, Windows **63**,
   macOS **139**, ops **26 passed / 1 skipped**, release tools **55**,
   deployment/signature **24 passed / 10 skipped**; Windows staged install,
   full bootstrap и rollback fixtures прошли.

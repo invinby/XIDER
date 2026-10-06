@@ -6744,7 +6744,7 @@ async def on_versions_detail(cq: CallbackQuery):
     if len(parts) == 5 and not parts[4].isdigit():
         await cq.answer(_lex("versions_bad_request"), show_alert=True)
         return
-    notes_page = min(int(parts[4]), 20) if len(parts) == 5 else 0
+    notes_page = int(parts[4]) if len(parts) == 5 else 0
     if kind == "server" and get_user_role(cq.from_user.id) != Role.OWNER:
         await cq.answer(_lex("versions_owner_only"), show_alert=True)
         return
@@ -6765,7 +6765,7 @@ async def on_versions_detail(cq: CallbackQuery):
     available = release.has_package(component)
     status = _lex("versions_package_found" if available else "versions_package_missing")
     notes = release.notes.strip() or _lex("versions_notes_empty")
-    note_chunks = _split_html_escaped_text(notes)
+    note_chunks = await asyncio.to_thread(_split_html_escaped_text, notes)
     note_count = len(note_chunks)
     notes_page = min(notes_page, note_count - 1)
     note_chunk = note_chunks[notes_page]
