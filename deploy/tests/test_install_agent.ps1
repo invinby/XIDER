@@ -186,4 +186,7 @@ finally {
     }
     Remove-Item Function:\icacls,Function:\New-ScheduledTaskAction,Function:\New-ScheduledTaskTrigger,Function:\New-ScheduledTaskSettingsSet,Function:\New-ScheduledTaskPrincipal,Function:\Register-ScheduledTask,Function:\Start-ScheduledTask,Function:\Get-ScheduledTask,Function:\Stop-ScheduledTask,Function:\Unregister-ScheduledTask,Function:\Get-ItemProperty,Function:\Remove-ItemProperty -ErrorAction SilentlyContinue
     Remove-Variable XiderTestActions,XiderAclCallCount,XiderRegisterCount,XiderStartCount,XiderLegacyTaskStopped,XiderLegacyTaskRemoved,XiderRemovedLegacyValues -Scope Global -ErrorAction SilentlyContinue
+    # The fixture intentionally mocks failed native icacls calls; do not leak
+    # their LASTEXITCODE into GitHub's `pwsh -command` test runner.
+    $global:LASTEXITCODE = 0
 }
