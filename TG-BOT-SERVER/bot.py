@@ -72,7 +72,7 @@ import info_book
 import ui_cards
 from config import ADMIN_ID, BOT_TOKEN, ENCRYPT_PAYLOAD, MQTT_BROKER, MQTT_PORT, MQTT_PREFIX
 from roles import AdminFilter, AnyAccessFilter, OwnerFilter, ReadOnlyFilter, Role, get_user_role
-from crypto import verify_message
+from crypto import verify_message_detailed
 from device_store import DeviceStore
 from transport import MQTTTransport
 from wol import send_wol
@@ -2367,9 +2367,13 @@ def _maybe_battery_alert(device_id: str, payload: dict) -> None:
 
 def on_mqtt_message(topic: str, data: dict) -> None:
     """Вызывается из потока MQTT при получении сообщения от клиента."""
-    payload = verify_message(data)
+    payload, verification_reason = verify_message_detailed(data)
     if payload is None:
-        log.warning("Сообщение с неверной подписью в топике %s", topic)
+        log.warning(
+            "MQTT-сообщение отклонено (%s) в топике %s",
+            verification_reason,
+            topic,
+        )
         return
     # ENCRYPT_PAYLOAD: содержимое лежит внутри enc, расшифровываем до маршрутизации.
     if ENCRYPT_PAYLOAD or ("enc" in payload):

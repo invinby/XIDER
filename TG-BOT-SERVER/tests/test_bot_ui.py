@@ -2814,7 +2814,7 @@ def test_device_status_notices_confirm_transitions_without_heartbeat_starvation(
         monkeypatch.setattr(bot, "_STATUS_NOTICE_PENDING", {})
         monkeypatch.setattr(bot, "_STATUS_NOTICE_DELAY_SEC", 0.02)
         monkeypatch.setattr(bot, "ENCRYPT_PAYLOAD", False)
-        monkeypatch.setattr(bot, "verify_message", lambda payload: payload)
+        monkeypatch.setattr(bot, "verify_message_detailed", lambda payload: (payload, "ok"))
         monkeypatch.setattr(bot, "audit", lambda *args, **kwargs: None)
         monkeypatch.setattr(bot, "_schedule_admin_notice", lambda text, **kwargs: notices.append(text))
         monkeypatch.setattr(bot.bot_settings, "is_blocked", lambda _device_id: False)
@@ -3627,7 +3627,7 @@ def test_successful_file_put_ack_is_routed_to_text_collector(monkeypatch):
             received.append((device_id, payload))
 
     monkeypatch.setattr(bot, "ENCRYPT_PAYLOAD", False)
-    monkeypatch.setattr(bot, "verify_message", lambda payload: payload)
+    monkeypatch.setattr(bot, "verify_message_detailed", lambda payload: (payload, "ok"))
     monkeypatch.setattr(bot.bot_settings, "is_blocked", lambda _device_id: False)
     monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
 
@@ -3723,3 +3723,20 @@ def test_device_card_shows_guardian_state(monkeypatch):
     text = bot.device_card("mac-1")
     assert "Guardian" in text
     assert "v1.0" in text
+
+
+def test_invalid_mqtt_envelope_logs_reason_without_payload(monkeypatch, caplog):
+    monkeypatch.setattr(
+        bot,
+        "verify_message_detailed",
+        lambda _data: (None, "bad_hmac"),
+    )
+
+    with caplog.at_level("WARNING", logger="xgent.bot"):
+        bot.on_mqtt_message(
+            f"{bot.MQTT_PREFIX}/device-1/status",
+            {"payload": {"sensitive_text": "must-not-be-logged"}},
+        )
+
+    assert "bad_hmac" in caplog.text
+    assert "must-not-be-logged" not in caplog.text

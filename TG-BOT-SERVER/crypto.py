@@ -50,29 +50,43 @@ def verify_message(envelope: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     Возвращает payload при успешной проверке, иначе None.
     """
+    payload, _reason = verify_message_detailed(envelope)
+    return payload
+
+
+def verify_message_detailed(
+    envelope: Dict[str, Any],
+) -> tuple[Optional[Dict[str, Any]], str]:
+    """Validate an MQTT envelope and return a safe diagnostic reason.
+
+    The reason is intended for local logs only; it never includes payload,
+    signature, or key material.
+    """
+    if not isinstance(envelope, dict):
+        return None, "invalid_envelope"
     signature = envelope.get("sig")
     payload = envelope.get("payload")
     if not isinstance(signature, str) or not isinstance(payload, dict):
-        return None
+        return None, "invalid_envelope"
     expected = hmac.new(SHARED_KEY.encode("utf-8"), _canonical(payload), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected, signature):
-        return None
+        return None, "bad_hmac"
     ts = payload.get("ts")
     if not isinstance(ts, (int, float)):
-        return None
+        return None, "invalid_timestamp"
     # LWT (Last Will and Testament) оффлайн-статус отправляется брокером при обрыве связи,
     # поэтому его ts может быть старше MAX_AGE. Подпись HMAC при этом проверяется всегда.
     is_lwt = (payload.get("type") == "status" and str(payload.get("status")).lower() == "offline")
     if not is_lwt:
         if abs(time.time() - ts) > MAX_AGE:
-            return None
+            return None, "stale_timestamp"
         nonce = payload.get("nonce")
         if not isinstance(nonce, str) or not nonce:
-            return None
+            return None, "missing_nonce"
         if not _mark_seen(nonce, ts):
             log_replay_warning(nonce, ts)
-            return None
-    return payload
+            return None, "replay"
+    return payload, "ok"
 
 
 def log_replay_warning(nonce: str, ts: float) -> None:
