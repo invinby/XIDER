@@ -6,6 +6,7 @@ param(
     [string]$ServerUser = 'ubuntu',
     [string]$Branch = 'main',
     [string]$Ref = $env:XIDER_REF,
+    [ValidateRange(1, 120)][int]$HealthTimeoutSeconds = 30,
     [switch]$PreflightOnly,
     [string]$SourceArchive
 )
@@ -138,6 +139,7 @@ try {
     foreach ($requiredFile in @(
         'XGENT-WDS\xgent_wds.py',
         'XGENT-WDS\xider_guardian_wds.py',
+        'XGENT-WDS\config.py',
         'XGENT-WDS\install_agent.ps1',
         'XGENT-WDS\install_guardian.ps1',
         'XGENT-WDS\requirements.txt'
@@ -334,13 +336,32 @@ try {
     $activePython = Join-Path $agent 'venv\Scripts\python.exe'
     & $activePython -m pip --version | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Новое окружение Python не работает после переключения; выполняю откат.' }
+    $versionMatch = [regex]::Match(
+        (Get-Content -LiteralPath (Join-Path $agent 'config.py') -Raw),
+        '(?m)^VERSION\s*=\s*"(?<version>[^"]+)"'
+    )
+    if (-not $versionMatch.Success) { throw 'Не удалось определить версию агента для проверки здоровья; выполняю откат.' }
+    $expectedAgentVersion = $versionMatch.Groups['version'].Value
+
+    # Task Scheduler's Running state only proves that a task was launched.
+    # Clear per-process markers so a previous install cannot satisfy this one.
+    $healthDirectory = Join-Path $env:USERPROFILE '.xgent'
+    foreach ($healthName in @('agent-health.json', 'guardian-health.json')) {
+        $healthPath = Join-Path $healthDirectory $healthName
+        if (Test-Path -LiteralPath $healthPath -PathType Leaf) {
+            Remove-Item -LiteralPath $healthPath -Force -ErrorAction Stop
+        }
+    }
+    $healthProbeStartedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0
     $taskInstallAttempted = $true
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $agent 'install_agent.ps1') -AgentDir $agent -PreferPython
     if ($LASTEXITCODE -ne 0) { throw 'Установка Windows-агента/Guardian завершилась ошибкой.' }
     $healthy = $false
-    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+    $healthySamples = 0
+    for ($attempt = 0; $attempt -lt $HealthTimeoutSeconds; $attempt++) {
         $agentTask = Get-ScheduledTask -TaskName 'XIDER Agent' -ErrorAction SilentlyContinue
         $guardianTask = Get-ScheduledTask -TaskName 'XIDER Guardian' -ErrorAction SilentlyContinue
+        $componentsHealthy = $false
         if ($agentTask -and $guardianTask -and $agentTask.State -eq 'Running' -and $guardianTask.State -eq 'Running') {
             $expectedAgent = Join-Path $agent 'venv\Scripts\pythonw.exe'
             $expectedGuardian = Join-Path $agent 'venv\Scripts\python.exe'
@@ -348,13 +369,49 @@ try {
             $guardianExecutable = [string]($guardianTask.Actions | Select-Object -First 1 -ExpandProperty Execute)
             if ([string]::Equals($agentExecutable, $expectedAgent, [StringComparison]::OrdinalIgnoreCase) -and
                 [string]::Equals($guardianExecutable, $expectedGuardian, [StringComparison]::OrdinalIgnoreCase)) {
-                $healthy = $true
-                break
+                $healthStates = @{}
+                foreach ($component in @('agent', 'guardian')) {
+                    $healthPath = Join-Path $healthDirectory "$component-health.json"
+                    if (-not (Test-Path -LiteralPath $healthPath -PathType Leaf)) { break }
+                    try {
+                        $health = Get-Content -LiteralPath $healthPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                        $updatedAt = 0.0
+                        $pidValue = 0
+                        $updatedAtText = ([double]$health.updated_at).ToString(
+                            'R', [Globalization.CultureInfo]::InvariantCulture
+                        )
+                        $isFreshTimestamp = [double]::TryParse(
+                            $updatedAtText,
+                            [Globalization.NumberStyles]::Float,
+                            [Globalization.CultureInfo]::InvariantCulture,
+                            [ref]$updatedAt
+                        )
+                        $isValidPid = [int]::TryParse([string]$health.pid, [ref]$pidValue)
+                        if ([string]$health.component -ne $component -or
+                            [string]$health.version -ne $expectedAgentVersion -or $health.connected -ne $true -or
+                            -not $isFreshTimestamp -or -not $isValidPid -or $pidValue -le 0 -or
+                            $updatedAt -lt $healthProbeStartedAt -or
+                            ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0 - $updatedAt) -gt 15 -or
+                            -not (Get-Process -Id $pidValue -ErrorAction SilentlyContinue)) {
+                            break
+                        }
+                        $healthStates[$component] = $health
+                    } catch { break }
+                }
+                if ($healthStates.Count -eq 2 -and
+                    [int]$healthStates.agent.pid -ne [int]$healthStates.guardian.pid) {
+                    $componentsHealthy = $true
+                }
             }
+        }
+        if ($componentsHealthy) { $healthySamples++ } else { $healthySamples = 0 }
+        if ($healthySamples -ge 2) {
+            $healthy = $true
+            break
         }
         Start-Sleep -Seconds 1
     }
-    if (-not $healthy) { throw 'Agent или Guardian не перешёл в Running; выполняю откат.' }
+    if (-not $healthy) { throw 'Agent и Guardian не подтвердили свежее MQTT-соединение; выполняю откат.' }
     Write-Host '[OK] XIDER Windows Agent + Guardian установлены и запущены.'
     if (Test-Path -LiteralPath $backup) { Write-Host "[BACKUP] Предыдущая версия сохранена: $backup" }
 }

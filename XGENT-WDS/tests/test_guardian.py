@@ -41,6 +41,26 @@ def test_new_guardian_install_enables_recovery_by_default(
     assert guardian.state["desired_running"] is True
 
 
+def test_guardian_mqtt_callbacks_write_connected_and_disconnected_health(
+    guardian_module, monkeypatch
+):
+    module = guardian_module
+    written = []
+    monkeypatch.setattr(
+        module, "write_runtime_health",
+        lambda component, connected: written.append((component, connected)),
+    )
+    guardian = object.__new__(module.Guardian)
+    guardian.client = Mock()
+    guardian._publish = Mock()
+    guardian.status_payload = Mock(return_value={"type": "guardian"})
+
+    guardian._on_connect(guardian.client, None, None, 0)
+    guardian._on_disconnect(guardian.client, None, None, 7)
+
+    assert written == [("guardian", True), ("guardian", False)]
+
+
 def test_legacy_state_migrates_recovery_but_preserves_explicit_stop(
     guardian_module, monkeypatch, tmp_path
 ):

@@ -66,8 +66,9 @@ try {
     }
 
     New-Item -ItemType Directory -Path $agentSource,$envDir -Force | Out-Null
-    foreach ($name in @('xgent_wds.py','xider_guardian_wds.py','install_agent.ps1','install_guardian.ps1','requirements.txt')) {
-        [IO.File]::WriteAllText((Join-Path $agentSource $name), 'fixture', $utf8)
+    foreach ($name in @('config.py','xgent_wds.py','xider_guardian_wds.py','install_agent.ps1','install_guardian.ps1','requirements.txt')) {
+        $body = if ($name -eq 'config.py') { 'VERSION = "fixture"' } else { 'fixture' }
+        [IO.File]::WriteAllText((Join-Path $agentSource $name), $body, $utf8)
     }
     Compress-Archive -Path (Join-Path $sourceRoot 'XIDER-fixture') -DestinationPath $archive
 

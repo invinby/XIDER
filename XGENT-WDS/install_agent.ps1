@@ -108,9 +108,12 @@ try {
     Write-Warning ("Не удалось очистить известные старые ключи автозапуска XGENT: {0}" -f $_.Exception.Message)
 }
 
-# Keep the sidecar env readable only by the account that runs this agent.
-icacls $envPath /inheritance:r | Out-Null
+# Add the dedicated account ACE before removing inherited entries, so a failed
+# inheritance update does not take away the user's existing access.
 icacls $envPath /grant:r "$($env:USERNAME):R" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'icacls failed to grant the current account read access to the XIDER .env file.' }
+icacls $envPath /inheritance:r | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'icacls failed to remove inherited access from the XIDER .env file.' }
 
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 # Guardian is the sole worker-recovery owner. A second Task Scheduler restart

@@ -32,8 +32,10 @@ if ($PreflightOnly) {
     return
 }
 
-icacls $envPath /inheritance:r | Out-Null
 icacls $envPath /grant:r "$($env:USERNAME):R" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'icacls failed to grant the current account read access to the XIDER .env file.' }
+icacls $envPath /inheritance:r | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'icacls failed to remove inherited access from the XIDER .env file.' }
 
 $action = New-ScheduledTaskAction -Execute $python -Argument ('"{0}"' -f $guardian) -WorkingDirectory $AgentDir
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
