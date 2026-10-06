@@ -1,8 +1,8 @@
-# XIDER · TARPED 4.1.2 — управление устройствами через Telegram
+# XIDER · TARPED 4.1.5 — управление устройствами через Telegram
 
-> Source version: 4.1.2. Published installable versions are listed in
+> Source version: 4.1.5. Published installable versions are listed in
 > [GitHub Releases](https://github.com/invinby/XIDER/releases); a source version
-> is not proof of a successful device installation. / Версия исходников: 4.1.2.
+> is not proof of a successful device installation. / Версия исходников: 4.1.5.
 > Опубликованные пакеты — в Releases. План, ограничения и незавершённая приёмка:
 > [TARPED](docs/TARPED.md), [подготовка Mac](docs/MAC-REMOTE-UPDATES.md).
 
@@ -55,7 +55,7 @@ The same two copy-ready commands are available in the owner's device list in the
 worker status and can start, stop, restart, or recover the agent from the
 owner-only Telegram panel. Version 4.1.0 added signed macOS file recovery,
 serialized source updates, and a lock-safe restart; 4.1.1 adds a copy-ready
-one-command Windows/macOS installer picker in Telegram. Version 4.1.2 fixes
+one-command Windows/macOS installer picker in Telegram. Version 4.1.5 fixes
 server updates for the signed source archive layout used by GitHub Releases.
 Deliberate stop/uninstall remains effective; Guard Keeper does
 not bypass local OS controls or access camera, microphone, screen, or location

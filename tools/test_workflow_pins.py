@@ -72,6 +72,18 @@ def test_tagged_release_builds_and_publishes_signed_source_package():
         assert f"artifacts/{asset}" in published_assets
 
 
+def test_tagged_release_uses_version_specific_bilingual_release_notes():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    release = text.split("  create-release:", 1)[1]
+    release_notes = ROOT / "docs" / "releases" / "v4.1.5.md"
+
+    assert release_notes.is_file()
+    assert "body_path: ${{ github.workspace }}/docs/releases/${{ github.ref_name }}.md" in release
+    assert "generate_release_notes: true" in release
+    assert "## Русский" in release_notes.read_text(encoding="utf-8")
+    assert "## English" in release_notes.read_text(encoding="utf-8")
+
+
 def test_tagged_release_waits_for_the_full_ci_workflow():
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     release_workflow = WORKFLOW.read_text(encoding="utf-8")

@@ -3,8 +3,9 @@
 TARPED is the working name for XIDER's broad upgrade sequence. This document is
 the design contract, **not** evidence that a tagged build is installed or
 complete; the name does not imply a particular SemVer increment.
-The currently published bot version remains defined in
-`TG-BOT-SERVER/version.py` until the release checklist is satisfied.
+The latest published version is the signed GitHub release tag. `version.py` on
+`main` may already contain a release candidate; a source version alone is not
+evidence that a release was published or installed.
 
 ## Names with responsibilities
 

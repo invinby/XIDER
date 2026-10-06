@@ -253,4 +253,5 @@ jobs:
             artifacts/release-manifest.json
           draft: false
           prerelease: false
+          body_path: ${{ github.workspace }}/docs/releases/${{ github.ref_name }}.md
           generate_release_notes: true
