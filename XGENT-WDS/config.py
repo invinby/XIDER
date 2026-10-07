@@ -174,7 +174,7 @@ def set_guardian_startup_enabled(enabled: bool) -> None:
     update_guardian_state(**updates)
 
 # Версия клиента и строка платформы для статусов.
-VERSION = "4.2.0"
+VERSION = "4.2.1"
 PLATFORM = f"Windows {platform.win32_ver()[0]}"
 
 

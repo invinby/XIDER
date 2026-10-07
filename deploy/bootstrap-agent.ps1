@@ -37,6 +37,64 @@ $tasksStopped = $false
 $activationStarted = $false
 $taskInstallAttempted = $false
 
+function Get-XiderManagedProcessIds {
+    param([Parameter(Mandatory)][string]$AgentDirectory)
+
+    $agentRoot = [IO.Path]::GetFullPath($AgentDirectory).TrimEnd([char[]]@([char]92, [char]47))
+    $managedExecutable = Join-Path $agentRoot 'XGENT-WDS.exe'
+    $managedScripts = @(
+        (Join-Path $agentRoot 'xgent_wds.py'),
+        (Join-Path $agentRoot 'xider_guardian_wds.py')
+    )
+    foreach ($process in Get-CimInstance -ClassName Win32_Process -ErrorAction Stop) {
+        $matchesAgent = $false
+        if ($process.ExecutablePath) {
+            try {
+                $processExecutable = [IO.Path]::GetFullPath([string]$process.ExecutablePath)
+                $matchesAgent = [string]::Equals(
+                    $processExecutable,
+                    $managedExecutable,
+                    [StringComparison]::OrdinalIgnoreCase
+                )
+            } catch { }
+        }
+        if (-not $matchesAgent -and $process.CommandLine) {
+            foreach ($scriptPath in $managedScripts) {
+                if ([string]$process.CommandLine -match [regex]::Escape($scriptPath)) {
+                    $matchesAgent = $true
+                    break
+                }
+            }
+        }
+        if ($matchesAgent) { [int]$process.ProcessId }
+    }
+}
+
+function Stop-XiderManagedProcesses {
+    param([Parameter(Mandatory)][string]$AgentDirectory)
+
+    $remaining = @()
+    for ($attempt = 0; $attempt -lt 10; $attempt++) {
+        $remaining = @(Get-XiderManagedProcessIds -AgentDirectory $AgentDirectory)
+        if (-not $remaining.Count) { return }
+        Start-Sleep -Seconds 1
+    }
+    foreach ($processId in $remaining) {
+        try { Stop-Process -Id $processId -Force -ErrorAction Stop }
+        catch {
+            if (Get-Process -Id $processId -ErrorAction SilentlyContinue) {
+                throw "Не удалось остановить процесс XIDER PID $processId перед заменой файлов."
+            }
+        }
+    }
+    for ($attempt = 0; $attempt -lt 5; $attempt++) {
+        $remaining = @(Get-XiderManagedProcessIds -AgentDirectory $AgentDirectory)
+        if (-not $remaining.Count) { return }
+        Start-Sleep -Seconds 1
+    }
+    throw "Процессы XIDER всё ещё используют каталог агента: $($remaining -join ', ')"
+}
+
 function Expand-XiderArchiveSafely {
     param(
         [Parameter(Mandatory)][string]$ArchivePath,
@@ -330,8 +388,11 @@ try {
         Start-Sleep -Seconds 1
     }
     if ($stillRunning.Count) { throw "Прежние задачи не остановились: $($stillRunning -join ', ')" }
-    if (Test-Path -LiteralPath $repo) { Move-Item -LiteralPath $repo -Destination $backup }
-    Move-Item -LiteralPath $stage -Destination $repo
+    if (Test-Path -LiteralPath $repo) {
+        Stop-XiderManagedProcesses -AgentDirectory (Join-Path $repo 'XGENT-WDS')
+        [IO.Directory]::Move($repo, $backup)
+    }
+    [IO.Directory]::Move($stage, $repo)
     $activationStarted = $true
     $activePython = Join-Path $agent 'venv\Scripts\python.exe'
     & $activePython -m pip --version | Out-Null
@@ -436,13 +497,14 @@ catch {
     }
     if ($activationStarted -and (Test-Path -LiteralPath $repo)) {
         try {
-            Move-Item -LiteralPath $repo -Destination $failed
+            Stop-XiderManagedProcesses -AgentDirectory (Join-Path $repo 'XGENT-WDS')
+            [IO.Directory]::Move($repo, $failed)
             $failedEnv = Join-Path $failed 'XGENT-WDS\.env'
             if (Test-Path -LiteralPath $failedEnv) { Remove-Item -LiteralPath $failedEnv -Force }
         } catch { $rollbackProblems += "Не удалось убрать неудачную версию: $($_.Exception.Message)" }
     }
     if ($backup -and (Test-Path -LiteralPath $backup) -and -not (Test-Path -LiteralPath $repo)) {
-        try { Move-Item -LiteralPath $backup -Destination $repo }
+        try { [IO.Directory]::Move($backup, $repo) }
         catch { $rollbackProblems += "Не удалось вернуть предыдущие файлы: $($_.Exception.Message)" }
     }
     if ($taskInstallAttempted) {

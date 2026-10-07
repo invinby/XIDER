@@ -18,7 +18,7 @@ def test_macos_app_builder_uses_the_current_agent_release_version():
     builder = Path(mcs.__file__).with_name("make_app.sh").read_text(encoding="utf-8")
     assert "AGENT_VERSION=\"$(sed -n" in builder
     assert builder.count("<string>${AGENT_VERSION}</string>") == 2
-    assert config.VERSION == "4.2.0"
+    assert config.VERSION == "4.2.1"
 
 
 def _make_client():

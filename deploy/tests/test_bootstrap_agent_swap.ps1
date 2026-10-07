@@ -9,6 +9,8 @@ $global:XiderMockInstallerResult = 'fail'
 $global:XiderMockInstallerCalls = 0
 $global:XiderMockTasksRunning = $false
 $global:XiderMockAgentDir = $null
+$global:XiderMockProcesses = @()
+$global:XiderMockStoppedPids = @()
 $global:XiderMockHealthStatus = 'missing'
 $global:XiderMockOldTasks = $true
 $global:XiderMockOldRunning = @{ 'XIDER Agent' = $true; 'XIDER Guardian' = $true }
@@ -50,6 +52,16 @@ function Start-ScheduledTask {
     $global:XiderMockRestarted += $TaskName
     $global:XiderMockOldRunning[$TaskName] = $true
 }
+function Get-CimInstance {
+    param($ClassName, $ErrorAction)
+    return @($global:XiderMockProcesses)
+}
+function Start-Sleep { param([int]$Seconds) }
+function Stop-Process {
+    param([int]$Id, [switch]$Force, $ErrorAction)
+    $global:XiderMockStoppedPids += $Id
+    $global:XiderMockProcesses = @($global:XiderMockProcesses | Where-Object { [int]$_.ProcessId -ne $Id })
+}
 function powershell.exe {
     $global:XiderMockInstallerCalls++
     if ($global:XiderMockInstallerResult -eq 'success') {
@@ -76,6 +88,12 @@ function powershell.exe {
 
 function New-OldInstall($installRoot) {
     $agentDir = Join-Path $installRoot 'git-ver\XGENT-WDS'
+    $global:XiderMockAgentDir = $agentDir
+    $global:XiderMockProcesses = @([pscustomobject]@{
+        ExecutablePath = Join-Path $agentDir 'XGENT-WDS.exe'
+        CommandLine = '"' + (Join-Path $agentDir 'XGENT-WDS.exe') + '"'
+        ProcessId = 3333
+    })
     New-Item -ItemType Directory -Path $agentDir -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $agentDir 'old-marker.txt'), 'previous-version', $utf8)
     [IO.File]::WriteAllLines((Join-Path $agentDir '.env'), @(
@@ -93,6 +111,7 @@ function New-OldInstall($installRoot) {
 function Get-Process {
     param([int]$Id, $ErrorAction)
     if ($Id -in @(1111, 2222)) { return [pscustomobject]@{ Id = $Id } }
+    if ($global:XiderMockProcesses | Where-Object { [int]$_.ProcessId -eq $Id }) { return [pscustomobject]@{ Id = $Id } }
     return $null
 }
 
@@ -121,6 +140,9 @@ try {
     }
     if ($global:XiderMockInstallerCalls -ne 1) {
         throw "The failure did not reach the simulated installer; rollback was not exercised. Bootstrap error: $failureMessage"
+    }
+    if (3333 -notin $global:XiderMockStoppedPids) {
+        throw 'The lingering managed XGENT-WDS.exe process was not stopped before the directory swap.'
     }
     if (-not (Test-Path -LiteralPath (Join-Path $rollbackRoot 'git-ver\XGENT-WDS\old-marker.txt'))) {
         throw 'The previous checkout was not restored after installer failure.'
@@ -174,5 +196,5 @@ finally {
         (Split-Path $fixture -Leaf) -like 'xider-bootstrap-swap-*') {
         Remove-Item -LiteralPath $fixture -Recurse -Force
     }
-    Remove-Variable XiderMockInstallerResult,XiderMockInstallerCalls,XiderMockTasksRunning,XiderMockAgentDir,XiderMockHealthStatus,XiderMockOldTasks,XiderMockOldRunning,XiderMockRestored,XiderMockRestarted -Scope Global -ErrorAction SilentlyContinue
+    Remove-Variable XiderMockInstallerResult,XiderMockInstallerCalls,XiderMockTasksRunning,XiderMockAgentDir,XiderMockProcesses,XiderMockStoppedPids,XiderMockHealthStatus,XiderMockOldTasks,XiderMockOldRunning,XiderMockRestored,XiderMockRestarted -Scope Global -ErrorAction SilentlyContinue
 }
