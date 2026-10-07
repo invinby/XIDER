@@ -78,7 +78,7 @@ Designed with a **Zero-Trust** security architecture, XIDER treats the network t
 
 ```mermaid
 graph TD
-    User([Telegram User / Admin]) <-->|Telegram Bot API (HTTPS)| BotServer[TG-BOT-SERVER (aiogram 3)]
+    User([Telegram User / Admin]) <-->|Telegram Bot API over HTTPS| BotServer["TG-BOT-SERVER (aiogram 3)"]
     
     subgraph Secure Messaging Mesh
         BotServer <-->|TLS 1.3| Broker[Mosquitto MQTT Broker]
