@@ -1,8 +1,10 @@
-# XIDER · TARPED 4.1.7 — управление устройствами через Telegram
+# XIDER · TARPED 4.2.0 — управление устройствами через Telegram
 
-> Source version: 4.1.7. Published installable versions are listed in
+[English](README.md) · [Русский](README.ru.md)
+
+> Source version: 4.2.0. Published installable versions are listed in
 > [GitHub Releases](https://github.com/invinby/XIDER/releases); a source version
-> is not proof of a successful device installation. / Версия исходников: 4.1.7.
+> is not proof of a successful device installation. / Версия исходников: 4.2.0.
 > Опубликованные пакеты — в Releases. План, ограничения и незавершённая приёмка:
 > [TARPED](docs/TARPED.md), [подготовка Mac](docs/MAC-REMOTE-UPDATES.md).
 
@@ -226,38 +228,7 @@ This software is developed strictly for educational purposes, defensive security
 
 ---
 
-## 🇷🇺 Кратко по-русски
+## Русская версия
 
-**XIDER** — система управления собственными Windows/macOS-устройствами через
-Telegram и MQTT. Команды подписываются HMAC-SHA256, при необходимости
-шифруются AES-256-GCM, а сервер получает уведомления о heartbeat и LWT.
-
-### Guard Keeper · Windows and macOS
-
-Guard Keeper — локальный supervisor, запускаемый средствами самой ОС
-(Windows Task Scheduler или macOS LaunchAgent). Он:
-
-- сообщает VPS, что устройство и рабочий агент живы;
-- показывает статус Guardian в Telegram;
-- запускает, останавливает и перезапускает рабочий агент;
-- умеет включать или отключать автоматическое восстановление;
-- оставляет локальный контроль пользователю: его можно остановить и удалить
-  штатными системными средствами; он не маскируется под системный компонент.
-
-Установка на Mac одной командой:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/invinby/XIDER/main/deploy/bootstrap.sh | bash
-```
-
-Прямая команда выше запускает bootstrap из подвижной ветки `main` и остаётся
-dev-установкой. В локальном кандидате release quickstart закрепляет полный
-commit ID и SHA-256 bootstrap; сами bootstrap-скрипты и quickstart входят в
-подписанный manifest. Однако команда не проверяет подпись manifest до запуска
-bootstrap и пока не является проверенным production-установщиком.
-
-Затем открой в боте: **Устройство → Питание & Защита → Guardian**.
-
-Камера, микрофон, запись экрана и геолокация работают только после выдачи
-разрешений macOS. Если ноутбук выключен или разряжен, Guardian не может
-запуститься физически: VPS покажет последний heartbeat и уведомит об офлайне.
+Полная русская документация, установка, описание компонентов, выбор релиза и
+границы подтверждённых возможностей находятся в [README.ru.md](README.ru.md).

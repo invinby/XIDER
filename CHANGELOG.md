@@ -1,5 +1,39 @@
 # XIDER release history
 
+## X4.2.0-TARPED+20261007 — X-ROUTE: ссылке — точный маршрут
+
+### English
+
+- Added X-ROUTE: a selected Windows/macOS agent opens validated HTTP(S) URLs;
+  the owner chooses 1, 2, 3, or 5 launches, and the default browser controls
+  whether these become tabs or windows. Owners can keep named URL favorites.
+- The Telegram handbook now renders chapter titles and content in the selected
+  X-LEX voice. X-PIKMI's handbook and URL copy now use a deliberately girly,
+  playful voice while retaining the same technical facts and permissions.
+- Kept the X-LEDGER exact GitHub release-tag picker, explicit confirmation,
+  pinned-key trust check, and signed-package verification as the only remote
+  agent update route.
+- Aligned bot/agent release identity at 4.2.0 and corrected Windows PE and
+  macOS app bundle version metadata. Added a complete Russian README alongside
+  the English project README.
+
+### Русский
+
+- Добавлен X-ROUTE: выбранный агент Windows/macOS открывает проверенные ссылки
+  HTTP(S). Владелец выбирает 1, 2, 3 или 5 запусков; вкладками или окнами
+  управляет браузер по умолчанию. Владелец может сохранять именованные ссылки.
+- Справочник Telegram теперь меняет заголовки и содержимое глав вместе с
+  выбранным голосом X-LEX. В X-PIKMI обновлены справка и тексты ссылок — стиль
+  стал более девчачьим и игривым, но технические факты и права не меняются.
+- Сохранён точный выбор GitHub-тега через X-LEDGER, подтверждение владельца,
+  проверка закреплённого ключа и подписи пакета как единственный путь удалённого
+  обновления агента.
+- Версии бота и агентов синхронизированы на 4.2.0; исправлены метаданные PE для
+  Windows и Info.plist macOS. Добавлен полный русский README к английскому.
+
+Офлайн-тесты проверяют логику; они не являются приёмкой на физическом Mac,
+Windows-устройстве или действующем VPS.
+
 ## X4.1.6-TARPED+20261007 — X-STAB: one card, one command
 
 ### English

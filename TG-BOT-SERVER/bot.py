@@ -69,6 +69,7 @@ import text_store
 import xlex
 import release_catalog
 import info_book
+import url_favorites
 import ui_cards
 from config import ADMIN_ID, BOT_TOKEN, ENCRYPT_PAYLOAD, MQTT_BROKER, MQTT_PORT, MQTT_PREFIX
 from roles import AdminFilter, AnyAccessFilter, OwnerFilter, ReadOnlyFilter, Role, get_user_role
@@ -122,6 +123,8 @@ def audit(event: str, **fields) -> None:
 
 class Form(StatesGroup):
     wait_url = State()
+    wait_url_count = State()
+    wait_url_favorite_name = State()
     wait_text = State()
     wait_sound = State()
     wait_shell = State()
@@ -1168,9 +1171,52 @@ def network_menu():
     kb.button(text=_lex("network_usb_button"), callback_data="cmd:usb", style="primary")
     kb.button(text=_lex("network_bluetooth_button"), callback_data="cmd:bluetooth", style="primary")
     kb.button(text=_lex("network_netstat_button"), callback_data="cmd:netstat", style="primary")
+    _action_button(kb, text=_lex("network_open_url_button"), callback="cmd:url", style="success")
+    if get_user_role(CURRENT_TG_USER.get()) == Role.OWNER:
+        kb.button(text=_lex("url_favorites_button"), callback_data="url:favorites", style="primary")
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2)
+    return kb.as_markup()
+
+
+def url_count_keyboard(*, is_owner: bool = False):
+    kb = InlineKeyboardBuilder()
+    for count in (1, 2, 3, 5):
+        kb.button(
+            text=_lex("url_count_button", count=str(count)),
+            callback_data=f"url:count:{count}",
+            style="success" if count == 1 else "primary",
+        )
+    if is_owner:
+        kb.button(
+            text=_lex("url_favorite_save_button"),
+            callback_data="url:fav:save",
+            style="primary",
+        )
+    kb.button(text=_lex("url_cancel_button"), callback_data="url:cancel", style="danger")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+def url_favorites_keyboard(*, is_owner: bool = False):
+    kb = InlineKeyboardBuilder()
+    favorites = url_favorites.normalize_favorites(bot_settings.get("url_favorites", []))
+    for item in favorites:
+        kb.button(
+            text=_limit_button_label(_lex("url_favorite_open_button", name=item["name"])),
+            callback_data=f"url:fav:open:{item['id']}",
+            style="success",
+        )
+        if is_owner:
+            kb.button(
+                text=_limit_button_label(_lex("url_favorite_delete_button", name=item["name"])),
+                callback_data=f"url:fav:delete:{item['id']}",
+                style="danger",
+            )
+    kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
+    kb.adjust(2, 2)
     return kb.as_markup()
 
 
@@ -2648,16 +2694,18 @@ async def cmd_cancel(message: Message, state: FSMContext):
 async def on_menu_about(cq: CallbackQuery):
     """XIDER handbook: short index, then individually readable chapters."""
     kb = InlineKeyboardBuilder()
-    for slug, title, _ in info_book.CHAPTERS:
+    style = bot_settings.get("ui_style", "technical")
+    for slug, _title, _body in info_book.CHAPTERS:
+        _index, title, _chapter_body = info_book.chapter(slug, style)
         label = _lex("about_chapter_button", title=title)
         kb.button(text=_limit_button_label(label), callback_data=f"about:chapter:{slug}", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(1)
     await _replace_callback_message(
         cq,
-        "<b>XIDER · книга проекта</b>\n"
-        f"Сборка бота: <code>{html.escape(XIDER_BUILD_CODE)}</code>\n"
-        "Выбери главу. Внутри — назначение частей, версии, ограничения и план TARPED.",
+        f"<b>{html.escape(_lex('about_book_title'))}</b>\n"
+        f"{html.escape(_lex('about_book_intro'))}\n"
+        f"\n{html.escape(_lex('build_code_label'))}: <code>{html.escape(XIDER_BUILD_CODE)}</code>",
         reply_markup=kb.as_markup(),
     )
     await cq.answer()
@@ -2667,7 +2715,7 @@ async def on_menu_about(cq: CallbackQuery):
 async def on_about_chapter(cq: CallbackQuery):
     slug = cq.data.rsplit(":", 1)[-1]
     try:
-        index, title, body = info_book.chapter(slug)
+        index, title, body = info_book.chapter(slug, bot_settings.get("ui_style", "technical"))
     except KeyError:
         await cq.answer("Такой главы нет", show_alert=True)
         return
@@ -2685,16 +2733,13 @@ async def on_about_chapter(cq: CallbackQuery):
 @router.message(AdminFilter(), Form.wait_url)
 async def on_url_input(message: Message, state: FSMContext):
     form_data = await state.get_data()
-    await state.clear()
     url = (message.text or "").strip()
-    if not url:
-        await _replace_user_card(
-            message, _lex("empty_text"), reply_markup=back_to_device_kb()
-        )
+    try:
+        url = url_favorites.normalize_web_url(url)
+    except ValueError:
+        await _replace_user_card(message, _lex("url_invalid"), reply_markup=back_to_device_kb())
         return
-    if not re.match(r"^https?://", url, re.IGNORECASE):
-        url = "https://" + url
-    target = form_data.get("command_target")
+    target = form_data.get("authorization_target") or form_data.get("command_target")
     if not target:
         await _replace_user_card(
             message, _lex("target_required"), reply_markup=back_to_device_kb()
@@ -2708,16 +2753,14 @@ async def on_url_input(message: Message, state: FSMContext):
     if not _pending_device_input_still_allowed(message, form_data, target):
         await _reject_revoked_device_input(message)
         return
-    if publish("open_url", _target=target, url=url):
-        await _replace_user_card(
-            message,
-            _lex_html("url_request_sent", device=target_label(target), url=url),
-            reply_markup=back_to_device_kb(),
-        )
-    else:
-        await _replace_user_card(
-            message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb()
-        )
+    await state.update_data(url=url, command_target=target)
+    await state.set_state(Form.wait_url_count)
+    is_owner = get_user_role(int(message.from_user.id)) == Role.OWNER
+    await _replace_user_card(
+        message,
+        _lex_html("url_count_prompt", device=target_label(target)),
+        reply_markup=url_count_keyboard(is_owner=is_owner),
+    )
 
 @router.message(AdminFilter(), Form.wait_text)
 async def on_text_input(message: Message, state: FSMContext):
@@ -3656,6 +3699,183 @@ async def on_cmd_url(cq: CallbackQuery, state: FSMContext):
         reply_markup=back_to_device_kb(),
     )
     await cq.answer()
+
+
+def _url_count_state_matches(current_state) -> bool:
+    return current_state == Form.wait_url_count.state or current_state is Form.wait_url_count
+
+
+@router.callback_query(ReadOnlyFilter(), F.data.startswith("url:count:"))
+async def on_url_count_select(cq: CallbackQuery, state: FSMContext):
+    count_text = str(cq.data or "").rsplit(":", 1)[-1]
+    if count_text not in {"1", "2", "3", "5"}:
+        await cq.answer(_lex("url_invalid"), show_alert=True)
+        return
+    if not _url_count_state_matches(await state.get_state()):
+        await cq.answer(_lex("url_request_expired"), show_alert=True)
+        return
+
+    form_data = await state.get_data()
+    user_id = int(cq.from_user.id) if cq.from_user else 0
+    target = str(form_data.get("authorization_target") or "")
+    callback = str(form_data.get("authorization_callback") or "")
+    try:
+        url = url_favorites.normalize_web_url(form_data.get("url") or "")
+    except ValueError:
+        await state.clear()
+        await _replace_callback_message(cq, _lex("url_invalid"), reply_markup=back_to_device_kb())
+        await cq.answer()
+        return
+    if callback != "cmd:url" or not _device_action_still_allowed(user_id, callback, target):
+        await state.clear()
+        await _replace_callback_message(cq, _lex("input_access_revoked"), reply_markup=back_to_device_kb())
+        await cq.answer()
+        return
+
+    count = int(count_text)
+    if not publish("open_url", _target=target, url=url, count=count):
+        await state.clear()
+        await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
+        await cq.answer()
+        return
+
+    await state.clear()
+    audit("url.open", user_id=user_id, target=target, count=count)
+    await _replace_callback_message(
+        cq,
+        _lex_html("url_multiple_request_sent", device=target_label(target), url=url, count=str(count)),
+        reply_markup=back_to_device_kb(),
+    )
+    await cq.answer()
+
+
+@router.callback_query(ReadOnlyFilter(), F.data == "url:cancel")
+async def on_url_cancel(cq: CallbackQuery, state: FSMContext):
+    await state.clear()
+    target = SESSION.get("target")
+    if target and devices.get(target):
+        await _replace_callback_message(cq, device_card(target), reply_markup=device_menu(target))
+    else:
+        await _replace_callback_message(cq, _lex("main_title"), reply_markup=main_menu(cq.from_user.id))
+    await cq.answer()
+
+
+def _url_favorites_text() -> str:
+    favorites = url_favorites.normalize_favorites(bot_settings.get("url_favorites", []))
+    if not favorites:
+        return f"<b>{html.escape(_lex('url_favorites_title'))}</b>\n\n{html.escape(_lex('url_favorites_empty'))}"
+    rows = [f"<b>{html.escape(_lex('url_favorites_title'))}</b>"]
+    rows.extend(f"\n• <b>{html.escape(item['name'])}</b> — <code>{html.escape(item['url'])}</code>" for item in favorites)
+    return "\n".join(rows)
+
+
+@router.callback_query(OwnerFilter(), F.data == "url:favorites")
+async def on_url_favorites(cq: CallbackQuery):
+    await _replace_callback_message(
+        cq,
+        _url_favorites_text(),
+        reply_markup=url_favorites_keyboard(is_owner=True),
+    )
+    await cq.answer()
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("url:fav:open:"))
+async def on_url_favorite_open(cq: CallbackQuery, state: FSMContext):
+    favorite_id = str(cq.data).rsplit(":", 1)[-1]
+    favorite = next(
+        (item for item in url_favorites.normalize_favorites(bot_settings.get("url_favorites", [])) if item["id"] == favorite_id),
+        None,
+    )
+    target = SESSION.get("target")
+    if not favorite or not target or not _device_action_still_allowed(cq.from_user.id, "cmd:url", target):
+        await cq.answer(_lex("target_required") if not target else _lex("url_request_expired"), show_alert=True)
+        return
+    await _start_authorized_input(
+        state,
+        Form.wait_url_count,
+        "cmd:url",
+        target,
+        command_target=target,
+        url=favorite["url"],
+        favorite_name=favorite["name"],
+    )
+    await _replace_callback_message(
+        cq,
+        _lex_html("url_count_prompt", device=target_label(target)),
+        reply_markup=url_count_keyboard(is_owner=True),
+    )
+    await cq.answer()
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("url:fav:delete:"))
+async def on_url_favorite_delete(cq: CallbackQuery):
+    favorite_id = str(cq.data).rsplit(":", 1)[-1]
+    current = bot_settings.get("url_favorites", [])
+    updated = url_favorites.remove_favorite(current, favorite_id)
+    if len(updated) == len(url_favorites.normalize_favorites(current)):
+        await cq.answer(_lex("url_request_expired"), show_alert=True)
+        return
+    bot_settings.set_key("url_favorites", updated)
+    audit("url.favorite.delete", favorite_id=favorite_id)
+    await _replace_callback_message(
+        cq,
+        _url_favorites_text(),
+        reply_markup=url_favorites_keyboard(is_owner=True),
+    )
+    await cq.answer(_lex("url_favorite_deleted"))
+
+
+@router.callback_query(OwnerFilter(), F.data == "url:fav:save")
+async def on_url_favorite_save_prompt(cq: CallbackQuery, state: FSMContext):
+    if not _url_count_state_matches(await state.get_state()):
+        await cq.answer(_lex("url_request_expired"), show_alert=True)
+        return
+    form_data = await state.get_data()
+    target = str(form_data.get("authorization_target") or "")
+    try:
+        url = url_favorites.normalize_web_url(form_data.get("url") or "")
+    except ValueError:
+        await cq.answer(_lex("url_invalid"), show_alert=True)
+        return
+    await _start_authorized_input(
+        state,
+        Form.wait_url_favorite_name,
+        "cmd:url",
+        target,
+        command_target=target,
+        url=url,
+    )
+    await _replace_callback_message(cq, _lex("url_favorite_name_prompt"), reply_markup=back_to_device_kb())
+    await cq.answer()
+
+
+@router.message(OwnerFilter(), Form.wait_url_favorite_name)
+async def on_url_favorite_save_name(message: Message, state: FSMContext):
+    form_data = await state.get_data()
+    target = str(form_data.get("authorization_target") or "")
+    if not _pending_device_input_still_allowed(message, form_data, target):
+        await state.clear()
+        await _reject_revoked_device_input(message)
+        return
+    try:
+        updated = url_favorites.add_favorite(
+            bot_settings.get("url_favorites", []),
+            message.text or "",
+            form_data.get("url") or "",
+        )
+    except ValueError as exc:
+        key = "url_favorite_duplicate" if "exists" in str(exc) else "url_favorite_invalid_name"
+        await _replace_user_card(message, _lex(key), reply_markup=back_to_device_kb())
+        return
+    bot_settings.set_key("url_favorites", updated)
+    await state.clear()
+    saved_name = updated[-1]["name"]
+    audit("url.favorite.save", user_id=message.from_user.id, name=saved_name)
+    await _replace_user_card(
+        message,
+        f"{html.escape(_lex('url_favorite_saved', name=saved_name))}\n\n{_url_favorites_text()}",
+        reply_markup=url_favorites_keyboard(is_owner=True),
+    )
 
 @router.callback_query(AdminFilter(), F.data == "cmd:text")
 async def on_cmd_text(cq: CallbackQuery, state: FSMContext):

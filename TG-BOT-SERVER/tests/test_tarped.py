@@ -5,11 +5,13 @@ import ast
 from types import SimpleNamespace
 from pathlib import Path
 
+import pytest
 import bot
 import info_book
 import release_catalog as ledger
 import text_store
 import xlex
+import url_favorites
 
 
 def test_six_voices_are_complete_and_keep_confirmations_explicit():
@@ -38,6 +40,26 @@ def test_current_and_legacy_style_ids_normalize_to_named_voices():
     assert xlex.normalize_style("conversational") == "xtarped"
     assert xlex.normalize_style("xplain") == "xtarped"
     assert xlex.normalize_style("xnoir") == "xcore"
+
+
+def test_web_url_validation_and_named_favorites_reject_unsafe_or_duplicate_entries():
+    assert url_favorites.normalize_web_url("example.com/docs") == "https://example.com/docs"
+    assert url_favorites.normalize_web_url("http://example.com") == "http://example.com"
+    for value in (
+        "javascript:alert(1)",
+        "file:///etc/passwd",
+        "https://user:pass@example.com/",
+        "https:///missing-host",
+    ):
+        with pytest.raises(ValueError):
+            url_favorites.normalize_web_url(value)
+
+    saved = url_favorites.add_favorite([], "Docs", "example.com/docs")
+    assert saved[0]["name"] == "Docs"
+    assert saved[0]["url"] == "https://example.com/docs"
+    with pytest.raises(ValueError):
+        url_favorites.add_favorite(saved, "docs", "https://other.example")
+    assert url_favorites.remove_favorite(saved, saved[0]["id"]) == []
 
 
 def test_common_command_feedback_has_six_distinct_xlex_voices():
@@ -427,6 +449,33 @@ def test_book_chapters_fit_telegram_and_device_menu_links_to_versions(monkeypatc
     markup = bot.device_menu("mac1")
     buttons = [button for row in markup.inline_keyboard for button in row]
     assert any(button.callback_data == "versions:device" and "3.3.8" in button.text for button in buttons)
+
+
+def test_handbook_chapter_titles_and_bodies_follow_the_selected_voice():
+    required_facts = {
+        "overview": ("telegram", "windows", "macos"),
+        "modules": ("xider link", "guard keeper"),
+        "updates": ("twinshift", "a/b"),
+    }
+    for slug, facts in required_facts.items():
+        rendered = [info_book.chapter(slug, style) for style in xlex.STYLES]
+        assert len({title for _, title, _ in rendered}) == len(xlex.STYLES), slug
+        assert len({body for _, _, body in rendered}) == len(xlex.STYLES), slug
+        for _, title, body in rendered:
+            assert len(title) < 160
+            assert len(body) < 3500
+            combined = f"{title}\n{body}".casefold()
+            assert all(fact in combined for fact in facts), (slug, facts)
+    _, _, pikmi_modules = info_book.chapter("modules", "xpikmi")
+    assert "подружки" in pikmi_modules.casefold()
+    assert "бантик" in pikmi_modules.casefold()
+
+
+def test_handbook_defines_x_route_and_its_open_count_contract():
+    bodies = [info_book.chapter("modules", style)[2] for style in xlex.STYLES]
+    assert all("X-ROUTE" in body for body in bodies)
+    assert all("HTTP" in body for body in bodies)
+    assert all(any(token in body.casefold() for token in ("1, 2, 3", "1/2/3", "пять")) for body in bodies)
 
 
 def test_handbook_distinguishes_transactional_updater_from_future_twinshift():

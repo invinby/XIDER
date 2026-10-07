@@ -12,6 +12,15 @@ import xgent_mcs as mcs
 import update_package as package
 
 
+def test_macos_app_builder_uses_the_current_agent_release_version():
+    import config
+
+    builder = Path(mcs.__file__).with_name("make_app.sh").read_text(encoding="utf-8")
+    assert "AGENT_VERSION=\"$(sed -n" in builder
+    assert builder.count("<string>${AGENT_VERSION}</string>") == 2
+    assert config.VERSION == "4.2.0"
+
+
 def _make_client():
     client = object.__new__(mcs.XgentClient)
     client._running = threading.Event()
@@ -25,6 +34,34 @@ def _make_client():
     client._command_subscriptions_failed = False
     client.on_stop_requested = None
     return client
+
+
+def test_open_url_opens_the_requested_number_of_web_tabs(monkeypatch):
+    import webbrowser
+
+    client = _make_client()
+    opened = []
+    monkeypatch.setattr(webbrowser, "open_new_tab", lambda url: opened.append(url) or True)
+    monkeypatch.setattr(client, "_notify_text", lambda _text: None)
+
+    client._do_open_url({"url": "https://example.com/path", "count": 3})
+
+    assert opened == ["https://example.com/path"] * 3
+
+
+@pytest.mark.parametrize("payload", [
+    {"url": "javascript:alert(1)"},
+    {"url": "file:///etc/passwd"},
+    {"url": "https://example.com", "count": 0},
+    {"url": "https://example.com", "count": 6},
+])
+def test_open_url_rejects_non_web_schemes_and_out_of_range_counts(monkeypatch, payload):
+    import webbrowser
+
+    client = _make_client()
+    monkeypatch.setattr(webbrowser, "open_new_tab", lambda _url: pytest.fail("must not open"))
+    with pytest.raises(ValueError):
+        client._do_open_url(payload)
 
 
 def _ack_command_subscriptions(client):

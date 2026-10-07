@@ -164,7 +164,7 @@ def set_guardian_startup_enabled(enabled: bool) -> None:
     update_guardian_state(**updates)
 
 # Версия клиента и строка платформы для статусов.
-VERSION = "4.1.7"
+VERSION = "4.2.0"
 PLATFORM = f"macOS {platform.mac_ver()[0]}"
 
 
