@@ -1,5 +1,39 @@
 # XIDER release history
 
+## X4.2.1-TARPED+20261007 — X-LATCH: безопасное переключение агента
+
+### English
+
+- Added an owner-only bootstrap action to legacy-agent release details. It
+  provides the latest signed one-line installer and clearly distinguishes that
+  recovery step from installing the selected historical release; the command
+  must be run locally on the target device.
+- Added a direct install action beside each compatible agent release in
+  X-LEDGER; the selected tag is still confirmed by the owner and verified by
+  the agent before installation.
+- Windows staged installation now waits for and, when necessary, stops only
+  processes whose executable or script belongs to the managed agent directory.
+  Activation and rollback use same-volume directory renames instead of
+  recursive folder moves; the old checkout remains as a backup.
+- Aligned bot, Windows, and macOS source/build metadata at 4.2.1.
+
+### Русский
+
+- В карточке релиза старого агента добавлена доступная только владельцу кнопка
+  восстановления: она показывает короткую команду последнего подписанного
+  установщика для локального запуска на целевом устройстве и отдельно поясняет,
+  что это не установка выбранного старого тега.
+- Рядом с каждым совместимым релизом агента в X-LEDGER добавлена кнопка
+  установки. Бот просит подтвердить выбранный тег, а агент сверяет подпись до
+  установки.
+- Windows-установщик теперь дожидается завершения процессов агента и при
+  необходимости останавливает только процессы из управляемого каталога XIDER.
+  Переключение и откат используют переименование папок на том же диске вместо
+  рекурсивного переноса; прежняя версия сохраняется резервной копией.
+- Версии исходников бота, Windows- и macOS-агентов согласованы на 4.2.1.
+
+Офлайн-проверки не заменяют проверку на физическом устройстве или Telegram.
+
 ## X4.2.0-TARPED+20261007 — X-ROUTE: ссылке — точный маршрут
 
 ### English

@@ -6798,6 +6798,14 @@ def _version_root_menu(server: bool = False):
     return kb.as_markup()
 
 
+_VERSION_BOOTSTRAP_BLOCK_REASONS = frozenset({
+    "versions_install_requires_agent",
+    "versions_install_frozen",
+    "versions_install_trust_missing",
+    "versions_install_offline",
+})
+
+
 def _version_install_block_reason(kind: str, release, component: str, info: dict | None) -> str | None:
     """Fail closed unless this exact release can be verified by this live source agent."""
     if kind != "agent":
@@ -6902,6 +6910,20 @@ async def on_versions_list(cq: CallbackQuery):
         _lex("versions_asset_legend"),
     ]
     kb = InlineKeyboardBuilder()
+    target = SESSION.get("target")
+    info = devices.get(target) if target and target != "all" else None
+    owner = get_user_role(cq.from_user.id) == Role.OWNER
+    bootstrap_release = None
+    if kind == "agent" and owner and info:
+        bootstrap_release = next(
+            (
+                release for release in releases
+                if release.has_source_update_payload(component)
+                and _version_install_block_reason(kind, release, component, info)
+                in _VERSION_BOOTSTRAP_BLOCK_REASONS
+            ),
+            None,
+        )
     for release in shown:
         available = release.has_package(component)
         phrase_key = "versions_release_available" if available else "versions_release_missing"
@@ -6912,8 +6934,20 @@ async def on_versions_list(cq: CallbackQuery):
             callback_data=f"versions:detail:{kind}:{release.tag}",
             style="success" if available else "primary",
         )
+        if kind == "agent" and _version_install_block_reason(kind, release, component, info) is None:
+            kb.button(
+                text=_limit_button_label(_lex("versions_install_button", tag=release.tag)),
+                callback_data=f"versions:install:agent:{release.tag}",
+                style="success",
+            )
     if not releases:
         lines.append(_lex("versions_empty"))
+    if bootstrap_release:
+        kb.button(
+            text=_limit_button_label(_lex("versions_install_bootstrap_button")),
+            callback_data=f"versions:bootstrap:{bootstrap_release.tag}",
+            style="success",
+        )
     if page:
         kb.button(text=_lex("versions_previous"), callback_data=f"versions:list:{kind}:{page - 1}", style="primary")
     if start + page_size < len(releases):
@@ -7002,6 +7036,16 @@ async def on_versions_detail(cq: CallbackQuery):
             callback_data=f"versions:install:agent:{release.tag}",
             style="success",
         )
+    elif (
+        kind == "agent"
+        and get_user_role(cq.from_user.id) == Role.OWNER
+        and install_reason in _VERSION_BOOTSTRAP_BLOCK_REASONS
+    ):
+        kb.button(
+            text=_limit_button_label(_lex("versions_install_bootstrap_button")),
+            callback_data=f"versions:bootstrap:{release.tag}",
+            style="success",
+        )
     kb.button(text=_lex("versions_release_list"), callback_data=f"versions:list:{kind}:0", style="primary")
     kb.adjust(1)
     await _replace_callback_message(
@@ -7016,6 +7060,59 @@ async def on_versions_detail(cq: CallbackQuery):
         reply_markup=kb.as_markup(),
     )
     await cq.answer()
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("versions:bootstrap:"))
+async def on_versions_bootstrap(cq: CallbackQuery):
+    parts = cq.data.split(":")
+    if len(parts) != 3:
+        await cq.answer(_lex("versions_bad_request"), show_alert=True)
+        return
+    tag = parts[2]
+    target = SESSION.get("target")
+    info = devices.get(target) if target and target != "all" else None
+    context = _version_context("agent")
+    if not target or not info or not context:
+        await cq.answer(_lex("versions_missing_device"), show_alert=True)
+        return
+    _, component, _ = context
+    if component not in {"windows_agent", "mac_agent"}:
+        await cq.answer(_lex("versions_missing_os"), show_alert=True)
+        return
+    try:
+        releases = await asyncio.to_thread(release_catalog.catalog.list)
+    except (OSError, ValueError):
+        await cq.answer(_lex("versions_catalog_unavailable"), show_alert=True)
+        return
+    release = next((item for item in releases if item.tag == tag), None)
+    if release is None:
+        await cq.answer(_lex("versions_not_found"), show_alert=True)
+        return
+    reason = _version_install_block_reason("agent", release, component, info)
+    if reason not in _VERSION_BOOTSTRAP_BLOCK_REASONS:
+        await cq.answer(_lex(reason or "versions_install_ready"), show_alert=True)
+        return
+
+    install_os = "macos" if component == "mac_agent" else "windows"
+    kb = InlineKeyboardBuilder()
+    kb.button(
+        text=_lex("versions_install_bootstrap_back"),
+        callback_data=f"versions:detail:agent:{release.tag}",
+        style="primary",
+    )
+    kb.adjust(1)
+    await cq.answer()
+    await _replace_callback_message(
+        cq,
+        _lex_html(
+            "versions_install_bootstrap_body",
+            device=target_label(target),
+            selected=release.tag,
+        )
+        + "\n\n"
+        + manual_install_command_screen(install_os),
+        reply_markup=kb.as_markup(),
+    )
 
 
 @router.callback_query(AdminFilter(), F.data.startswith("versions:install:agent:"))

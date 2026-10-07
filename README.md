@@ -1,10 +1,10 @@
-# XIDER · TARPED 4.2.0 — управление устройствами через Telegram
+# XIDER · TARPED 4.2.1 — управление устройствами через Telegram
 
 [English](README.md) · [Русский](README.ru.md)
 
-> Source version: 4.2.0. Published installable versions are listed in
+> Source version: 4.2.1. Published installable versions are listed in
 > [GitHub Releases](https://github.com/invinby/XIDER/releases); a source version
-> is not proof of a successful device installation. / Версия исходников: 4.2.0.
+> is not proof of a successful device installation. / Версия исходников: 4.2.1.
 > Опубликованные пакеты — в Releases. План, ограничения и незавершённая приёмка:
 > [TARPED](docs/TARPED.md), [подготовка Mac](docs/MAC-REMOTE-UPDATES.md).
 

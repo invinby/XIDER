@@ -37,6 +37,145 @@ $tasksStopped = $false
 $activationStarted = $false
 $taskInstallAttempted = $false
 
+function Get-XiderPathForms {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $forms = New-Object 'System.Collections.Generic.List[string]'
+    $forms.Add($fullPath)
+    try {
+        $resolvedPath = [string](Resolve-Path -LiteralPath $fullPath -ErrorAction Stop).Path
+        if ($resolvedPath -and -not $forms.Exists({ param($item) [string]::Equals($item, $resolvedPath, [StringComparison]::OrdinalIgnoreCase) })) {
+            $forms.Add($resolvedPath)
+        }
+    } catch { }
+
+    if (-not ('XiderNativePath' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+using System.Text;
+public static class XiderNativePath {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern uint GetShortPathName(string longPath, StringBuilder shortPath, uint bufferLength);
+}
+'@
+    }
+    $shortBuffer = New-Object System.Text.StringBuilder(32768)
+    $shortLength = [XiderNativePath]::GetShortPathName($fullPath, $shortBuffer, [uint32]$shortBuffer.Capacity)
+    if ($shortLength -gt 0 -and $shortLength -lt $shortBuffer.Capacity) {
+        $shortPath = $shortBuffer.ToString()
+        if (-not $forms.Exists({ param($item) [string]::Equals($item, $shortPath, [StringComparison]::OrdinalIgnoreCase) })) {
+            $forms.Add($shortPath)
+        }
+    }
+    return $forms.ToArray()
+}
+
+function Test-XiderManagedProcess {
+    param(
+        [Parameter(Mandatory)]$Process,
+        [Parameter(Mandatory)][string]$AgentDirectory
+    )
+
+    $agentRoot = [IO.Path]::GetFullPath($AgentDirectory).TrimEnd([char[]]@([char]92, [char]47))
+    $managedExecutable = Join-Path $agentRoot 'XGENT-WDS.exe'
+    if ($Process.ExecutablePath) {
+        try {
+            $processExecutable = [IO.Path]::GetFullPath([string]$Process.ExecutablePath)
+            if ([string]::Equals(
+                $processExecutable,
+                $managedExecutable,
+                [StringComparison]::OrdinalIgnoreCase
+            )) { return $true }
+        } catch { }
+    }
+
+    $processName = [string]$Process.Name
+    if (-not [string]::Equals($processName, 'python.exe', [StringComparison]::OrdinalIgnoreCase) -and
+        -not [string]::Equals($processName, 'pythonw.exe', [StringComparison]::OrdinalIgnoreCase)) {
+        return $false
+    }
+    $commandLine = [string]$Process.CommandLine
+    foreach ($scriptName in @('xgent_wds.py', 'xider_guardian_wds.py')) {
+        $scriptPathForms = @(Get-XiderPathForms -Path (Join-Path $agentRoot $scriptName))
+        foreach ($scriptPathForm in $scriptPathForms) {
+            $searchFrom = 0
+            while ($searchFrom -lt $commandLine.Length) {
+                $scriptIndex = $commandLine.IndexOf(
+                    $scriptPathForm, $searchFrom, [StringComparison]::OrdinalIgnoreCase
+                )
+                if ($scriptIndex -lt 0) { break }
+                $beforeIsBoundary = $scriptIndex -eq 0
+                if (-not $beforeIsBoundary) {
+                    $before = $commandLine[$scriptIndex - 1]
+                    $beforeIsBoundary = [char]::IsWhiteSpace($before) -or $before -eq [char]34
+                }
+                $scriptEnd = $scriptIndex + $scriptPathForm.Length
+                $afterIsBoundary = $scriptEnd -eq $commandLine.Length
+                if (-not $afterIsBoundary) {
+                    $after = $commandLine[$scriptEnd]
+                    $afterIsBoundary = [char]::IsWhiteSpace($after) -or $after -eq [char]34
+                }
+                if ($beforeIsBoundary -and $afterIsBoundary) { return $true }
+                $searchFrom = $scriptIndex + 1
+            }
+        }
+    }
+    return $false
+}
+
+function Get-XiderManagedProcesses {
+    param([Parameter(Mandatory)][string]$AgentDirectory)
+
+    foreach ($process in Get-CimInstance -ClassName Win32_Process -ErrorAction Stop) {
+        if (Test-XiderManagedProcess -Process $process -AgentDirectory $AgentDirectory) {
+            [pscustomobject]@{
+                ProcessId = [int]$process.ProcessId
+                Name = [string]$process.Name
+                ExecutablePath = [string]$process.ExecutablePath
+                CommandLine = [string]$process.CommandLine
+                CreationDate = [string]$process.CreationDate
+            }
+        }
+    }
+}
+
+function Stop-XiderManagedProcesses {
+    param([Parameter(Mandatory)][string]$AgentDirectory)
+
+    $remaining = @()
+    for ($attempt = 0; $attempt -lt 10; $attempt++) {
+        $remaining = @(Get-XiderManagedProcesses -AgentDirectory $AgentDirectory)
+        if (-not $remaining.Count) { return }
+        Start-Sleep -Seconds 1
+    }
+    foreach ($managedProcess in $remaining) {
+        $processId = [int]$managedProcess.ProcessId
+        if (-not $managedProcess.CreationDate) {
+            throw "Не удалось подтвердить личность процесса XIDER PID $processId; каталог оставлен без изменений."
+        }
+        $currentProcess = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $processId" -ErrorAction Stop
+        if (-not $currentProcess -or
+            [string]$currentProcess.CreationDate -ne [string]$managedProcess.CreationDate -or
+            -not (Test-XiderManagedProcess -Process $currentProcess -AgentDirectory $AgentDirectory)) {
+            continue
+        }
+        try { Stop-Process -Id $processId -Force -ErrorAction Stop }
+        catch {
+            if (Get-Process -Id $processId -ErrorAction SilentlyContinue) {
+                throw "Не удалось остановить процесс XIDER PID $processId перед заменой файлов."
+            }
+        }
+    }
+    for ($attempt = 0; $attempt -lt 5; $attempt++) {
+        $remaining = @(Get-XiderManagedProcesses -AgentDirectory $AgentDirectory)
+        if (-not $remaining.Count) { return }
+        Start-Sleep -Seconds 1
+    }
+    $remainingIds = @($remaining | ForEach-Object { $_.ProcessId }) -join ', '
+    throw "Процессы XIDER всё ещё используют каталог агента: $remainingIds"
+}
+
 function Expand-XiderArchiveSafely {
     param(
         [Parameter(Mandatory)][string]$ArchivePath,
@@ -330,8 +469,11 @@ try {
         Start-Sleep -Seconds 1
     }
     if ($stillRunning.Count) { throw "Прежние задачи не остановились: $($stillRunning -join ', ')" }
-    if (Test-Path -LiteralPath $repo) { Move-Item -LiteralPath $repo -Destination $backup }
-    Move-Item -LiteralPath $stage -Destination $repo
+    if (Test-Path -LiteralPath $repo) {
+        Stop-XiderManagedProcesses -AgentDirectory (Join-Path $repo 'XGENT-WDS')
+        [IO.Directory]::Move($repo, $backup)
+    }
+    [IO.Directory]::Move($stage, $repo)
     $activationStarted = $true
     $activePython = Join-Path $agent 'venv\Scripts\python.exe'
     & $activePython -m pip --version | Out-Null
@@ -436,13 +578,14 @@ catch {
     }
     if ($activationStarted -and (Test-Path -LiteralPath $repo)) {
         try {
-            Move-Item -LiteralPath $repo -Destination $failed
+            Stop-XiderManagedProcesses -AgentDirectory (Join-Path $repo 'XGENT-WDS')
+            [IO.Directory]::Move($repo, $failed)
             $failedEnv = Join-Path $failed 'XGENT-WDS\.env'
             if (Test-Path -LiteralPath $failedEnv) { Remove-Item -LiteralPath $failedEnv -Force }
         } catch { $rollbackProblems += "Не удалось убрать неудачную версию: $($_.Exception.Message)" }
     }
     if ($backup -and (Test-Path -LiteralPath $backup) -and -not (Test-Path -LiteralPath $repo)) {
-        try { Move-Item -LiteralPath $backup -Destination $repo }
+        try { [IO.Directory]::Move($backup, $repo) }
         catch { $rollbackProblems += "Не удалось вернуть предыдущие файлы: $($_.Exception.Message)" }
     }
     if ($taskInstallAttempted) {
