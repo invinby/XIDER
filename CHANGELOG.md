@@ -8,6 +8,9 @@
   provides the latest signed one-line installer and clearly distinguishes that
   recovery step from installing the selected historical release; the command
   must be run locally on the target device.
+- Added a direct install action beside each compatible agent release in
+  X-LEDGER; the selected tag is still confirmed by the owner and verified by
+  the agent before installation.
 - Windows staged installation now waits for and, when necessary, stops only
   processes whose executable or script belongs to the managed agent directory.
   Activation and rollback use same-volume directory renames instead of
@@ -20,6 +23,9 @@
   восстановления: она показывает короткую команду последнего подписанного
   установщика для локального запуска на целевом устройстве и отдельно поясняет,
   что это не установка выбранного старого тега.
+- Рядом с каждым совместимым релизом агента в X-LEDGER добавлена кнопка
+  установки. Бот просит подтвердить выбранный тег, а агент сверяет подпись до
+  установки.
 - Windows-установщик теперь дожидается завершения процессов агента и при
   необходимости останавливает только процессы из управляемого каталога XIDER.
   Переключение и откат используют переименование папок на том же диске вместо

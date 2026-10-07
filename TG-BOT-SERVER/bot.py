@@ -6910,6 +6910,20 @@ async def on_versions_list(cq: CallbackQuery):
         _lex("versions_asset_legend"),
     ]
     kb = InlineKeyboardBuilder()
+    target = SESSION.get("target")
+    info = devices.get(target) if target and target != "all" else None
+    owner = get_user_role(cq.from_user.id) == Role.OWNER
+    bootstrap_release = None
+    if kind == "agent" and owner and info:
+        bootstrap_release = next(
+            (
+                release for release in releases
+                if release.has_source_update_payload(component)
+                and _version_install_block_reason(kind, release, component, info)
+                in _VERSION_BOOTSTRAP_BLOCK_REASONS
+            ),
+            None,
+        )
     for release in shown:
         available = release.has_package(component)
         phrase_key = "versions_release_available" if available else "versions_release_missing"
@@ -6920,8 +6934,20 @@ async def on_versions_list(cq: CallbackQuery):
             callback_data=f"versions:detail:{kind}:{release.tag}",
             style="success" if available else "primary",
         )
+        if kind == "agent" and _version_install_block_reason(kind, release, component, info) is None:
+            kb.button(
+                text=_limit_button_label(_lex("versions_install_button", tag=release.tag)),
+                callback_data=f"versions:install:agent:{release.tag}",
+                style="success",
+            )
     if not releases:
         lines.append(_lex("versions_empty"))
+    if bootstrap_release:
+        kb.button(
+            text=_limit_button_label(_lex("versions_install_bootstrap_button")),
+            callback_data=f"versions:bootstrap:{bootstrap_release.tag}",
+            style="success",
+        )
     if page:
         kb.button(text=_lex("versions_previous"), callback_data=f"versions:list:{kind}:{page - 1}", style="primary")
     if start + page_size < len(releases):

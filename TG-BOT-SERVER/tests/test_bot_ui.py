@@ -2166,6 +2166,46 @@ def test_selected_release_install_requires_confirmation_and_dispatches_exact_tag
     assert dispatched[0][1]["timeout"] == 110.0
 
 
+def test_agent_release_catalog_has_a_direct_install_action(monkeypatch):
+    import release_catalog
+    from types import SimpleNamespace
+
+    session = bot.SessionRegistry()
+    session["target"] = "device-1"
+    monkeypatch.setattr(bot, "SESSION", session)
+    _setup(monkeypatch, {"device-1": {
+        "name": "My device", "os": "macOS 27", "version": "4.2.0",
+        "update_mode": "source", "release_update_ready": True,
+        "online": True, "last_seen": time.time(),
+    }})
+    release = release_catalog.Release(
+        tag="v4.2.0", version=(4, 2, 0), name="Chosen release",
+        published_at="2026-10-07T00:00:00Z", notes="Signed release",
+        asset_names=frozenset({
+            "XGENT-MCS-macos-bundle.zip", "XIDER-source.zip", "release-manifest.json",
+        }),
+    )
+    monkeypatch.setattr(bot.release_catalog.catalog, "list", lambda: [release])
+    cards = []
+
+    async def replace(_cq, text, reply_markup=None):
+        cards.append((text, reply_markup))
+
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+
+    class Callback:
+        from_user = SimpleNamespace(id=bot.ADMIN_ID)
+        data = "versions:list:agent:0"
+
+        async def answer(self, *args, **kwargs):
+            pass
+
+    asyncio.run(bot.on_versions_list(Callback()))
+    callbacks = _callback_data(cards[-1][1])
+    assert "versions:detail:agent:v4.2.0" in callbacks
+    assert "versions:install:agent:v4.2.0" in callbacks
+
+
 def test_selected_release_install_fails_closed_without_pinned_trust(monkeypatch):
     import release_catalog
     from types import SimpleNamespace
@@ -2220,6 +2260,10 @@ def test_legacy_agent_version_page_offers_owner_bootstrap_command(monkeypatch):
 
         async def answer(self, *args, **kwargs):
             pass
+
+    asyncio.run(bot.on_versions_list(Callback("versions:list:agent:0")))
+    catalog_callbacks = _callback_data(cards[-1][1])
+    assert "versions:bootstrap:v4.2.0" in catalog_callbacks
 
     asyncio.run(bot.on_versions_detail(Callback("versions:detail:agent:v4.2.0")))
     detail_buttons = [button for row in cards[-1][1].inline_keyboard for button in row]
