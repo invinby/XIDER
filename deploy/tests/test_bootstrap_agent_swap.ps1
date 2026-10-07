@@ -151,6 +151,15 @@ try {
 
     $rollbackRoot = Join-Path $fixture 'rollback-install'
     New-OldInstall $rollbackRoot
+    . $bootstrap -InstallRoot $rollbackRoot -SourceArchive $archive -PreflightOnly
+    $managedBeforeSwap = @(
+        Get-XiderManagedProcesses -AgentDirectory (Join-Path $rollbackRoot 'git-ver\XGENT-WDS') |
+            ForEach-Object { [int]$_.ProcessId }
+    )
+    if (5555 -notin $managedBeforeSwap) {
+        $pythonProcess = $global:XiderMockProcesses | Where-Object { [int]$_.ProcessId -eq 5555 }
+        throw "The process matcher did not recognize its Python fixture. Name=$($pythonProcess.Name); executable=$($pythonProcess.ExecutablePath); command line=$($pythonProcess.CommandLine); managed PIDs=$($managedBeforeSwap -join ',')"
+    }
     $failedAsExpected = $false
     $failureMessage = ''
     try { & $bootstrap -InstallRoot $rollbackRoot -SourceArchive $archive -HealthTimeoutSeconds 1 }
