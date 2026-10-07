@@ -154,12 +154,22 @@ try {
     $rollbackRoot = Join-Path $fixture 'rollback-install'
     New-OldInstall $rollbackRoot
     . $bootstrap -InstallRoot $rollbackRoot -SourceArchive $archive -PreflightOnly
+    $pythonProcess = $global:XiderMockProcesses | Where-Object { [int]$_.ProcessId -eq 5555 }
+    $pythonScriptPath = Join-Path $global:XiderMockAgentDir 'xgent_wds.py'
+    $null = Get-XiderPathForms -Path $pythonScriptPath
+    $shortScriptBuffer = New-Object System.Text.StringBuilder(32768)
+    $shortScriptLength = [XiderNativePath]::GetShortPathName(
+        $pythonScriptPath, $shortScriptBuffer, [uint32]$shortScriptBuffer.Capacity
+    )
+    if ($shortScriptLength -gt 0 -and $shortScriptLength -lt $shortScriptBuffer.Capacity) {
+        # WMI can report the same running script through its 8.3 alias.
+        $pythonProcess.CommandLine = '"' + $pythonProcess.ExecutablePath + '" "' + $shortScriptBuffer.ToString() + '"'
+    }
     $managedBeforeSwap = @(
         Get-XiderManagedProcesses -AgentDirectory (Join-Path $rollbackRoot 'git-ver\XGENT-WDS') |
             ForEach-Object { [int]$_.ProcessId }
     )
     if (5555 -notin $managedBeforeSwap) {
-        $pythonProcess = $global:XiderMockProcesses | Where-Object { [int]$_.ProcessId -eq 5555 }
         throw "The process matcher did not recognize its Python fixture. Name=$($pythonProcess.Name); executable=$($pythonProcess.ExecutablePath); command line=$($pythonProcess.CommandLine); managed PIDs=$($managedBeforeSwap -join ',')"
     }
     $failedAsExpected = $false

@@ -37,6 +37,40 @@ $tasksStopped = $false
 $activationStarted = $false
 $taskInstallAttempted = $false
 
+function Get-XiderPathForms {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $forms = New-Object 'System.Collections.Generic.List[string]'
+    $forms.Add($fullPath)
+    try {
+        $resolvedPath = [string](Resolve-Path -LiteralPath $fullPath -ErrorAction Stop).Path
+        if ($resolvedPath -and -not $forms.Exists({ param($item) [string]::Equals($item, $resolvedPath, [StringComparison]::OrdinalIgnoreCase) })) {
+            $forms.Add($resolvedPath)
+        }
+    } catch { }
+
+    if (-not ('XiderNativePath' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+using System.Text;
+public static class XiderNativePath {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern uint GetShortPathName(string longPath, StringBuilder shortPath, uint bufferLength);
+}
+'@
+    }
+    $shortBuffer = New-Object System.Text.StringBuilder(32768)
+    $shortLength = [XiderNativePath]::GetShortPathName($fullPath, $shortBuffer, [uint32]$shortBuffer.Capacity)
+    if ($shortLength -gt 0 -and $shortLength -lt $shortBuffer.Capacity) {
+        $shortPath = $shortBuffer.ToString()
+        if (-not $forms.Exists({ param($item) [string]::Equals($item, $shortPath, [StringComparison]::OrdinalIgnoreCase) })) {
+            $forms.Add($shortPath)
+        }
+    }
+    return $forms.ToArray()
+}
+
 function Test-XiderManagedProcess {
     param(
         [Parameter(Mandatory)]$Process,
@@ -63,17 +97,7 @@ function Test-XiderManagedProcess {
     }
     $commandLine = [string]$Process.CommandLine
     foreach ($scriptName in @('xgent_wds.py', 'xider_guardian_wds.py')) {
-        $scriptPath = [IO.Path]::GetFullPath((Join-Path $agentRoot $scriptName))
-        $scriptPathForms = @($scriptPath)
-        # WMI command lines can preserve an 8.3 path (for example RUNNER~1),
-        # while GetFullPath returns the long form. Resolve-Path often returns
-        # the short form, so compare both representations of the same file.
-        try {
-            $resolvedScriptPath = (Resolve-Path -LiteralPath $scriptPath -ErrorAction Stop).Path
-            if ($resolvedScriptPath -and $resolvedScriptPath -notin $scriptPathForms) {
-                $scriptPathForms += [string]$resolvedScriptPath
-            }
-        } catch { }
+        $scriptPathForms = @(Get-XiderPathForms -Path (Join-Path $agentRoot $scriptName))
         foreach ($scriptPathForm in $scriptPathForms) {
             $searchFrom = 0
             while ($searchFrom -lt $commandLine.Length) {
