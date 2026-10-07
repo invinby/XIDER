@@ -37,36 +37,48 @@ $tasksStopped = $false
 $activationStarted = $false
 $taskInstallAttempted = $false
 
-function Get-XiderManagedProcessIds {
-    param([Parameter(Mandatory)][string]$AgentDirectory)
+function Test-XiderManagedProcess {
+    param(
+        [Parameter(Mandatory)]$Process,
+        [Parameter(Mandatory)][string]$AgentDirectory
+    )
 
     $agentRoot = [IO.Path]::GetFullPath($AgentDirectory).TrimEnd([char[]]@([char]92, [char]47))
     $managedExecutable = Join-Path $agentRoot 'XGENT-WDS.exe'
-    $managedScripts = @(
-        (Join-Path $agentRoot 'xgent_wds.py'),
-        (Join-Path $agentRoot 'xider_guardian_wds.py')
-    )
+    if ($Process.ExecutablePath) {
+        try {
+            $processExecutable = [IO.Path]::GetFullPath([string]$Process.ExecutablePath)
+            if ([string]::Equals(
+                $processExecutable,
+                $managedExecutable,
+                [StringComparison]::OrdinalIgnoreCase
+            )) { return $true }
+        } catch { }
+    }
+
+    if ([string]$Process.Name -notin @('python.exe', 'pythonw.exe')) { return $false }
+    $commandLine = [string]$Process.CommandLine
+    foreach ($scriptName in @('xgent_wds.py', 'xider_guardian_wds.py')) {
+        $scriptPath = Join-Path $agentRoot $scriptName
+        $scriptArgument = '(?i)(?:^|\s|")' + [regex]::Escape($scriptPath) + '(?:"|\s|$)'
+        if ($commandLine -match $scriptArgument) { return $true }
+    }
+    return $false
+}
+
+function Get-XiderManagedProcesses {
+    param([Parameter(Mandatory)][string]$AgentDirectory)
+
     foreach ($process in Get-CimInstance -ClassName Win32_Process -ErrorAction Stop) {
-        $matchesAgent = $false
-        if ($process.ExecutablePath) {
-            try {
-                $processExecutable = [IO.Path]::GetFullPath([string]$process.ExecutablePath)
-                $matchesAgent = [string]::Equals(
-                    $processExecutable,
-                    $managedExecutable,
-                    [StringComparison]::OrdinalIgnoreCase
-                )
-            } catch { }
-        }
-        if (-not $matchesAgent -and $process.CommandLine) {
-            foreach ($scriptPath in $managedScripts) {
-                if ([string]$process.CommandLine -match [regex]::Escape($scriptPath)) {
-                    $matchesAgent = $true
-                    break
-                }
+        if (Test-XiderManagedProcess -Process $process -AgentDirectory $AgentDirectory) {
+            [pscustomobject]@{
+                ProcessId = [int]$process.ProcessId
+                Name = [string]$process.Name
+                ExecutablePath = [string]$process.ExecutablePath
+                CommandLine = [string]$process.CommandLine
+                CreationDate = [string]$process.CreationDate
             }
         }
-        if ($matchesAgent) { [int]$process.ProcessId }
     }
 }
 
@@ -75,11 +87,21 @@ function Stop-XiderManagedProcesses {
 
     $remaining = @()
     for ($attempt = 0; $attempt -lt 10; $attempt++) {
-        $remaining = @(Get-XiderManagedProcessIds -AgentDirectory $AgentDirectory)
+        $remaining = @(Get-XiderManagedProcesses -AgentDirectory $AgentDirectory)
         if (-not $remaining.Count) { return }
         Start-Sleep -Seconds 1
     }
-    foreach ($processId in $remaining) {
+    foreach ($managedProcess in $remaining) {
+        $processId = [int]$managedProcess.ProcessId
+        if (-not $managedProcess.CreationDate) {
+            throw "Не удалось подтвердить личность процесса XIDER PID $processId; каталог оставлен без изменений."
+        }
+        $currentProcess = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $processId" -ErrorAction Stop
+        if (-not $currentProcess -or
+            [string]$currentProcess.CreationDate -ne [string]$managedProcess.CreationDate -or
+            -not (Test-XiderManagedProcess -Process $currentProcess -AgentDirectory $AgentDirectory)) {
+            continue
+        }
         try { Stop-Process -Id $processId -Force -ErrorAction Stop }
         catch {
             if (Get-Process -Id $processId -ErrorAction SilentlyContinue) {
@@ -88,11 +110,12 @@ function Stop-XiderManagedProcesses {
         }
     }
     for ($attempt = 0; $attempt -lt 5; $attempt++) {
-        $remaining = @(Get-XiderManagedProcessIds -AgentDirectory $AgentDirectory)
+        $remaining = @(Get-XiderManagedProcesses -AgentDirectory $AgentDirectory)
         if (-not $remaining.Count) { return }
         Start-Sleep -Seconds 1
     }
-    throw "Процессы XIDER всё ещё используют каталог агента: $($remaining -join ', ')"
+    $remainingIds = @($remaining | ForEach-Object { $_.ProcessId }) -join ', '
+    throw "Процессы XIDER всё ещё используют каталог агента: $remainingIds"
 }
 
 function Expand-XiderArchiveSafely {
