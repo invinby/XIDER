@@ -11,6 +11,7 @@ $global:XiderMockTasksRunning = $false
 $global:XiderMockAgentDir = $null
 $global:XiderMockProcesses = @()
 $global:XiderMockStoppedPids = @()
+$global:XiderMockFilterResults = @()
 $global:XiderMockHealthStatus = 'missing'
 $global:XiderMockOldTasks = $true
 $global:XiderMockOldRunning = @{ 'XIDER Agent' = $true; 'XIDER Guardian' = $true }
@@ -55,8 +56,12 @@ function Start-ScheduledTask {
 function Get-CimInstance {
     param($ClassName, $Filter, $ErrorAction)
     $processes = @($global:XiderMockProcesses)
-    if ($Filter -match 'ProcessId\s*=\s*(\d+)') {
-        $processes = @($processes | Where-Object { [int]$_.ProcessId -eq [int]$Matches[1] })
+    $processIdMatch = [regex]::Match([string]$Filter, 'ProcessId\s*=\s*(\d+)')
+    if ($processIdMatch.Success) {
+        $requestedProcessId = [int]$processIdMatch.Groups[1].Value
+        $processes = @($processes | Where-Object { [int]$_.ProcessId -eq $requestedProcessId })
+        $returnedProcessIds = @($processes | ForEach-Object { [int]$_.ProcessId }) -join ','
+        $global:XiderMockFilterResults += "${requestedProcessId}->${returnedProcessIds}"
     }
     return $processes
 }
@@ -163,7 +168,9 @@ try {
         throw 'The lingering managed XGENT-WDS.exe process was not stopped before the directory swap.'
     }
     if (5555 -notin $global:XiderMockStoppedPids) {
-        throw 'The lingering managed Python agent process was not stopped before the directory swap.'
+        $filterResults = $global:XiderMockFilterResults -join '; '
+        $stoppedPids = $global:XiderMockStoppedPids -join ','
+        throw "The lingering managed Python agent process was not stopped before the directory swap. CIM filter results: $filterResults; stopped PIDs: $stoppedPids"
     }
     if (4444 -in $global:XiderMockStoppedPids) {
         throw 'An unrelated editor process referencing an agent script was stopped.'
@@ -220,5 +227,5 @@ finally {
         (Split-Path $fixture -Leaf) -like 'xider-bootstrap-swap-*') {
         Remove-Item -LiteralPath $fixture -Recurse -Force
     }
-    Remove-Variable XiderMockInstallerResult,XiderMockInstallerCalls,XiderMockTasksRunning,XiderMockAgentDir,XiderMockProcesses,XiderMockStoppedPids,XiderMockHealthStatus,XiderMockOldTasks,XiderMockOldRunning,XiderMockRestored,XiderMockRestarted -Scope Global -ErrorAction SilentlyContinue
+    Remove-Variable XiderMockInstallerResult,XiderMockInstallerCalls,XiderMockTasksRunning,XiderMockAgentDir,XiderMockProcesses,XiderMockStoppedPids,XiderMockFilterResults,XiderMockHealthStatus,XiderMockOldTasks,XiderMockOldRunning,XiderMockRestored,XiderMockRestarted -Scope Global -ErrorAction SilentlyContinue
 }
