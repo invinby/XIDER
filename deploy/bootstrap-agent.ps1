@@ -56,12 +56,34 @@ function Test-XiderManagedProcess {
         } catch { }
     }
 
-    if ([string]$Process.Name -notin @('python.exe', 'pythonw.exe')) { return $false }
+    $processName = [string]$Process.Name
+    if (-not [string]::Equals($processName, 'python.exe', [StringComparison]::OrdinalIgnoreCase) -and
+        -not [string]::Equals($processName, 'pythonw.exe', [StringComparison]::OrdinalIgnoreCase)) {
+        return $false
+    }
     $commandLine = [string]$Process.CommandLine
     foreach ($scriptName in @('xgent_wds.py', 'xider_guardian_wds.py')) {
-        $scriptPath = Join-Path $agentRoot $scriptName
-        $scriptArgument = '(?i)(?:^|\s|")' + [regex]::Escape($scriptPath) + '(?:"|\s|$)'
-        if ($commandLine -match $scriptArgument) { return $true }
+        $scriptPath = [IO.Path]::GetFullPath((Join-Path $agentRoot $scriptName))
+        $searchFrom = 0
+        while ($searchFrom -lt $commandLine.Length) {
+            $scriptIndex = $commandLine.IndexOf(
+                $scriptPath, $searchFrom, [StringComparison]::OrdinalIgnoreCase
+            )
+            if ($scriptIndex -lt 0) { break }
+            $beforeIsBoundary = $scriptIndex -eq 0
+            if (-not $beforeIsBoundary) {
+                $before = $commandLine[$scriptIndex - 1]
+                $beforeIsBoundary = [char]::IsWhiteSpace($before) -or $before -eq [char]34
+            }
+            $scriptEnd = $scriptIndex + $scriptPath.Length
+            $afterIsBoundary = $scriptEnd -eq $commandLine.Length
+            if (-not $afterIsBoundary) {
+                $after = $commandLine[$scriptEnd]
+                $afterIsBoundary = [char]::IsWhiteSpace($after) -or $after -eq [char]34
+            }
+            if ($beforeIsBoundary -and $afterIsBoundary) { return $true }
+            $searchFrom = $scriptIndex + 1
+        }
     }
     return $false
 }
