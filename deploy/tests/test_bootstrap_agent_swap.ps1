@@ -119,6 +119,8 @@ function New-OldInstall($installRoot) {
     })
     New-Item -ItemType Directory -Path $agentDir -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $agentDir 'old-marker.txt'), 'previous-version', $utf8)
+    [IO.File]::WriteAllText((Join-Path $agentDir 'xgent_wds.py'), 'fixture', $utf8)
+    [IO.File]::WriteAllText((Join-Path $agentDir 'xider_guardian_wds.py'), 'fixture', $utf8)
     [IO.File]::WriteAllLines((Join-Path $agentDir '.env'), @(
         'SHARED_KEY=test-secret-not-real-0123456789',
         'MQTT_BROKER=example.invalid',

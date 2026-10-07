@@ -64,25 +64,37 @@ function Test-XiderManagedProcess {
     $commandLine = [string]$Process.CommandLine
     foreach ($scriptName in @('xgent_wds.py', 'xider_guardian_wds.py')) {
         $scriptPath = [IO.Path]::GetFullPath((Join-Path $agentRoot $scriptName))
-        $searchFrom = 0
-        while ($searchFrom -lt $commandLine.Length) {
-            $scriptIndex = $commandLine.IndexOf(
-                $scriptPath, $searchFrom, [StringComparison]::OrdinalIgnoreCase
-            )
-            if ($scriptIndex -lt 0) { break }
-            $beforeIsBoundary = $scriptIndex -eq 0
-            if (-not $beforeIsBoundary) {
-                $before = $commandLine[$scriptIndex - 1]
-                $beforeIsBoundary = [char]::IsWhiteSpace($before) -or $before -eq [char]34
+        $scriptPathForms = @($scriptPath)
+        # WMI command lines can preserve an 8.3 path (for example RUNNER~1),
+        # while GetFullPath returns the long form. Resolve-Path often returns
+        # the short form, so compare both representations of the same file.
+        try {
+            $resolvedScriptPath = (Resolve-Path -LiteralPath $scriptPath -ErrorAction Stop).Path
+            if ($resolvedScriptPath -and $resolvedScriptPath -notin $scriptPathForms) {
+                $scriptPathForms += [string]$resolvedScriptPath
             }
-            $scriptEnd = $scriptIndex + $scriptPath.Length
-            $afterIsBoundary = $scriptEnd -eq $commandLine.Length
-            if (-not $afterIsBoundary) {
-                $after = $commandLine[$scriptEnd]
-                $afterIsBoundary = [char]::IsWhiteSpace($after) -or $after -eq [char]34
+        } catch { }
+        foreach ($scriptPathForm in $scriptPathForms) {
+            $searchFrom = 0
+            while ($searchFrom -lt $commandLine.Length) {
+                $scriptIndex = $commandLine.IndexOf(
+                    $scriptPathForm, $searchFrom, [StringComparison]::OrdinalIgnoreCase
+                )
+                if ($scriptIndex -lt 0) { break }
+                $beforeIsBoundary = $scriptIndex -eq 0
+                if (-not $beforeIsBoundary) {
+                    $before = $commandLine[$scriptIndex - 1]
+                    $beforeIsBoundary = [char]::IsWhiteSpace($before) -or $before -eq [char]34
+                }
+                $scriptEnd = $scriptIndex + $scriptPathForm.Length
+                $afterIsBoundary = $scriptEnd -eq $commandLine.Length
+                if (-not $afterIsBoundary) {
+                    $after = $commandLine[$scriptEnd]
+                    $afterIsBoundary = [char]::IsWhiteSpace($after) -or $after -eq [char]34
+                }
+                if ($beforeIsBoundary -and $afterIsBoundary) { return $true }
+                $searchFrom = $scriptIndex + 1
             }
-            if ($beforeIsBoundary -and $afterIsBoundary) { return $true }
-            $searchFrom = $scriptIndex + 1
         }
     }
     return $false
