@@ -6798,6 +6798,14 @@ def _version_root_menu(server: bool = False):
     return kb.as_markup()
 
 
+_VERSION_BOOTSTRAP_BLOCK_REASONS = frozenset({
+    "versions_install_requires_agent",
+    "versions_install_frozen",
+    "versions_install_trust_missing",
+    "versions_install_offline",
+})
+
+
 def _version_install_block_reason(kind: str, release, component: str, info: dict | None) -> str | None:
     """Fail closed unless this exact release can be verified by this live source agent."""
     if kind != "agent":
@@ -7005,12 +7013,7 @@ async def on_versions_detail(cq: CallbackQuery):
     elif (
         kind == "agent"
         and get_user_role(cq.from_user.id) == Role.OWNER
-        and install_reason in {
-            "versions_install_requires_agent",
-            "versions_install_frozen",
-            "versions_install_trust_missing",
-            "versions_install_offline",
-        }
+        and install_reason in _VERSION_BOOTSTRAP_BLOCK_REASONS
     ):
         kb.button(
             text=_limit_button_label(_lex("versions_install_bootstrap_button")),
@@ -7060,12 +7063,7 @@ async def on_versions_bootstrap(cq: CallbackQuery):
         await cq.answer(_lex("versions_not_found"), show_alert=True)
         return
     reason = _version_install_block_reason("agent", release, component, info)
-    if reason not in {
-        "versions_install_requires_agent",
-        "versions_install_frozen",
-        "versions_install_trust_missing",
-        "versions_install_offline",
-    }:
+    if reason not in _VERSION_BOOTSTRAP_BLOCK_REASONS:
         await cq.answer(_lex(reason or "versions_install_ready"), show_alert=True)
         return
 

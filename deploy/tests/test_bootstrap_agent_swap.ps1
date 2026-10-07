@@ -53,8 +53,12 @@ function Start-ScheduledTask {
     $global:XiderMockOldRunning[$TaskName] = $true
 }
 function Get-CimInstance {
-    param($ClassName, $ErrorAction)
-    return @($global:XiderMockProcesses)
+    param($ClassName, $Filter, $ErrorAction)
+    $processes = @($global:XiderMockProcesses)
+    if ($Filter -match 'ProcessId\s*=\s*(\d+)') {
+        $processes = @($processes | Where-Object { [int]$_.ProcessId -eq [int]$Matches[1] })
+    }
+    return $processes
 }
 function Start-Sleep { param([int]$Seconds) }
 function Stop-Process {
@@ -90,9 +94,23 @@ function New-OldInstall($installRoot) {
     $agentDir = Join-Path $installRoot 'git-ver\XGENT-WDS'
     $global:XiderMockAgentDir = $agentDir
     $global:XiderMockProcesses = @([pscustomobject]@{
+        Name = 'XGENT-WDS.exe'
         ExecutablePath = Join-Path $agentDir 'XGENT-WDS.exe'
         CommandLine = '"' + (Join-Path $agentDir 'XGENT-WDS.exe') + '"'
         ProcessId = 3333
+        CreationDate = '20261007000000.000000+000'
+    }, [pscustomobject]@{
+        Name = 'pythonw.exe'
+        ExecutablePath = Join-Path $agentDir 'venv\Scripts\pythonw.exe'
+        CommandLine = '"' + (Join-Path $agentDir 'venv\Scripts\pythonw.exe') + '" "' + (Join-Path $agentDir 'xgent_wds.py') + '"'
+        ProcessId = 5555
+        CreationDate = '20261007000000.000001+000'
+    }, [pscustomobject]@{
+        Name = 'notepad.exe'
+        ExecutablePath = 'C:\Windows\System32\notepad.exe'
+        CommandLine = 'notepad.exe "' + (Join-Path $agentDir 'xgent_wds.py') + '"'
+        ProcessId = 4444
+        CreationDate = '20261007000001.000000+000'
     })
     New-Item -ItemType Directory -Path $agentDir -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $agentDir 'old-marker.txt'), 'previous-version', $utf8)
@@ -143,6 +161,12 @@ try {
     }
     if (3333 -notin $global:XiderMockStoppedPids) {
         throw 'The lingering managed XGENT-WDS.exe process was not stopped before the directory swap.'
+    }
+    if (5555 -notin $global:XiderMockStoppedPids) {
+        throw 'The lingering managed Python agent process was not stopped before the directory swap.'
+    }
+    if (4444 -in $global:XiderMockStoppedPids) {
+        throw 'An unrelated editor process referencing an agent script was stopped.'
     }
     if (-not (Test-Path -LiteralPath (Join-Path $rollbackRoot 'git-ver\XGENT-WDS\old-marker.txt'))) {
         throw 'The previous checkout was not restored after installer failure.'

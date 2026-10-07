@@ -2233,6 +2233,7 @@ def test_legacy_agent_version_page_offers_owner_bootstrap_command(monkeypatch):
     body, keyboard = cards[-1]
     assert "подписан" in body
     assert "не" in body and "v4.2.0" in body
+    assert "Old Mac" in body and "терминал" in body
     assert "curl -fsSL https://invinby.github.io/XIDER/mac | bash" in body
     assert keyboard.inline_keyboard[0][0].callback_data == "versions:detail:agent:v4.2.0"
 

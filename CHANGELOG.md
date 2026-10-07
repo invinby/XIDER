@@ -6,22 +6,24 @@
 
 - Added an owner-only bootstrap action to legacy-agent release details. It
   provides the latest signed one-line installer and clearly distinguishes that
-  recovery step from installing the selected historical release.
+  recovery step from installing the selected historical release; the command
+  must be run locally on the target device.
 - Windows staged installation now waits for and, when necessary, stops only
   processes whose executable or script belongs to the managed agent directory.
-  Same-volume directory renames make activation and rollback atomic; the old
-  checkout remains as a backup.
+  Activation and rollback use same-volume directory renames instead of
+  recursive folder moves; the old checkout remains as a backup.
 - Aligned bot, Windows, and macOS source/build metadata at 4.2.1.
 
 ### Русский
 
 - В карточке релиза старого агента добавлена доступная только владельцу кнопка
   восстановления: она показывает короткую команду последнего подписанного
-  установщика и отдельно поясняет, что это не установка выбранного старого тега.
+  установщика для локального запуска на целевом устройстве и отдельно поясняет,
+  что это не установка выбранного старого тега.
 - Windows-установщик теперь дожидается завершения процессов агента и при
   необходимости останавливает только процессы из управляемого каталога XIDER.
-  Переключение и откат выполняются атомарным переименованием папок; прежняя
-  версия сохраняется резервной копией.
+  Переключение и откат используют переименование папок на том же диске вместо
+  рекурсивного переноса; прежняя версия сохраняется резервной копией.
 - Версии исходников бота, Windows- и macOS-агентов согласованы на 4.2.1.
 
 Офлайн-проверки не заменяют проверку на физическом устройстве или Telegram.
