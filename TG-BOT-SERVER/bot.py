@@ -4255,6 +4255,31 @@ async def on_cmd_sound(cq: CallbackQuery, state: FSMContext):
     )
     await cq.answer()
 
+def _screenshot_failure_help(result: dict) -> str:
+    """Canonical screenshot states; unknown/legacy responses remain unverified."""
+    instructions = {
+        "permission_denied": "Отказ в доступе к экрану. Проверь разрешение на самом устройстве.",
+        "session_unavailable": "GUI-сеанс недоступен. Войди в сеанс владельца и проверь работу агента после блокировки, сна и смены пользователя.",
+        "tool_missing": "Отсутствует компонент захвата. Проверь установку screencapture/Pillow на устройстве.",
+        "command_failed": "Не выполнена команда захвата. Проверь диагностику агента; это не подтверждает отказ TCC.",
+        "file_empty": "Получен пустой снимок. Проверь сеанс и повтори разрешённое действие; разрешение неизвестно.",
+        "file_oversized": "Превышен допустимый размер снимка. Уменьши разрешение/число экранов и повтори.",
+        "file_unreadable": "Не удалось прочитать снимок или очистить временный файл. Проверь диск и доступ агента к временной папке.",
+        "timeout": "Истекло время захвата. Проверь GUI-сеанс и повтори действие.",
+        "transport_failed": "Не подтверждена доставка результата. Проверь MQTT/Telegram и повтори запрос.",
+    }
+    state = result.get("state")
+    text = "⚠️ " + instructions.get(state, "Состояние захвата неизвестно. Проверь диагностику агента и повтори запрос.")
+    if state == "permission_denied" and result.get("platform") == "macOS":
+        text += ("\nНа самом устройстве: Системные настройки → Конфиденциальность и безопасность → Запись экрана (Screen Recording)."
+                 " Названия разделов могут отличаться в разных версиях macOS. Разрешение выдаёт владелец через ОС; агент не выдаёт его."
+                 " Проверь активный GUI-сеанс LaunchAgent после блокировки, сна/пробуждения и смены пользователя.")
+    elif state == "permission_denied" and result.get("platform") == "Windows":
+        text += "\nПроверь интерактивный рабочий стол и ограничения UAC локально; агент не подтверждает запрос UAC."
+    detail = str(result.get("detail") or result.get("error") or "")[:500]
+    return text + (f"\n<pre>{html.escape(detail)}</pre>" if detail else "")
+
+
 @router.callback_query(AdminFilter(), F.data == "cmd:screenshot")
 async def on_cmd_screenshot(cq: CallbackQuery):
     target = SESSION.get("target")
@@ -4281,23 +4306,37 @@ async def on_cmd_screenshot(cq: CallbackQuery):
     if result is None:
         await _replace_callback_message(
             cq,
-            "⏳ Скриншот не получен за 15 сек — устройство офлайн.",
+            "⏳ Ответ не получен за 15 сек. Проверь MQTT и доставку команды; состояние устройства и разрешения неизвестны.",
             reply_markup=back_to_device_kb(),
         )
         return
     img_b64 = result.get("image")
-    if not img_b64:
-        agent_error = str(result.get("error") or "").strip()
-        detail = f"\n<pre>{html.escape(agent_error[:500])}</pre>" if agent_error else ""
+    if not img_b64 or result.get("state") not in (None, "success"):
         await _replace_callback_message(
             cq,
-            "⚠️ Устройство ответило, но скриншот не получен." + detail,
+            _screenshot_failure_help(result),
             reply_markup=back_to_device_kb(),
         )
         return
     try:
-        img_bytes = base64.b64decode(img_b64)
+        if not isinstance(img_b64, str) or len(img_b64) > 4 * ((30 * 1024 * 1024 + 2) // 3):
+            raise ValueError("Screenshot payload exceeds limit")
+        img_bytes = base64.b64decode(img_b64, validate=True)
+        if not img_bytes:
+            raise ValueError("Empty screenshot")
+        if result.get("state") == "success":
+            from PIL import Image
+            with Image.open(io.BytesIO(img_bytes)) as image:
+                image.verify()
         photo = BufferedInputFile(img_bytes, filename="screenshot.png")
+    except Exception:
+        log.exception("Ошибка декодирования скриншота")
+        await _replace_callback_message(
+            cq, _screenshot_failure_help({"state": "file_unreadable"}),
+            reply_markup=back_to_device_kb(),
+        )
+        return
+    try:
         await _replace_callback_with_media(
             cq,
             bot.send_photo,
@@ -4305,10 +4344,10 @@ async def on_cmd_screenshot(cq: CallbackQuery):
             caption=f"📸 <b>{target_label(target)}</b>",
         )
     except Exception:
-        log.exception("Ошибка декодирования скриншота")
+        log.exception("Ошибка доставки скриншота")
         await _replace_callback_message(
             cq,
-            "⚠️ Ошибка обработки скриншота.",
+            _screenshot_failure_help({"state": "transport_failed", "detail": "Telegram result delivery failed"}),
             reply_markup=back_to_device_kb(),
         )
 
@@ -5210,13 +5249,23 @@ async def on_all_screenshot(cq: CallbackQuery):
     results = await multi_screenshot.wait_window(14.0)
     collected = 0
     manifest = []
+    diagnostics = []
     archive_bytes = io.BytesIO()
     with zipfile.ZipFile(archive_bytes, "w", zipfile.ZIP_DEFLATED) as archive:
         for index, result in enumerate(results, 1):
-            if not result.get("image"):
+            if not result.get("image") or result.get("state") not in (None, "success"):
+                diagnostics.append(f"{html.escape(target_label(str(result.get('device_id') or 'unknown'))[:80])}: {_screenshot_failure_help(result)}")
                 continue
             try:
+                if not isinstance(result["image"], str) or len(result["image"]) > 4 * ((30 * 1024 * 1024 + 2) // 3):
+                    raise ValueError("Screenshot payload exceeds limit")
                 image = base64.b64decode(result["image"], validate=True)
+                if not image:
+                    raise ValueError("Empty screenshot")
+                if result.get("state") == "success":
+                    from PIL import Image
+                    with Image.open(io.BytesIO(image)) as decoded:
+                        decoded.verify()
                 device_id = str(result.get("device_id") or "unknown")
                 name = target_label(device_id)
                 filename = _safe_transfer_filename(
@@ -5225,10 +5274,18 @@ async def on_all_screenshot(cq: CallbackQuery):
                 archive.writestr(filename, image)
                 manifest.append({"file": filename, "device_id": device_id, "device_name": name})
                 collected += 1
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, OSError):
                 log.warning("Некорректный скриншот в сводке устройства", exc_info=True)
+                diagnostics.append(f"{html.escape(str(result.get('device_id') or 'unknown')[:80])}: {_screenshot_failure_help({'state': 'file_unreadable'})}")
         archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False).encode("utf-8"))
     caption = f"📸 Скриншоты собраны: {collected}."
+    if diagnostics:
+        # Keep complete HTML blocks within the Telegram message/caption bounds.
+        for diagnostic in diagnostics:
+            if len(caption) + len(diagnostic) + 2 > (1000 if collected else 3900):
+                caption += "\nОстальные ответы: повтори запрос для конкретного устройства."
+                break
+            caption += "\n\n" + diagnostic
     if collected:
         await _replace_callback_with_media(
             cq, bot.send_document, chat_id=cq.message.chat.id,

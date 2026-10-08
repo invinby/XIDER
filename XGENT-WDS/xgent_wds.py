@@ -30,9 +30,67 @@ from urllib.parse import urlsplit
 import winreg
 import winsound
 from logging.handlers import RotatingFileHandler
+from concurrent.futures import Future
 
 MAX_FILE_PUT_BYTES = 30 * 1024 * 1024
 MAX_FILE_PUT_B64_CHARS = 4 * ((MAX_FILE_PUT_BYTES + 2) // 3)
+MAX_SCREENSHOT_BYTES = 30 * 1024 * 1024
+SCREENSHOT_TIMEOUT = 10.0
+_SCREENSHOT_CAPTURE_LOCK = threading.Lock()
+
+
+def _bounded_screen_grab():
+    """At most one native call; a late image is closed after the caller deadline."""
+    from PIL import ImageGrab
+    if not _SCREENSHOT_CAPTURE_LOCK.acquire(blocking=False):
+        raise TimeoutError("Previous native screen capture is still running")
+    result = Future()
+
+    def capture():
+        try:
+            result.set_result(ImageGrab.grab(all_screens=True))
+        except BaseException as exc:
+            result.set_exception(exc)
+        finally:
+            _SCREENSHOT_CAPTURE_LOCK.release()
+
+    def discard_late_image(completed):
+        if completed.exception() is None:
+            image = completed.result()
+            if image is not None:
+                try:
+                    image.close()
+                except Exception:
+                    log.warning("Could not close late screenshot")
+
+    try:
+        threading.Thread(target=capture, name="xider-screen-capture", daemon=True).start()
+    except BaseException:
+        _SCREENSHOT_CAPTURE_LOCK.release()
+        raise
+    try:
+        return result.result(timeout=SCREENSHOT_TIMEOUT)
+    except TimeoutError:
+        result.add_done_callback(discard_late_image)
+        raise
+
+
+def _screenshot_session_available() -> bool:
+    """Read-only desktop access check; never opens consent or changes sessions."""
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.OpenInputDesktop.argtypes = [ctypes.c_uint, ctypes.c_bool, ctypes.c_uint]
+        user32.OpenInputDesktop.restype = ctypes.c_void_p
+        user32.CloseDesktop.argtypes = [ctypes.c_void_p]
+        desktop = user32.OpenInputDesktop(0, False, 1)
+        if not desktop:
+            return False
+        try:
+            return True
+        finally:
+            user32.CloseDesktop(desktop)
+    except (OSError, AttributeError):
+        return False
 
 
 def _validated_open_url(payload: dict) -> tuple[str, int]:
@@ -1197,7 +1255,7 @@ class XgentClient:
             qos=1,
         )
 
-    def _publish_response(self, topic_suffix: str, payload: dict) -> None:
+    def _publish_response(self, topic_suffix: str, payload: dict) -> bool:
         """Отправить подписанный ответ в топик {prefix}/{device_id}/{suffix}."""
         cmd_id = getattr(self._command_context, "cmd_id", None)
         if cmd_id is not None and "id" not in payload:
@@ -1211,11 +1269,14 @@ class XgentClient:
         )
         if info.rc != mqtt.MQTT_ERR_SUCCESS:
             log.warning("Не удалось опубликовать ответ %s (rc=%s)", topic_suffix, info.rc)
+            return False
         else:
             try:
                 info.wait_for_publish(timeout=3.0)
             except Exception:
                 log.exception("Не дождались доставки ответа %s", topic_suffix)
+                return False
+        return info.is_published() if callable(getattr(info, "is_published", None)) else True
 
     def _publish_ack(self, action, status, detail=None, cmd_id=None) -> None:
         """Подтверждение выполнения команды (received/ok/error)."""
@@ -1282,32 +1343,56 @@ class XgentClient:
         self._publish_status()
 
     def _do_screenshot(self, payload: dict) -> None:
-        """Сделать скриншот и отправить base64 JPEG в MQTT."""
+        """One screenshot attempt with conservative, distinguishable diagnostics."""
+        result = {"type": "screenshot", "device_id": DEVICE_ID, "platform": "Windows",
+                  "state": "command_failed", "detail": "Capture failed", "image": None}
+        img = None
         try:
-            from PIL import ImageGrab
-
-            try:
-                img = ImageGrab.grab(all_screens=True)
-            except Exception:
-                img = ImageGrab.grab()
-            img.thumbnail((1600, 1200))
-            buf = io.BytesIO()
-            img.convert("RGB").save(buf, format="JPEG", quality=80, optimize=True)
-            b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-            self._publish_response("screenshot", {
-                "type": "screenshot",
-                "device_id": DEVICE_ID,
-                "image": b64,
-            })
-            log.info("Скриншот отправлен (%d байт)", len(buf.getvalue()))
+            if not _screenshot_session_available():
+                result.update(state="session_unavailable", detail="No accessible interactive input desktop")
+            else:
+                img = _bounded_screen_grab()
+                result.update(state="file_unreadable", detail="Capture did not return a readable image")
+                if img is not None:
+                    width, height = img.size
+                    if width <= 0 or height <= 0:
+                        result.update(state="file_empty", detail="Capture has empty dimensions")
+                    elif width * height > 40_000_000:
+                        result.update(state="file_oversized", detail="Raw capture exceeds 40 megapixels")
+                    else:
+                        img.thumbnail((1600, 1200))
+                        with io.BytesIO() as buf:
+                            with img.convert("RGB") as rgb:
+                                rgb.save(buf, format="JPEG", quality=80, optimize=True)
+                            data = buf.getvalue()
+                        if not data:
+                            result.update(state="file_empty", detail="Encoded image is empty")
+                        elif len(data) > MAX_SCREENSHOT_BYTES:
+                            result.update(state="file_oversized", detail="Encoded image exceeds 30 MiB")
+                        else:
+                            result.update(state="success", detail="One capture produced a valid image; no persistent permission claim",
+                                          image=base64.b64encode(data).decode("ascii"))
+        except ImportError:
+            result.update(state="tool_missing", detail="Pillow ImageGrab is unavailable")
+        except PermissionError:
+            result.update(state="permission_denied", detail="Screen capture reported access denied; no UAC auto-consent")
+        except (TimeoutError, subprocess.TimeoutExpired):
+            result.update(state="timeout", detail="Screen capture timed out")
         except Exception as exc:
-            log.warning("Ошибка создания скриншота: %s", exc)
-            self._publish_response("screenshot", {
-                "type": "screenshot",
-                "device_id": DEVICE_ID,
-                "image": None,
-                "error": str(exc),
-            })
+            result.update(detail=f"{type(exc).__name__}: {str(exc)[:500]}")
+        finally:
+            if img is not None:
+                img.close()
+        try:
+            delivered = self._publish_response("screenshot", result)
+        except Exception:
+            delivered = False
+        if delivered is False:
+            failure = {**result, "state": "transport_failed", "detail": "MQTT result delivery failed", "image": None}
+            try:
+                self._publish_response("screenshot", failure)
+            except Exception:
+                log.warning("Screenshot transport diagnostic could not be delivered")
 
     def _do_geo_location(self, payload: dict) -> None:
         """One explicit request; IP estimation requires the exact boolean opt-in."""

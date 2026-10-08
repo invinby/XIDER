@@ -28,6 +28,15 @@ from logging.handlers import RotatingFileHandler
 
 MAX_FILE_PUT_BYTES = 30 * 1024 * 1024
 MAX_FILE_PUT_B64_CHARS = 4 * ((MAX_FILE_PUT_BYTES + 2) // 3)
+MAX_SCREENSHOT_BYTES = 30 * 1024 * 1024
+
+
+def _screenshot_session_available() -> bool:
+    """Console ownership is a session gate, never evidence of TCC permission."""
+    try:
+        return os.stat("/dev/console").st_uid == os.getuid() and os.getuid() != 0
+    except (OSError, AttributeError):
+        return False
 
 
 def _validated_open_url(payload: dict) -> tuple[str, int]:
@@ -834,7 +843,7 @@ class XgentClient:
         envelope = sign_message(body)
         self._client.publish(f"{MQTT_PREFIX}/{DEVICE_ID}/status", json.dumps(envelope, ensure_ascii=False), qos=1)
 
-    def _publish_response(self, topic_suffix: str, payload: dict) -> None:
+    def _publish_response(self, topic_suffix: str, payload: dict) -> bool:
         cmd_id = getattr(self._command_context, "cmd_id", None)
         if cmd_id is not None and "id" not in payload:
             payload = {**payload, "id": cmd_id}
@@ -848,11 +857,14 @@ class XgentClient:
         )
         if info.rc != mqtt.MQTT_ERR_SUCCESS:
             log.warning("Не удалось опубликовать ответ %s (rc=%s)", topic_suffix, info.rc)
+            return False
         else:
             try:
                 info.wait_for_publish(timeout=3.0)
             except Exception:
                 log.exception("Не дождались доставки ответа %s", topic_suffix)
+                return False
+        return info.is_published() if callable(getattr(info, "is_published", None)) else True
 
     def _publish_ack(self, action, status, detail=None, cmd_id=None) -> None:
         payload = {"type": "ack", "device_id": DEVICE_ID, "action": action, "status": status}
@@ -899,37 +911,78 @@ class XgentClient:
         self._publish_status()
 
     def _do_screenshot(self, payload: dict) -> None:
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-            tmp_path = tmp.name
+        result = {"type": "screenshot", "device_id": DEVICE_ID, "platform": "macOS",
+                  "state": "command_failed", "detail": "Capture failed", "image": None}
+        tmp_path = None
+        capture_completed = False
         try:
-            res = subprocess.run(["screencapture", "-x", tmp_path], capture_output=True, timeout=10)
-            if res.returncode != 0 or not os.path.exists(tmp_path) or os.path.getsize(tmp_path) == 0:
-                log.warning("screencapture вернул ошибку rc=%s: %s", res.returncode, res.stderr)
-                self._publish_response("screenshot", {
-                    "type": "screenshot",
-                    "device_id": DEVICE_ID,
-                    "image": None,
-                    "error": "Отказано в доступе (TCC). Выдайте разрешение «Запись экрана» в Настройках Mac.",
-                })
-                return
-            from PIL import Image
-            img = Image.open(tmp_path)
-            img.thumbnail((1600, 1200))
-            buf = io.BytesIO()
-            img.convert("RGB").save(buf, format="JPEG", quality=80, optimize=True)
-            b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-            self._publish_response("screenshot", {"type": "screenshot", "device_id": DEVICE_ID, "image": b64})
-            log.info("Скриншот отправлен")
+            if not _screenshot_session_available():
+                result.update(state="session_unavailable", detail="No active owner GUI console session")
+            elif not shutil.which("screencapture"):
+                result.update(state="tool_missing", detail="screencapture is unavailable")
+            else:
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                    tmp_path = tmp.name
+                res = subprocess.run(["screencapture", "-x", tmp_path], capture_output=True, timeout=10)
+                capture_completed = True
+                if res.returncode != 0:
+                    stderr = res.stderr.decode("utf-8", errors="replace") if isinstance(res.stderr, bytes) else str(res.stderr or "")
+                    # Only an explicit denial is evidence of denial. Generic rc/empty files are not TCC diagnostics.
+                    denied = any(word in stderr.lower() for word in ("permission denied", "not authorized", "not permitted", "tcc denied"))
+                    result.update(state="permission_denied" if denied else "command_failed",
+                                  detail=f"screencapture exit {res.returncode}: {stderr[:500]}")
+                else:
+                    result.update(state="file_unreadable", detail="Cannot read captured image")
+                    size = os.path.getsize(tmp_path)
+                    if size == 0:
+                        result.update(state="file_empty", detail="Capture output is empty; permission is unverified")
+                    elif size > MAX_SCREENSHOT_BYTES:
+                        result.update(state="file_oversized", detail="Capture exceeds 30 MiB")
+                    else:
+                        from PIL import Image
+                        with Image.open(tmp_path) as img:
+                            img.load()
+                            img.thumbnail((1600, 1200))
+                            with io.BytesIO() as buf:
+                                with img.convert("RGB") as rgb:
+                                    rgb.save(buf, format="JPEG", quality=80, optimize=True)
+                                data = buf.getvalue()
+                        if not data:
+                            result.update(state="file_empty", detail="Encoded image is empty")
+                        elif len(data) > MAX_SCREENSHOT_BYTES:
+                            result.update(state="file_oversized", detail="Encoded image exceeds 30 MiB")
+                        else:
+                            result.update(state="success", detail="One capture produced a valid image; no persistent permission claim",
+                                          image=base64.b64encode(data).decode("ascii"))
+        except (subprocess.TimeoutExpired, TimeoutError):
+            result.update(state="timeout", detail="Screen capture timed out")
+        except ImportError:
+            result.update(state="tool_missing", detail="Pillow is unavailable")
+        except FileNotFoundError:
+            result.update(state="file_unreadable" if capture_completed else "tool_missing", detail="Capture tool or output is missing")
+        except PermissionError:
+            result.update(state="file_unreadable", detail="Capture artifact access denied; TCC permission is unverified")
         except Exception as exc:
-            log.exception("Ошибка скриншота")
-            self._publish_response("screenshot", {
-                "type": "screenshot",
-                "device_id": DEVICE_ID,
-                "image": None,
-                "error": f"Ошибка: {exc}",
-            })
+            result.update(detail=f"{type(exc).__name__}: {str(exc)[:500]}")
         finally:
-            if os.path.exists(tmp_path): os.unlink(tmp_path)
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    result.update(state="file_unreadable", detail="Temporary capture cleanup failed", image=None)
+                    log.warning("Could not unlink temporary screenshot")
+        try:
+            delivered = self._publish_response("screenshot", result)
+        except Exception:
+            delivered = False
+        if delivered is False:
+            failure = {**result, "state": "transport_failed", "detail": "MQTT result delivery failed", "image": None}
+            try:
+                self._publish_response("screenshot", failure)
+            except Exception:
+                log.warning("Screenshot transport diagnostic could not be delivered")
 
     def _do_webcam(self, payload: dict) -> None:
         try:
