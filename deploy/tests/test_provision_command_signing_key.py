@@ -267,6 +267,80 @@ class ProvisionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(self.key.is_file())
 
+    def test_interrupted_key_publication_recovers_exact_inode_and_fsyncs_cleanup(self):
+        key = self.write_key()
+        self.key.chmod(0o640)
+        os.chown(self.key, 0, self.gid)
+        private_digest = hashlib.sha256(self.key.read_bytes()).digest()
+        original_inode = self.key.stat().st_ino
+        orphan = self.directory / f".{self.key.name}.abcdef12.tmp"
+        os.link(self.key, orphan)
+        self.assertEqual(self.key.stat().st_nlink, 2)
+        spec = importlib.util.spec_from_file_location("provision_crash_test", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        real_sync = module._sync_directory
+        cleanup_syncs = []
+
+        def observe_sync(path):
+            real_sync(path)
+            if not orphan.exists() and self.key.stat().st_nlink == 1:
+                cleanup_syncs.append(NAME not in self.env.read_text())
+
+        with unittest.mock.patch.object(module, "_sync_directory", side_effect=observe_sync):
+            actual_id = module.provision(self.key, self.env, group=self.group)
+        self.assertEqual(actual_id, next(iter(public_entry(key))))
+        self.assertEqual(self.key.stat().st_ino, original_inode)
+        self.assertEqual(hashlib.sha256(self.key.read_bytes()).digest(), private_digest)
+        self.assertEqual(self.key.stat().st_nlink, 1)
+        self.assertFalse(orphan.exists())
+        self.assertIn(True, cleanup_syncs, "orphan cleanup was not fsynced before public env publication")
+        self.assertIn(keyset(public_entry(key)), self.env.read_text())
+        self.run_install()
+        self.assertEqual(hashlib.sha256(self.key.read_bytes()).digest(), private_digest)
+
+    def test_normal_key_publication_fsyncs_after_removing_temp_alias(self):
+        spec = importlib.util.spec_from_file_location("provision_sync_test", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        key = Ed25519PrivateKey.generate()
+        private = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                    serialization.NoEncryption())
+        real_sync = module._sync_directory
+        link_counts_at_sync = []
+
+        def observe_sync(path):
+            real_sync(path)
+            link_counts_at_sync.append(self.key.stat().st_nlink)
+
+        with unittest.mock.patch.object(module, "_sync_directory", side_effect=observe_sync):
+            module._atomic_file(self.key, private, mode=0o640, uid=0, gid=self.gid, create_only=True)
+        self.assertEqual(link_counts_at_sync[-1], 1, "last directory fsync preceded alias removal")
+        self.assertFalse(list(self.directory.glob(f".{self.key.name}.*.tmp")))
+
+    def test_unrelated_or_unsafe_hardlinks_are_not_recovered(self):
+        self.write_key()
+        self.key.chmod(0o640)
+        os.chown(self.key, 0, self.gid)
+        for suffix in ("unrelated", f".{self.key.name}.bad-name.tmp"):
+            with self.subTest(shape=suffix):
+                alias = self.directory / suffix
+                os.link(self.key, alias)
+                self.assert_preserved_failure()
+                self.assertTrue(alias.is_file())
+                alias.unlink()
+        orphan = self.directory / f".{self.key.name}.abcdef12.tmp"
+        os.link(self.key, orphan)
+        self.key.chmod(0o666)
+        self.assert_preserved_failure()
+        self.assertTrue(orphan.exists())
+        self.key.chmod(0o640)
+        external = self.directory / "unrelated-third-link"
+        os.link(self.key, external)
+        self.assert_preserved_failure()
+        self.assertTrue(orphan.exists())
+        self.assertTrue(external.exists())
+
 
 if __name__ == "__main__":
     import unittest.mock

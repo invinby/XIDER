@@ -80,11 +80,11 @@ def _check_directory(directory: Path):
         raise ValueError("provisioning directory must be root-owned and not writable by others")
 
 
-def _read_regular(path: Path, limit: int):
+def _read_regular(path: Path, limit: int, *, allowed_links=(1,)):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, "rb") as stream:
         info = os.fstat(stream.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > limit:
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink not in allowed_links or info.st_size > limit:
             raise ValueError("unsafe or oversized provisioning file")
         data = stream.read(limit + 1)
         if len(data) > limit:
@@ -98,6 +98,39 @@ def _sync_directory(path: Path):
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+def _publication_alias(path: Path, info, gid: int) -> Path | None:
+    """Recognize only our root-owned, same-inode interrupted mkstemp link."""
+    if info.st_nlink == 1:
+        return None
+    if info.st_nlink != 2 or info.st_uid != 0 or info.st_gid != gid or stat.S_IMODE(info.st_mode) != 0o640:
+        raise ValueError("unsafe linked signing key")
+    pattern = re.compile(re.escape(f".{path.name}.") + r"[a-z0-9_]{8}\.tmp")
+    aliases = []
+    for candidate in path.parent.iterdir():
+        if not pattern.fullmatch(candidate.name):
+            continue
+        alias_info = candidate.lstat()
+        if stat.S_ISREG(alias_info.st_mode) and (alias_info.st_dev, alias_info.st_ino) == (info.st_dev, info.st_ino):
+            aliases.append(candidate)
+    if len(aliases) != 1:
+        raise ValueError("unrecognized signing-key hardlink")
+    return aliases[0]
+
+
+def _recover_publication(path: Path, alias: Path, info):
+    # The caller holds the provisioning lock in a root-owned directory that
+    # nobody else can write. Recheck both names before removing only the alias.
+    current, pending = path.lstat(), alias.lstat()
+    identity = (info.st_dev, info.st_ino)
+    if not all(stat.S_ISREG(item.st_mode) and item.st_nlink == 2 and
+               (item.st_dev, item.st_ino) == identity for item in (current, pending)):
+        raise ValueError("signing-key publication state changed")
+    os.unlink(alias)
+    _sync_directory(path.parent)
+    if path.lstat().st_nlink != 1:
+        raise ValueError("signing-key recovery is incomplete")
 
 
 def _atomic_file(path: Path, data: bytes, *, mode: int, uid: int, gid: int, create_only=False):
@@ -119,6 +152,9 @@ def _atomic_file(path: Path, data: bytes, *, mode: int, uid: int, gid: int, crea
     finally:
         if os.path.lexists(temporary):
             os.unlink(temporary)
+            # Persist the alias removal as well as final-name publication. A
+            # crash before this sync is recoverable on the next installer run.
+            _sync_directory(path.parent)
 
 
 def provision(key_path: Path = KEY_PATH, env_file: Path = Path("/etc/xider/bot.env"), *, group="xider") -> str:
@@ -153,7 +189,7 @@ def provision(key_path: Path = KEY_PATH, env_file: Path = Path("/etc/xider/bot.e
                 value = value[1:-1]
             entries = _public_keyset(value)
         try:
-            private_bytes, _ = _read_regular(key_path, 4096)
+            private_bytes, key_info = _read_regular(key_path, 4096, allowed_links=(1, 2))
         except FileNotFoundError:
             key = Ed25519PrivateKey.generate()
             absent = True
@@ -161,6 +197,7 @@ def provision(key_path: Path = KEY_PATH, env_file: Path = Path("/etc/xider/bot.e
             key = serialization.load_pem_private_key(private_bytes, password=None)
             if not isinstance(key, Ed25519PrivateKey):
                 raise ValueError("existing key is not Ed25519")
+            publication_alias = _publication_alias(key_path, key_info, gid)
             absent = False
         public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
         key_id = hashlib.sha256(public).hexdigest()[:16]
@@ -175,6 +212,8 @@ def provision(key_path: Path = KEY_PATH, env_file: Path = Path("/etc/xider/bot.e
                                               serialization.NoEncryption())
             _atomic_file(key_path, private_bytes, mode=0o640, uid=0, gid=gid, create_only=True)
         else:
+            if publication_alias is not None:
+                _recover_publication(key_path, publication_alias, key_info)
             fd = os.open(key_path, os.O_RDONLY | os.O_NOFOLLOW)
             try:
                 os.fchown(fd, 0, gid)

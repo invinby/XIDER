@@ -53,6 +53,53 @@ function Merge-XiderCommandPublicKeyset {
     return $result
 }
 
+function Read-XiderUtf8EnvText {
+    param([Parameter(Mandatory)][string]$Path)
+    # PS5.1 Get-Content defaults to ANSI for BOM-less files. Decode explicitly,
+    # retaining a UTF-8 BOM if present and rejecting invalid UTF-8 bytes.
+    $strictUtf8 = [System.Text.UTF8Encoding]::new($false, $true)
+    return $strictUtf8.GetString([IO.File]::ReadAllBytes($Path))
+}
+
+function Write-XiderPublicKeysetEnv {
+    param([Parameter(Mandatory)][string]$SourcePath,
+          [Parameter(Mandatory)][string]$DestinationPath,
+          [string[]]$PublicLines)
+    $text = Read-XiderUtf8EnvText -Path $SourcePath
+    $bom = ''
+    if ($text.StartsWith([string][char]0xFEFF, [StringComparison]::Ordinal)) {
+        $bom = [string][char]0xFEFF
+        $text = $text.Substring(1)
+    }
+    $publicEntry = @(Merge-XiderCommandPublicKeyset -ConfigLines @() -PublicLines $PublicLines)
+    $pattern = '^\s*(?:export\s+)?XIDER_COMMAND_VERIFY_KEYSET_B64\s*='
+    $newlineMatch = [regex]::Match($text, '\r\n|\n|\r')
+    $newline = if ($newlineMatch.Success) { $newlineMatch.Value } else { [Environment]::NewLine }
+    $output = [System.Text.StringBuilder]::new()
+    [void]$output.Append($bom)
+    $written = $false
+    # Preserve every unrelated line's exact text and original terminator,
+    # including mixed CRLF/LF and a final line without a newline.
+    foreach ($line in [regex]::Matches($text, '([^\r\n]*)(\r\n|\n|\r|$)')) {
+        if ($line.Length -eq 0) { continue }
+        if ($line.Groups[1].Value -match $pattern) {
+            if (-not $written -and $publicEntry.Count -eq 1) {
+                [void]$output.Append($publicEntry[0]).Append($line.Groups[2].Value)
+                $written = $true
+            }
+        } else {
+            [void]$output.Append($line.Value)
+        }
+    }
+    if (-not $written -and $publicEntry.Count -eq 1) {
+        if ($output.Length -gt $bom.Length -and $output[$output.Length - 1] -notin @([char]13, [char]10)) {
+            [void]$output.Append($newline)
+        }
+        [void]$output.Append($publicEntry[0]).Append($newline)
+    }
+    [IO.File]::WriteAllText($DestinationPath, $output.ToString(), [System.Text.UTF8Encoding]::new($false, $true))
+}
+
 function Get-XiderPathForms {
     param([Parameter(Mandatory)][string]$Path)
 
@@ -379,9 +426,9 @@ try {
                 "sudo -n sh -c 'grep -E `"^XIDER_COMMAND_VERIFY_KEYSET_B64=`" /etc/xider/bot.env || test `$? -eq 1'" 2>$null |
                 Where-Object { $_ -match '^XIDER_COMMAND_VERIFY_KEYSET_B64=' })
             if ($LASTEXITCODE -eq 0) {
-                $merged = @(Merge-XiderCommandPublicKeyset -ConfigLines @(Get-Content -LiteralPath $envSource) -PublicLines $publicLines)
-                $envSource = Join-Path $extract 'agent.public-refreshed.env'
-                [IO.File]::WriteAllLines($envSource, [string[]]$merged, [System.Text.UTF8Encoding]::new($false))
+                $refreshedEnv = Join-Path $extract 'agent.public-refreshed.env'
+                Write-XiderPublicKeysetEnv -SourcePath $envSource -DestinationPath $refreshedEnv -PublicLines $publicLines
+                $envSource = $refreshedEnv
             }
         } catch {
             Write-Host 'Публичный keyset сейчас недоступен; использую локальную конфигурацию.'
@@ -392,7 +439,7 @@ try {
         'SHARED_KEY', 'MQTT_BROKER', 'MQTT_PORT', 'MQTT_PREFIX',
         'MQTT_TLS', 'MQTT_USERNAME', 'MQTT_PASSWORD', 'ENCRYPT_PAYLOAD'
     )
-    $configLines = @(Get-Content -LiteralPath $envSource -ErrorAction Stop)
+    $configLines = @([regex]::Split((Read-XiderUtf8EnvText -Path $envSource).TrimStart([char]0xFEFF), '\r\n|\n|\r'))
     $prefixPattern = '^\s*(?:export\s+)?MQTT_PREFIX\s*=\s*(.*)$'
     $prefixLines = @($configLines | Where-Object { $_ -match $prefixPattern })
     if ($prefixLines.Count -gt 1) {
