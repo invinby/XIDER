@@ -17,7 +17,7 @@ Every modern result contains `state`, nonempty `detail`, `platform`, `device_id`
 | timeout | Capture exceeded the 10-second caller deadline, or the previous Windows native call is still running. Check the GUI session and retry. |
 | transport_failed | MQTT publisher positively reported delivery failure. Check transport; the diagnostic itself may also fail to arrive. |
 
-Unknown/legacy failure responses remain unknown. Modern failed states override even an attached image. Modern success images are decoded and verified by the bot. Legacy images keep existing compatibility, with strict base64, nonempty and size checks. The bot result wait deadline reports uncertain delivery, never proves that the device is offline.
+Unknown/legacy failure responses remain unknown. Modern failed states override even an attached image. Modern success images pass one shared bot validator: strict bounded base64, JPEG/PNG format allowlist, positive dimensions at most 40 megapixels, then complete pixel decode. Truncated images and Pillow decompression bombs fail per item, preserving valid peer results in bulk requests. Legacy images keep existing compatibility, with strict base64, nonempty and size checks. The bot result wait deadline reports uncertain delivery, never proves that the device is offline.
 
 Owner-local macOS guidance: Системные настройки → Конфиденциальность и безопасность → Запись экрана (Screen Recording). Названия разделов могут отличаться в разных версиях macOS. Verify the active LaunchAgent GUI session after lock, sleep/wake and user switching on a physical Mac. Console ownership alone does not prove TCC permission or guarantee post-lock capture behavior.
 

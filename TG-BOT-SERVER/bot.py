@@ -4255,6 +4255,30 @@ async def on_cmd_sound(cq: CallbackQuery, state: FSMContext):
     )
     await cq.answer()
 
+def _decode_screenshot_image(result: dict) -> bytes:
+    """Bound transport bytes and modern image dimensions before full pixel decode."""
+    encoded = result.get("image")
+    limit = 30 * 1024 * 1024
+    if not isinstance(encoded, str) or len(encoded) > 4 * ((limit + 2) // 3):
+        raise ValueError("Screenshot payload exceeds limit")
+    data = base64.b64decode(encoded, validate=True)
+    if not data or len(data) > limit:
+        raise ValueError("Screenshot payload is empty or exceeds limit")
+    if result.get("state") == "success":
+        from PIL import Image
+        try:
+            with Image.open(io.BytesIO(data), formats=["JPEG", "PNG"]) as image:
+                width, height = image.size
+                if width <= 0 or height <= 0 or width * height > 40_000_000:
+                    raise ValueError("Screenshot dimensions exceed limit")
+                # Header verification alone accepts truncated JPEGs. Decode all pixels
+                # only after the format/dimension gates have bounded the allocation.
+                image.load()
+        except Image.DecompressionBombError as exc:
+            raise ValueError("Screenshot dimensions exceed limit") from exc
+    return data
+
+
 def _screenshot_failure_help(result: dict) -> str:
     """Canonical screenshot states; unknown/legacy responses remain unverified."""
     instructions = {
@@ -4319,15 +4343,7 @@ async def on_cmd_screenshot(cq: CallbackQuery):
         )
         return
     try:
-        if not isinstance(img_b64, str) or len(img_b64) > 4 * ((30 * 1024 * 1024 + 2) // 3):
-            raise ValueError("Screenshot payload exceeds limit")
-        img_bytes = base64.b64decode(img_b64, validate=True)
-        if not img_bytes:
-            raise ValueError("Empty screenshot")
-        if result.get("state") == "success":
-            from PIL import Image
-            with Image.open(io.BytesIO(img_bytes)) as image:
-                image.verify()
+        img_bytes = _decode_screenshot_image(result)
         photo = BufferedInputFile(img_bytes, filename="screenshot.png")
     except Exception:
         log.exception("Ошибка декодирования скриншота")
@@ -5257,15 +5273,7 @@ async def on_all_screenshot(cq: CallbackQuery):
                 diagnostics.append(f"{html.escape(target_label(str(result.get('device_id') or 'unknown'))[:80])}: {_screenshot_failure_help(result)}")
                 continue
             try:
-                if not isinstance(result["image"], str) or len(result["image"]) > 4 * ((30 * 1024 * 1024 + 2) // 3):
-                    raise ValueError("Screenshot payload exceeds limit")
-                image = base64.b64decode(result["image"], validate=True)
-                if not image:
-                    raise ValueError("Empty screenshot")
-                if result.get("state") == "success":
-                    from PIL import Image
-                    with Image.open(io.BytesIO(image)) as decoded:
-                        decoded.verify()
+                image = _decode_screenshot_image(result)
                 device_id = str(result.get("device_id") or "unknown")
                 name = target_label(device_id)
                 filename = _safe_transfer_filename(
