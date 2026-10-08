@@ -11,6 +11,11 @@ import pytest
 import bot
 
 
+@pytest.fixture(autouse=True)
+def isolated_card_index(monkeypatch, tmp_path):
+    monkeypatch.setattr(bot.ui_cards, "FILE", tmp_path / "ui-cards.json")
+
+
 def _admin_fixture(monkeypatch, tmp_path):
     from types import SimpleNamespace
     monkeypatch.setattr(bot, "ADMIN_ID", 100)
@@ -3154,7 +3159,7 @@ def test_screenshot_displays_agent_error_without_html_injection(monkeypatch):
     assert "<denied>" not in shown[0]
 
 
-@pytest.mark.parametrize("action", ["screenshot", "webcam"])
+@pytest.mark.parametrize("action", ["screenshot", "webcam", "mic"])
 def test_photo_response_becomes_current_navigation_card(monkeypatch, action):
     from types import SimpleNamespace
 
@@ -3175,7 +3180,8 @@ def test_photo_response_becomes_current_navigation_card(monkeypatch, action):
 
     class FakeCollector:
         async def wait_for(self, *args, **kwargs):
-            return {"image": base64.b64encode(b"fixture-image").decode("ascii")}
+            return {"image": base64.b64encode(b"fixture-image").decode("ascii"),
+                    "audio": base64.b64encode(b"fixture-audio").decode("ascii")}
 
     async def send_photo(*args, **kwargs):
         return SimpleNamespace(chat=SimpleNamespace(id=1), message_id=18)
@@ -3184,7 +3190,7 @@ def test_photo_response_becomes_current_navigation_card(monkeypatch, action):
     monkeypatch.setitem(bot.SESSION, "target", "mac1")
     monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (True, "cmd-1"))
     monkeypatch.setattr(bot, f"{action}_collector", FakeCollector())
-    monkeypatch.setattr(bot, "bot", SimpleNamespace(send_photo=send_photo))
+    monkeypatch.setattr(bot, "bot", SimpleNamespace(send_photo=send_photo, send_voice=send_photo))
     monkeypatch.setattr(bot.ui_cards, "set_card", lambda *args: cards.append(args))
     monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: True)
 
@@ -4479,8 +4485,8 @@ def test_device_status_notices_confirm_transitions_without_heartbeat_starvation(
         assert len(notices) == 1 and "вернулся онлайн" in notices[0]
 
         # Repeated heartbeats must neither resend nor push the transition timer out.
-        status("online")
-        status("online")
+        for _ in range(20):
+            status("online")
         await asyncio.sleep(0.05)
         assert len(notices) == 1
 
@@ -4493,6 +4499,11 @@ def test_device_status_notices_confirm_transitions_without_heartbeat_starvation(
         status("offline")
         await asyncio.sleep(0.05)
         assert len(notices) == 2 and "ушёл в оффлайн" in notices[1]
+
+        for _ in range(20):
+            status("offline")
+        await asyncio.sleep(0.05)
+        assert len(notices) == 2
 
         status("online")
         await asyncio.sleep(0.05)
@@ -4845,7 +4856,7 @@ def test_callback_result_media_replaces_text_card_and_stores_media_id(monkeypatc
     )
 
     assert result.message_id == 31
-    assert calls[0] == ("send", 20, audio, bot.back_to_device_kb())
+    assert calls[0] == ("send", 10, audio, bot.back_to_device_kb())
     assert calls[1:] == [("delete", 10, 30), ("store", 31)]
 
 
@@ -5323,13 +5334,16 @@ def test_lifecycle_notice_ignores_prepared_and_bounds_duplicate_cache(monkeypatc
 
 
 def test_lifecycle_notice_sends_only_to_owner(monkeypatch):
+    from types import SimpleNamespace
     sent = []
     class FakeBot:
-        async def send_message(self, user_id, text):
+        async def send_message(self, user_id, text, **kwargs):
             sent.append((user_id, text))
+            return SimpleNamespace(chat=SimpleNamespace(id=user_id), message_id=80)
     monkeypatch.setattr(bot, "bot", FakeBot())
     asyncio.run(bot._notify_owner("operation failed"))
     assert sent == [(int(bot.ADMIN_ID), "operation failed")]
+    assert bot.ui_cards.get(int(bot.ADMIN_ID), int(bot.ADMIN_ID)) == 80
 
 
 def test_server_menu_contains_metrics_chart_and_safe_terminal():
@@ -5374,3 +5388,261 @@ def test_invalid_mqtt_envelope_logs_reason_without_payload(monkeypatch, caplog):
 
     assert "bad_hmac" in caplog.text
     assert "must-not-be-logged" not in caplog.text
+
+
+class CardTelegram:
+    """Telegram boundary double; registry and card-routing logic remain real."""
+
+    def __init__(self):
+        self.cards = {30: {"text": "Menu", "media": False, "markup": "buttons"}}
+        self.sent = []
+        self.edited = []
+        self.fail_edit = self.fail_send = self.fail_delete = 0
+
+    async def edit_message_text(self, text, *, chat_id, message_id, reply_markup=None):
+        if self.fail_edit:
+            self.fail_edit -= 1
+            raise RuntimeError("temporary network failure")
+        if message_id not in self.cards:
+            raise RuntimeError("message to edit not found")
+        if self.cards[message_id]["media"]:
+            raise RuntimeError("there is no text in the message to edit")
+        self.cards[message_id].update(text=text, markup=reply_markup)
+        self.edited.append(message_id)
+
+    async def send_message(self, chat_id, text, **kwargs):
+        return await self.send(chat_id, text, False, kwargs.get("reply_markup"))
+
+    async def send_document(self, chat_id, document, **kwargs):
+        return await self.send(chat_id, kwargs.get("caption"), True, kwargs.get("reply_markup"), document)
+
+    async def send_photo(self, chat_id, photo, **kwargs):
+        return await self.send(chat_id, kwargs.get("caption"), True, kwargs.get("reply_markup"), photo)
+
+    async def send(self, chat_id, text, media, markup, document=None):
+        from types import SimpleNamespace
+        await asyncio.sleep(0)
+        if self.fail_send:
+            self.fail_send -= 1
+            raise RuntimeError("temporary send failure")
+        message_id = 31 + len(self.sent)
+        self.cards[message_id] = dict(text=text, media=media, markup=markup, document=document)
+        self.sent.append(message_id)
+        return self.message(message_id, chat_id)
+
+    async def delete_message(self, chat_id, message_id):
+        if self.fail_delete:
+            self.fail_delete -= 1
+            raise RuntimeError("temporary delete failure")
+        self.cards.pop(message_id, None)
+
+    async def edit_message_reply_markup(self, *, chat_id, message_id, reply_markup):
+        self.cards[message_id]["markup"] = reply_markup
+
+    def message(self, message_id=30, chat_id=10, user_id=20, media=False):
+        from types import SimpleNamespace
+        async def edit(text, **kwargs):
+            await self.edit_message_text(text, chat_id=chat_id, message_id=message_id, **kwargs)
+        async def answer(text, **kwargs):
+            return await self.send_message(chat_id, text, **kwargs)
+        async def document(value, **kwargs):
+            return await self.send_document(chat_id, value, **kwargs)
+        return SimpleNamespace(chat=SimpleNamespace(id=chat_id), from_user=SimpleNamespace(id=user_id),
+                               message_id=message_id, photo=[object()] if media else None,
+                               edit_text=edit, answer=answer, answer_document=document)
+
+    def callback(self, data="menu:main", message_id=30, media=False):
+        from types import SimpleNamespace
+        async def answer(*args, **kwargs):
+            pass
+        return SimpleNamespace(data=data, from_user=SimpleNamespace(id=20),
+                               message=self.message(message_id, media=media), answer=answer)
+
+
+def _card_telegram(monkeypatch, tmp_path):
+    telegram = CardTelegram()
+    monkeypatch.setattr(bot, "bot", telegram)
+    monkeypatch.setattr(bot.ui_cards, "FILE", tmp_path / "cards.json")
+    bot.ui_cards.set_card(10, 20, 30)
+    return telegram
+
+
+def test_stale_media_callback_and_operation_result_keep_current_index(monkeypatch, tmp_path):
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    telegram.cards[30]["media"] = True
+    telegram.fail_delete = 1
+    stale = telegram.callback(media=True)
+    async def scenario():
+        current = await bot._replace_callback_message(stale, "Device")
+        assert current.message_id == 31
+        for _ in range(5):
+            await bot._replace_callback_message(stale, "Home")
+            await bot._replace_message_card(stale.message, 20, "Result")
+        assert bot.ui_cards.get(10, 20) == 31
+        assert telegram.sent == [31]
+        assert telegram.cards[30]["markup"] is None
+        assert telegram.cards[31]["text"] == "Result"
+    asyncio.run(scenario())
+
+
+def test_missing_card_send_failure_recovers_without_repeated_duplicates(monkeypatch, tmp_path):
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    telegram.cards.clear()
+    telegram.fail_send = 1
+    stale = telegram.callback()
+    async def scenario():
+        await bot._replace_callback_message(stale, "Home")
+        assert bot.ui_cards.get(10, 20) == 30
+        await bot._replace_callback_message(stale, "Home")
+        for _ in range(5):
+            await bot._replace_callback_message(stale, "Home")
+        assert bot.ui_cards.get(10, 20) == 31
+        assert list(telegram.cards) == [31]
+        assert telegram.sent == [31]
+    asyncio.run(scenario())
+
+
+def test_owner_lifecycle_feedback_edits_indexed_card(monkeypatch, tmp_path):
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    monkeypatch.setattr(bot, "ADMIN_ID", 20)
+    bot.ui_cards.set_card(20, 20, 30)
+    asyncio.run(bot._notify_owner("Deferred restart failed"))
+    assert telegram.sent == []
+    assert telegram.cards[30]["text"] == "Deferred restart failed"
+    assert bot.ui_cards.get(20, 20) == 30
+
+
+def test_bulk_screenshots_deliver_one_indexed_archive_with_device_names(monkeypatch, tmp_path):
+    import io
+    import json
+    import zipfile
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    monkeypatch.setattr(bot, "ADMIN_ID", 20)
+    monkeypatch.setattr(bot.transport, "publish_command", lambda *args: True)
+    monkeypatch.setattr(bot.multi_screenshot, "reset", lambda: None)
+    async def results(*args):
+        return [{"device_id": "a", "image": base64.b64encode(b"image-a").decode()},
+                {"device_id": "b", "image": base64.b64encode(b"image-b").decode()},
+                {"device_id": "c", "image": base64.b64encode(b"image-c").decode()}]
+    monkeypatch.setattr(bot.multi_screenshot, "wait_window", results)
+    labels = {"a": "Laptop", "b": "Desktop", "c": "Ноут/../" + "🖥" * 100}
+    monkeypatch.setattr(bot, "target_label", lambda value: labels[value])
+    asyncio.run(bot.on_all_screenshot(telegram.callback("all:screenshot")))
+    assert telegram.sent == [31]
+    assert list(telegram.cards) == [31]
+    assert bot.ui_cards.get(10, 20) == 31
+    document = telegram.cards[31]["document"]
+    with zipfile.ZipFile(io.BytesIO(document.data)) as archive:
+        assert archive.read("01-a-Laptop.jpg") == b"image-a"
+        assert archive.read("02-b-Desktop.jpg") == b"image-b"
+        manifest = json.loads(archive.read("manifest.json"))
+        assert manifest[2]["device_id"] == "c"
+        assert manifest[2]["device_name"] == labels["c"]
+        assert "/" not in manifest[2]["file"] and "\\" not in manifest[2]["file"]
+        assert archive.read(manifest[2]["file"]) == b"image-c"
+
+
+def test_concurrent_missing_card_callbacks_create_one_replacement(monkeypatch, tmp_path):
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    telegram.cards.clear()
+    async def scenario():
+        await asyncio.gather(*(bot._replace_callback_message(telegram.callback(), "Home") for _ in range(8)))
+        assert telegram.sent == [31]
+        assert bot.ui_cards.get(10, 20) == 31
+        assert list(telegram.cards) == [31]
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("category", ["media", "screen", "input", "system", "network", "files",
+                                     "terminal", "power", "pranks", "device"])
+def test_navigation_category_operation_back_home_stays_one_card(monkeypatch, tmp_path, category):
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    _setup(monkeypatch, {"a": {"name": "Laptop", "os": "Windows", "online": True}})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user: bot.Role.OWNER)
+    monkeypatch.setattr(bot, "_simple_command_still_allowed", lambda *_args: True)
+    monkeypatch.setattr(bot, "publish_tracked", lambda *_args, **_kwargs: (True, "op-1"))
+    class Collector:
+        async def wait_for(self, *_args, **_kwargs):
+            assert "Laptop" in telegram.cards[30]["text"]
+            assert telegram.sent == []
+            return {"ok": True, "text": "Operation complete"}
+    monkeypatch.setattr(bot, "fun_text_collector", Collector())
+    async def scenario():
+        await bot.on_menu_main(telegram.callback())
+        await bot.on_menu_devices(telegram.callback("menu:devices"))
+        await bot.on_dev(telegram.callback("dev:a"))
+        await getattr(bot, f"on_cat_{category}")(telegram.callback(f"cat:{category}"))
+        await getattr(bot, f"on_cat_{category}")(telegram.callback(f"cat:{category}"))
+        await bot.simple_command(telegram.callback("cmd:status"), "status", "⚙️", "Status", timeout=1)
+        assert "Operation complete" in telegram.cards[30]["text"]
+        await bot.on_back_to_device(telegram.callback("back:device"))
+        assert "Laptop" in telegram.cards[30]["text"]
+        await bot.on_menu_main(telegram.callback())
+        assert bot.SESSION["target"] is None
+        assert telegram.sent == []
+        assert list(telegram.cards) == [30]
+        assert bot.ui_cards.get(10, 20) == 30
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("flow", ["callback", "input", "media", "document"])
+def test_transient_card_failure_and_next_callback_recover_current_card(monkeypatch, tmp_path, flow):
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    async def scenario():
+        if flow in {"callback", "input"}:
+            telegram.fail_edit = 2
+            if flow == "callback":
+                await bot._replace_callback_message(telegram.callback(), "Progress")
+            else:
+                await bot._replace_user_card(telegram.message(99), "Progress")
+        elif flow == "media":
+            telegram.fail_send = 1
+            await bot._replace_callback_with_media(telegram.callback(), telegram.send_document,
+                                                  document=bot.BufferedInputFile(b"data", filename="file.bin"))
+        else:
+            telegram.fail_send = 1
+            await bot._replace_user_card_with_document(telegram.message(99),
+                                                       bot.BufferedInputFile(b"data", filename="file.bin"), "Result")
+        assert telegram.sent == []
+        assert bot.ui_cards.get(10, 20) == 30
+        telegram.fail_edit = 0
+        await bot._replace_callback_message(telegram.callback(), "Recovered")
+        assert telegram.cards[30]["text"] == "Recovered"
+        assert telegram.sent == []
+    asyncio.run(scenario())
+
+
+def test_document_to_text_recovers_after_delete_and_neutralization_errors(monkeypatch, tmp_path):
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    async def broken_markup(**kwargs):
+        raise RuntimeError("temporary markup failure")
+    monkeypatch.setattr(telegram, "edit_message_reply_markup", broken_markup)
+    telegram.fail_delete = 2
+    async def scenario():
+        result = await bot._replace_user_card_with_document(
+            telegram.message(99), bot.BufferedInputFile(b"data", filename="file.bin"), "Result", "buttons"
+        )
+        assert result == 31
+        assert bot.ui_cards.get(10, 20) == 31
+        await bot._replace_user_card(telegram.message(99), "Home")
+        for _ in range(5):
+            await bot._replace_callback_message(telegram.callback(), "Home")
+        assert telegram.sent == [31, 32]
+        assert bot.ui_cards.get(10, 20) == 32
+        assert telegram.cards[32]["text"] == "Home"
+    asyncio.run(scenario())
+
+
+def test_callback_media_targets_callback_chat_and_deletes_indexed_card(monkeypatch, tmp_path):
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    telegram.cards[40] = dict(text="Current", media=False, markup="buttons")
+    bot.ui_cards.set_card(10, 20, 40)
+    # Distinct chat/user IDs model a group chat and also catch stale callback IDs.
+    sent_targets = []
+    async def sender(chat_id, **kwargs):
+        sent_targets.append(chat_id)
+        return await telegram.send(chat_id, "Result", True, "buttons")
+    asyncio.run(bot._replace_callback_with_media(telegram.callback(), sender, photo=object()))
+    assert sent_targets == [10]
+    assert 40 not in telegram.cards
+    assert bot.ui_cards.get(10, 20) == 31

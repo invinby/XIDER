@@ -11,9 +11,11 @@ if __name__ == "__main__":
 import asyncio
 import base64
 import contextvars
+from contextlib import asynccontextmanager
 import datetime
 import html
 import io
+import json
 import logging
 import os
 import re
@@ -22,8 +24,10 @@ import sys
 import threading
 import time
 import uuid
+import zipfile
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from types import SimpleNamespace
 
 if sys.platform == "win32":
     try:
@@ -364,10 +368,10 @@ async def on_cmd_mic(cq: CallbackQuery):
     try:
         audio_bytes = base64.b64decode(audio_b64)
         audio_file = BufferedInputFile(audio_bytes, filename="mic.ogg")
-        await bot.send_voice(
-            cq.from_user.id,
+        await _replace_callback_with_media(
+            cq, bot.send_voice,
             voice=audio_file,
-            caption=f"🎙 <b>{target_label(target)}</b>",
+            caption=f"🎙 <b>{html.escape(target_label(target))}</b>",
             reply_markup=back_to_device_kb(),
         )
     except Exception:
@@ -2006,6 +2010,26 @@ def _no_target_text() -> str:
     return _lex("target_required")
 
 
+_CARD_UPDATES: dict[tuple[int, int], tuple[asyncio.Lock, int]] = {}
+
+
+@asynccontextmanager
+async def _card_update(chat_id: int, user_id: int):
+    """Serialize replacements so concurrent stale callbacks share the new card ID."""
+    key = (int(chat_id), int(user_id))
+    lock, users = _CARD_UPDATES.get(key, (asyncio.Lock(), 0))
+    _CARD_UPDATES[key] = (lock, users + 1)
+    try:
+        async with lock:
+            yield
+    finally:
+        _, users = _CARD_UPDATES[key]
+        if users == 1:
+            _CARD_UPDATES.pop(key)
+        else:
+            _CARD_UPDATES[key] = (lock, users - 1)
+
+
 async def _stale_card_allows_replacement(chat_id: int, message_id: int, exc: Exception) -> bool:
     """Return true only when Telegram confirms the old card is gone or removed."""
     detail = str(exc).lower()
@@ -2074,7 +2098,11 @@ async def _replace_media_card_with_text(
 ):
     """Replace a media card with a text card, then remove the old media card."""
     media_message_id = old_message_id or message.message_id
-    sent = await message.answer(text, reply_markup=reply_markup)
+    try:
+        sent = await message.answer(text, reply_markup=reply_markup)
+    except Exception:
+        log.warning("Не удалось отправить текстовую замену карточки %s", media_message_id, exc_info=True)
+        return _card_message(message, media_message_id)
     try:
         await bot.delete_message(message.chat.id, media_message_id)
     except Exception:
@@ -2101,22 +2129,34 @@ async def _replace_media_card_with_text(
 async def _replace_callback_with_media(
     cq: CallbackQuery, sender, *, chat_id: int | None = None, **media_kwargs
 ):
+    async with _card_update(cq.message.chat.id, cq.from_user.id):
+        return await _replace_callback_with_media_unlocked(cq, sender, chat_id=chat_id, **media_kwargs)
+
+
+async def _replace_callback_with_media_unlocked(
+    cq: CallbackQuery, sender, *, chat_id: int | None = None, **media_kwargs
+):
     """Make returned media the current card and remove/neutralize the prior card."""
     media_kwargs.setdefault("reply_markup", back_to_device_kb())
-    sent = await sender(chat_id if chat_id is not None else cq.from_user.id, **media_kwargs)
+    old_id = ui_cards.get(cq.message.chat.id, cq.from_user.id) or cq.message.message_id
     try:
-        await bot.delete_message(cq.message.chat.id, cq.message.message_id)
+        sent = await sender(chat_id if chat_id is not None else cq.message.chat.id, **media_kwargs)
+    except Exception:
+        log.warning("Не удалось отправить media-карточку", exc_info=True)
+        return _card_message(cq.message, old_id)
+    try:
+        await bot.delete_message(cq.message.chat.id, old_id)
     except Exception:
         try:
             await bot.edit_message_reply_markup(
                 chat_id=cq.message.chat.id,
-                message_id=cq.message.message_id,
+                message_id=old_id,
                 reply_markup=None,
             )
         except Exception:
             log.warning(
                 "Не удалось удалить или отключить предыдущую карточку %s после media",
-                cq.message.message_id,
+                old_id,
                 exc_info=True,
             )
     try:
@@ -2128,32 +2168,32 @@ async def _replace_callback_with_media(
 
 async def _replace_callback_message(cq: CallbackQuery, text: str, reply_markup=None):
     """Edit the current card; avoid duplicates on transient Telegram failures."""
-    if _message_has_media(cq.message):
-        return await _replace_media_card_with_text(
-            cq.message, cq.from_user.id, text, reply_markup
+    return await _replace_message_card(cq.message, cq.from_user.id, text, reply_markup)
+
+
+def _card_message(message: Message, message_id: int):
+    """Address the indexed bot card even when a callback carries an obsolete message."""
+    if getattr(message, "message_id", None) == message_id:
+        return message
+    async def edit_text(text, reply_markup=None):
+        return await bot.edit_message_text(
+            text, chat_id=message.chat.id, message_id=message_id, reply_markup=reply_markup
         )
-    exc = await _edit_card_with_retry(cq.message, text, reply_markup)
-    if exc is None:
-        try:
-            ui_cards.set_card(cq.message.chat.id, cq.from_user.id, cq.message.message_id)
-        except OSError:
-            log.exception("Не удалось сохранить ID карточки")
-        return cq.message
-    if not await _stale_card_allows_replacement(
-        cq.message.chat.id, cq.message.message_id, exc
-    ):
-        log.warning("Не удалось обновить карточку %s: %s", cq.message.message_id, exc)
-        return cq.message
-    sent = await cq.message.answer(text, reply_markup=reply_markup)
-    try:
-        ui_cards.set_card(sent.chat.id, cq.from_user.id, sent.message_id)
-    except OSError:
-        log.exception("Не удалось сохранить ID новой карточки")
-    return sent
+    return SimpleNamespace(
+        chat=message.chat, message_id=message_id, edit_text=edit_text, answer=message.answer
+    )
 
 
 async def _replace_message_card(message: Message, user_id: int, text: str, reply_markup=None):
+    async with _card_update(message.chat.id, user_id):
+        return await _replace_message_card_unlocked(message, user_id, text, reply_markup)
+
+
+async def _replace_message_card_unlocked(message: Message, user_id: int, text: str, reply_markup=None):
     """Replace one known operation card, creating a new one only if old is proven stale."""
+    current_id = ui_cards.get(message.chat.id, user_id)
+    if current_id:
+        message = _card_message(message, current_id)
     if _message_has_media(message):
         return await _replace_media_card_with_text(message, user_id, text, reply_markup)
     exc = await _edit_card_with_retry(message, text, reply_markup)
@@ -2163,12 +2203,18 @@ async def _replace_message_card(message: Message, user_id: int, text: str, reply
         except OSError:
             log.exception("Не удалось сохранить ID карточки")
         return message
+    if _is_media_text_edit_error(exc):
+        return await _replace_media_card_with_text(message, user_id, text, reply_markup)
     if not await _stale_card_allows_replacement(
         message.chat.id, message.message_id, exc
     ):
         log.warning("Не удалось обновить карточку %s: %s", message.message_id, exc)
         return message
-    sent = await message.answer(text, reply_markup=reply_markup)
+    try:
+        sent = await message.answer(text, reply_markup=reply_markup)
+    except Exception:
+        log.warning("Не удалось отправить замену карточки %s", message.message_id, exc_info=True)
+        return message
     try:
         ui_cards.set_card(sent.chat.id, user_id, sent.message_id)
     except OSError:
@@ -2176,7 +2222,12 @@ async def _replace_message_card(message: Message, user_id: int, text: str, reply
     return sent
 
 
-async def _replace_user_card(message: Message, text: str, reply_markup=None) -> int:
+async def _replace_user_card(message: Message, text: str, reply_markup=None) -> int | None:
+    async with _card_update(message.chat.id, message.from_user.id):
+        return await _replace_user_card_unlocked(message, text, reply_markup)
+
+
+async def _replace_user_card_unlocked(message: Message, text: str, reply_markup=None) -> int | None:
     """Edit this user's registered bot card; create a replacement only if stale."""
     chat_id = message.chat.id
     user_id = message.from_user.id
@@ -2203,7 +2254,11 @@ async def _replace_user_card(message: Message, text: str, reply_markup=None) -> 
                 log.warning("Не удалось обновить карточку %s: %s", card_id, exc)
                 return card_id
 
-    sent = await message.answer(text, reply_markup=reply_markup)
+    try:
+        sent = await message.answer(text, reply_markup=reply_markup)
+    except Exception:
+        log.warning("Не удалось отправить пользовательскую карточку", exc_info=True)
+        return card_id
     try:
         ui_cards.set_card(chat_id, user_id, sent.message_id)
     except OSError:
@@ -2213,21 +2268,35 @@ async def _replace_user_card(message: Message, text: str, reply_markup=None) -> 
 
 async def _replace_user_card_with_document(
     message: Message, document: BufferedInputFile, caption: str, reply_markup=None
-) -> int:
+) -> int | None:
+    async with _card_update(message.chat.id, message.from_user.id):
+        return await _replace_user_card_with_document_unlocked(message, document, caption, reply_markup)
+
+
+async def _replace_user_card_with_document_unlocked(
+    message: Message, document: BufferedInputFile, caption: str, reply_markup=None
+) -> int | None:
     """Make a delivered document the new main card and remove the old text card."""
     chat_id = message.chat.id
     user_id = message.from_user.id
     old_card_id = ui_cards.get(chat_id, user_id)
-    sent = await message.answer_document(
-        document,
-        caption=caption,
-        reply_markup=reply_markup,
-    )
+    try:
+        sent = await message.answer_document(
+            document, caption=caption, reply_markup=reply_markup,
+        )
+    except Exception:
+        log.warning("Не удалось отправить карточку с файлом", exc_info=True)
+        return old_card_id
     if old_card_id and old_card_id != sent.message_id:
         try:
             await bot.delete_message(chat_id, old_card_id)
         except Exception:
-            log.debug("Старая карточка не удалена при отправке файла", exc_info=True)
+            try:
+                await bot.edit_message_reply_markup(
+                    chat_id=chat_id, message_id=old_card_id, reply_markup=None
+                )
+            except Exception:
+                log.warning("Не удалось отключить старую карточку с файлом", exc_info=True)
     try:
         ui_cards.set_card(chat_id, user_id, sent.message_id)
     except OSError:
@@ -2236,6 +2305,11 @@ async def _replace_user_card_with_document(
 
 
 async def _show_start_card(message: Message, text: str, reply_markup) -> int:
+    async with _card_update(message.chat.id, message.from_user.id):
+        return await _show_start_card_unlocked(message, text, reply_markup)
+
+
+async def _show_start_card_unlocked(message: Message, text: str, reply_markup) -> int:
     """Always send a visible /start card, even after the user clears chat history."""
     chat_id = message.chat.id
     user_id = message.from_user.id
@@ -2390,17 +2464,23 @@ def _schedule_admin_notice(text: str, reply_markup=None) -> None:
     )
 
 
-async def _notify_owner(text: str) -> None:
+async def _notify_owner(text: str, reply_markup=None) -> None:
     try:
-        await bot.send_message(int(ADMIN_ID), text)
+        owner = int(ADMIN_ID)
+        async def answer(value, **kwargs):
+            return await bot.send_message(owner, value, **kwargs)
+        await _replace_user_card(
+            SimpleNamespace(chat=SimpleNamespace(id=owner), from_user=SimpleNamespace(id=owner), answer=answer),
+            text, reply_markup=reply_markup if reply_markup is not None else main_menu(owner),
+        )
     except Exception:
         log.exception("Не удалось отправить владельцу результат операции жизненного цикла")
 
 
-def _schedule_owner_notice(text: str) -> bool:
+def _schedule_owner_notice(text: str, reply_markup=None) -> bool:
     if LOOP is None or LOOP.is_closed():
         return False
-    future = asyncio.run_coroutine_threadsafe(_notify_owner(text), LOOP)
+    future = asyncio.run_coroutine_threadsafe(_notify_owner(text, reply_markup), LOOP)
     future.add_done_callback(
         lambda done: done.exception() if not done.cancelled() else None
     )
@@ -2506,7 +2586,7 @@ def _maybe_battery_alert(device_id: str, payload: dict) -> None:
     name = target_label(device_id)
     if LOOP is None:
         return
-    _schedule_admin_notice(
+    _schedule_owner_notice(
         f"🔋 <b>{html.escape(name)}</b>: низкий заряд батареи — {percent:.0f}%",
     )
 
@@ -2585,7 +2665,7 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             kb.button(text=_lex("device_approve_button"), callback_data=f"devmg:allow:{device_id}", style="success")
             kb.button(text=_lex("device_block_button"), callback_data=f"devmg:block:{device_id}", style="danger")
             kb.adjust(1)
-            _schedule_admin_notice(
+            _schedule_owner_notice(
                 f"🆕 Новое устройство: <b>{html.escape(info['name'])}</b> "
                 f"(<code>{device_id}</code>)\nПодтверди, чтобы работать с ним:",
                 reply_markup=kb.as_markup(),
@@ -4970,24 +5050,35 @@ async def on_all_screenshot(cq: CallbackQuery):
         return
     await cq.answer("📸 Собираю скриншоты...")
     results = await multi_screenshot.wait_window(14.0)
-    sent = 0
-    for r in results[:6]:
-        img = r.get("image")
-        if not img:
-            continue
-        try:
-            photo = BufferedInputFile(base64.b64decode(img), filename="screenshot.jpg")
-            await bot.send_photo(
-                ADMIN_ID,
-                photo=photo,
-                caption=f"📸 {html.escape(target_label(r.get('device_id', '')))}",
-            )
-            sent += 1
-        except Exception:
-            log.exception("Не удалось отправить скриншот")
-    await _replace_callback_message(
-        cq, f"📸 Скриншоты собраны: {sent}.", reply_markup=devices_menu()
-    )
+    collected = 0
+    manifest = []
+    archive_bytes = io.BytesIO()
+    with zipfile.ZipFile(archive_bytes, "w", zipfile.ZIP_DEFLATED) as archive:
+        for index, result in enumerate(results, 1):
+            if not result.get("image"):
+                continue
+            try:
+                image = base64.b64decode(result["image"], validate=True)
+                device_id = str(result.get("device_id") or "unknown")
+                name = target_label(device_id)
+                filename = _safe_transfer_filename(
+                    f"{index:02d}-{device_id}-{name}.jpg".replace("/", "_").replace("\\", "_")
+                )
+                archive.writestr(filename, image)
+                manifest.append({"file": filename, "device_id": device_id, "device_name": name})
+                collected += 1
+            except (ValueError, TypeError):
+                log.warning("Некорректный скриншот в сводке устройства", exc_info=True)
+        archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False).encode("utf-8"))
+    caption = f"📸 Скриншоты собраны: {collected}."
+    if collected:
+        await _replace_callback_with_media(
+            cq, bot.send_document, chat_id=cq.message.chat.id,
+            document=BufferedInputFile(archive_bytes.getvalue(), filename="screenshots.zip"),
+            caption=caption, reply_markup=devices_menu(),
+        )
+    else:
+        await _replace_callback_message(cq, caption, reply_markup=devices_menu())
     await cq.answer()
 
 
