@@ -131,6 +131,19 @@ def test_shell_remains_owner_only_even_if_a_user_callback_is_granted(monkeypatch
     assert store.can_use_callback(200, "cmd:status", 100, "other-device") is False
 
 
+def test_shell_request_grant_cannot_approve_shell_execution(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    store.register_start(_user(200))
+    store.set_role(100, 200, store.Role.USER, 100)
+    store.toggle_device(100, 200, "laptop-a", 100)
+    store.toggle_callback(100, 200, "cfm:shell", 100)
+    assert store.can_use_callback(200, "cfm:shell", 100, "laptop-a") is True
+    assert store.can_use_callback(200, "shell:ok", 100, "laptop-a") is False
+    assert store.can_use_callback(200, "cmd:shell", 100, "laptop-a") is False
+    store.toggle_callback(100, 200, "full_device", 100)
+    assert store.can_use_callback(200, "shell:ok", 100, "laptop-a") is False
+
+
 def test_legacy_global_callback_grants_are_ignored(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     store.register_start(_user(200))

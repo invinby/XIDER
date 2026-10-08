@@ -2565,6 +2565,10 @@ def _rendered_callback_inventory(monkeypatch):
             "shell:ok", "openapp:ok", "stop:ok", "stopall:ok", "guardianstop:ok", "sleep:ok", "kill:123",
         )),
     ]
+    # Exercise state-dependent keyboard branches, including standby wake.
+    devices._devices["device-1"]["standby"] = True
+    builders.append(bot.power_menu_new())
+    devices._devices["device-1"]["standby"] = False
     for style in bot.xlex.STYLES:
         monkeypatch.setattr(bot.bot_settings, "get", lambda key, default=None, selected=style:
                             selected if key == "ui_style" else default)
@@ -2645,14 +2649,171 @@ def test_rendered_menu_callbacks_match_a_registered_route(monkeypatch):
     assert not unmatched, f"Buttons have no callback route: {sorted(unmatched)}"
 
 
-def _descriptive_callback_metadata(callback, route):
-    """Test-local inventory, never consumed by authorization or runtime UI.
+def _expected_callback_gate(callback):
+    """Independent route contract: never inferred from the installed filter."""
+    if callback in {"cmd:shell", "shell:ok", "menu:admin", "menu:target", "url:favorites", "versions:server"} or callback.startswith(
+        ("admin:", "devmg:", "install:", "server:", "server_confirm:", "url:fav:", "versions:bootstrap:")
+    ):
+        return "OwnerFilter"
+    if callback in {"menu:main", "menu:about", "menu:server", "menu:guest_devices", "guest:readonly", "url:cancel"} or callback.startswith(("about:chapter:", "url:count:")):
+        return "ReadOnlyFilter"
+    if callback in {"cmd:net_ping", "cmd:geo_location"}:
+        return "AnyAccessFilter"
+    assert callback == "noop" or callback.startswith((
+        "cmd:", "cat:", "dev:", "back:", "all:", "ev:", "adm:", "quiet:", "digest:",
+        "files:", "fun:", "power:", "power_confirm:", "proc:", "kill:", "killq:", "rotate:",
+        "volq:", "vol:", "mic:", "micdur:", "prank:", "prankpage:", "fav:", "hist:", "rep:",
+        "cfm:", "openapp:", "stop:", "stopall:", "guardianstop:", "sleep:", "menu:", "versions:",
+    )), f"Unclassified access contract: {callback}"
+    return "AdminFilter"
 
-    No complete action OS/timeout/privacy/risk declaration exists in the bot.
-    Keep those gaps explicit rather than inventing policy from button labels.
+
+# Review-maintained literal contracts, not derived from production declarations:
+# route, category, wire command, collector seconds, sensitivity, risk.
+# 0 means no collector wait; prompted input has no user-response deadline.
+# Windows/macOS below is dispatch declaration, never live hardware acceptance.
+_ACTION_CONTRACTS = {
+    name: (category, command, float(seconds), sensitivity.replace("_", " "), risk.replace("_", " "))
+    for name, category, command, seconds, sensitivity, risk in (
+        line.split() for line in """
+on_cmd_screenshot media screenshot 15 private_image privacy_read
+on_cmd_webcam media webcam 20 private_image privacy_read
+on_cmd_clipboard input clipboard 10 private_clipboard privacy_read
+on_cmd_processes terminal processes 15 process_list privacy_read
+on_proc_page terminal processes 15 process_list privacy_read
+on_cmd_battery system battery 15 device_telemetry read
+on_cmd_network network network 15 network_configuration privacy_read
+on_cmd_services terminal services 15 service_list privacy_read
+on_cmd_capabilities system capabilities 15 device_capabilities read
+on_cmd_sysinfo system sysinfo 12 device_identifiers privacy_read
+on_cmd_status system status_request 12 device_telemetry read
+on_cmd_disks files disks 15 storage_information privacy_read
+on_cmd_volume media volume_toggle 8 acknowledgment audio_change
+on_vol_set media volume_set 8 acknowledgment audio_change
+on_cmd_lock power lock 0 acknowledgment session_interruption
+on_cmd_apps system sys_installed_apps 15 installed_applications privacy_read
+on_cmd_wifi network net_wifi_passwords 12 credentials credential_disclosure
+on_cmd_bluetooth network net_bluetooth_list 10 device_identifiers privacy_read
+on_cmd_usb network usb_devices 10 device_identifiers privacy_read
+on_cmd_netstat network netstat 10 network_connections privacy_read
+on_cmd_startup terminal startup_list 10 startup_applications privacy_read
+on_cmd_cmdhistory terminal sys_history_cmd 10 private_command_history privacy_read
+on_cmd_smart system storage_smart 12 storage_diagnostics read
+on_cmd_sys_uptime system sys_uptime 10 device_telemetry read
+on_cmd_sys_clean_temp system sys_clean_temp 15 cleanup_result file_deletion
+on_cmd_net_ping network net_ping 12 network_telemetry network_request
+on_cmd_geo_location network geo_location 16 approximate_location privacy_read
+on_cmd_autorun_status power autorun_status 10 startup_status read
+on_cmd_autorun_enable power autorun_enable 10 acknowledgment persistence_change
+on_cmd_autorun_disable power autorun_disable 10 acknowledgment persistence_change
+on_cmd_standby_sleep power standby_sleep 8 acknowledgment agent_interruption
+on_cmd_wake power wake 8 acknowledgment agent_state_change
+on_kill terminal kill_process 0 acknowledgment process_termination
+on_rotate_select screen display_rotate 8 acknowledgment display_change
+on_cmd_nightlight screen display_night_light 8 acknowledgment display_change
+on_cmd_brightness screen display_brightness 8 acknowledgment display_change
+on_fun_extip network ext_ip 10 public_IP_address privacy_read
+on_fun_screenoff screen screen_off 0 acknowledgment display_interruption
+on_fun_screensaver screen screensaver_on 0 acknowledgment display_change
+on_prank_screamer pranks prank_screamer 12 acknowledgment sensory_disruption
+on_prank_rickroll pranks prank_rickroll 18 acknowledgment browser_disruption
+on_prank_matrix pranks prank_matrix 18 acknowledgment display_disruption
+on_prank_siren pranks prank_siren 14 acknowledgment audio_disruption
+on_prank_crazycursor pranks prank_crazy_cursor 14 acknowledgment input_disruption
+on_prank_dancewin pranks prank_dancing_windows 14 acknowledgment display_disruption
+on_prank_blackscreen pranks prank_black_screen 18 acknowledgment display_interruption
+on_prank_randomsite pranks prank_random_site 14 acknowledgment browser_disruption
+on_prank_swapmouse pranks prank_swap_mouse 0 acknowledgment input_disruption
+on_prank_hidedesktop pranks prank_hide_desktop 0 acknowledgment display_disruption
+on_all_status system status_request 6 all_device_telemetry bulk_read
+on_all_screenshot media screenshot 14 all_device_private_images bulk_privacy_read
+on_power_confirm power power 5 acknowledgment power_interruption
+on_files_list files dir_list 15 private_paths privacy_read
+on_files_find files find_file 20 private_paths privacy_read
+on_files_get files file_get 30 private_file_contents data_disclosure
+on_files_put files file_put 25 acknowledgment file_write
+on_files_del files file_del 15 acknowledgment file_deletion
+on_files_open files path_open 10 acknowledgment application_launch
+on_fun_wallpaper screen wallpaper_set 20 acknowledgment desktop_change
+on_wallpaper_random_meme screen wallpaper_set 15 acknowledgment desktop_change
+on_wallpaper_photo_guide screen wallpaper_set 20 user_image desktop_change
+on_cmd_clipset input clipboard_set 0 user_clipboard_text clipboard_write
+on_cmd_url network open_url 0 user_URL browser_launch
+on_url_count_select network open_url 0 user_URL browser_launch
+on_url_favorite_open network open_url 0 saved_URL browser_launch
+on_cmd_open_app terminal open_app 0 user_executable_path application_launch
+on_openapp_ok terminal open_app 0 user_executable_path application_launch
+on_fun_type input type_text 0 user_text input_injection
+on_fun_hotkey input hotkey 0 user_hotkey input_injection
+on_cmd_prockillname terminal proc_kill_name 0 user_process_name process_termination
+on_fun_spam pranks msgbox_spam 15 user_text display_disruption
+on_prank_shout pranks prank_shout_tts 15 user_text audio_disruption
+on_cmd_text input notify 0 user_text display_injection
+on_cmd_sound media sound 0 user_text audio_change
+on_devmg_uninstall_ok power uninstall_agent 15 acknowledgment agent_removal
+on_versions_install_confirm power agent_update 110 update_result executable_replacement
+on_prank_stop_all pranks prank_stop_all 0 acknowledgment restore_desktop_state
+on_sleep_ok power power 0 acknowledgment power_interruption
+""".strip().splitlines()
+    )
+}
+
+
+_NAVIGATION_ROUTES = frozenset("""
+on_about_chapter on_menu_about on_menu_main on_menu_devices on_menu_server on_menu_admin on_menu_target
+on_guest_devices on_guest_readonly on_noop on_back_to_device on_dev on_cat_device on_cat_files on_files_menu
+on_cat_input on_cat_media on_cat_network on_cat_power on_cat_pranks on_cat_screen on_cat_system on_cat_terminal
+on_cmd_guardian_menu on_cmd_rotate on_menu_wallpaper on_fav_menu on_mic_opts on_vol_opts on_prank_page
+on_ev_menu on_ev_quiet on_ev_digest on_ev_admins on_admin_users on_admin_user on_admin_devices
+on_admin_permissions on_admin_texts on_admin_style on_devmg_blocked on_manual_install on_versions_device
+on_versions_server on_versions_list on_versions_detail on_url_favorites on_history on_kill_confirm
+on_power_action on_server_dangerous_request on_devmg_delete on_devmg_uninstall on_devmg_block
+on_devmg_clear_all on_versions_install_select on_versions_install_cancel on_url_cancel
+""".split())
+
+
+_DEPENDENT_ACTION_CONTRACTS = {
+    "on_repeat": dict(category="history", os_support="unknown: selected HISTORY entry determines wire action",
+                      timeout=0.0, result_sensitivity="unknown: selected HISTORY entry determines output",
+                      risk="unknown: selected HISTORY entry determines side effect"),
+    "on_cmd_wol": dict(category="power", os_support=("WoL-capable network adapter",), timeout=(0.0, 12.0),
+                       result_sensitivity="network adapter address", risk="remote wake"),
+    "on_server_status": dict(category="server", os_support=("Linux/systemd",), timeout=20.0,
+                             result_sensitivity="redacted service status", risk="server read"),
+    "on_server_logs": dict(category="server", os_support=("Linux/systemd",), timeout=25.0,
+                           result_sensitivity="private server logs", risk="privacy read"),
+    "on_server_metrics": dict(category="server", os_support=("server host",), timeout=0.0,
+                              result_sensitivity="server telemetry", risk="read and metrics history write"),
+    "on_server_chart": dict(category="server", os_support=("server host",), timeout=0.0,
+                            result_sensitivity="server telemetry", risk="read and metrics history write"),
+    "on_server_specs": dict(category="server", os_support=("Linux",), timeout=(15.0, 6 * 10.0),
+                            result_sensitivity="bounded server hardware/OS information", risk="server read"),
+    "on_server_terminal": dict(category="server", os_support=("Linux/systemd",), timeout=0.0,
+                               result_sensitivity="prompt; allowlisted command output after input", risk="owner server command request"),
+    "on_versions_bootstrap": dict(category="installation", os_support=("Windows", "macOS"), timeout=6.0,
+                                  result_sensitivity="public signed installer instructions", risk="non-action"),
+}
+for _guardian_route in (
+    "on_cmd_guardian_status", "on_cmd_guardian_start", "on_cmd_guardian_restart",
+    "on_cmd_guardian_auto_on", "on_cmd_guardian_auto_off", "on_guardian_stop_ok", "on_stop_ok",
+):
+    _DEPENDENT_ACTION_CONTRACTS[_guardian_route] = dict(
+        category="power", os_support=("Windows", "macOS"), timeout=12.0,
+        result_sensitivity="guardian status/acknowledgment", risk="guardian read" if _guardian_route == "on_cmd_guardian_status" else "agent lifecycle/persistence change",
+    )
+_DEPENDENT_ACTION_CONTRACTS["on_stopall_ok"] = dict(
+    category="power", os_support=("Windows", "macOS"), timeout=0.0,
+    result_sensitivity="acknowledgment", risk="all-device agent interruption",
+)
+
+
+def _descriptive_callback_metadata(callback, route):
+    """Independent descriptive contract, never consumed by authorization/UI.
+
+    Sensitivity/risk describe the result and side effect; platforms are source
+    dispatch declarations. Only a history-selected action has unknowable fields.
     """
-    gate = next(item.callback for item in route.filters if item.magic is None)
-    gate_name = type(gate).__name__
+    gate_name = _expected_callback_gate(callback)
     if callback.startswith("url:count:"):
         permission = "access_store.can_use_callback"
         grants = "owner or cmd:url grant on FSM-bound device; live recheck"
@@ -2663,41 +2824,263 @@ def _descriptive_callback_metadata(callback, route):
     else:
         permission = "access_store.can_use_callback"
         grants = "owner or user with matching callback/device authority decision"
-    return {
+        if callback.startswith(("all:", "ev:", "adm:", "quiet:", "digest:", "versions:")) or callback in {"cfm:stop_all", "stopall:ok"}:
+            grants = "owner; nonowner rejected by access_store"
+    metadata = {
         "callback": callback, "route": route.callback.__name__,
-        "category": callback.split(":", 1)[0], "required_permission": permission,
-        "allowed_roles_grants": grants, "os_support": "unknown",
-        "timeout": "unknown", "result_sensitivity": "unknown", "risk": "unknown",
+        "category": callback.split(":", 1)[0], "access_class": permission,
+        "required_permission": permission,
+        "allowed_roles_grants": grants, "os_support": ("server host",),
+        "timeout": 0.0, "result_sensitivity": "UI navigation", "risk": "non-action",
     }
+    if permission == "access_store.can_use_callback":
+        metadata["required_permission"] = f"device grant: {callback}"
+        if callback.startswith("url:count:"):
+            metadata["required_permission"] = "device grant: cmd:url (FSM-bound device)"
+        elif grants == "owner; nonowner rejected by access_store":
+            metadata["required_permission"] = f"owner authority: {callback} (access_store)"
+        elif callback in {"menu:main", "menu:devices", "menu:about", "back:device"}:
+            metadata["required_permission"] = f"user navigation: {callback}"
+        elif callback.startswith("dev:"):
+            metadata["required_permission"] = f"device selection grant: {callback}"
+    name = route.callback.__name__
+    if name in _ACTION_CONTRACTS:
+        category, command, timeout, sensitivity, risk = _ACTION_CONTRACTS[name]
+        metadata.update(category=category, wire_action=command, timeout=timeout,
+                        os_support=("Windows", "macOS"), result_sensitivity=sensitivity, risk=risk)
+    elif name == "on_cmd_prank_generic":
+        metadata.update(category="pranks", wire_action=callback[4:], timeout=15.0,
+                        os_support=("Windows", "macOS"), result_sensitivity="acknowledgment",
+                        risk="desktop/audio/input disruption")
+    elif name in {"on_confirm_action", "on_shell_ok", "on_cmd_shell"}:
+        metadata.update(category="terminal" if "shell" in callback else "power",
+                        result_sensitivity="confirmation request")
+        if callback == "cfm:shell":
+            metadata.update(access_class="owner-approved request", required_permission="request grant: cfm:shell; approval: protected owner", allowed_roles_grants=
+                            "owner or granted cfm:shell request; shell:ok approval requires owner")
+        if callback in {"shell:ok", "cmd:shell"}:
+            metadata.update(result_sensitivity="private shell output after input", risk="arbitrary code execution",
+                            os_support=("Windows", "macOS"), timeout=20.0, wire_action="shell")
+    elif name in _NAVIGATION_ROUTES:
+        metadata["category"] = "navigation"
+        if name in {"on_versions_list", "on_versions_detail", "on_versions_install_select"}:
+            metadata.update(timeout=6.0, result_sensitivity="public release metadata", risk="catalog network read")
+        if name == "on_manual_install":
+            metadata.update(category="installation", os_support=("Windows", "macOS"),
+                            result_sensitivity="public signed installer instructions")
+        if name in {"on_admin_users", "on_admin_user", "on_admin_devices", "on_admin_permissions", "on_admin_texts"}:
+            metadata.update(category="administration", result_sensitivity="private identities/device grants/settings",
+                            risk="privacy read")
+        if name == "on_history":
+            metadata.update(category="history", result_sensitivity="private command history", risk="privacy read")
+        if name in {"on_menu_devices", "on_guest_devices", "on_dev", "on_cat_device"}:
+            metadata["result_sensitivity"] = "role-filtered device inventory"
+    elif name == "on_mic_dur":
+        metadata.update(category="media", wire_action="mic", os_support=("Windows", "macOS"),
+                        timeout=int(callback.split(":")[1]) + 12.0,
+                        result_sensitivity="private microphone audio", risk="privacy recording")
+    elif name == "on_server_confirm":
+        metadata.update(category="server", os_support=("Linux/systemd",),
+                        timeout={"restart": 30.0, "update": 180.0, "rollback": 180.0}[callback.split(":")[1]],
+                        result_sensitivity="server operation output", risk="server restart/executable replacement")
+    elif name.startswith(("on_admin_", "on_adm_", "on_ev_")) or name in {
+        "on_quiet_set", "on_digest_set", "on_fav_toggle", "on_server_approval", "on_server_autostart_toggle",
+        "on_url_favorite_delete", "on_url_favorite_save_prompt", "on_devmg_allow", "on_devmg_rename",
+        "on_devmg_delete_ok", "on_devmg_blockok", "on_devmg_unblock", "on_devmg_clear_all_confirm", "on_devmg_manualadd",
+    }:
+        metadata.update(category="administration", result_sensitivity="identities/settings/device records",
+                        risk="local configuration/access mutation")
+        if name == "on_server_autostart_toggle":
+            metadata.update(os_support=("Windows",), risk="server persistence change")
+        if name == "on_admin_audit":
+            metadata.update(result_sensitivity="private audit records", risk="privacy read")
+        if name == "on_admin_message":
+            metadata.update(result_sensitivity="user-directed message text", risk="owner messaging request")
+    else:
+        assert name in _DEPENDENT_ACTION_CONTRACTS, f"Missing independent action profile: {callback}/{name}"
+        metadata.update(_DEPENDENT_ACTION_CONTRACTS[name])
+    if callback in {"noop", "guest:readonly", "url:cancel"}:
+        metadata["access_class"] = "explicitly non-action"
+    return metadata
+
+
+def _assert_expected_callback_gate(callback, route):
+    gates = [item.callback for item in route.filters if item.magic is None]
+    assert len(gates) == 1, (callback, route.callback.__name__, gates)
+    assert type(gates[0]).__name__ == _expected_callback_gate(callback), (callback, route.callback.__name__)
 
 
 def test_inventory_routes_have_explicit_server_access_filters(monkeypatch):
     # Losing a gate or accidentally registering an action as public must fail,
     # even if its keyboard remains hidden from a user.
-    from roles import AdminFilter, AnyAccessFilter, OwnerFilter, ReadOnlyFilter
-
-    public = {"menu:main", "menu:devices", "menu:about", "menu:server",
-              "menu:guest_devices", "guest:readonly", "noop", "url:cancel"}
-    state_bound_actions = {"url:count:1", "url:count:2", "url:count:3", "url:count:5"}
     for callback in _rendered_callback_inventory(monkeypatch):
         for route in _callback_routes(callback):
-            gates = [item.callback for item in route.filters if item.magic is None]
-            assert len(gates) == 1, (callback, route.callback.__name__, gates)
-            gate = gates[0]
-            assert type(gate) in {AdminFilter, AnyAccessFilter, OwnerFilter, ReadOnlyFilter}
-            if type(gate) is ReadOnlyFilter:
-                assert callback in public or callback in state_bound_actions or callback.startswith("about:chapter:"), callback
+            _assert_expected_callback_gate(callback, route)
             # Descriptive classes only: AdminFilter/AnyAccessFilter delegate
             # the actual grant decision to access_store.can_use_callback.
             metadata = _descriptive_callback_metadata(callback, route)
-            assert set(metadata) == {
+            assert {
                 "callback", "route", "category", "required_permission", "allowed_roles_grants",
                 "os_support", "timeout", "result_sensitivity", "risk",
+            } <= set(metadata)
+            assert isinstance(metadata["timeout"], (float, int, tuple)), callback
+            if isinstance(metadata["timeout"], (float, int)):
+                assert metadata["timeout"] >= 0
+            assert metadata["risk"] != "unknown", callback
+            assert metadata["os_support"] != "unknown", callback
+            assert metadata["result_sensitivity"] != "unknown", callback
+            assert metadata["access_class"] in {
+                "protected OwnerFilter", "public ReadOnlyFilter", "access_store.can_use_callback", "owner-approved request",
+                "explicitly non-action",
             }
-            assert all(metadata.values()), callback
-            assert metadata["required_permission"] in {
-                "protected OwnerFilter", "public ReadOnlyFilter", "access_store.can_use_callback",
-            }
+            if metadata["access_class"] == "access_store.can_use_callback":
+                assert metadata["required_permission"] == (
+                    "device grant: cmd:url (FSM-bound device)" if callback.startswith("url:count:") else
+                    f"owner authority: {callback} (access_store)" if callback.startswith(("all:", "ev:", "adm:", "quiet:", "digest:", "versions:")) or callback in {"cfm:stop_all", "stopall:ok"} else
+                    f"user navigation: {callback}" if callback in {"menu:main", "menu:devices", "menu:about", "back:device"} else
+                    f"device selection grant: {callback}" if callback.startswith("dev:") else f"device grant: {callback}"
+                )
+            for field in ("os_support", "result_sensitivity", "risk"):
+                if isinstance(metadata[field], str) and metadata[field].startswith("unknown:"):
+                    assert route.callback.__name__ == "on_repeat", (callback, field)
+                    assert metadata[field] == {
+                        "os_support": "unknown: selected HISTORY entry determines wire action",
+                        "result_sensitivity": "unknown: selected HISTORY entry determines output",
+                        "risk": "unknown: selected HISTORY entry determines side effect",
+                    }[field]
+
+
+def test_action_contract_records_source_proven_values():
+    route = _callback_routes("cmd:screenshot")[0]
+    metadata = _descriptive_callback_metadata("cmd:screenshot", route)
+    assert metadata["category"] == "media"
+    assert metadata["os_support"] == ("Windows", "macOS")
+    assert metadata["timeout"] == 15.0
+    assert metadata["result_sensitivity"] == "private image"
+    assert metadata["risk"] == "privacy read"
+    assert metadata["required_permission"] == "device grant: cmd:screenshot"
+
+
+def test_action_contract_platforms_match_client_dispatch_declarations(monkeypatch):
+    declared = {}
+    root = Path(bot.__file__).resolve().parent.parent
+    for platform, path in (("Windows", root / "XGENT-WDS/xgent_wds.py"),
+                           ("macOS", root / "XGENT-MCS/xgent_mcs.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        assignment = next(node for node in tree.body if isinstance(node, ast.Assign)
+                          and any(isinstance(target, ast.Name) and target.id == "SUPPORTED_COMMANDS"
+                                  for target in node.targets))
+        declared[platform] = set(ast.literal_eval(assignment.value))
+    for callback in _rendered_callback_inventory(monkeypatch):
+        for route in _callback_routes(callback):
+            metadata = _descriptive_callback_metadata(callback, route)
+            command = metadata.get("wire_action")
+            if command:
+                for platform in metadata["os_support"]:
+                    assert command in declared[platform], (callback, command, platform)
+
+
+@pytest.mark.parametrize("callback,expected_timeout,collector_name", [
+    ("cmd:screenshot", 15.0, "screenshot_collector"),
+    ("cmd:clipboard", 10.0, "clipboard_collector"),
+    ("cmd:sysinfo", 12.0, "sysinfo_collector"),
+    ("cmd:wifi", 12.0, "fun_text_collector"),
+    ("cmd:apps", 15.0, "fun_text_collector"),
+    ("cmd:volume", 8.0, "fun_text_collector"),
+])
+def test_source_proven_action_deadlines_reach_real_collectors(monkeypatch, callback, expected_timeout, collector_name):
+    from aiogram.types import CallbackQuery, Chat, Message, User
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    owner = bot.ADMIN_ID
+    monkeypatch.setattr(bot, "SESSION", bot.SessionRegistry())
+    bot.SESSION["target"] = "device-1"
+    monkeypatch.setattr(bot, "devices", FakeDevices({"device-1": {"name": "PC", "os": "Windows"}}))
+    deadlines = []
+
+    async def wait_for(target, action, timeout=12.0, command_id=None):
+        assert target == "device-1"
+        assert command_id == "contract-command"
+        deadlines.append(timeout)
+        return None
+
+    async def noop(*args, **kwargs):
+        return SimpleNamespace(chat=SimpleNamespace(id=owner), message_id=1)
+
+    monkeypatch.setattr(getattr(bot, collector_name), "wait_for", wait_for)
+    monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (True, "contract-command"))
+    monkeypatch.setattr(CallbackQuery, "answer", noop)
+    monkeypatch.setattr(bot, "_replace_callback_message", noop)
+    monkeypatch.setattr(bot, "_replace_message_card", noop)
+    user = User(id=owner, is_bot=False, first_name="Owner")
+    message = Message(message_id=1, date=datetime.now(timezone.utc), chat=Chat(id=owner, type="private"), from_user=user)
+    cq = CallbackQuery(id="deadline", from_user=user, chat_instance="test", data=callback, message=message)
+    asyncio.run(bot.router.callback_query.trigger(cq))
+    assert deadlines == [expected_timeout]
+    assert _descriptive_callback_metadata(callback, _callback_routes(callback)[0])["timeout"] == expected_timeout
+
+
+@pytest.mark.parametrize("callback", ["admin:users", "server:logs", "devmg:allow:device-1", "shell:ok"])
+def test_owner_filter_downgrade_is_detected_by_independent_contract(monkeypatch, callback):
+    from roles import AdminFilter
+
+    route = _callback_routes(callback)[0]
+    owner_filter = next(item for item in route.filters if item.magic is None)
+    assert type(owner_filter.callback).__name__ == _expected_callback_gate(callback) == "OwnerFilter"
+    monkeypatch.setattr(owner_filter, "callback", AdminFilter())
+    with pytest.raises(AssertionError):
+        _assert_expected_callback_gate(callback, route)
+
+
+def test_shell_request_and_owner_approval_have_distinct_access_contracts():
+    request = _descriptive_callback_metadata("cfm:shell", _callback_routes("cfm:shell")[0])
+    approval = _descriptive_callback_metadata("shell:ok", _callback_routes("shell:ok")[0])
+    assert _expected_callback_gate("cfm:shell") == "AdminFilter"
+    assert request["access_class"] == "owner-approved request"
+    assert request["required_permission"] == "request grant: cfm:shell; approval: protected owner"
+    assert request["risk"] == "non-action"
+    assert approval["required_permission"] == "protected OwnerFilter"
+    assert approval["risk"] == "arbitrary code execution"
+    assert approval["timeout"] == 20.0
+
+
+@pytest.mark.parametrize("identity", ["owner", "full_device_user"])
+def test_invalid_registered_prank_suffix_is_rejected_before_publish(monkeypatch, tmp_path, identity):
+    from aiogram.types import CallbackQuery, User
+    from contextvars import ContextVar
+    from types import SimpleNamespace
+
+    owner, user = bot.ADMIN_ID, 200
+    actor = owner if identity == "owner" else user
+    monkeypatch.setattr(bot.access_store, "FILE", tmp_path / "access.json")
+    monkeypatch.setattr(bot.access_store, "AUDIT_FILE", tmp_path / "audit.jsonl")
+    bot.access_store.register_start(SimpleNamespace(id=user, username="test", first_name="Test", last_name=""))
+    bot.access_store.set_role(owner, user, bot.Role.USER, owner)
+    bot.access_store.toggle_device(owner, user, "device-1", owner)
+    bot.access_store.toggle_callback(owner, user, "full_device", owner)
+    monkeypatch.setattr(bot, "CURRENT_TG_USER", ContextVar("invalid_prank_actor", default=actor))
+    monkeypatch.setattr(bot, "SESSION", bot.SessionRegistry())
+    bot.SESSION["target"] = "device-1"
+    monkeypatch.setattr(bot, "devices", FakeDevices({"device-1": {"name": "PC", "os": "Windows"}}))
+    answers = []
+
+    async def answer(_cq, text=None, **kwargs):
+        answers.append((text, kwargs))
+
+    def unexpected_publish(*args, **kwargs):
+        pytest.fail(f"Invalid prank suffix reached publication for {identity}: {args}")
+
+    monkeypatch.setattr(CallbackQuery, "answer", answer)
+    monkeypatch.setattr(bot, "publish", unexpected_publish)
+    monkeypatch.setattr(bot, "publish_tracked", unexpected_publish)
+    data = "cmd:prank_not_a_real_action"
+    assert bot.access_store.can_use_callback(actor, data, owner, "device-1") is True
+    assert [r.callback.__name__ for r in _callback_routes(data)] == ["on_cmd_prank_generic"]
+    callback = CallbackQuery(id="invalid-prank", from_user=User(id=actor, is_bot=False,
+                             first_name="Test"), chat_instance="test", data=data)
+    asyncio.run(bot.router.callback_query.trigger(callback))
+    assert answers == [(bot._lex("send_failed"), {"show_alert": True})]
 
 
 def test_unregistered_action_callback_has_no_dispatch_or_publish(monkeypatch):
