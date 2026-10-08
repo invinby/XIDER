@@ -176,12 +176,21 @@ def _redact(text: str) -> str:
     text = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [REDACTED]", text)
     text = re.sub(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b", "[TOKEN]", text)
     text = re.sub(
+        r'''(?i)["']?\b((?:bot[_-]?)?token|password|passwd|secret|shared[_-]?key|'''
+        r'''mqtt[_-]?password|api[_-]?key|ssh[_-]?key|private[_-]?key|authorization)["']?'''
+        r'''\s*[:=]\s*(["']).*?\2''',
+        r"\1=[REDACTED]", text, flags=re.DOTALL,
+    )
+    text = re.sub(
         r"(?i)\b((?:bot[_-]?)?token|password|passwd|secret|shared[_-]?key|"
         r"mqtt[_-]?password|api[_-]?key|ssh[_-]?key|private[_-]?key|authorization)"
         r"\s*[:=]\s*[^\s,;]+",
         r"\1=[REDACTED]",
         text,
     )
+    text = re.sub(r"(?i)\b[A-Z]:[\\/][^\s,;]+|(?<!\w)/(?:[^\s,;]+)", "[PATH REDACTED]", text)
+    text = re.sub(r"\b[\w-]+\.[A-Za-z][A-Za-z0-9]{0,9}\b", "[FILE REDACTED]", text)
+    text = re.sub(r"-?\b\d{1,3}\.\d+\s*,\s*-?\d{1,3}\.\d+\b", "[LOCATION REDACTED]", text)
     text = " ".join(text.split())
     return text[:500]
 
@@ -193,6 +202,15 @@ def redact_text(text: str) -> str:
 
 def append_audit(kind: str, *, actor_id: int | None = None, target_id: int | None = None,
                  detail: str = "") -> None:
+    # Only known metadata events carry detail. New/raw payload kinds fail closed.
+    detail_kinds = {
+        "telegram_start", "telegram_callback", "role_set", "callback_permission",
+        "device_permission", "device_permissions_revoked", "device_approval_policy",
+        "server_status", "server_logs", "server_metrics", "server_specs", "server_chart",
+        "server_terminal", "server_operation", "bot_text_updated", "ui_style_set",
+    }
+    if kind not in detail_kinds:
+        detail = ""
     row = {
         "at": int(time.time()),
         "kind": str(kind)[:80],
@@ -235,8 +253,9 @@ def register_start(user: Any) -> tuple[dict[str, Any], bool]:
         data = _load()
         users = data.setdefault("users", {})
         key = str(user_id)
-        first_start = key not in users
-        record = _safe_user(users.get(key)) if not first_start else _empty_user(user_id)
+        record = _safe_user(users.get(key)) if key in users else _empty_user(user_id)
+        first_start = "started_at" not in record
+        record["started_at"] = int(time.time())
         record["id"] = user_id
         record["last_seen"] = int(time.time())
         record.update(_identity(user))
@@ -286,6 +305,8 @@ def get_role(user_id: int, owner_id: int) -> str:
     if record.get("blocked") or record.get("role") == Role.BLOCKED:
         return Role.BLOCKED
     role = str(record.get("role") or Role.GUEST)
+    if role == Role.OWNER:
+        return Role.GUEST
     if role == Role.COOWNER:
         return Role.USER
     return role if role in Role.ALL else Role.GUEST
@@ -304,26 +325,37 @@ def _update(user_id: int, mutator) -> dict[str, Any]:
 
 
 def set_role(actor_id: int, target_id: int, role: str, owner_id: int) -> bool:
-    if int(target_id) == int(owner_id) or role not in (Role.USER, Role.GUEST):
+    if (int(actor_id) != int(owner_id) or int(target_id) == int(owner_id)
+            or not get_user(target_id) or role not in (Role.USER, Role.GUEST)):
         return False
-    _update(target_id, lambda record: record.update(role=role, blocked=False))
+    def change(record):
+        record.update(role=role, blocked=False)
+        record.pop("role_before_block", None)
+    _update(target_id, change)
     append_audit("role_set", actor_id=actor_id, target_id=target_id, detail=role)
     return True
 
 
 def set_blocked(actor_id: int, target_id: int, blocked: bool, owner_id: int) -> bool:
-    if int(target_id) == int(owner_id):
+    if int(actor_id) != int(owner_id) or int(target_id) == int(owner_id) or not get_user(target_id):
         return False
     def change(record: dict[str, Any]) -> None:
+        if blocked and not record.get("blocked") and record.get("role") != Role.BLOCKED:
+            prior = record.get("role")
+            record["role_before_block"] = Role.USER if prior in (Role.USER, Role.COOWNER) else Role.GUEST
         record["blocked"] = bool(blocked)
-        record["role"] = Role.BLOCKED if blocked else Role.GUEST
+        if blocked:
+            record["role"] = Role.BLOCKED
+        else:
+            prior = record.pop("role_before_block", Role.GUEST)
+            record["role"] = prior if prior in (Role.USER, Role.GUEST) else Role.GUEST
     _update(target_id, change)
     append_audit("user_blocked" if blocked else "user_unblocked", actor_id=actor_id, target_id=target_id)
     return True
 
 
 def toggle_callback(actor_id: int, target_id: int, callback: str, owner_id: int) -> bool | None:
-    if int(target_id) == int(owner_id):
+    if int(actor_id) != int(owner_id) or int(target_id) == int(owner_id) or not get_user(target_id):
         return None
     current = get_user(target_id) or _empty_user(target_id)
     enabled = callback not in set(current["permissions"]["callbacks"])
@@ -341,7 +373,7 @@ def toggle_callback(actor_id: int, target_id: int, callback: str, owner_id: int)
 
 
 def toggle_device(actor_id: int, target_id: int, device_id: str, owner_id: int) -> bool | None:
-    if int(target_id) == int(owner_id):
+    if int(actor_id) != int(owner_id) or int(target_id) == int(owner_id) or not get_user(target_id):
         return None
     current = get_user(target_id) or _empty_user(target_id)
     enabled = device_id not in set(current["permissions"]["devices"])

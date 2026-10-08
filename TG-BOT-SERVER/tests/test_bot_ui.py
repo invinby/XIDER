@@ -10,6 +10,242 @@ import pytest
 
 import bot
 
+
+def _admin_fixture(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    monkeypatch.setattr(bot, "ADMIN_ID", 100)
+    monkeypatch.setattr(bot.access_store, "FILE", tmp_path / "access.json")
+    monkeypatch.setattr(bot.access_store, "AUDIT_FILE", tmp_path / "audit.jsonl")
+    bot.access_store.register_start(SimpleNamespace(id=200, username="u", first_name="User", last_name=""))
+    _setup(monkeypatch, {"a": {"name": "Laptop"}})
+    rendered = []
+    async def render(_obj, text, reply_markup=None, **kwargs):
+        rendered.append((text, reply_markup))
+    monkeypatch.setattr(bot, "_replace_callback_message", render)
+    monkeypatch.setattr(bot, "_replace_user_card", render)
+    class Callback:
+        def __init__(self, data, actor=100):
+            self.data = data
+            self.from_user = SimpleNamespace(id=actor)
+        async def answer(self, *args, **kwargs):
+            pass
+    return Callback, rendered
+
+
+@pytest.mark.parametrize("handler,data", [
+    ("on_admin_role", "admin:role:200:user"),
+    ("on_admin_block", "admin:block:200"),
+    ("on_admin_device_toggle", "admin:device:200:a"),
+    ("on_admin_permission_toggle", "admin:perm:200:cmd_status"),
+])
+def test_admin_mutations_require_confirm_and_reject_cancel_expiry_replay(monkeypatch, tmp_path, handler, data):
+    Callback, rendered = _admin_fixture(monkeypatch, tmp_path)
+    before = bot.access_store.get_user(200)
+    now = [1000.0]
+    monkeypatch.setattr(bot.time, "monotonic", lambda: now[0])
+    async def scenario():
+        await getattr(bot, handler)(Callback(data))
+        assert bot.access_store.get_user(200) == before
+        actions = _callback_data(rendered[-1][1])
+        confirm = next(value for value in actions if value.startswith("admin:confirm:"))
+        cancel = next(value for value in actions if value.startswith("admin:cancel:"))
+        await bot.on_admin_confirm(Callback(confirm, actor=200))
+        assert bot.access_store.get_user(200) == before
+        await bot.on_admin_cancel(Callback(cancel))
+        await bot.on_admin_confirm(Callback(confirm))
+        assert bot.access_store.get_user(200) == before
+        await getattr(bot, handler)(Callback(data))
+        confirm = next(value for value in _callback_data(rendered[-1][1]) if value.startswith("admin:confirm:"))
+        now[0] += 121
+        await bot.on_admin_confirm(Callback(confirm))
+        assert bot.access_store.get_user(200) == before
+        await getattr(bot, handler)(Callback(data))
+        confirm = next(value for value in _callback_data(rendered[-1][1]) if value.startswith("admin:confirm:"))
+        await bot.on_admin_confirm(Callback(confirm))
+        changed = bot.access_store.get_user(200)
+        assert changed != before
+        await bot.on_admin_confirm(Callback(confirm))
+        assert bot.access_store.get_user(200) == changed
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("actor", [200, 300, 400])
+@pytest.mark.parametrize("handler,data", [
+    ("on_admin_users", "admin:users"), ("on_admin_user", "admin:user:200"),
+    ("on_admin_audit", "admin:audit"), ("on_admin_devices", "admin:devices:200"),
+    ("on_admin_permissions", "admin:perms:200"), ("on_admin_texts", "admin:texts"),
+    ("on_admin_role", "admin:role:200:user"), ("on_admin_block", "admin:block:200"),
+])
+def test_direct_admin_calls_deny_user_guest_blocked_without_private_reads(monkeypatch, tmp_path, actor, handler, data):
+    Callback, rendered = _admin_fixture(monkeypatch, tmp_path)
+    if actor == 200:
+        bot.access_store.set_role(100, actor, bot.Role.USER, 100)
+    if actor == 400:
+        from types import SimpleNamespace
+        bot.access_store.register_start(SimpleNamespace(id=actor))
+        bot.access_store.set_blocked(100, actor, True, 100)
+    def private(*args, **kwargs):
+        pytest.fail("unauthorized admin path read private data")
+    monkeypatch.setattr(bot.access_store, "get_user", private)
+    monkeypatch.setattr(bot.access_store, "list_users", private)
+    monkeypatch.setattr(bot.access_store, "recent_audit", private)
+    asyncio.run(getattr(bot, handler)(Callback(data, actor)))
+    assert not rendered
+
+
+@pytest.mark.parametrize("handler,data", [
+    ("on_admin_role", "admin:role:999:user"), ("on_admin_devices", "admin:devices:999"),
+    ("on_admin_permissions", "admin:perms:999"), ("on_admin_block", "admin:block:999"),
+])
+def test_unknown_admin_target_neither_created_nor_rendered(monkeypatch, tmp_path, handler, data):
+    Callback, rendered = _admin_fixture(monkeypatch, tmp_path)
+    asyncio.run(getattr(bot, handler)(Callback(data)))
+    assert bot.access_store.get_user(999) is None
+    assert not rendered
+
+
+def test_admin_log_omits_payload_fields_and_redacts_nested_credentials(monkeypatch):
+    rows = []
+    monkeypatch.setattr(bot.audit_log, "info", lambda *args: rows.append(str(args)))
+    bot.audit("operation", latitude="41.123", longitude="69.456", stdout="raw-result",
+              shell="rm -rf /", file_bytes=b"private-file", detail="MQTT_PASSWORD=credential")
+    logged = " ".join(rows)
+    for private in ("41.123", "69.456", "raw-result", "rm -rf", "private-file", "credential"):
+        assert private not in logged
+
+
+def test_start_notification_deduplicates_concurrent_updates(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    Callback, rendered = _admin_fixture(monkeypatch, tmp_path)
+    monkeypatch.setattr(bot, "_START_NOTIFY_LAST", {})
+    monkeypatch.setattr(bot, "get_user_role", lambda _id: bot.Role.GUEST)
+    notices = []
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    async def notify(text, **kwargs):
+        notices.append(text)
+        entered.set()
+        await release.wait()
+    async def card(*args, **kwargs):
+        pass
+    monkeypatch.setattr(bot, "_notify_admins", notify)
+    monkeypatch.setattr(bot, "_show_start_card", card)
+    class State:
+        async def clear(self):
+            pass
+    message = SimpleNamespace(from_user=SimpleNamespace(id=200, username="u"), chat=SimpleNamespace(id=200))
+    async def scenario():
+        first = asyncio.create_task(bot.cmd_start(message, State()))
+        await entered.wait()
+        second = asyncio.create_task(bot.cmd_start(message, State()))
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.gather(first, second)
+    asyncio.run(scenario())
+    assert len(notices) == 1
+
+
+def test_admin_text_and_outbound_message_need_owner_decision(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    Callback, rendered = _admin_fixture(monkeypatch, tmp_path)
+    monkeypatch.setattr(bot.text_store, "FILE", tmp_path / "texts.json")
+    class Message:
+        def __init__(self, actor, text):
+            self.from_user = SimpleNamespace(id=actor)
+            self.text = text
+    monkeypatch.setattr(bot, "Message", Message)
+    class State:
+        def __init__(self, data):
+            self.data = data
+        async def get_data(self):
+            return self.data.copy()
+        async def clear(self):
+            self.data.clear()
+    sent = []
+    async def send(target, text):
+        sent.append((target, text))
+    monkeypatch.setattr(bot.bot, "send_message", send)
+    key = "xtech_start_guest"
+    original = bot.text_store.get(key)
+    async def scenario():
+        for actor in (200, 300):
+            await bot.on_admin_text_value(Message(actor, "Unapproved"), State({"bot_text_key": key}))
+            await bot.on_admin_message_text(Message(actor, "Unapproved"), State({"admin_message_user": 200}))
+        assert not rendered and not sent
+        assert bot.text_store.get(key) == original
+        await bot.on_admin_text_value(Message(100, "Approved text"), State({"bot_text_key": key}))
+        assert bot.text_store.get(key) == original
+        confirm = next(value for value in _callback_data(rendered[-1][1]) if value.startswith("admin:confirm:"))
+        await bot.on_admin_confirm(Callback(confirm))
+        assert bot.text_store.get(key) == "Approved text"
+        await bot.on_admin_message_text(Message(100, "Sensitive <text>"), State({"admin_message_user": 200}))
+        assert not sent
+        confirm = next(value for value in _callback_data(rendered[-1][1]) if value.startswith("admin:confirm:"))
+        await bot.on_admin_confirm(Callback(confirm))
+        await bot.on_admin_confirm(Callback(confirm))
+        assert sent == [(200, "Sensitive &lt;text&gt;")]
+        assert all("Sensitive" not in row["detail"] for row in bot.access_store.recent_audit())
+    asyncio.run(scenario())
+
+
+def test_admin_preview_is_invalidated_by_intervening_access_change(monkeypatch, tmp_path):
+    Callback, rendered = _admin_fixture(monkeypatch, tmp_path)
+    async def scenario():
+        await bot.on_admin_role(Callback("admin:role:200:user"))
+        confirm = next(value for value in _callback_data(rendered[-1][1]) if value.startswith("admin:confirm:"))
+        bot.access_store.set_blocked(100, 200, True, 100)
+        await bot.on_admin_confirm(Callback(confirm))
+        assert bot.access_store.get_role(200, 100) == bot.Role.BLOCKED
+    asyncio.run(scenario())
+
+
+def test_owner_user_card_includes_activity_and_actual_grants(monkeypatch, tmp_path):
+    Callback, rendered = _admin_fixture(monkeypatch, tmp_path)
+    bot.access_store.toggle_device(100, 200, "a", 100)
+    bot.access_store.toggle_callback(100, 200, "cmd:status", 100)
+    asyncio.run(bot.on_admin_user(Callback("admin:user:200")))
+    assert "Последнее посещение" in rendered[-1][0]
+    assert "Устройства: a" in rendered[-1][0]
+    assert "Действия: cmd:status" in rendered[-1][0]
+    asyncio.run(bot.on_admin_users(Callback("admin:users")))
+    assert "Последнее посещение" in rendered[-1][0]
+    assert "cmd:status" in rendered[-1][0]
+
+
+def test_owner_cannot_stage_self_role_block_or_grants(monkeypatch, tmp_path):
+    Callback, rendered = _admin_fixture(monkeypatch, tmp_path)
+    async def scenario():
+        for handler, data in (
+            (bot.on_admin_role, "admin:role:100:guest"),
+            (bot.on_admin_block, "admin:block:100"),
+            (bot.on_admin_device_toggle, "admin:device:100:a"),
+            (bot.on_admin_permission_toggle, "admin:perm:100:cmd_status"),
+        ):
+            await handler(Callback(data))
+    asyncio.run(scenario())
+    assert not rendered
+    assert bot.access_store.get_role(100, 100) == bot.Role.OWNER
+
+
+def test_middleware_audits_metadata_instead_of_message_or_callback_payload(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    _admin_fixture(monkeypatch, tmp_path)
+    logged = []
+    monkeypatch.setattr(bot.log, "info", lambda *args: logged.append(str(args)))
+    user = SimpleNamespace(id=200, username="u")
+    async def handler(event, data):
+        return "ok"
+    async def scenario():
+        await bot._live_log_middleware(handler, SimpleNamespace(
+            message=SimpleNamespace(from_user=user, text="41.123 69.456 raw-file whoami", content_type="text"),
+            callback_query=None), {})
+        await bot._live_log_middleware(handler, SimpleNamespace(message=None,
+            callback_query=SimpleNamespace(from_user=user, data="admin:role:200:user secret payload")), {})
+    asyncio.run(scenario())
+    data = " ".join(logged) + str(bot.access_store.recent_audit())
+    assert "41.123" not in data and "raw-file" not in data and "whoami" not in data
+    assert "secret payload" not in data
+
 DEVICE_SECTIONS = {
     "cat:system", "cat:screen", "cat:files", "cat:network", "cat:terminal",
     "cat:power", "versions:device", "cat:device", "cat:pranks",
@@ -3066,6 +3302,7 @@ def _rendered_callback_inventory(monkeypatch):
         "message": SimpleNamespace(from_user=SimpleNamespace(id=200)),
         "device_id": "device-1", "info_book": bot.info_book, "index": 1,
         "it": {"pid": 123}, "page": 1, "i": 0, "notes_page": 1,
+        "token": "0123456789abcdef0123456789abcdef",
         "release": SimpleNamespace(tag="v4.1.0"),
         "bootstrap_release": SimpleNamespace(tag="v4.1.0"), "tag": "v4.1.0",
     }

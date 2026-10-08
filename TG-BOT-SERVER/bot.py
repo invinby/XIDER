@@ -109,10 +109,12 @@ def audit(event: str, **fields) -> None:
     BLOCK = ("token", "password", "secret", "key", "bot_token", "admin_id")
     clean = {}
     for k, v in fields.items():
+        if k.lower() in {"latitude", "longitude", "coordinates", "location", "stdout", "stderr", "shell", "command", "file_bytes", "file_contents"}:
+            continue
         if k.lower() in BLOCK:
             clean[k] = "[REDACTED]"
         else:
-            clean[k] = v
+            clean[k] = access_store.redact_text(str(v))
     audit_log.info("%s | %s", event, " | ".join(f"{k}={v}" for k, v in clean.items()))
 
 
@@ -218,12 +220,15 @@ async def _live_log_middleware(handler, event, data):
         m = event.message
         user = m.from_user
         kind = "telegram_message"
-        detail = m.text or f"<{m.content_type}>"
+        # Bodies may contain shell commands, coordinates or file contents.
+        detail = f"<{m.content_type}>"
     elif event.callback_query:
         cq = event.callback_query
         user = cq.from_user
         kind = "telegram_callback"
-        detail = cq.data or ""
+        # Keep the route family, never attacker-supplied callback parameters.
+        parts = str(cq.data or "").split(":")[:2]
+        detail = ":".join(part for part in parts if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", part))
     detail = access_store.redact_text(detail)
     token = CURRENT_TG_USER.set(int(user.id) if user else ADMIN_ID)
     try:
@@ -2726,6 +2731,7 @@ async def cmd_start(message: Message, state: FSMContext):
         and (first_start or now - last_notice >= 600)
     )
     if should_notify_start:
+        _START_NOTIFY_LAST[message.from_user.id] = now
         try:
             kb = InlineKeyboardBuilder()
             kb.button(text=_lex("admin_open_user_button"), callback_data=f"admin:user:{message.from_user.id}", style="primary")
@@ -2736,8 +2742,8 @@ async def cmd_start(message: Message, state: FSMContext):
                 f"(<code>{message.from_user.id}</code>). Роль по умолчанию: гость.",
                 reply_markup=kb.as_markup(),
             )
-            _START_NOTIFY_LAST[message.from_user.id] = now
         except Exception:
+            _START_NOTIFY_LAST.pop(message.from_user.id, None)
             log.exception("Не удалось уведомить владельца о новом пользователе")
     if role == Role.BLOCKED:
         await _show_start_card(
@@ -3101,12 +3107,154 @@ async def on_menu_admin(cq: CallbackQuery):
     await cq.answer()
 
 
+_ADMIN_PENDING: dict[str, dict] = {}
+
+
+async def _admin_owner(obj) -> bool:
+    if (obj.from_user and obj.from_user.id == ADMIN_ID
+            and access_store.get_role(obj.from_user.id, ADMIN_ID) == Role.OWNER):
+        return True
+    if not isinstance(obj, Message):
+        await obj.answer(_lex("owner_immutable"), show_alert=True)
+    return False
+
+
+def _admin_snapshot(user_id: int):
+    record = access_store.get_user(user_id)
+    if record is None:
+        return None
+    return {key: record.get(key) for key in ("role", "blocked", "permissions", "role_before_block")}
+
+
+async def _admin_stage(obj, action: str, user_id: int = 0, value=None) -> None:
+    """One-use owner decision; access_store remains the permission authority."""
+    now = time.monotonic()
+    for token, pending in list(_ADMIN_PENDING.items()):
+        if pending["actor"] == obj.from_user.id or now >= pending["expires"]:
+            _ADMIN_PENDING.pop(token, None)
+    token = uuid.uuid4().hex
+    _ADMIN_PENDING[token] = {
+        "actor": obj.from_user.id, "expires": now + 120,
+        "action": action, "target": user_id, "value": value,
+        "snapshot": _admin_snapshot(user_id) if user_id else text_store.get(value[0]),
+    }
+    kb = InlineKeyboardBuilder()
+    kb.button(text=_lex("confirm_yes_button"), callback_data=f"admin:confirm:{token}", style="danger")
+    kb.button(text=_nav("back"), callback_data=f"admin:cancel:{token}", style="primary")
+    kb.adjust(1)
+    labels = {
+        "role": "Изменение роли", "block": "Блокировка / разблокировка",
+        "device": "Изменение доступа к устройству", "permission": "Изменение доступа к действию",
+        "text": "Изменение текста бота", "message": "Отправка сообщения",
+    }
+    preview = f"<b>Подтвердить изменение</b>\n{html.escape(labels[action])}"
+    if user_id:
+        preview += f" · <code>{user_id}</code>"
+    description = str(value)
+    snapshot = _ADMIN_PENDING[token]["snapshot"]
+    if action == "role":
+        description = _role_label(value)
+    elif action == "block":
+        description = _nav("block_user" if value else "unblock_user")
+    elif action in {"device", "permission"}:
+        field = "devices" if action == "device" else "callbacks"
+        enabled = value not in snapshot["permissions"][field]
+        description = f"{'Выдать' if enabled else 'Отозвать'}: {value}"
+    elif action == "text":
+        description = f"{TEXT_LABELS[value[0]]}: {value[1]}"
+    preview += f"\n{html.escape(access_store.redact_text(description))}\nПодтверждение действует 2 минуты."
+    if isinstance(obj, Message):
+        await _replace_user_card(obj, preview, reply_markup=kb.as_markup())
+    else:
+        await _replace_callback_message(obj, preview, reply_markup=kb.as_markup())
+        await obj.answer()
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("admin:cancel:"))
+async def on_admin_cancel(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
+    token = cq.data.rsplit(":", 1)[-1]
+    pending = _ADMIN_PENDING.get(token)
+    if pending and pending["actor"] == cq.from_user.id:
+        _ADMIN_PENDING.pop(token, None)
+    await _replace_callback_message(cq, _lex("text_edit_expired"), reply_markup=admin_menu())
+    await cq.answer()
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("admin:confirm:"))
+async def on_admin_confirm(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
+    token = cq.data.rsplit(":", 1)[-1]
+    pending = _ADMIN_PENDING.get(token)
+    if not pending or pending["actor"] != cq.from_user.id:
+        await cq.answer(_lex("text_edit_expired"), show_alert=True)
+        return
+    _ADMIN_PENDING.pop(token, None)  # consume before any await/side effect
+    action, target, value = pending["action"], pending["target"], pending["value"]
+    current = _admin_snapshot(target) if target else text_store.get(value[0])
+    if time.monotonic() >= pending["expires"] or current != pending["snapshot"]:
+        await cq.answer(_lex("text_edit_expired"), show_alert=True)
+        return
+    if target and (target == ADMIN_ID or current is None):
+        await cq.answer(_lex("owner_immutable"), show_alert=True)
+        return
+    if action == "role":
+        access_store.set_role(cq.from_user.id, target, value, ADMIN_ID)
+    elif action == "block":
+        access_store.set_blocked(cq.from_user.id, target, value, ADMIN_ID)
+    elif action == "device":
+        if value not in devices.all():
+            await cq.answer(_lex("device_unavailable"), show_alert=True)
+            return
+        access_store.toggle_device(cq.from_user.id, target, value, ADMIN_ID)
+    elif action == "permission":
+        access_store.toggle_callback(cq.from_user.id, target, value, ADMIN_ID)
+    elif action == "text":
+        try:
+            text_store.set_text(value[0], value[1])
+        except (KeyError, ValueError):
+            await cq.answer(_lex("text_save_failed"), show_alert=True)
+            return
+        access_store.append_audit("bot_text_updated", actor_id=cq.from_user.id, detail=value[0])
+    elif action == "message":
+        try:
+            await bot.send_message(target, html.escape(value))
+        except Exception:
+            log.warning("Admin message delivery failed for target %s", target)
+            await cq.answer(_lex("admin_message_failed"), show_alert=True)
+            return
+        access_store.append_audit("admin_message_sent", actor_id=cq.from_user.id, target_id=target)
+    else:
+        await cq.answer(_lex("admin_invalid_data"), show_alert=True)
+        return
+    await _replace_callback_message(cq, _lex("text_saved"), reply_markup=admin_menu())
+    await cq.answer()
+
+
 @router.callback_query(OwnerFilter(), F.data == "admin:users")
 async def on_admin_users(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     users = access_store.list_users()
+    summaries = []
+    for record in users[:30]:
+        uid = int(record.get("id") or 0)
+        perms = record.get("permissions") or {}
+        last_seen = datetime.datetime.fromtimestamp(int(record.get("last_seen") or 0)).strftime("%d.%m %H:%M")
+        summary = (
+            f"\n\n{html.escape(_user_label(record))} · {html.escape(_role_label(access_store.get_role(uid, ADMIN_ID)))}"
+            f"\nПоследнее посещение: {last_seen}"
+            f"\nУстройства: {html.escape(', '.join(perms.get('devices') or []) or '—')}"
+            f"\nДействия: {html.escape(', '.join(perms.get('callbacks') or []) or '—')}"
+        )
+        if sum(len(item) for item in summaries) + len(summary) > 3000:
+            break
+        summaries.append(summary)
     await _replace_callback_message(cq,
         f"<b>{html.escape(_nav('admin_users'))}</b>\n"
-        f"{html.escape(_lex('users_intro', total=str(len(users))))}",
+        f"{html.escape(_lex('users_intro', total=str(len(users))))}" + "".join(summaries),
         reply_markup=admin_users_menu(),
     )
     await cq.answer()
@@ -3114,6 +3262,8 @@ async def on_admin_users(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data == "admin:texts")
 async def on_admin_texts(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     mode = xlex.normalize_style(bot_settings.get("ui_style", "technical"))
     await _replace_callback_message(cq,
         f"<b>X-LEX · {html.escape(xlex.STYLE_NAMES[mode])}</b>\n"
@@ -3125,6 +3275,8 @@ async def on_admin_texts(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data.startswith("admin:text:"))
 async def on_admin_text_edit(cq: CallbackQuery, state: FSMContext):
+    if not await _admin_owner(cq):
+        return
     key = cq.data.split(":", 2)[2]
     if key not in TEXT_LABELS:
         await cq.answer(_lex("admin_invalid_data"), show_alert=True)
@@ -3145,23 +3297,21 @@ async def on_admin_text_edit(cq: CallbackQuery, state: FSMContext):
 
 @router.message(OwnerFilter(), Form.wait_bot_text)
 async def on_admin_text_value(message: Message, state: FSMContext):
+    if not await _admin_owner(message):
+        await state.clear()
+        return
     data = await state.get_data()
     key = str(data.get("bot_text_key") or "")
     await state.clear()
     if key not in TEXT_LABELS:
         await _replace_user_card(message, _lex("text_edit_expired"), reply_markup=admin_menu())
         return
-    try:
-        text_store.set_text(key, message.text or "")
-    except (KeyError, ValueError) as exc:
-        log.warning("Не удалось сохранить пользовательский текст %r: %s", key, exc)
-        await _replace_user_card(message, _lex("text_save_failed"), reply_markup=admin_texts_menu())
-        return
-    access_store.append_audit("bot_text_updated", actor_id=message.from_user.id, detail=key)
-    await _replace_user_card(message, _lex("text_saved"), reply_markup=admin_texts_menu())
+    await _admin_stage(message, "text", value=(key, message.text or ""))
 
 
 async def _render_admin_user_card(cq: CallbackQuery, user_id: int) -> bool:
+    if not await _admin_owner(cq):
+        return False
     record = access_store.get_user(user_id)
     if not record:
         return False
@@ -3178,7 +3328,10 @@ async def _render_admin_user_card(cq: CallbackQuery, user_id: int) -> bool:
             role=_role_label(role),
             devices=device_count,
             buttons=button_count,
-        ),
+        ) + "\nПоследнее посещение: " + html.escape(datetime.datetime.fromtimestamp(
+            int(record.get("last_seen") or 0)).strftime("%d.%m.%Y %H:%M"))
+        + "\nУстройства: " + html.escape(", ".join(perms.get("devices") or []) or "—")
+        + "\nДействия: " + html.escape(", ".join(perms.get("callbacks") or []) or "—"),
         reply_markup=admin_user_menu(user_id),
     )
     return True
@@ -3186,6 +3339,8 @@ async def _render_admin_user_card(cq: CallbackQuery, user_id: int) -> bool:
 
 @router.callback_query(OwnerFilter(), F.data.startswith("admin:user:"))
 async def on_admin_user(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     raw = cq.data.rsplit(":", 1)[-1]
     if not raw.isdigit():
         await cq.answer(_lex("admin_invalid_user"), show_alert=True)
@@ -3199,39 +3354,47 @@ async def on_admin_user(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data.startswith("admin:role:"))
 async def on_admin_role(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     parts = cq.data.split(":")
     if len(parts) != 4 or not parts[2].isdigit():
         await cq.answer(_lex("admin_invalid_data"), show_alert=True)
         return
     user_id, role = int(parts[2]), parts[3]
-    if not access_store.set_role(cq.from_user.id, user_id, role, ADMIN_ID):
+    if user_id == ADMIN_ID or role not in (Role.USER, Role.GUEST):
         await cq.answer(_lex("owner_immutable"), show_alert=True)
         return
-    await cq.answer(_lex("admin_role_changed", role=_role_label(role)))
-    if not await _render_admin_user_card(cq, user_id):
-        await _replace_callback_message(cq, _lex("admin_user_not_found"), reply_markup=admin_menu())
+    if not access_store.get_user(user_id):
+        await cq.answer(_lex("admin_user_not_found"), show_alert=True)
+        return
+    await _admin_stage(cq, "role", user_id, role)
 
 
 @router.callback_query(OwnerFilter(), F.data.startswith("admin:block:"))
 async def on_admin_block(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     raw = cq.data.rsplit(":", 1)[-1]
     if not raw.isdigit():
         await cq.answer(_lex("admin_invalid_user"), show_alert=True)
         return
     user_id = int(raw)
-    blocked = access_store.get_role(user_id, ADMIN_ID) != Role.BLOCKED
-    if not access_store.set_blocked(cq.from_user.id, user_id, blocked, ADMIN_ID):
+    if user_id == ADMIN_ID:
         await cq.answer(_lex("owner_immutable"), show_alert=True)
         return
-    await cq.answer(_lex("admin_user_blocked" if blocked else "admin_user_unblocked"))
-    if not await _render_admin_user_card(cq, user_id):
-        await _replace_callback_message(cq, _lex("admin_user_not_found"), reply_markup=admin_menu())
+    if not access_store.get_user(user_id):
+        await cq.answer(_lex("admin_user_not_found"), show_alert=True)
+        return
+    blocked = access_store.get_role(user_id, ADMIN_ID) != Role.BLOCKED
+    await _admin_stage(cq, "block", user_id, blocked)
 
 
 @router.callback_query(OwnerFilter(), F.data.startswith("admin:devices:"))
 async def on_admin_devices(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     raw = cq.data.rsplit(":", 1)[-1]
-    if not raw.isdigit():
+    if not raw.isdigit() or not access_store.get_user(int(raw)):
         await cq.answer(_lex("admin_invalid_user"), show_alert=True)
         return
     await _replace_callback_message(cq,
@@ -3243,6 +3406,8 @@ async def on_admin_devices(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data.startswith("admin:device:"))
 async def on_admin_device_toggle(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     parts = cq.data.split(":", 3)
     if len(parts) != 4 or not parts[2].isdigit():
         await cq.answer(_lex("admin_invalid_data"), show_alert=True)
@@ -3251,22 +3416,18 @@ async def on_admin_device_toggle(cq: CallbackQuery):
     if device_id not in devices.all():
         await cq.answer(_lex("device_unavailable"), show_alert=True)
         return
-    enabled = access_store.toggle_device(cq.from_user.id, user_id, device_id, ADMIN_ID)
-    await cq.answer(_lex(
-        "admin_device_access_changed",
-        device=target_label(device_id),
-        action="выдан" if enabled else "отозван",
-    ))
-    await _replace_callback_message(cq,
-        _lex("admin_device_access_intro"),
-        reply_markup=admin_devices_menu(user_id),
-    )
+    if user_id == ADMIN_ID or not access_store.get_user(user_id):
+        await cq.answer(_lex("admin_invalid_user"), show_alert=True)
+        return
+    await _admin_stage(cq, "device", user_id, device_id)
 
 
 @router.callback_query(OwnerFilter(), F.data.startswith("admin:perms:"))
 async def on_admin_permissions(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     raw = cq.data.rsplit(":", 1)[-1]
-    if not raw.isdigit():
+    if not raw.isdigit() or not access_store.get_user(int(raw)):
         await cq.answer(_lex("admin_invalid_user"), show_alert=True)
         return
     await _replace_callback_message(cq,
@@ -3278,6 +3439,8 @@ async def on_admin_permissions(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data.startswith("admin:perm:"))
 async def on_admin_permission_toggle(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     parts = cq.data.split(":", 3)
     if len(parts) != 4 or not parts[2].isdigit():
         await cq.answer(_lex("admin_invalid_data"), show_alert=True)
@@ -3287,20 +3450,16 @@ async def on_admin_permission_toggle(cq: CallbackQuery):
     if not callback:
         await cq.answer(_lex("admin_invalid_data"), show_alert=True)
         return
-    enabled = access_store.toggle_callback(cq.from_user.id, user_id, callback, ADMIN_ID)
-    await cq.answer(_lex(
-        "admin_permission_changed",
-        permission=callback,
-        action="выдано" if enabled else "отозвано",
-    ))
-    await _replace_callback_message(cq,
-        _lex("admin_permissions_intro"),
-        reply_markup=admin_permissions_menu(user_id),
-    )
+    if user_id == ADMIN_ID or not access_store.get_user(user_id):
+        await cq.answer(_lex("admin_invalid_user"), show_alert=True)
+        return
+    await _admin_stage(cq, "permission", user_id, callback)
 
 
 @router.callback_query(OwnerFilter(), F.data.startswith("admin:message:"))
 async def on_admin_message(cq: CallbackQuery, state: FSMContext):
+    if not await _admin_owner(cq):
+        return
     raw = cq.data.rsplit(":", 1)[-1]
     if not raw.isdigit() or not access_store.get_user(int(raw)):
         await cq.answer(_lex("admin_user_not_found"), show_alert=True)
@@ -3313,25 +3472,23 @@ async def on_admin_message(cq: CallbackQuery, state: FSMContext):
 
 @router.message(OwnerFilter(), Form.wait_admin_message)
 async def on_admin_message_text(message: Message, state: FSMContext):
+    if not await _admin_owner(message):
+        await state.clear()
+        return
     data = await state.get_data()
     await state.clear()
     target_id = int(data.get("admin_message_user") or 0)
     text = (message.text or "").strip()
-    if not target_id or not text:
+    if not target_id or not text or target_id == ADMIN_ID or not access_store.get_user(target_id):
         await _replace_user_card(message, _lex("admin_message_empty"), reply_markup=admin_menu())
         return
-    try:
-        await bot.send_message(target_id, html.escape(text))
-    except Exception:
-        log.exception("Не удалось отправить администраторское сообщение")
-        await _replace_user_card(message, _lex("admin_message_failed"), reply_markup=admin_menu())
-        return
-    access_store.append_audit("admin_message_sent", actor_id=message.from_user.id, target_id=target_id, detail=text)
-    await _replace_user_card(message, _lex("admin_message_sent"), reply_markup=admin_menu())
+    await _admin_stage(message, "message", target_id, text)
 
 
 @router.callback_query(OwnerFilter(), F.data == "admin:audit")
 async def on_admin_audit(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     rows = access_store.recent_audit(12)
     if not rows:
         text = "<b>Журнал действий</b>\nЗаписей пока нет."
@@ -3349,6 +3506,8 @@ async def on_admin_audit(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data == "admin:style")
 async def on_admin_style(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     kb = InlineKeyboardBuilder()
     current = xlex.normalize_style(bot_settings.get("ui_style", "technical"))
     for style in xlex.STYLES:
@@ -3365,6 +3524,8 @@ async def on_admin_style(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data.startswith("admin:style:set:"))
 async def on_admin_style_set(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     style = cq.data.rsplit(":", 1)[-1]
     if style not in xlex.STYLES:
         await cq.answer("Неизвестный стиль", show_alert=True)

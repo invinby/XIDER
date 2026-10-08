@@ -6,6 +6,84 @@ import roles
 import pytest
 
 
+@pytest.mark.parametrize("operation", [
+    lambda actor, target: store.set_role(actor, target, store.Role.USER, 100),
+    lambda actor, target: store.set_blocked(actor, target, True, 100),
+    lambda actor, target: store.toggle_device(actor, target, "a", 100),
+    lambda actor, target: store.toggle_callback(actor, target, "cmd:status", 100),
+])
+def test_mutation_store_denies_nonowner_and_unknown_targets(monkeypatch, tmp_path, operation):
+    _isolate(monkeypatch, tmp_path)
+    store.register_start(_user(200))
+    before = store.get_user(200)
+    assert not operation(200, 200)
+    assert store.get_user(200) == before
+    assert not operation(100, 999)
+    assert store.get_user(999) is None
+    assert not operation(100, 100)
+
+
+def test_unblock_restores_prior_role_and_exact_grants_without_elevation(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    store.register_start(_user(200))
+    store.set_role(100, 200, store.Role.USER, 100)
+    store.toggle_device(100, 200, "a", 100)
+    store.toggle_callback(100, 200, "cmd:status", 100)
+    store.set_blocked(100, 200, True, 100)
+    store.set_blocked(100, 200, True, 100)
+    assert not store.can_use_callback(200, "cmd:status", 100, "a")
+    store.set_blocked(100, 200, False, 100)
+    assert store.get_role(200, 100) == store.Role.USER
+    assert store.can_use_callback(200, "cmd:status", 100, "a")
+    assert not store.can_use_callback(200, "cmd:screenshot", 100, "a")
+    store.set_role(100, 200, store.Role.GUEST, 100)
+    store.set_blocked(100, 200, True, 100)
+    store.set_blocked(100, 200, False, 100)
+    assert store.get_role(200, 100) == store.Role.GUEST
+    store.set_role(100, 200, store.Role.USER, 100)
+    assert store.get_user(200)["permissions"] == {"devices": ["a"], "callbacks": ["cmd:status"]}
+
+
+def test_audit_discards_raw_message_shell_file_location_payloads(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    for kind in ("telegram_message", "admin_message_sent", "shell", "stdout", "geo_location", "file_contents"):
+        store.append_audit(kind, actor_id=200, detail="41.123,69.456 secret-file-bytes rm -rf / raw stdout")
+    assert all(not row["detail"] for row in store.recent_audit())
+
+
+def test_first_start_is_distinct_from_prior_callback_activity(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    store.touch_user(_user(200), "telegram_callback", "admin:users")
+    assert store.register_start(_user(200))[1] is True
+    assert store.register_start(_user(200))[1] is False
+
+
+def test_persisted_owner_marker_cannot_create_a_second_owner(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    store.register_start(_user(200))
+    store._update(200, lambda record: record.update(role=store.Role.OWNER))
+    assert store.get_role(200, 100) == store.Role.GUEST
+    assert not store.can_use_callback(200, "admin:audit", 100)
+    assert store.get_role(100, 100) == store.Role.OWNER
+
+
+def test_audit_drops_unknown_payload_and_redacts_paths_and_coordinates(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    store.append_audit("unclassified_payload", detail="raw stdout whoami private.txt")
+    assert store.recent_audit()[0]["detail"] == ""
+    store.append_audit("telegram_callback", detail=r"token=secret C:\Users\rog\secret.txt /home/user/private.txt 41.123, 69.456")
+    detail = store.recent_audit()[0]["detail"]
+    for private in ("secret.txt", "private.txt", "Users", "41.123", "69.456", "token=secret"):
+        assert private not in detail
+
+
+def test_redaction_handles_quoted_credentials_with_spaces():
+    safe = store.redact_text('"password": "very secret value", MQTT_PASSWORD=\'another private value\'')
+    assert "very secret value" not in safe
+    assert "another private value" not in safe
+    assert safe.count("[REDACTED]") == 2
+
+
 @pytest.mark.parametrize("callback,full_device_allowed", [
     ("cmd:screenshot", True), ("cmd:status", True), ("files:get", True),
     ("fun:type", True), ("power_confirm:shutdown", True), ("kill:123", True),
@@ -220,7 +298,7 @@ def test_block_replaces_access_and_audit_redacts_tokens(monkeypatch, tmp_path):
     assert store.get_role(200, 100) == store.Role.BLOCKED
     assert store.can_use_callback(200, "cmd:status", 100) is False
 
-    store.append_audit("message", actor_id=200, detail="token=123456:abcdefghijklmnopqrstuvwxyz")
+    store.append_audit("callback_permission", actor_id=200, detail="token=123456:abcdefghijklmnopqrstuvwxyz")
     rows = store.recent_audit()
     assert "[REDACTED]" in rows[0]["detail"] or "[TOKEN]" in rows[0]["detail"]
 
