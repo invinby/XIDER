@@ -50,7 +50,9 @@ function global:ssh.exe {
         'MQTT_TLS=true',
         'MQTT_USERNAME=fixture-user',
         'MQTT_PASSWORD=fixture-password',
-        'ENCRYPT_PAYLOAD=true'
+        'ENCRYPT_PAYLOAD=true',
+        'XIDER_COMMAND_VERIFY_KEYSET_B64=eyIzMDk3ZTJkZWUyY2I0YTM0IjoiSVZMNDBadDVIU1JGTWtMaFh5NnJiTGZQLW50cVh0TUFsNVlPQnBpQjJ4SSJ9',
+        'SERVER_PRIVATE_SENTINEL=must-not-transfer'
     )
 }
 
@@ -97,6 +99,35 @@ try {
     $remoteEnvRoot = Join-Path $fixture 'remote-env'
     New-Item -ItemType Directory -Path $remoteEnvRoot -Force | Out-Null
     & $bootstrap -InstallRoot (Join-Path $fixture 'remote-install') -EnvRoot $remoteEnvRoot -SourceArchive $archive -PreflightOnly
+    if (($global:XiderBootstrapSshArgs -join ' ') -notmatch 'XIDER_COMMAND_VERIFY_KEYSET_B64' -or
+        ($global:XiderBootstrapSshArgs -join ' ') -match 'command-signing-private|SERVER_PRIVATE_SENTINEL') {
+        throw 'Windows bootstrap must request only the public command keyset.'
+    }
+    # Exercise the actual pure merge helper without running install side effects.
+    $tokens = $null; $parseErrors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseFile($bootstrap, [ref]$tokens, [ref]$parseErrors)
+    $mergeFunction = $ast.Find({ param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Merge-XiderCommandPublicKeyset'
+    }, $true)
+    if (-not $mergeFunction) { throw 'Public-only merge helper is missing.' }
+    Invoke-Expression $mergeFunction.Extent.Text
+    $localLines = @('SHARED_KEY=local-device-secret', 'MQTT_PASSWORD=local-password',
+                    'DEVICE_ID=local-device', 'UNRELATED=keep', 'XIDER_COMMAND_VERIFY_KEYSET_B64=old')
+    $remoteLines = @('SHARED_KEY=must-not-overwrite', 'SERVER_PRIVATE_SENTINEL=must-not-transfer',
+                     'XIDER_COMMAND_VERIFY_KEYSET_B64=eyIzMDk3ZTJkZWUyY2I0YTM0IjoiSVZMNDBadDVIU1JGTWtMaFh5NnJiTGZQLW50cVh0TUFsNVlPQnBpQjJ4SSJ9')
+    $merged = @(Merge-XiderCommandPublicKeyset -ConfigLines $localLines -PublicLines $remoteLines)
+    foreach ($expected in $localLines | Where-Object { $_ -notmatch '^XIDER_COMMAND_VERIFY_KEYSET_B64=' }) {
+        if ($merged -notcontains $expected) { throw 'Public refresh overwrote device-specific configuration.' }
+    }
+    if ($merged -notcontains $remoteLines[2] -or $merged -match 'SERVER_PRIVATE_SENTINEL|must-not-overwrite') {
+        throw 'Public merge lost the keyset or transferred server secrets.'
+    }
+    foreach ($publicCase in @(@(), @('XIDER_COMMAND_VERIFY_KEYSET_B64=invalid=='),
+                             @($remoteLines[2], $remoteLines[2]))) {
+        $withoutKey = @(Merge-XiderCommandPublicKeyset -ConfigLines $localLines -PublicLines $publicCase)
+        if ($withoutKey -match '^XIDER_COMMAND_VERIFY_KEYSET_B64=') { throw 'Unsafe/missing public config enabled shell.' }
+        if ($withoutKey -notcontains 'SHARED_KEY=local-device-secret') { throw 'Missing public config broke ordinary install.' }
+    }
     if ($global:XiderBootstrapSshArgs -notcontains '-i' -or
         $global:XiderBootstrapSshArgs -notcontains $explicitKey -or
         $global:XiderBootstrapSshArgs -notcontains 'IdentitiesOnly=yes') {

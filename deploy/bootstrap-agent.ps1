@@ -37,6 +37,22 @@ $tasksStopped = $false
 $activationStarted = $false
 $taskInstallAttempted = $false
 
+function Merge-XiderCommandPublicKeyset {
+    param([string[]]$ConfigLines, [string[]]$PublicLines)
+    $pattern = '^\s*(?:export\s+)?XIDER_COMMAND_VERIFY_KEYSET_B64\s*='
+    $result = @($ConfigLines | Where-Object { $_ -notmatch $pattern })
+    $entries = @($PublicLines | Where-Object { $_ -match '^XIDER_COMMAND_VERIFY_KEYSET_B64=' })
+    if ($entries.Count -eq 1) {
+        $value = $entries[0].Substring('XIDER_COMMAND_VERIFY_KEYSET_B64='.Length)
+        if ($value.Length -le 1024 -and $value -cmatch '^[A-Za-z0-9_-]+$') {
+            $result += "XIDER_COMMAND_VERIFY_KEYSET_B64=$value"
+        }
+    }
+    # Missing/duplicate/invalid public config leaves shell disabled; the agent
+    # performs canonical cryptographic validation after its dependencies load.
+    return $result
+}
+
 function Get-XiderPathForms {
     param([Parameter(Mandatory)][string]$Path)
 
@@ -303,7 +319,7 @@ try {
     if (-not $envSource) {
         Write-Host "Локальный .env не найден. Пробую SSH-ключ/ssh-agent, затем пароль VPS при запросе: $ServerUser@$ServerHost."
         $fetched = Join-Path $extract 'agent.env'
-        $remoteCommand = "sudo -n sh -c 'grep -E `"^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD)=`" /etc/xider/bot.env'"
+        $remoteCommand = "sudo -n sh -c 'grep -E `"^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD|XIDER_COMMAND_VERIFY_KEYSET_B64)=`" /etc/xider/bot.env'"
         $sshArguments = @(
             '-o', 'StrictHostKeyChecking=accept-new',
             '-o', 'ConnectTimeout=15',
@@ -322,12 +338,15 @@ try {
             $sshArguments += @('-i', $sshKey, '-o', 'IdentitiesOnly=yes')
         }
         & ssh.exe @sshArguments `
-            "$ServerUser@$ServerHost" $remoteCommand | Set-Content -LiteralPath $fetched -Encoding utf8
+            "$ServerUser@$ServerHost" $remoteCommand | Where-Object {
+                $_ -match '^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD|XIDER_COMMAND_VERIFY_KEYSET_B64)='
+            } | Set-Content -LiteralPath $fetched -Encoding utf8
         $sshExit = $LASTEXITCODE
         if ($sshExit -ne 0) { throw "SSH не смог получить настройки (код $sshExit). VPS и файлы агента не изменены." }
         $allowed = Get-Content -LiteralPath $fetched | Where-Object {
-            $_ -match '^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD)='
+            $_ -match '^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD|XIDER_COMMAND_VERIFY_KEYSET_B64)='
         }
+        $allowed = @(Merge-XiderCommandPublicKeyset -ConfigLines $allowed -PublicLines $allowed)
         $prefixEntries = @($allowed | Where-Object { $_ -match '^MQTT_PREFIX=' })
         if ($prefixEntries.Count -gt 1) {
             throw 'На VPS параметр MQTT_PREFIX указан несколько раз. Файлы агента не изменены.'
@@ -342,6 +361,31 @@ try {
         }
         $allowed | Set-Content -LiteralPath $fetched -Encoding utf8
         $envSource = $fetched
+    } else {
+        # Existing per-device credentials remain authoritative. Refresh only
+        # public verification material, with a bounded noninteractive request.
+        $sshArguments = @('-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+                          '-o', 'ConnectTimeout=5', '-o', 'ServerAliveInterval=5', '-o', 'ServerAliveCountMax=1')
+        $sshKey = $env:XIDER_SSH_KEY
+        if (-not $sshKey) {
+            $defaultSshKey = Join-Path $env:USERPROFILE '.ssh\xider'
+            if (Test-Path -LiteralPath $defaultSshKey -PathType Leaf) { $sshKey = $defaultSshKey }
+        }
+        if ($sshKey -and (Test-Path -LiteralPath $sshKey -PathType Leaf)) {
+            $sshArguments += @('-i', $sshKey, '-o', 'IdentitiesOnly=yes')
+        }
+        try {
+            $publicLines = @(& ssh.exe @sshArguments "$ServerUser@$ServerHost" `
+                "sudo -n sh -c 'grep -E `"^XIDER_COMMAND_VERIFY_KEYSET_B64=`" /etc/xider/bot.env || test `$? -eq 1'" 2>$null |
+                Where-Object { $_ -match '^XIDER_COMMAND_VERIFY_KEYSET_B64=' })
+            if ($LASTEXITCODE -eq 0) {
+                $merged = @(Merge-XiderCommandPublicKeyset -ConfigLines @(Get-Content -LiteralPath $envSource) -PublicLines $publicLines)
+                $envSource = Join-Path $extract 'agent.public-refreshed.env'
+                [IO.File]::WriteAllLines($envSource, [string[]]$merged, [System.Text.UTF8Encoding]::new($false))
+            }
+        } catch {
+            Write-Host 'Публичный keyset сейчас недоступен; использую локальную конфигурацию.'
+        }
     }
 
     $requiredSettings = @(

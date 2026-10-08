@@ -18,6 +18,13 @@ $global:XiderMockOldRunning = @{ 'XIDER Agent' = $true; 'XIDER Guardian' = $true
 $global:XiderMockRestored = @()
 $global:XiderMockRestarted = @()
 
+function global:ssh.exe {
+    $global:LASTEXITCODE = 0
+    'SHARED_KEY=remote-must-not-overwrite-local'
+    'XIDER_COMMAND_VERIFY_KEYSET_B64=eyIzMDk3ZTJkZWUyY2I0YTM0IjoiSVZMNDBadDVIU1JGTWtMaFh5NnJiTGZQLW50cVh0TUFsNVlPQnBpQjJ4SSJ9'
+    'SERVER_PRIVATE_SENTINEL=must-not-transfer'
+}
+
 function Get-ScheduledTask {
     param($TaskName, $ErrorAction)
     if ($global:XiderMockTasksRunning) {
@@ -129,7 +136,9 @@ function New-OldInstall($installRoot) {
         'MQTT_TLS=true',
         'MQTT_USERNAME=test-user',
         'MQTT_PASSWORD=test-password-not-real',
-        'ENCRYPT_PAYLOAD=true'
+        'ENCRYPT_PAYLOAD=true',
+        'DEVICE_ID=preserve-device',
+        'UNRELATED=preserve-setting'
     ), $utf8)
 }
 
@@ -232,6 +241,12 @@ try {
     $global:XiderMockHealthStatus = 'connected'
     $global:XiderMockOldTasks = $false
     & $bootstrap -InstallRoot $successRoot -SourceArchive $archive -HealthTimeoutSeconds 3
+    $installedEnv = Get-Content -LiteralPath (Join-Path $successRoot 'git-ver\XGENT-WDS\.env')
+    foreach ($expected in @('SHARED_KEY=test-secret-not-real-0123456789', 'DEVICE_ID=preserve-device',
+                            'UNRELATED=preserve-setting', 'XIDER_COMMAND_VERIFY_KEYSET_B64=eyIzMDk3ZTJkZWUyY2I0YTM0IjoiSVZMNDBadDVIU1JGTWtMaFh5NnJiTGZQLW50cVh0TUFsNVlPQnBpQjJ4SSJ9')) {
+        if ($installedEnv -notcontains $expected) { throw "Bootstrap lost or failed to deliver $expected." }
+    }
+    if ($installedEnv -match 'SERVER_PRIVATE_SENTINEL|PRIVATE KEY') { throw 'Private server data reached the agent.' }
     if (-not (Test-Path -LiteralPath (Join-Path $successRoot 'git-ver\XGENT-WDS\new-marker.txt'))) {
         throw 'The new checkout was not activated.'
     }

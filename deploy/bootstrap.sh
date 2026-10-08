@@ -138,6 +138,33 @@ done
 agent_env="$stage/new/XGENT-MCS/.env"
 if [[ -f "$preserved_env" ]]; then
   cp "$preserved_env" "$agent_env"
+  public_env="$stage/public.env"
+  ssh_args=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=1)
+  ssh_key="${XIDER_SSH_KEY:-}"
+  if [[ -z "$ssh_key" && -r "$HOME/.ssh/xider" ]]; then ssh_key="$HOME/.ssh/xider"; fi
+  if [[ -n "$ssh_key" && -r "$ssh_key" ]]; then ssh_args+=(-i "$ssh_key" -o IdentitiesOnly=yes); fi
+  if ssh "${ssh_args[@]}" "${SERVER_USER}@${SERVER_HOST}" \
+      "sudo -n sh -c 'grep -E \"^XIDER_COMMAND_VERIFY_KEYSET_B64=\" /etc/xider/bot.env || test \$? -eq 1'" \
+      2>"$stage/public-ssh.err" | tr -d '\r' | awk '/^XIDER_COMMAND_VERIFY_KEYSET_B64=/ { print }' > "$public_env"; then
+    # Merge only public verification data into the staged copy. Existing
+    # device credentials and rollback configuration stay authoritative.
+    python3 - "$agent_env" "$public_env" <<'PY'
+from pathlib import Path
+import re
+import sys
+env, public = map(Path, sys.argv[1:])
+pattern = re.compile(r'^\s*(?:export\s+)?XIDER_COMMAND_VERIFY_KEYSET_B64\s*=')
+lines = [line for line in env.read_text(encoding='utf-8-sig').splitlines() if not pattern.match(line)]
+entries = public.read_text().splitlines()
+if len(entries) == 1:
+    value = entries[0].partition('=')[2]
+    if len(value) <= 1024 and re.fullmatch(r'[A-Za-z0-9_-]+', value):
+        lines.append('XIDER_COMMAND_VERIFY_KEYSET_B64=' + value)
+env.write_text('\n'.join(lines) + '\n')
+PY
+  else
+    echo 'Публичный keyset сейчас недоступен; использую локальную конфигурацию.'
+  fi
 else
   fetched_env="$stage/fetched.env"
   echo "Локального .env нет; читаю только настройки агента с ${SERVER_USER}@${SERVER_HOST}."
@@ -153,8 +180,8 @@ else
   fi
   if ! ssh "${ssh_args[@]}" \
       "${SERVER_USER}@${SERVER_HOST}" \
-      "sudo -n sh -c 'grep -E \"^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD)=\" /etc/xider/bot.env'" \
-      2>"$stage/ssh.err" | tr -d '\r' | awk '/^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD)=/ { print }' > "$fetched_env"; then
+      "sudo -n sh -c 'grep -E \"^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD|XIDER_COMMAND_VERIFY_KEYSET_B64)=\" /etc/xider/bot.env'" \
+      2>"$stage/ssh.err" | tr -d '\r' | awk '/^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD|XIDER_COMMAND_VERIFY_KEYSET_B64)=/ { print }' > "$fetched_env"; then
     echo "Не удалось получить параметры с VPS:" >&2
     cat "$stage/ssh.err" >&2
     exit 4
