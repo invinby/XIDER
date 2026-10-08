@@ -126,6 +126,7 @@ def test_start_notification_deduplicates_concurrent_updates(monkeypatch, tmp_pat
         notices.append(text)
         entered.set()
         await release.wait()
+        return True
     async def card(*args, **kwargs):
         pass
     monkeypatch.setattr(bot, "_notify_admins", notify)
@@ -143,6 +144,37 @@ def test_start_notification_deduplicates_concurrent_updates(monkeypatch, tmp_pat
         await asyncio.gather(first, second)
     asyncio.run(scenario())
     assert len(notices) == 1
+
+
+def test_start_retries_failed_owner_delivery_through_real_notification_helper(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    _admin_fixture(monkeypatch, tmp_path)
+    monkeypatch.setattr(bot.ui_cards, "FILE", tmp_path / "cards.json")
+    monkeypatch.setattr(bot, "_START_NOTIFY_LAST", {})
+    monkeypatch.setattr(bot.bot_settings, "get", lambda _key, default=None: default)
+    attempts = []
+    async def send(target, text, **kwargs):
+        attempts.append(target)
+        if len(attempts) == 1:
+            raise RuntimeError("Telegram temporarily unavailable")
+    monkeypatch.setattr(bot.bot, "send_message", send)
+    class State:
+        async def clear(self):
+            pass
+    class Message:
+        from_user = SimpleNamespace(id=200, username="u")
+        chat = SimpleNamespace(id=200)
+        async def answer(self, *args, **kwargs):
+            return SimpleNamespace(message_id=30, chat=self.chat)
+    async def scenario():
+        await bot.cmd_start(Message(), State())
+        assert 200 not in bot._START_NOTIFY_LAST
+        await bot.cmd_start(Message(), State())
+        assert attempts == [100, 100]
+        assert 200 in bot._START_NOTIFY_LAST
+        await bot.cmd_start(Message(), State())
+        assert attempts == [100, 100]
+    asyncio.run(scenario())
 
 
 def test_admin_text_and_outbound_message_need_owner_decision(monkeypatch, tmp_path):

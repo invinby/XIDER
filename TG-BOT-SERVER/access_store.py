@@ -178,7 +178,7 @@ def _redact(text: str) -> str:
     text = re.sub(
         r'''(?i)["']?\b((?:bot[_-]?)?token|password|passwd|secret|shared[_-]?key|'''
         r'''mqtt[_-]?password|api[_-]?key|ssh[_-]?key|private[_-]?key|authorization)["']?'''
-        r'''\s*[:=]\s*(["']).*?\2''',
+        r'''\s*[:=]\s*(["'])(?:\\.|(?!\2)[^\\])*\2''',
         r"\1=[REDACTED]", text, flags=re.DOTALL,
     )
     text = re.sub(
@@ -188,7 +188,9 @@ def _redact(text: str) -> str:
         r"\1=[REDACTED]",
         text,
     )
-    text = re.sub(r"(?i)\b[A-Z]:[\\/][^\s,;]+|(?<!\w)/(?:[^\s,;]+)", "[PATH REDACTED]", text)
+    # An unquoted Windows path has no reliable delimiter: spaces, commas and
+    # semicolons can all be part of directory names. Mask its whole remainder.
+    text = re.sub(r"(?i)\b[A-Z]:[\\/][^\r\n]*|(?<!\w)/(?:[^\s,;]+)", "[PATH REDACTED]", text)
     text = re.sub(r"\b[\w-]+\.[A-Za-z][A-Za-z0-9]{0,9}\b", "[FILE REDACTED]", text)
     text = re.sub(r"-?\b\d{1,3}\.\d+\s*,\s*-?\d{1,3}\.\d+\b", "[LOCATION REDACTED]", text)
     text = " ".join(text.split())

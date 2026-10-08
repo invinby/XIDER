@@ -84,6 +84,31 @@ def test_redaction_handles_quoted_credentials_with_spaces():
     assert safe.count("[REDACTED]") == 2
 
 
+@pytest.mark.parametrize("raw", [
+    r'{"password": "prefix\" TOPSECRET suffix ,; end"}',
+    r'MQTT_PASSWORD="prefix\" TOPSECRET suffix ,; end"',
+    r"MQTT_PASSWORD='prefix\' TOPSECRET suffix ,; end'",
+])
+def test_redaction_masks_entire_escaped_quoted_credentials(raw):
+    safe = store.redact_text(raw)
+    assert "TOPSECRET" not in safe
+    assert "suffix" not in safe
+    assert "prefix" not in safe
+    assert "[REDACTED]" in safe
+
+
+@pytest.mark.parametrize("raw", [
+    r'C:\Users\John Smith\Documents\private.txt',
+    r'file="C:\Users\John Smith\Documents\private.txt"',
+    r"file='C:\Users\John Smith\Documents\private.txt'",
+])
+def test_redaction_masks_entire_windows_path_with_spaces(raw):
+    safe = store.redact_text(raw)
+    for fragment in ("John", "Smith", "Documents", "private.txt"):
+        assert fragment not in safe
+    assert "[PATH REDACTED]" in safe
+
+
 @pytest.mark.parametrize("callback,full_device_allowed", [
     ("cmd:screenshot", True), ("cmd:status", True), ("files:get", True),
     ("fun:type", True), ("power_confirm:shutdown", True), ("kill:123", True),

@@ -2366,12 +2366,17 @@ def _notification_recipients() -> list[int]:
     return ids
 
 
-async def _notify_admins(text: str, reply_markup=None) -> None:
+async def _notify_admins(text: str, reply_markup=None) -> bool:
+    """Deliver notifications and report whether the protected owner received it."""
+    owner_delivered = False
     for user_id in _notification_recipients():
         try:
             await bot.send_message(user_id, text, reply_markup=reply_markup)
+            if user_id == int(ADMIN_ID):
+                owner_delivered = True
         except Exception:
             log.exception("Не удалось отправить уведомление администратору %s", user_id)
+    return owner_delivered
 
 
 def _schedule_admin_notice(text: str, reply_markup=None) -> None:
@@ -2736,12 +2741,14 @@ async def cmd_start(message: Message, state: FSMContext):
             kb = InlineKeyboardBuilder()
             kb.button(text=_lex("admin_open_user_button"), callback_data=f"admin:user:{message.from_user.id}", style="primary")
             kb.adjust(1)
-            await _notify_admins(
+            owner_delivered = await _notify_admins(
                 "Новый запуск бота: "
                 f"<b>{html.escape(_user_label(record))}</b> "
                 f"(<code>{message.from_user.id}</code>). Роль по умолчанию: гость.",
                 reply_markup=kb.as_markup(),
             )
+            if not owner_delivered:
+                _START_NOTIFY_LAST.pop(message.from_user.id, None)
         except Exception:
             _START_NOTIFY_LAST.pop(message.from_user.id, None)
             log.exception("Не удалось уведомить владельца о новом пользователе")
