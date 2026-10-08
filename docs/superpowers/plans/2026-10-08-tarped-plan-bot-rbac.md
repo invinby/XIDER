@@ -78,7 +78,7 @@
 - [ ] Add failing rendered-screen tests for the approved hierarchy: main → devices/server/admin/info; device → overview/diagnostics, display/media, files, network/apps, commands/processes, power, versions/update, permissions and extra functions; all routes return/back/home inside the same card.
 - [ ] Extend the role × navigation × callback × device × grant-revocation matrix to owner, granted user, ungranted user, guest and blocked across two devices; guest sees only public info, safe device summaries and read-only server overview, never sensitive results.
 - [ ] Test that a guessed callback, a changed device id, unsupported OS action, blocked user and stale role/grant are denied even if a keyboard still contains the callback.
-- [ ] Test that a granted user's shell request reaches only the owner approval flow; before approval it publishes nothing, and the user cannot activate approve/cancel as owner.
+- [ ] Test that a granted user's shell grant remains request-only: the user cannot approve or publish; the positive owner preview/approve/cancel lifecycle is implemented and tested in the separate Command Approval Plan Task 3.
 - [ ] Implement screen layout and visibility changes using `access_store.can_use_callback(...)`; do not blindly convert all `kb.button(...)` calls or alter action semantics.
 - [ ] Run `python -m pytest tests/test_bot_ui.py tests/test_access_store.py -q`; expect the complete matrix to pass with no X-LEX edits.
 
