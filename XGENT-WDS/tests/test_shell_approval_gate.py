@@ -3,8 +3,11 @@
 import base64
 import hashlib
 import json
+import sys
 import threading
+import types
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -12,6 +15,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import command_replay
+import command_module_loader as command_loader
 import xgent_wds as wds
 
 
@@ -128,20 +132,149 @@ def test_windows_missing_public_key_fails_closed(monkeypatch, tmp_path):
 @pytest.mark.parametrize("missing_module", ["command_signing", "command_replay"])
 def test_windows_missing_approval_component_fails_closed(monkeypatch, tmp_path, missing_module):
     client = _client(monkeypatch, tmp_path)
-    original_import = wds.importlib.import_module
+    original_loader = wds._load_command_approval_component
 
-    def import_module(name, *args, **kwargs):
+    def load_component(name):
         if name == missing_module:
             raise ImportError("approval component unavailable")
-        return original_import(name, *args, **kwargs)
+        return original_loader(name)
 
-    monkeypatch.setattr(wds.importlib, "import_module", import_module)
+    monkeypatch.setattr(wds, "_load_command_approval_component", load_component)
     calls = []
     monkeypatch.setattr(wds.subprocess, "run", _fake_run(calls))
 
     client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
 
     assert calls == []
+
+
+def test_windows_path_bound_loader_ignores_preloaded_modules_with_forged_paths(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(wds, "_COMMAND_MODULE_LOADER", None)
+    monkeypatch.setattr(command_loader, "_CACHE", {})
+    expected_root = Path(wds.__file__).resolve().parent.parent / "XGENT-MCS"
+    for name in ("command_signing", "command_replay"):
+        fake = types.ModuleType(name)
+        # Forged __file__ used to pass the former origin check in the lazy import.
+        fake.__file__ = str(expected_root / f"{name}.py")
+        monkeypatch.setitem(sys.modules, name, fake)
+
+    signing, ledger = wds._shell_approval_runtime(client)
+    replay = wds._load_command_approval_component("command_replay")
+
+    assert Path(signing.__spec__.origin).resolve() == (expected_root / "command_signing.py").resolve()
+    assert Path(replay.__spec__.origin).resolve() == (expected_root / "command_replay.py").resolve()
+    assert ledger.path == tmp_path / "command-replay.json"
+
+
+def test_windows_path_bound_loader_ignores_sys_path_shadow_files(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(wds, "_COMMAND_MODULE_LOADER", None)
+    shadow_dir = tmp_path / "shadow"
+    shadow_dir.mkdir()
+    marker = tmp_path / "shadow-executed"
+    for name in ("command_signing", "command_replay"):
+        (shadow_dir / f"{name}.py").write_text(
+            f"from pathlib import Path\nPath({str(marker)!r}).write_text('executed')\n",
+            encoding="utf-8",
+        )
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.syspath_prepend(str(shadow_dir))
+
+    signing, ledger = wds._shell_approval_runtime(client)
+    replay = wds._load_command_approval_component("command_replay")
+
+    expected_root = Path(wds.__file__).resolve().parent.parent / "XGENT-MCS"
+    assert Path(signing.__spec__.origin).resolve() == (expected_root / "command_signing.py").resolve()
+    assert Path(replay.__spec__.origin).resolve() == (expected_root / "command_replay.py").resolve()
+    assert ledger.path == tmp_path / "command-replay.json"
+    assert not marker.exists()
+
+
+def test_windows_frozen_loader_rejects_filesystem_fallback_before_exec(monkeypatch, tmp_path):
+    executed = []
+    archive = types.SimpleNamespace(toc={})
+
+    class FallbackLoader:
+        def exec_module(self, _module):
+            executed.append("fallback")
+
+    class PyiFrozenFinder:
+        __module__ = "pyimod02_importers"
+
+        def __init__(self, path):
+            self._path = path
+            self._pyz_archive = archive
+
+        def find_spec(self, name):
+            from importlib.machinery import ModuleSpec
+            return ModuleSpec(name, FallbackLoader(), origin=str(tmp_path / f"{name}.py"))
+
+    class PyiFrozenLoader:
+        __module__ = "pyimod02_importers"
+        pass
+
+    runtime = types.ModuleType("pyimod02_importers")
+    runtime.PyiFrozenFinder = PyiFrozenFinder
+    runtime.PyiFrozenLoader = PyiFrozenLoader
+    runtime.pyz_archive = archive
+    monkeypatch.setitem(sys.modules, "pyimod02_importers", runtime)
+    monkeypatch.setattr(wds.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(wds.sys, "_MEIPASS", str(tmp_path), raising=False)
+    monkeypatch.setattr(command_loader, "_CACHE", {})
+
+    with pytest.raises(ImportError):
+        command_loader.load_component("command_signing", source_root=tmp_path, frozen=True)
+
+    assert executed == []
+
+
+def test_windows_frozen_loader_accepts_only_matching_bundled_pyz_entry(monkeypatch, tmp_path):
+    executed = []
+    archive = types.SimpleNamespace(toc={"command_signing": (0, 1)})
+
+    class PyiFrozenLoader:
+        __module__ = "pyimod02_importers"
+
+        def __init__(self, name, pyz_archive, pyz_entry_name, is_package=False):
+            self.name = name
+            self._pyz_archive = pyz_archive
+            self._pyz_entry_name = pyz_entry_name
+            self._is_package = is_package
+            self.path = str(tmp_path / f"{name}.py")
+
+        def create_module(self, _spec):
+            return None
+
+        def exec_module(self, module):
+            executed.append(module.__name__)
+            module.bundled = True
+
+    class PyiFrozenFinder:
+        __module__ = "pyimod02_importers"
+
+        def __init__(self, path):
+            self._path = path
+            self._pyz_archive = archive
+
+        def find_spec(self, name):
+            from importlib.machinery import ModuleSpec
+            loader = PyiFrozenLoader(name, archive, name)
+            return ModuleSpec(name, loader, origin=loader.path)
+
+    runtime = types.ModuleType("pyimod02_importers")
+    runtime.PyiFrozenFinder = PyiFrozenFinder
+    runtime.PyiFrozenLoader = PyiFrozenLoader
+    runtime.pyz_archive = archive
+    monkeypatch.setitem(sys.modules, "pyimod02_importers", runtime)
+    monkeypatch.setattr(wds.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(wds.sys, "_MEIPASS", str(tmp_path), raising=False)
+    monkeypatch.setattr(command_loader, "_CACHE", {})
+
+    module = command_loader.load_component("command_signing", source_root=tmp_path, frozen=True)
+
+    assert module.bundled is True
+    assert executed == ["command_signing"]
 
 
 def test_windows_valid_approval_runs_exact_command_once_and_ledger_excludes_secrets(monkeypatch, tmp_path):

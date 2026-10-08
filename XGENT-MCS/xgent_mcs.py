@@ -6,6 +6,7 @@
 import base64
 import binascii
 import io
+import importlib.machinery
 import importlib.util
 import json
 import logging
@@ -286,23 +287,101 @@ def _command_available(name: str, fallback_paths: tuple[str, ...]) -> bool:
     return bool(shutil.which(name) or any(Path(path).is_file() for path in fallback_paths))
 
 
+_COMMAND_MODULE_LOADER = None
+
+
+def _same_absolute_path(left, right) -> bool:
+    return os.path.normcase(os.path.abspath(os.fspath(left))) == os.path.normcase(os.path.abspath(os.fspath(right)))
+
+
+def _load_trusted_command_module_loader():
+    """Bootstrap the one shared loader without importing it by a shadowable name."""
+    global _COMMAND_MODULE_LOADER
+    if _COMMAND_MODULE_LOADER is not None:
+        return _COMMAND_MODULE_LOADER
+    module_name = "command_module_loader"
+    try:
+        if getattr(sys, "frozen", False):
+            runtime = sys.modules.get("pyimod02_importers")
+            finder_type = getattr(runtime, "PyiFrozenFinder", None)
+            loader_type = getattr(runtime, "PyiFrozenLoader", None)
+            archive = getattr(runtime, "pyz_archive", None)
+            meipass = getattr(sys, "_MEIPASS", None)
+            if (
+                not isinstance(finder_type, type)
+                or finder_type.__name__ != "PyiFrozenFinder"
+                or finder_type.__module__ != "pyimod02_importers"
+                or not isinstance(loader_type, type)
+                or loader_type.__name__ != "PyiFrozenLoader"
+                or loader_type.__module__ != "pyimod02_importers"
+                or archive is None
+                or not isinstance(getattr(archive, "toc", None), dict)
+                or not isinstance(meipass, (str, os.PathLike))
+                or not os.fspath(meipass)
+            ):
+                raise ImportError("Trusted PyInstaller loader is unavailable")
+            finder = finder_type(os.fspath(meipass))
+            spec = finder.find_spec(module_name)
+            loader = getattr(spec, "loader", None)
+            expected_origin = Path(meipass) / f"{module_name}.py"
+            if (
+                type(finder) is not finder_type
+                or getattr(finder, "_pyz_archive", None) is not archive
+                or not _same_absolute_path(getattr(finder, "_path", ""), meipass)
+                or getattr(spec, "name", None) != module_name
+                or type(loader) is not loader_type
+                or getattr(loader, "name", None) != module_name
+                or getattr(loader, "_pyz_archive", None) is not archive
+                or getattr(loader, "_pyz_entry_name", None) != module_name
+                or getattr(loader, "_is_package", None) is not False
+                or module_name not in archive.toc
+                or not getattr(spec, "origin", None)
+                or not getattr(loader, "path", None)
+                or not _same_absolute_path(loader.path, expected_origin)
+                or not _same_absolute_path(spec.origin, expected_origin)
+                or getattr(spec, "submodule_search_locations", None) is not None
+            ):
+                raise ImportError("Shared command loader is not bundled in the active PYZ")
+        else:
+            root = Path(__file__).resolve().parent
+            expected = root / f"{module_name}.py"
+            if expected.is_symlink() or not expected.is_file():
+                raise ImportError("Shared command loader is missing")
+            if not _same_absolute_path(expected.resolve(strict=True), expected):
+                raise ImportError("Shared command loader escaped its repository directory")
+            spec = importlib.util.spec_from_file_location(module_name, expected)
+            if (
+                spec is None
+                or spec.name != module_name
+                or type(spec.loader) is not importlib.machinery.SourceFileLoader
+                or not spec.origin
+                or not _same_absolute_path(spec.origin, expected)
+                or not _same_absolute_path(spec.loader.get_filename(module_name), expected)
+            ):
+                raise ImportError("Shared command loader has an unexpected source spec")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _COMMAND_MODULE_LOADER = module
+        return module
+    except ImportError:
+        raise
+    except Exception as exc:
+        raise ImportError("Shared command loader could not be trusted") from exc
+
+
+def _load_command_approval_component(module_name: str):
+    return _load_trusted_command_module_loader().load_component(
+        module_name,
+        source_root=Path(__file__).resolve().parent,
+        frozen=getattr(sys, "frozen", False),
+    )
+
+
 def _shell_approval_runtime(client):
     """Load the separate Ed25519 verifier and durable replay store lazily."""
     try:
-        if not getattr(sys, "frozen", False):
-            shared_dir = str(Path(__file__).resolve().parent)
-            if not sys.path or sys.path[0] != shared_dir:
-                if shared_dir in sys.path:
-                    sys.path.remove(shared_dir)
-                sys.path.insert(0, shared_dir)
-            for module_name in ("command_signing", "command_replay"):
-                loaded = sys.modules.get(module_name)
-                loaded_path = getattr(loaded, "__file__", None)
-                expected_path = Path(shared_dir) / f"{module_name}.py"
-                if loaded_path and Path(loaded_path).resolve() != expected_path.resolve():
-                    sys.modules.pop(module_name, None)
-        signing = importlib.import_module("command_signing")
-        replay = importlib.import_module("command_replay")
+        signing = _load_command_approval_component("command_signing")
+        replay = _load_command_approval_component("command_replay")
         ledger = getattr(client, "_command_replay_ledger", None)
         if ledger is None:
             ledger = replay.CommandReplayLedger()
