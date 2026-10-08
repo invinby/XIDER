@@ -14,6 +14,9 @@ VENV_DIR="venv"
 # ──────────────────────────────────────────
 if [[ "${1:-}" == "--setup" ]]; then
     echo "🍎 Запуск мастера настройки разрешений macOS..."
+    if [[ -x XIDER.app/Contents/MacOS/XGENT-MCS ]]; then
+        exec "$(pwd)/XIDER.app/Contents/MacOS/XGENT-MCS" --location-setup
+    fi
     python3 setup_mac.py
     exit 0
 fi
@@ -45,6 +48,13 @@ if [[ "${1:-}" == "--status" || "${1:-}" == "-s" ]]; then
         fi
     fi
     if command -v pgrep >/dev/null 2>&1; then
+        if [[ -d XIDER.app ]]; then
+            PID="$(pgrep -f "$(pwd)/XIDER.app/Contents/MacOS/XGENT-MCS" 2>/dev/null | head -n 1 || true)"
+            if [[ -n "$PID" ]] && ps -p "$PID" >/dev/null 2>&1; then
+                echo "[OK] XIDER.app работает (PID: $PID)"
+                exit 0
+            fi
+        fi
         PID="$(pgrep -f "$ENTRY" 2>/dev/null | head -n 1 || true)"
         if [[ -n "$PID" ]] && ps -p "$PID" >/dev/null 2>&1; then
             echo "[OK] XIDER Agent работает под Guardian/LaunchAgent (PID: $PID)"
@@ -54,6 +64,23 @@ if [[ "${1:-}" == "--status" || "${1:-}" == "-s" ]]; then
     fi
     echo "[STOPPED] XIDER Agent не запущен"
     exit 1
+fi
+
+APP_BINARY="$(pwd)/XIDER.app/Contents/MacOS/XGENT-MCS"
+if [[ -d XIDER.app ]]; then
+    if [[ ! -x "$APP_BINARY" ]]; then
+        echo "BLOCKED: XIDER.app executable is missing; reinstall locally." >&2
+        exit 1
+    fi
+    if [[ "${1:-}" == "--location-setup" ]]; then
+        exec "$APP_BINARY" --location-setup
+    elif [[ "${1:-}" == "--foreground" || "${1:-}" == "-f" ]]; then
+        exec "$APP_BINARY"
+    else
+        # LaunchServices runs the signed bundled executable, never shell/venv.
+        open -g "$(pwd)/XIDER.app"
+        exit $?
+    fi
 fi
 
 # ──────────────────────────────────────────

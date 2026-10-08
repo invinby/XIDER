@@ -47,6 +47,19 @@ def test_guardian_fails_closed_when_worker_or_env_is_missing(
     assert list(tmp_path.iterdir()) == []
 
 
+def test_bundle_worker_identity_is_persisted_with_real_guardian_state(guardian_module, monkeypatch, tmp_path):
+    module = guardian_module
+    monkeypatch.setattr(module, "SCRIPT_DIR", tmp_path)
+    executable = tmp_path / "XIDER.app/Contents/MacOS/XGENT-MCS"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"fixture")
+    guardian = object.__new__(module.Guardian)
+    guardian.state = {"desired_running": True}
+    assert guardian._worker_command() == [str(executable)]
+    saved = json.loads(module.STATE_FILE.read_text(encoding="utf-8"))
+    assert saved["worker_runtime"] == "bundle"
+
+
 def test_guardian_uses_inherited_config_without_recreating_missing_env(
     guardian_module, monkeypatch, tmp_path
 ):

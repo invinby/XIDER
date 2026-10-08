@@ -1,73 +1,17 @@
 #!/usr/bin/env bash
-# XIDER v2.0 - macOS App Builder
-# Создает XIDER.app, который запускает агент в фоне (start_agent.sh)
-
+# Build the real signed app, never a shell launcher outside the bundle.
 set -euo pipefail
 cd "$(dirname "$0")"
-
-APP_NAME="XIDER"
-APP_DIR="${APP_NAME}.app"
-CONTENTS_DIR="${APP_DIR}/Contents"
-MACOS_DIR="${CONTENTS_DIR}/MacOS"
-RESOURCES_DIR="${CONTENTS_DIR}/Resources"
-AGENT_VERSION="$(sed -n 's/^VERSION = "\([0-9.]*\)"/\1/p' config.py | head -n 1)"
-if [[ ! "$AGENT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+AGENT_VERSION="$(sed -n 's/^VERSION = "\\([0-9.]*\\)"/\\1/p' config.py | head -n 1)"
+if [[ ! "$AGENT_VERSION" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then
   echo "Could not read the agent version from config.py." >&2
   exit 1
 fi
-
-echo "🍎 Сборка $APP_DIR..."
-
-# Удаляем старую сборку если есть
-rm -rf "$APP_DIR"
-
-# Создаем структуру
-mkdir -p "$MACOS_DIR"
-mkdir -p "$RESOURCES_DIR"
-
-# Создаем Info.plist
-cat > "${CONTENTS_DIR}/Info.plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key>
-    <string>launcher</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.xider.agent</string>
-    <key>CFBundleName</key>
-    <string>XIDER</string>
-    <key>CFBundleIconFile</key>
-    <string>icon</string>
-    <key>CFBundleShortVersionString</key>
-    <string>${AGENT_VERSION}</string>
-    <key>CFBundleVersion</key>
-    <string>${AGENT_VERSION}</string>
-    <key>LSUIElement</key>
-    <true/> <!-- Приложение работает в фоне, без иконки в Dock -->
-    <key>NSAppleEventsUsageDescription</key>
-    <string>XIDER requires access to run scripts.</string>
-    <key>NSCameraUsageDescription</key>
-    <string>XIDER requires camera access.</string>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>XIDER requires microphone access.</string>
-    <key>NSDesktopFolderUsageDescription</key>
-    <string>XIDER requires access to your files.</string>
-</dict>
-</plist>
-EOF
-
-# Создаем скрипт-лаунчер
-TARGET_DIR=$(pwd)
-cat > "${MACOS_DIR}/launcher" <<EOF
-#!/usr/bin/env bash
-# Лаунчер XIDER (передает управление в оригинальную папку)
-cd "$TARGET_DIR"
-./start_agent.sh > /tmp/xider_mac_launcher.log 2>&1 &
-EOF
-
-chmod +x "${MACOS_DIR}/launcher"
-
-echo "✅ $APP_DIR успешно собран!"
-echo "💡 Чтобы запустить агента, просто дважды кликните на $APP_DIR в Finder."
-echo "💡 (Если не работает, попробуйте Right Click -> Open)"
+case "${XIDER_MACOS_SIGNING_IDENTITY:-}" in
+  "Apple Development:"*|"Developer ID Application:"*) ;;
+  *) echo "BLOCKED: Core Location requires a proper non-ad-hoc Apple signing identity." >&2; exit 1 ;;
+esac
+python3 -m PyInstaller --clean --noconfirm XGENT-MCS.spec
+python3 ../tools/verify_macos_bundle.py dist/XIDER.app
+echo "Built signed XIDER.app $AGENT_VERSION; physical Core Location acceptance remains required."
+echo "Local visible permission setup: dist/XIDER.app/Contents/MacOS/XGENT-MCS --location-setup"

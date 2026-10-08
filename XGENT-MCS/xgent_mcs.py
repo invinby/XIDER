@@ -111,6 +111,11 @@ if __name__ == "__main__" and sys.argv[1:] == ["--xider-fake-update"]:
         raise SystemExit(1) from exc
     raise SystemExit(0)
 
+if __name__ == "__main__" and sys.argv[1:] == ["--location-setup"]:
+    from location_adapter import visible_local_setup
+    visible_local_setup()
+    raise SystemExit(0)
+
 # Claim the normal process lock before examining a crash journal. A manual
 # second launch must never roll back files while the live updater is replacing
 # them. This prelude intentionally uses only the Python standard library.
@@ -322,8 +327,8 @@ def _capability_snapshot(feature_status: dict[str, str]) -> dict:
             state = "unknown"
             detail = "Diagnostic prerequisites could not be determined; no permission grant inferred."
         if capability_id == "location":
-            detail = ("System location permission not queried. source=ip_estimate; uncertainty=unknown; "
-                      "current fallback is approximate city/region, never GPS or coordinates.")
+            from location_adapter import location_capability
+            state, detail = location_capability()
         elif capability_id == "accessibility":
             detail = ("TCC Accessibility status not queried; owner must allow the actual app on the device. "
                       "Only an authorized UI trial confirms access.")
@@ -1392,55 +1397,16 @@ class XgentClient:
                                           "text": ip or "Не удалось определить внешний IP"})
 
     def _do_geo_location(self, payload: dict) -> None:
-        """Получить приблизительную геолокацию по IP."""
-        providers = (
-            ("ipapi.co", "https://ipapi.co/json/"),
-            ("ipinfo.io", "https://ipinfo.io/json"),
-        )
-        data = None
-        provider = None
-        errors = []
-        deadline = time.monotonic() + 7.0
-        for name, url in providers:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                errors.append("общий тайм-аут геолокации")
-                break
-            try:
-                req = urllib.request.Request(url, headers={"User-Agent": "XIDER-Agent/3"})
-                with urllib.request.urlopen(req, timeout=min(4.0, remaining)) as response:
-                    candidate = json.loads(response.read(16_385).decode("utf-8", "replace"))
-                if not isinstance(candidate, dict):
-                    raise RuntimeError("provider returned invalid data")
-                if candidate.get("error") or candidate.get("status") == "fail":
-                    raise RuntimeError(candidate.get("reason") or candidate.get("message") or "provider error")
-                if candidate.get("ip") or candidate.get("query") or candidate.get("city"):
-                    data, provider = candidate, name
-                    break
-            except Exception as exc:
-                errors.append(f"{name}: {exc}")
-        if data:
-            def safe(value):
-                return str(value if value not in (None, "") else "?")[:120]
-
-            ip = data.get("ip") or data.get("query") or "?"
-            country = data.get("country_name") or data.get("country") or "?"
-            city = data.get("city") or "?"
-            org = data.get("org") or data.get("isp") or "?"
-            coordinates = data.get("loc") or f"{data.get('latitude') or '?'}, {data.get('longitude') or '?'}"
-            info = ("Приблизительная локация по публичному IP, не GPS:\n"
-                    f"🌍 Страна: {safe(country)}\n🏙 Город: {safe(city)}\n📡 Провайдер: {safe(org)}\n"
-                    f"🗺 Координаты: {safe(coordinates)}\n💻 IP: {safe(ip)}\n🔎 Источник: {safe(provider)}")
-            ok = True
-        else:
-            info = "Локация по IP недоступна: " + "; ".join(errors[:2])[:300]
-            ok = False
-            
+        """One explicit request; IP estimation requires the exact boolean opt-in."""
+        from location_adapter import read_system_location, read_ip_estimate, location_text
+        value = read_system_location()
+        if value["state"] != "granted" and payload.get("ip_fallback") is True:
+            system_state = value["state"]
+            value = read_ip_estimate()
+            value["system_state"] = system_state
         self._publish_response("geo_location", {
-            "type": "geo_location",
-            "device_id": DEVICE_ID,
-            "ok": ok,
-            "text": info,
+            "type": "geo_location", "device_id": DEVICE_ID,
+            "ok": value["state"] == "granted", **value, "text": location_text(value),
         })
 
     def _do_wallpaper_set(self, payload: dict) -> None:
@@ -1786,11 +1752,11 @@ class XgentClient:
         plist_dir = os.path.expanduser("~/Library/LaunchAgents")
         os.makedirs(plist_dir, exist_ok=True)
         plist_path = os.path.join(plist_dir, "com.xgent.agent.plist")
-        script_dir = os.path.dirname(os.path.abspath(__file__))
+        script_dir = str(_agent_install_dir())
         try:
             plist = {
                 "Label": "com.xgent.agent",
-                "ProgramArguments": [sys.executable, os.path.join(script_dir, "xgent_mcs.py")],
+                "ProgramArguments": _worker_launch_command(),
                 "WorkingDirectory": script_dir,
                 "RunAtLoad": True,
                 # Guardian owns recovery; launchd only starts the worker at login.
@@ -2538,18 +2504,38 @@ def setup_logging() -> None:
     handler = RotatingFileHandler(CONFIG_DIR / "xgent.log", maxBytes=500_000, backupCount=3, encoding="utf-8")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", handlers=[handler])
 
+def _worker_launch_command() -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [sys.executable]
+    return [sys.executable, str(Path(__file__).resolve())]
+
+
+def _agent_install_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        app = next((path for path in Path(sys.executable).resolve().parents if path.suffix == ".app"), None)
+        if app is not None:
+            return app.parent
+    return Path(__file__).resolve().parent
+
+
 def main() -> None:
     if not acquire_instance_lock():
         sys.stderr.write("FATAL: XGENT-MCS уже запущен на этой машине! Второй экземпляр остановлен.\n")
         raise SystemExit(1)
     update_state = EARLY_UPDATE_STATE
     setup_logging()
+    from location_adapter import initialize_runtime
+    location_runtime = initialize_runtime()
     client = XgentClient()
     client.start()
     if update_state == "pending":
         threading.Thread(target=client._rollback_if_update_unhealthy, name="xgent-update-health", daemon=True).start()
     try:
-        while client.is_running: time.sleep(1)
+        while client.is_running:
+            if location_runtime is not None:
+                location_runtime.pump()
+            else:
+                time.sleep(1)
     except KeyboardInterrupt:
         client.request_stop()
     finally: client.stop()

@@ -664,7 +664,7 @@ def test_geoip_uses_https_fallback_and_reports_approximation(client, monkeypatch
         return Response(b'{"ip":"203.0.113.10","city":"Test","country":"XX","loc":"1.0,2.0"}')
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    client._do_geo_location({})
+    client._do_geo_location({"ip_fallback": True})
     results = [payload for topic, payload in _publish_calls(client) if topic.endswith("/geo_location")]
     assert results and results[-1]["ok"] is True
     assert "не GPS" in results[-1]["text"]
@@ -688,9 +688,9 @@ def test_geoip_lookup_obeys_total_deadline_and_publishes_once(client, monkeypatc
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr(client, "_publish_response", lambda topic, payload: publications.append((topic, payload)))
 
-    client._do_geo_location({"id": "geo-456"})
+    client._do_geo_location({"id": "geo-456", "ip_fallback": True})
 
-    assert timeouts == [4.0, 3.0]
+    assert timeouts == [3.0, 3.0]
     assert len(publications) == 1
     assert publications[0][0] == "geo_location"
     assert publications[0][1]["type"] == "geo_location"

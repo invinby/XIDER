@@ -4479,9 +4479,49 @@ async def on_cmd_capabilities(cq: CallbackQuery):
     await _replace_callback_message(cq, _format_capabilities(res), reply_markup=_capabilities_keyboard())
 
 
+def format_location_result(result: dict) -> str:
+    """Pure bounded presentation; ignore old free-form/provider coordinate text."""
+    import math
+    import datetime
+    source, state = result.get("source"), result.get("state")
+    checked = result.get("checked_at")
+    try:
+        stamp = datetime.datetime.fromisoformat(checked)
+        valid_stamp = stamp.utcoffset() == datetime.timedelta(0)
+    except (TypeError, ValueError):
+        valid_stamp = False
+    if (not isinstance(source, str) or not isinstance(state, str)
+            or source not in {"system", "ip_estimate"} or state not in _SNAPSHOT_STATES or not valid_stamp):
+        return "Локация: неизвестно; нужен новый запрос к обновлённому агенту."
+    safe = lambda value, limit: html.escape(str(value)[:limit])
+    label = safe(result.get("label", ""), 500)
+    when = safe(checked, 50)
+    if source == "ip_estimate":
+        return ("Приблизительная оценка города/региона по IP, не GPS; точность неизвестна.\n"
+                + label + "\nСостояние: " + _SNAPSHOT_STATES[state] + "\nПроверено: " + when)
+    if state == "granted":
+        lat, lon, accuracy = (result.get(key) for key in ("latitude", "longitude", "accuracy_m"))
+        if (not all(type(value) in (int, float) and math.isfinite(value) for value in (lat, lon, accuracy))
+                or not (-90 <= lat <= 90 and -180 <= lon <= 180 and accuracy >= 0)):
+            return "Системная локация: неизвестно; некорректный результат."
+        return (f"Системная геолокация (источник ОС, не обязательно GPS): {lat}, {lon}\n"
+                f"Погрешность: {accuracy} м\nПроверено: " + when)
+    return ("Системная локация: " + _SNAPSHOT_STATES[state] + "\n"
+            + label + "\nПроверено: " + when)
+
+
 def _capabilities_keyboard():
     kb = InlineKeyboardBuilder()
     kb.button(text=_nav("refresh"), callback_data="cmd:capabilities")
+    kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def _location_result_keyboard(result: dict, user_id: int):
+    kb = InlineKeyboardBuilder()
+    if result.get("state") != "granted" and get_user_role(user_id) == Role.OWNER:
+        kb.button(text=_lex("geo_beta"), callback_data="location:ip")
     kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
     kb.adjust(1)
     return kb.as_markup()
@@ -6915,7 +6955,8 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
     if result is None:
         text = _lex("device_timeout", seconds=str(int(timeout)))
     else:
-        text = result.get("text") or result.get("error")
+        text = (format_location_result(result) if action == "geo_location"
+                else result.get("text") or result.get("error"))
         if not text:
             text = (
                 _lex("device_command_completed")
@@ -6933,7 +6974,8 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
         status_msg,
         user_id,
         final_text,
-        reply_markup=back_to_device_kb(),
+        reply_markup=(_location_result_keyboard(result or {}, user_id)
+                      if action == "geo_location" else back_to_device_kb()),
     )
     return result
 
@@ -7827,6 +7869,12 @@ async def on_cmd_net_ping(cq: CallbackQuery):
 @router.callback_query(AnyAccessFilter(), F.data == "cmd:geo_location")
 async def on_cmd_geo_location(cq: CallbackQuery):
     await simple_command(cq, "geo_location", "⚠️", _lex("geo_beta"), timeout=16.0)
+
+
+@router.callback_query(OwnerFilter(), F.data == "location:ip")
+async def on_cmd_geo_location_ip(cq: CallbackQuery):
+    await simple_command(cq, "geo_location", "⚠️", _lex("geo_beta"),
+                         timeout=16.0, ip_fallback=True)
 
 
 @router.message(F.from_user.id != ADMIN_ID)

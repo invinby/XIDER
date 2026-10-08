@@ -25,7 +25,7 @@ if [ -f "agent.pid" ]; then
     rm -f agent.pid
 else
     # Поиск по имени процесса
-    PIDS=$(pgrep -f "xgent_mcs" | grep -v "$$")
+    PIDS=$(pgrep -f "xgent_mcs|$(pwd)/XIDER.app/Contents/MacOS/XGENT-MCS" | grep -v "$$")
     if [ -n "$PIDS" ]; then
         echo "🛑 Остановка найденных процессов xgent_mcs: $PIDS..."
         kill $PIDS 2>/dev/null

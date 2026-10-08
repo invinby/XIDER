@@ -20,6 +20,10 @@ from dotenv import load_dotenv
 
 # Загружаем .env из каталога скрипта (с поддержкой UTF-8 BOM).
 _ENV_FILE = Path(__file__).resolve().parent / ".env"
+if getattr(sys, "frozen", False):
+    _bundle = next((path for path in Path(sys.executable).resolve().parents if path.suffix == ".app"), None)
+    if _bundle is not None:
+        _ENV_FILE = _bundle.parent / ".env"
 try:
     load_dotenv(_ENV_FILE, encoding="utf-8-sig")
 except TypeError:

@@ -14,10 +14,23 @@ import update_package as package
 
 def test_macos_app_builder_uses_the_current_agent_release_version():
     import config
-
+    import runpy
+    from unittest.mock import patch
+    from types import SimpleNamespace
     builder = Path(mcs.__file__).with_name("make_app.sh").read_text(encoding="utf-8")
     assert "AGENT_VERSION=\"$(sed -n" in builder
-    assert builder.count("<string>${AGENT_VERSION}</string>") == 2
+    captured = {}
+    analysis = SimpleNamespace(pure=[], scripts=[], binaries=[], datas=[])
+    def bundle(*args, **kwargs):
+        captured.update(kwargs)
+    with patch.dict("os.environ", {"XIDER_MACOS_SIGNING_IDENTITY": "Apple Development: Fixture (TEAM)"}):
+        runpy.run_path(str(Path(mcs.__file__).with_name("XGENT-MCS.spec")), init_globals={
+            "Analysis": lambda *a, **kw: analysis, "PYZ": lambda *a, **kw: None,
+            "EXE": lambda *a, **kw: None, "BUNDLE": bundle,
+            "SPECPATH": str(Path(mcs.__file__).parent),
+        })
+    assert captured["info_plist"]["CFBundleShortVersionString"] == config.VERSION
+    assert captured["info_plist"]["CFBundleVersion"] == config.VERSION
     assert config.VERSION == "4.2.1"
 
 
@@ -101,9 +114,9 @@ def test_geo_location_has_one_bounded_response(monkeypatch):
     monkeypatch.setattr(mcs.time, "monotonic", fake_monotonic)
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
 
-    client._do_geo_location({"id": "geo-123"})
+    client._do_geo_location({"id": "geo-123", "ip_fallback": True})
 
-    assert timeouts == [4.0, 3.0]
+    assert timeouts == [3.0, 3.0]
     assert len(published) == 1
     assert published[0][0] == "geo_location"
     assert published[0][1]["type"] == "geo_location"

@@ -1310,53 +1310,21 @@ class XgentClient:
             })
 
     def _do_geo_location(self, payload: dict) -> None:
-        """Approximate public-IP location; never claim GPS precision."""
-        import urllib.request
-        data = None
-        provider = ""
-        errors = []
-        deadline = time.monotonic() + 7.0
-        for name, url in (
-            ("ipapi.co", "https://ipapi.co/json/"),
-            ("ipinfo.io", "https://ipinfo.io/json"),
-        ):
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                errors.append("общий тайм-аут геолокации")
-                break
+        """One explicit request; IP estimation requires the exact boolean opt-in."""
+        from location_adapter import read_system_location, read_ip_estimate, location_text
+        value = read_system_location()
+        if value["state"] == "needs_live_test":
             try:
-                request = urllib.request.Request(url, headers={"User-Agent": "XIDER-Agent/3"})
-                with urllib.request.urlopen(request, timeout=min(4.0, remaining)) as response:
-                    candidate = json.loads(response.read(16_385).decode("utf-8", "replace"))
-                if not isinstance(candidate, dict) or candidate.get("error") or not (candidate.get("ip") or candidate.get("city")):
-                    raise ValueError("нет пригодного ответа")
-                data, provider = candidate, name
-                break
-            except (OSError, ValueError) as exc:
-                errors.append(f"{name}: {exc}")
-        if data is None:
-            ok = False
-            info = "Локация по IP недоступна: " + "; ".join(errors)[:300]
-        else:
-            def safe(value):
-                return str(value if value not in (None, "") else "?")[:120]
-
-            coordinates = data.get("loc") or f"{data.get('latitude') or '?'}, {data.get('longitude') or '?'}"
-            info = (
-                "Приблизительная локация по публичному IP, не GPS:\n"
-                f"🌍 Страна: {safe(data.get('country_name') or data.get('country'))}\n"
-                f"🏙 Город: {safe(data.get('city'))}\n"
-                f"📡 Провайдер: {safe(data.get('org'))}\n"
-                f"🗺 Координаты: {safe(coordinates)}\n"
-                f"💻 IP: {safe(data.get('ip'))}\n"
-                f"🔎 Источник: {safe(provider)}"
-            )
-            ok = True
+                os.startfile("ms-settings:privacy-location")
+            except OSError:
+                pass  # Guidance remains visible in the owner response.
+        if value["state"] != "granted" and payload.get("ip_fallback") is True:
+            system_state = value["state"]
+            value = read_ip_estimate()
+            value["system_state"] = system_state
         self._publish_response("geo_location", {
-            "type": "geo_location",
-            "device_id": DEVICE_ID,
-            "ok": ok,
-            "text": info,
+            "type": "geo_location", "device_id": DEVICE_ID,
+            "ok": value["state"] == "granted", **value, "text": location_text(value),
         })
     def _do_webcam(self, payload: dict) -> None:
         """Сделать фото с веб-камеры и отправить base64 JPEG в MQTT."""
@@ -3761,8 +3729,8 @@ def _capability_snapshot(feature_status: dict[str, str]) -> dict:
             state = "unknown"
             detail = "Diagnostic prerequisites could not be determined; no permission grant inferred."
         if capability_id == "location":
-            detail = ("System location permission not queried. source=ip_estimate; uncertainty=unknown; "
-                      "current fallback is approximate city/region, never GPS or coordinates.")
+            from location_adapter import location_capability
+            state, detail = location_capability()
         elif capability_id == "accessibility":
             detail = ("A macOS-style TCC Accessibility permission is unsupported on Windows; "
                       "interactive session, integrity level and UAC may limit UI control. No UAC auto-consent.")
