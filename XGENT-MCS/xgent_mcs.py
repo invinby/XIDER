@@ -301,6 +301,40 @@ def _detect_feature_status() -> dict[str, str]:
     return statuses
 
 
+def _capability_snapshot(feature_status: dict[str, str]) -> dict:
+    """Passive diagnostics only: prerequisites are never an OS permission grant."""
+    items = []
+    for capability_id, legacy_id, settings_uri in (
+        ("screen_recording", "screenshot", "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"),
+        ("camera", "webcam", "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"),
+        ("microphone", "microphone", "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"),
+        ("location", "geolocation", "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices"),
+        ("accessibility", None, "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"),
+        ("file_access", None, "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders"),
+    ):
+        prerequisite = feature_status.get(legacy_id) if legacy_id else None
+        state = "needs_live_test"
+        detail = "Permission cannot be queried directly; only an owner-authorized trial action confirms access."
+        if prerequisite in {"dependency_missing", "unavailable"}:
+            state = "unavailable"
+            detail = "Required local tool or library is unavailable; OS permission was not queried."
+        elif legacy_id and prerequisite not in {"permission_unverified", "device_unverified", "approximate"}:
+            state = "unknown"
+            detail = "Diagnostic prerequisites could not be determined; no permission grant inferred."
+        if capability_id == "location":
+            detail = ("System location permission not queried. source=ip_estimate; uncertainty=unknown; "
+                      "current fallback is approximate city/region, never GPS or coordinates.")
+        elif capability_id == "accessibility":
+            detail = ("TCC Accessibility status not queried; owner must allow the actual app on the device. "
+                      "Only an authorized UI trial confirms access.")
+        elif capability_id == "file_access":
+            detail = ("TCC Files and Folders is path-specific; Full Disk Access is not inferred. "
+                      "Only an authorized trial for the chosen path confirms access.")
+        items.append({"id": capability_id, "state": state, "detail": detail, "settings_uri": settings_uri})
+    return {"schema": 1, "platform": PLATFORM,
+            "checked_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()), "items": items}
+
+
 def _humanize_seconds(secs):
     if secs is None: return None
     try: secs = int(secs)
@@ -1085,6 +1119,7 @@ class XgentClient:
                 "clipboard": feature_status["clipboard"] == "device_unverified",
             },
             "feature_status": feature_status,
+            **_capability_snapshot(feature_status),
         })
 
     def _do_lock_screen(self, payload: dict) -> None:

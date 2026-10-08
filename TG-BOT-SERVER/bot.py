@@ -2707,36 +2707,38 @@ def on_mqtt_message(topic: str, data: dict) -> None:
         # or credentials. A declaration is not proof that hardware works.
         commands = payload.get("commands")
         features = payload.get("features")
-        if isinstance(commands, list):
-            clean_commands = sorted({
-                str(command) for command in commands[:256]
-                if isinstance(command, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", command)
-            })
-            clean_features = {
-                str(key): value for key, value in (features or {}).items()
-                if isinstance(key, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key)
-                and isinstance(value, bool)
-            } if isinstance(features, dict) else {}
-            allowed_states = {
-                "supported", "dependency_missing", "permission_unverified",
-                "device_unverified", "unavailable", "approximate", "unknown",
-            }
-            raw_status = payload.get("feature_status")
-            clean_status = {
-                key: state for key, state in raw_status.items()
-                if isinstance(key, str)
-                and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key)
-                and isinstance(state, str)
-                and state in allowed_states
-            } if isinstance(raw_status, dict) else {}
-            devices.upsert(device_id, {
-                "capabilities": {
-                    "commands": clean_commands,
-                    "features": clean_features,
-                    "feature_status": clean_status,
-                },
-                "capabilities_seen": time.time(),
-            })
+        clean_commands = sorted({
+            command for command in commands[:256]
+            if isinstance(command, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", command)
+        }) if isinstance(commands, list) else []
+        clean_features = {
+            key: value for key, value in features.items()
+            if isinstance(key, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key)
+            and isinstance(value, bool)
+        } if isinstance(features, dict) else {}
+        allowed_states = {
+            "supported", "dependency_missing", "permission_unverified",
+            "device_unverified", "unavailable", "approximate", "unknown",
+        }
+        raw_status = payload.get("feature_status")
+        clean_status = {
+            key: state for key, state in raw_status.items()
+            if isinstance(key, str)
+            and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key)
+            and isinstance(state, str)
+            and state in allowed_states
+        } if isinstance(raw_status, dict) else {}
+        # Every new report replaces the diagnostic snapshot, including malformed
+        # reports without commands; a previous declaration must not remain fresh.
+        devices.upsert(device_id, {
+            "capabilities": {
+                "commands": clean_commands,
+                "features": clean_features,
+                "feature_status": clean_status,
+                "snapshot": _parse_capability_snapshot(payload),
+            },
+            "capabilities_seen": time.time(),
+        })
         capabilities_collector.submit(device_id, payload)
     elif msg_type == "guardian" and payload.get("type") == "guardian":
         # Храним только последний подписанный ответ Guardian без лишних
@@ -4474,7 +4476,15 @@ async def on_cmd_capabilities(cq: CallbackQuery):
     if not res:
         await _replace_callback_message(cq, _lex("device_no_response"), reply_markup=back_to_device_kb())
         return
-    await _replace_callback_message(cq, _format_capabilities(res), reply_markup=back_to_device_kb())
+    await _replace_callback_message(cq, _format_capabilities(res), reply_markup=_capabilities_keyboard())
+
+
+def _capabilities_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.button(text=_nav("refresh"), callback_data="cmd:capabilities")
+    kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
+    kb.adjust(1)
+    return kb.as_markup()
 
 
 _CAPABILITY_LABELS = {
@@ -4497,22 +4507,125 @@ _CAPABILITY_STATES = {
     "unknown": "агент не смог определить состояние",
 }
 
+_SNAPSHOT_LABELS = {
+    "screen_recording": "Снимок экрана", "camera": "Камера", "microphone": "Микрофон",
+    "location": "Локация", "accessibility": "Управление интерфейсом", "file_access": "Доступ к файлам",
+}
+_SNAPSHOT_STATES = {
+    "granted": "разрешено (сообщено агентом; не выдаёт доступ к действиям)",
+    "denied": "отказано", "not_determined": "решение ещё не принято",
+    "unavailable": "недоступно", "needs_live_test": "нужна проверка действием",
+    "unknown": "неизвестно",
+}
+_CAPABILITY_SETTINGS = {
+    "macOS": {
+        key: "x-apple.systempreferences:com.apple.preference.security?Privacy_" + target
+        for key, target in {"screen_recording": "ScreenCapture", "camera": "Camera",
+                            "microphone": "Microphone", "location": "LocationServices",
+                            "accessibility": "Accessibility", "file_access": "FilesAndFolders"}.items()
+    },
+    "Windows": {"camera": "ms-settings:privacy-webcam", "microphone": "ms-settings:privacy-microphone",
+                "location": "ms-settings:privacy-location"},
+}
+
+
+def _parse_capability_snapshot(result: dict) -> dict:
+    """Normalize untrusted data; old or malformed envelopes cannot imply grants."""
+    empty = {"schema": None, "platform": None, "checked_at": None,
+             "items": [{"id": key, "state": "unknown", "detail": "", "settings_uri": None}
+                       for key in _SNAPSHOT_LABELS]}
+    if not isinstance(result, dict) or type(result.get("schema")) is not int or result["schema"] != 1:
+        return empty
+    raw_platform = result.get("platform")
+    if not isinstance(raw_platform, str):
+        return empty
+    match = re.fullmatch(r"(macOS|Windows)(?: [0-9.]+)?", raw_platform.strip())
+    if not match:
+        return empty
+    platform = match.group(1)
+    checked_at = result.get("checked_at")
+    try:
+        if not isinstance(checked_at, str) or len(checked_at) > 40:
+            return empty
+        stamp = datetime.datetime.fromisoformat(checked_at)
+        if stamp.utcoffset() is None:
+            return empty
+    except (ValueError, TypeError, OverflowError):
+        return empty
+    raw_items = result.get("items")
+    if not isinstance(raw_items, list) or len(raw_items) > 64:
+        return empty
+    seen = {}
+    duplicates = set()
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        key = item.get("id")
+        if not isinstance(key, str) or key not in _SNAPSHOT_LABELS:
+            continue
+        if key in seen:
+            duplicates.add(key)
+        seen[key] = item
+    items = []
+    for key in _SNAPSHOT_LABELS:
+        item = seen.get(key, {})
+        state = item.get("state")
+        detail = item.get("detail")
+        valid = (key not in duplicates and isinstance(state, str) and state in _SNAPSHOT_STATES
+                 and isinstance(detail, str) and bool(detail.strip()))
+        items.append({"id": key, "state": state if valid else "unknown",
+                      "detail": detail[:200] if valid else "",
+                      # Route selection belongs to this bot, never to the agent.
+                      "settings_uri": _CAPABILITY_SETTINGS[platform].get(key) if valid else None})
+    return {"schema": 1, "platform": raw_platform, "checked_at": checked_at, "items": items}
+
 
 def _format_capabilities(result: dict) -> str:
     """Render bounded capability data without treating declarations as health checks."""
     def safe(value, limit=100):
-        return html.escape(str(value or "?")[:limit], quote=False)
+        chunks = []
+        length = 0
+        for char in str(value or "?")[:limit]:
+            chunk = html.escape(char, quote=False)
+            if length + len(chunk) > limit:
+                break
+            chunks.append(chunk)
+            length += len(chunk)
+        return "".join(chunks)
+
+    if not isinstance(result, dict):
+        result = {}
+    snapshot = _parse_capability_snapshot(result)
 
     lines = ["📊 <b>Проверка возможностей</b>"]
     lines.append(f"Устройство: <b>{safe(result.get('hostname'))}</b>")
     lines.append(f"ОС: {safe(result.get('platform'))} · агент: {safe(result.get('version'), 40)}")
+    lines.append(f"Проверено: {safe(snapshot['checked_at'], 40)}")
+    lines.append("\n<b>Разрешения</b> <i>(это не тест реального действия)</i>")
+    for item in snapshot["items"]:
+        lines.append(f"• {_SNAPSHOT_LABELS[item['id']]}: {_SNAPSHOT_STATES[item['state']]}")
+        if item["detail"]:
+            lines.append(safe(item["detail"], 200 if item["id"] == "location" else 100))
+        if item["settings_uri"]:
+            lines.append("Настройки: <code>" + safe(item["settings_uri"], 120) + "</code>")
+    if any(item["state"] == "needs_live_test" for item in snapshot["items"]):
+        lines.append("Прямой запрос разрешения недоступен: только разрешённое пробное действие подтверждает доступ.")
+    lines.append("Снимок не выдаёт разрешения. Владелец меняет их на самом устройстве.")
+    if snapshot["schema"] == 1:
+        if snapshot["platform"].startswith("macOS"):
+            lines.append("macOS: Системные настройки → Конфиденциальность и безопасность → нужный раздел. "
+                         "Разреши фактическое приложение XIDER; при запросе ОС перезапусти его.")
+        else:
+            lines.append("Windows: Параметры → Конфиденциальность и безопасность → Камера / Микрофон / Расположение. "
+                         "Для камеры и микрофона: «Разрешить классическим приложениям». "
+                         "Для файлов и UI нет общего разрешения TCC: проверь ACL и сеанс; UAC подтверждает владелец.")
 
     raw_statuses = result.get("feature_status")
     raw_features = result.get("features")
     statuses = raw_statuses if isinstance(raw_statuses, dict) else {}
     legacy = raw_features if isinstance(raw_features, dict) else {}
-    lines.append("\n<b>Функции</b> <i>(это не тест реального действия)</i>")
-    for key, label in _CAPABILITY_LABELS.items():
+    # Legacy declarations stay explicitly unverified, never become schema v1 grants.
+    for key, label in (_CAPABILITY_LABELS.items() if snapshot["schema"] is None else []):
         state = statuses.get(key)
         if isinstance(state, dict):
             state = state.get("state")
@@ -4534,7 +4647,12 @@ def _format_capabilities(result: dict) -> str:
             command for command in commands[:256]
             if isinstance(command, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", command)
         })
-        shown = clean[:32]
+        budget = max(0, 3900 - len("\n".join(lines)))
+        shown = []
+        for command in clean[:32]:
+            if len(", ".join(shown + [command])) > budget:
+                break
+            shown.append(command)
         suffix = f"\n… ещё {len(clean) - len(shown)}" if len(clean) > len(shown) else ""
         lines.append(f"\n<b>Заявлено команд:</b> {len(clean)}")
         if shown:

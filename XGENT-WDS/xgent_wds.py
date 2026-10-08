@@ -1480,6 +1480,7 @@ class XgentClient:
 
         НЕ содержит секретов (SHARED_KEY намеренно исключён).
         """
+        feature_status = _detect_feature_status()
         self._publish_response("capabilities", {
             "type": "capabilities",
             "device_id": DEVICE_ID,
@@ -1488,7 +1489,8 @@ class XgentClient:
             "hostname": socket.gethostname(),
             "commands": sorted(SUPPORTED_COMMANDS),
             "features": _detect_features(),
-            "feature_status": _detect_feature_status(),
+            "feature_status": feature_status,
+            **_capability_snapshot(feature_status),
         })
         log.info("Отчёт о возможностях отправлен")
 
@@ -3736,6 +3738,43 @@ def _detect_feature_status() -> dict[str, str]:
         "clipboard": "device_unverified" if features["clipboard"] else "dependency_missing",
         "battery": "supported" if features["battery"] else "unavailable",
     }
+
+
+def _capability_snapshot(feature_status: dict[str, str]) -> dict:
+    """Passive diagnostics only: prerequisites are never an OS permission grant."""
+    items = []
+    for capability_id, legacy_id, settings_uri in (
+        ("screen_recording", "screenshot", None),
+        ("camera", "webcam", "ms-settings:privacy-webcam"),
+        ("microphone", "microphone", "ms-settings:privacy-microphone"),
+        ("location", "geolocation", "ms-settings:privacy-location"),
+        ("accessibility", None, None),
+        ("file_access", None, None),
+    ):
+        prerequisite = feature_status.get(legacy_id) if legacy_id else None
+        state = "needs_live_test"
+        detail = "Permission cannot be queried directly; only an owner-authorized trial action confirms access."
+        if prerequisite in {"dependency_missing", "unavailable"}:
+            state = "unavailable"
+            detail = "Required local tool or library is unavailable; OS permission was not queried."
+        elif legacy_id and prerequisite not in {"permission_unverified", "device_unverified", "approximate"}:
+            state = "unknown"
+            detail = "Diagnostic prerequisites could not be determined; no permission grant inferred."
+        if capability_id == "location":
+            detail = ("System location permission not queried. source=ip_estimate; uncertainty=unknown; "
+                      "current fallback is approximate city/region, never GPS or coordinates.")
+        elif capability_id == "accessibility":
+            detail = ("A macOS-style TCC Accessibility permission is unsupported on Windows; "
+                      "interactive session, integrity level and UAC may limit UI control. No UAC auto-consent.")
+        elif capability_id == "file_access":
+            detail = ("A blanket TCC file permission is unsupported on Windows; access is path-specific "
+                      "and depends on ACL/UAC. Only an authorized trial confirms access.")
+        elif capability_id == "screen_recording" and state == "needs_live_test":
+            detail = ("A TCC screen recording grant is unsupported on Windows; capture depends on "
+                      "the interactive session and a permitted trial action.")
+        items.append({"id": capability_id, "state": state, "detail": detail, "settings_uri": settings_uri})
+    return {"schema": 1, "platform": PLATFORM,
+            "checked_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()), "items": items}
 
 
 def ctypes_windll_user32_message_box(text: str) -> None:
