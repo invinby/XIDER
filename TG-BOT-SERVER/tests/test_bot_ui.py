@@ -2509,7 +2509,8 @@ def test_common_process_feedback_uses_selected_xlex_voice(monkeypatch):
         assert shown[0][0] == bot.xlex.render("device_timeout", style, seconds="15")
 
 
-def test_rendered_menu_callbacks_match_a_registered_route(monkeypatch):
+def _rendered_callback_inventory(monkeypatch):
+    from contextvars import ContextVar
     from types import SimpleNamespace
 
     devices = FakeDevices({
@@ -2522,14 +2523,24 @@ def test_rendered_menu_callbacks_match_a_registered_route(monkeypatch):
     session["target"] = "device-1"
     monkeypatch.setattr(bot, "devices", devices)
     monkeypatch.setattr(bot, "SESSION", session)
+    monkeypatch.setattr(bot, "CURRENT_TG_USER", ContextVar("inventory_owner", default=bot.ADMIN_ID))
+    monkeypatch.setattr(bot.bot_settings, "all_settings", lambda: {
+        "admins": [200], "blocked_ids": ["blocked-device"],
+    })
+    monkeypatch.setattr(bot.access_store, "list_users", lambda: [
+        {"id": 200, "role": "guest", "permissions": {}},
+    ])
+    url_shortcuts = [{"id": "012345abcdef", "name": "Example", "url": "https://example.com"}]
     monkeypatch.setattr(
         bot.bot_settings,
         "get",
-        lambda key, default=None: "xtech" if key == "ui_style" else default,
+        lambda key, default=None: "xtech" if key == "ui_style" else
+        url_shortcuts if key == "url_favorites" else default,
     )
 
     builders = [
-        bot.main_menu(0), bot.devices_menu(), bot.device_menu("device-1"), bot.all_menu(),
+        bot.main_menu(bot.ADMIN_ID), bot.main_menu(200), bot.devices_menu(bot.ADMIN_ID),
+        bot.device_menu("device-1", bot.ADMIN_ID), bot.all_menu(),
         bot.back_to_device_kb(), bot.power_menu(), bot.confirm_power_menu("shutdown"),
         bot.rotate_menu(), bot.media_menu(), bot.screen_menu(), bot.wallpaper_menu(),
         bot.input_menu(), bot.system_menu(), bot.network_menu(), bot.files_menu(),
@@ -2538,11 +2549,26 @@ def test_rendered_menu_callbacks_match_a_registered_route(monkeypatch):
         bot.device_settings_menu(), bot.mic_options_menu(), bot.vol_options_menu(),
         bot.confirm_kb("stop:ok"), bot.events_menu(), bot.quiet_hours_menu(),
         bot.digest_menu(), bot.admins_menu(), bot.admin_menu(), bot.admin_texts_menu(),
-        bot.admin_users_menu(), bot.admin_user_menu(0), bot.admin_devices_menu(0),
-        bot.admin_permissions_menu(0), bot.guest_devices_menu(), bot.server_menu(0),
-        bot.server_confirm_menu("restart"), bot.blocked_menu(), bot._version_root_menu(),
+        bot.admin_users_menu(), bot.admin_user_menu(0), bot.admin_user_menu(200), bot.admin_devices_menu(200),
+        bot.admin_permissions_menu(0), bot.guest_devices_menu(), bot.server_menu(bot.ADMIN_ID),
+        *(bot.server_confirm_menu(action) for action in ("restart", "update", "rollback")),
+        *(bot.confirm_power_menu(action) for action in ("shutdown", "reboot", "sleep")),
+        bot.blocked_menu(), bot._version_root_menu(),
         bot._version_root_menu(server=True),
+        bot.manual_install_os_keyboard(), bot.manual_install_os_keyboard(selected_os="windows"),
+        bot.manual_install_os_keyboard(selected_os="macos"),
+        bot.url_count_keyboard(), bot.url_count_keyboard(is_owner=True),
+        bot.url_favorites_keyboard(), bot.url_favorites_keyboard(is_owner=True),
+        bot._favorites_kb("device-1", ["status"]),
+        bot._version_install_confirmation_kb("v4.1.0"),
+        *(bot.confirm_kb(callback) for callback in (
+            "shell:ok", "openapp:ok", "stop:ok", "stopall:ok", "guardianstop:ok", "sleep:ok", "kill:123",
+        )),
     ]
+    for style in bot.xlex.STYLES:
+        monkeypatch.setattr(bot.bot_settings, "get", lambda key, default=None, selected=style:
+                            selected if key == "ui_style" else default)
+        builders.append(bot.admin_texts_menu())
     callbacks = {
         button.callback_data
         for markup in builders
@@ -2550,6 +2576,57 @@ def test_rendered_menu_callbacks_match_a_registered_route(monkeypatch):
         for button in row
         if button.callback_data
     }
+    # Previously omitted keyboard branches must participate in route coverage.
+    assert {"install:windows", "install:macos", "fav:toggle:screenshot",
+            "versions:install_confirm:v4.1.0", "versions:install_cancel:v4.1.0"} <= callbacks
+    # Some screens build their keyboard inside a handler. Evaluate only the
+    # callback expressions with controlled samples, never execute the handler
+    # or its network/disk/publish side effects. Every expression is included,
+    # including confirmation, paging and owner notification branches.
+    tree = ast.parse(Path(bot.__file__).read_text(encoding="utf-8"))
+    context = {
+        "message": SimpleNamespace(from_user=SimpleNamespace(id=200)),
+        "device_id": "device-1", "info_book": bot.info_book, "index": 1,
+        "it": {"pid": 123}, "page": 1, "i": 0, "notes_page": 1,
+        "release": SimpleNamespace(tag="v4.1.0"),
+        "bootstrap_release": SimpleNamespace(tag="v4.1.0"), "tag": "v4.1.0",
+    }
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        # Standalone builders above are rendered; inline handler expressions
+        # cannot be rendered independently without performing remote actions.
+        if not isinstance(node, ast.AsyncFunctionDef) and node.name != "on_mqtt_message":
+            continue
+        for call in ast.walk(node):
+            if not isinstance(call, ast.Call):
+                continue
+            for keyword in call.keywords:
+                if keyword.arg != "callback_data":
+                    continue
+                expression = compile(ast.Expression(keyword.value), str(bot.__file__), "eval")
+                for kind in ("server", "agent", "keeper"):
+                    for style in bot.xlex.STYLES:
+                        for slug, _title, _body in bot.info_book.CHAPTERS:
+                            callbacks.add(eval(expression, {"__builtins__": {}},
+                                               dict(context, kind=kind, style=style, slug=slug)))
+    return callbacks
+
+
+def _callback_routes(callback):
+    from types import SimpleNamespace
+
+    return [
+        handler for handler in bot.router.callback_query.handlers
+        if any(item.magic is not None and item.callback(SimpleNamespace(data=callback)) is True
+               for item in handler.filters)
+    ]
+
+
+def test_rendered_menu_callbacks_match_a_registered_route(monkeypatch):
+    from types import SimpleNamespace
+
+    callbacks = _rendered_callback_inventory(monkeypatch)
     route_filters = [
         filter_object.callback
         for handler in bot.router.callback_query.handlers
@@ -2566,6 +2643,78 @@ def test_rendered_menu_callbacks_match_a_registered_route(monkeypatch):
         )
     }
     assert not unmatched, f"Buttons have no callback route: {sorted(unmatched)}"
+
+
+def _descriptive_callback_metadata(callback, route):
+    """Test-local inventory, never consumed by authorization or runtime UI.
+
+    No complete action OS/timeout/privacy/risk declaration exists in the bot.
+    Keep those gaps explicit rather than inventing policy from button labels.
+    """
+    gate = next(item.callback for item in route.filters if item.magic is None)
+    gate_name = type(gate).__name__
+    if callback.startswith("url:count:"):
+        permission = "access_store.can_use_callback"
+        grants = "owner or cmd:url grant on FSM-bound device; live recheck"
+    elif gate_name == "OwnerFilter":
+        permission, grants = "protected OwnerFilter", "protected owner"
+    elif gate_name == "ReadOnlyFilter":
+        permission, grants = "public ReadOnlyFilter", "owner/user/guest; blocked denied"
+    else:
+        permission = "access_store.can_use_callback"
+        grants = "owner or user with matching callback/device authority decision"
+    return {
+        "callback": callback, "route": route.callback.__name__,
+        "category": callback.split(":", 1)[0], "required_permission": permission,
+        "allowed_roles_grants": grants, "os_support": "unknown",
+        "timeout": "unknown", "result_sensitivity": "unknown", "risk": "unknown",
+    }
+
+
+def test_inventory_routes_have_explicit_server_access_filters(monkeypatch):
+    # Losing a gate or accidentally registering an action as public must fail,
+    # even if its keyboard remains hidden from a user.
+    from roles import AdminFilter, AnyAccessFilter, OwnerFilter, ReadOnlyFilter
+
+    public = {"menu:main", "menu:devices", "menu:about", "menu:server",
+              "menu:guest_devices", "guest:readonly", "noop", "url:cancel"}
+    state_bound_actions = {"url:count:1", "url:count:2", "url:count:3", "url:count:5"}
+    for callback in _rendered_callback_inventory(monkeypatch):
+        for route in _callback_routes(callback):
+            gates = [item.callback for item in route.filters if item.magic is None]
+            assert len(gates) == 1, (callback, route.callback.__name__, gates)
+            gate = gates[0]
+            assert type(gate) in {AdminFilter, AnyAccessFilter, OwnerFilter, ReadOnlyFilter}
+            if type(gate) is ReadOnlyFilter:
+                assert callback in public or callback in state_bound_actions or callback.startswith("about:chapter:"), callback
+            # Descriptive classes only: AdminFilter/AnyAccessFilter delegate
+            # the actual grant decision to access_store.can_use_callback.
+            metadata = _descriptive_callback_metadata(callback, route)
+            assert set(metadata) == {
+                "callback", "route", "category", "required_permission", "allowed_roles_grants",
+                "os_support", "timeout", "result_sensitivity", "risk",
+            }
+            assert all(metadata.values()), callback
+            assert metadata["required_permission"] in {
+                "protected OwnerFilter", "public ReadOnlyFilter", "access_store.can_use_callback",
+            }
+
+
+def test_unregistered_action_callback_has_no_dispatch_or_publish(monkeypatch):
+    from aiogram.dispatcher.event.bases import UNHANDLED
+    from aiogram.types import CallbackQuery, User
+
+    def unexpected_publish(*args, **kwargs):
+        pytest.fail("Unregistered callback reached a publish path")
+
+    monkeypatch.setattr(bot, "publish", unexpected_publish)
+    monkeypatch.setattr(bot, "publish_tracked", unexpected_publish)
+    # A broad full_device family grant is not a registered route. Exercise the
+    # actual observer with owner identity so authorization cannot hide a route.
+    for data in ("cmd:unknown_action", "unknown:action", "server:unknown_action"):
+        callback = CallbackQuery(id="inventory", from_user=User(id=bot.ADMIN_ID,
+                                 is_bot=False, first_name="Owner"), chat_instance="inventory", data=data)
+        assert asyncio.run(bot.router.callback_query.trigger(callback)) is UNHANDLED
 
 
 def test_pranks_menu_has_stop_all_button(monkeypatch):

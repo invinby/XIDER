@@ -3,6 +3,40 @@ from types import SimpleNamespace
 
 import access_store as store
 import roles
+import pytest
+
+
+@pytest.mark.parametrize("callback,full_device_allowed", [
+    ("cmd:screenshot", True), ("cmd:status", True), ("files:get", True),
+    ("fun:type", True), ("power_confirm:shutdown", True), ("kill:123", True),
+    ("volq:50", True), ("micdur:10", True), ("rotate:90", True),
+    ("fav:toggle:screenshot", True), ("rep:0", True), ("sleep:ok", True),
+    ("cmd:shell", False), ("shell:ok", False), ("cfm:stop_all", False),
+    ("stopall:ok", False), ("all:status", False), ("devmg:allow:device-1", False),
+    ("admin:users", False), ("server:logs", False), ("server_confirm:restart", False),
+    ("versions:install_confirm:v4.1.0", False), ("install:windows", False),
+    ("ev:menu", False), ("quiet:22:8", False), ("digest:60", False),
+    ("adm:rm:200", False), ("unknown:action", False),
+])
+def test_inventory_permission_matrix_is_device_bound_and_role_scoped(
+    monkeypatch, tmp_path, callback, full_device_allowed,
+):
+    # Expectations are hand-classified fixtures, not recomputed from store's
+    # prefix tables. A missing owner-only gate or widened family fails here.
+    _isolate(monkeypatch, tmp_path)
+    owner, user = 100, 200
+    store.register_start(_user(user))
+    assert store.can_use_callback(owner, callback, owner, "device-1") is True
+    assert store.can_use_callback(user, callback, owner, "device-1") is False
+    store.set_role(owner, user, store.Role.USER, owner)
+    store.toggle_device(owner, user, "device-1", owner)
+    assert store.can_use_callback(user, callback, owner, "device-1") is False
+    store.toggle_callback(owner, user, "full_device", owner)
+    assert store.can_use_callback(user, callback, owner, "device-1") is full_device_allowed
+    assert store.can_use_callback(user, callback, owner, "other-device") is False
+    assert store.can_use_callback(user, callback, owner, None) is False
+    store.set_blocked(owner, user, True, owner)
+    assert store.can_use_callback(user, callback, owner, "device-1") is False
 
 
 def _user(user_id: int, username: str = "tester"):
