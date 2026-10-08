@@ -60,6 +60,35 @@ def test_bundle_worker_identity_is_persisted_with_real_guardian_state(guardian_m
     assert saved["worker_runtime"] == "bundle"
 
 
+def test_adopted_running_bundle_removal_forbids_source_recovery(guardian_module, monkeypatch, tmp_path):
+    import subprocess
+    module = guardian_module
+    monkeypatch.setattr(module, "SCRIPT_DIR", tmp_path)
+    executable = tmp_path / "XIDER.app/Contents/MacOS/XGENT-MCS"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"fixture")
+    guardian = object.__new__(module.Guardian)
+    guardian.state = {"desired_running": True}
+    pid = module.os.getpid() + 1000
+    live = [True]
+    def discover(args, **kwargs):
+        assert args == ["pgrep", "-f", str(executable)]
+        return subprocess.CompletedProcess(args, 0 if live[0] else 1, str(pid) if live[0] else "", "")
+    monkeypatch.setattr(module.subprocess, "run", discover)
+    assert guardian.start_agent() == pid
+    assert guardian.state.get("worker_runtime") == "bundle"
+    saved = json.loads(module.STATE_FILE.read_text(encoding="utf-8"))
+    assert saved["worker_runtime"] == "bundle"
+    executable.unlink()
+    live[0] = False
+    def forbidden(*args, **kwargs):
+        pytest.fail("Removed adopted bundle must not launch or recover source worker")
+    monkeypatch.setattr(guardian, "_restore_missing_agent_files", forbidden)
+    monkeypatch.setattr(module.subprocess, "Popen", forbidden)
+    with pytest.raises(RuntimeError, match="Owner removed XIDER.app"):
+        guardian.start_agent()
+
+
 def test_guardian_uses_inherited_config_without_recreating_missing_env(
     guardian_module, monkeypatch, tmp_path
 ):

@@ -2,8 +2,8 @@
 # Build the real signed app, never a shell launcher outside the bundle.
 set -euo pipefail
 cd "$(dirname "$0")"
-AGENT_VERSION="$(sed -n 's/^VERSION = "\\([0-9.]*\\)"/\\1/p' config.py | head -n 1)"
-if [[ ! "$AGENT_VERSION" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then
+AGENT_VERSION="$(sed -n 's/^VERSION = "\([0-9.]*\)"/\1/p' config.py | head -n 1)"
+if [[ ! "$AGENT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "Could not read the agent version from config.py." >&2
   exit 1
 fi

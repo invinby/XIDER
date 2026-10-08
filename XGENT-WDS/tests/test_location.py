@@ -121,3 +121,20 @@ def test_windows_limited_diagnostic_opens_owner_settings_without_os_consent(monk
     result = client_result({})
     assert result["state"] == "needs_live_test"
     assert opened == ["ms-settings:privacy-location"]
+
+@pytest.mark.parametrize("status", [1, 2, 4])
+def test_windows_allowed_startup_status_performs_exactly_one_bounded_read(status):
+    import location_adapter as adapter
+    attempts = []
+    async def get_position(maximum_age, timeout):
+        attempts.append((maximum_age.total_seconds(), timeout.total_seconds()))
+        return SimpleNamespace(coordinate=SimpleNamespace(
+            point=SimpleNamespace(position=SimpleNamespace(latitude=41.311, longitude=69.279)),
+            accuracy=80.0))
+    backend = object.__new__(adapter.WindowsLocationBackend)
+    backend.capability = SimpleNamespace(check_access=lambda: 4)
+    backend.locator = SimpleNamespace(location_status=status, get_geoposition_async=get_position)
+    result = adapter.read_system_location(backend)
+    assert attempts == [(0.0, 8.0)]
+    assert result["state"] == "granted" and result["source"] == "system"
+    assert result["accuracy_m"] == 80.0

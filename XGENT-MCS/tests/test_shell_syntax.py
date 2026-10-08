@@ -34,6 +34,42 @@ def test_mac_shell_script_parses_with_bash(script_name):
     assert result.returncode == 0, result.stderr or result.stdout
 
 
+@pytest.mark.parametrize("version,accepted", [("4.2.1", True), ("4.2", False)])
+def test_make_app_executes_real_version_preflight(tmp_path, version, accepted):
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("Bash is unavailable; executable version preflight needs Bash.")
+    (tmp_path / "make_app.sh").write_text(
+        (ROOT / "make_app.sh").read_text(encoding="utf-8"), encoding="utf-8", newline="\n"
+    )
+    (tmp_path / "config.py").write_text(f'VERSION = "{version}"\n', encoding="utf-8", newline="\n")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    # Only the external build/signing boundary is doubled. The actual sed,
+    # Bash version validation, and non-ad-hoc identity check run unchanged.
+    python = fake_bin / "python3"
+    python.write_text('#!/usr/bin/env bash\nprintf "BUILD_BOUNDARY %s\\n" "$*"\n',
+                      encoding="utf-8", newline="\n")
+    python.chmod(0o755)
+    env = os.environ.copy()
+    env["XIDER_MACOS_SIGNING_IDENTITY"] = "Apple Development: Fixture (TEAM)"
+    result = subprocess.run(
+        [bash, "-c", 'export PATH="$PWD/bin:$PATH"; '
+         'export XIDER_MACOS_SIGNING_IDENTITY="Apple Development: Fixture (TEAM)"; '
+         'exec bash ./make_app.sh'],
+        cwd=tmp_path, env=env, capture_output=True, text=True, check=False,
+    )
+    if accepted:
+        assert result.returncode == 0, result.stderr or result.stdout
+        assert f"Built signed XIDER.app {version};" in result.stdout
+        assert "BUILD_BOUNDARY -m PyInstaller" in result.stdout
+        assert "BUILD_BOUNDARY ../tools/verify_macos_bundle.py" in result.stdout
+    else:
+        assert result.returncode == 1
+        assert "Could not read the agent version" in result.stderr
+        assert "BUILD_BOUNDARY" not in result.stdout
+
+
 def test_mac_agent_status_falls_back_when_launchd_job_is_waiting(tmp_path):
     if os.name == "nt":
         pytest.skip("The process/launchd status fixture requires a Unix process table.")

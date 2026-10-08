@@ -107,7 +107,7 @@ class WindowsLocationBackend:
             return "denied", True
         if access != 4:
             return "not_determined", True
-        if status == 0:
+        if status in (0, 1, 2, 4):
             return "granted", True
         if status == 3:
             return "granted", False

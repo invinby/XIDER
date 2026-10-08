@@ -190,6 +190,9 @@ class Guardian:
                 except ValueError:
                     continue
                 if pid != os.getpid():
+                    if worker_pattern == str(bundled) and self.state.get("worker_runtime") != "bundle":
+                        self.state["worker_runtime"] = "bundle"
+                        _save_state(self.state, "worker_runtime")
                     return pid
         except OSError:
             pass
