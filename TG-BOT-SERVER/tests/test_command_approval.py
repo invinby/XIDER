@@ -247,3 +247,23 @@ def test_nonce_is_random_and_not_reused_for_pending_requests():
 
     assert len(set(nonces)) == len(nonces)
     assert all(len(nonce) >= 32 for nonce in nonces)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("owner_id", OWNER_ID + 1),
+        ("device_id", "another-device"),
+        ("command_hash", "0" * 64),
+        ("command_text", "replacement command"),
+    ],
+    ids=["owner_id", "device_id", "command_hash", "command_text"],
+)
+def test_pending_command_fields_cannot_be_reassigned(field, replacement):
+    pending = create_request()
+    original_value = getattr(pending, field)
+
+    with pytest.raises(AttributeError):
+        setattr(pending, field, replacement)
+
+    assert getattr(pending, field) == original_value
