@@ -108,6 +108,20 @@ def test_process_pagination_uses_the_process_list_grant_without_granting_kill(mo
     assert store.can_use_callback(200, "proc:1", 100, "laptop-a") is False
 
 
+def test_specific_kill_grant_allows_only_its_matching_process_confirmation(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    store.register_start(_user(200))
+    store.set_role(100, 200, store.Role.USER, 100)
+    store.toggle_device(100, 200, "laptop-a", 100)
+    store.toggle_callback(100, 200, "proc:0", 100)
+    store.toggle_callback(100, 200, "killq:42", 100)
+
+    assert store.can_use_callback(200, "killq:42", 100, "laptop-a") is True
+    assert store.can_use_callback(200, "kill:42", 100, "laptop-a") is True
+    assert store.can_use_callback(200, "killq:43", 100, "laptop-a") is False
+    assert store.can_use_callback(200, "kill:43", 100, "laptop-a") is False
+
+
 def test_screen_category_and_wallpaper_entry_follow_their_action_grants(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     store.register_start(_user(200))

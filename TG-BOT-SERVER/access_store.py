@@ -39,6 +39,11 @@ OWNER_ONLY_CALLBACK_PREFIXES = (
 )
 USER_NAVIGATION_CALLBACKS = frozenset({"menu:main", "menu:about", "menu:devices", "back:device"})
 
+INPUT_ACTION_CALLBACKS = frozenset({
+    "cmd:clipboard", "cmd:clipset", "fun:type", "fun:hotkey",
+    "prank:swapmouse", "prank:crazycursor",
+})
+
 # A small set of categories is useful when a role gets only one or two
 # individual actions. Entering a category must never imply permission for the
 # other buttons inside it; the UI filters those buttons separately.
@@ -53,9 +58,7 @@ CATEGORY_REQUIRED_GRANTS = {
         "cmd:rotate", "cmd:wallpaper_random_meme", "cmd:wallpaper_photo_guide", "fun:wallpaper",
         "cmd:prank_restore_wallpaper", "rotate:0", "rotate:90", "rotate:180", "rotate:270",
     }),
-    "cat:input": frozenset({
-        "cmd:clipboard", "cmd:clipset", "fun:type", "fun:hotkey", "prank:swapmouse", "prank:crazycursor",
-    }),
+    "cat:input": INPUT_ACTION_CALLBACKS,
     "cat:system": frozenset({
         "cmd:status", "cmd:sysinfo", "cmd:battery", "cmd:sys_uptime", "cmd:disks", "cmd:smart",
         "cmd:sys_clean_temp", "cmd:apps", "cmd:capabilities",
@@ -72,7 +75,7 @@ CATEGORY_REQUIRED_GRANTS = {
     "cat:terminal": frozenset({
         "proc:0", "cmd:prockillname", "cfm:shell", "cmd:open_app", "cmd:startup", "cmd:services",
         "cmd:cmdhistory", "hist:0", "rep:0",
-    }),
+    }) | INPUT_ACTION_CALLBACKS,
     "cat:power": frozenset({
         "cmd:lock", "power:sleep", "power:reboot", "power:shutdown", "cmd:wol", "cmd:autorun_status",
         "cmd:autorun_enable", "cmd:autorun_disable", "cmd:standby_sleep", "cmd:wake", "cmd:guardian_menu",
@@ -419,6 +422,10 @@ def can_use_callback(user_id: int, callback: str | None, owner_id: int,
         return False
     if "full_device" in callbacks or data in callbacks:
         return True
+    if data.startswith("kill:"):
+        pid = data.split(":", 1)[1]
+        if pid.isdigit() and f"killq:{pid}" in callbacks:
+            return True
     if data.startswith("proc:"):
         proc_action = data.split(":", 1)[1]
         if (proc_action == "refresh" or proc_action.isdigit()) and "proc:0" in callbacks:

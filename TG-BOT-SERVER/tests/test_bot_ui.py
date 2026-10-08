@@ -2092,11 +2092,119 @@ def test_process_results_filter_kill_controls_and_keep_granted_pagination(monkey
     asyncio.run(bot.on_proc_page(FakeCallback()))
 
     callbacks = set(_callback_data(rendered[-1][1]))
+    assert "process-0" in rendered[-1][0]
+    assert "<code>0</code>" in rendered[-1][0]
+    assert "1%" in rendered[-1][0]
+    assert "process-8" not in rendered[-1][0]
     assert "proc:1" in callbacks
     assert "proc:refresh" in callbacks
     assert "back:device" in callbacks
     assert "menu:main" in callbacks
     assert not any(callback.startswith("killq:") for callback in callbacks)
+
+
+def test_process_details_remain_visible_with_only_one_specific_kill_grant(monkeypatch):
+    from types import SimpleNamespace
+
+    _setup(monkeypatch, {"device-1": {"name": "PC", "os": "Windows"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "device-1"})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.USER)
+    monkeypatch.setattr(
+        bot.access_store, "can_use_callback",
+        lambda user_id, callback, _owner_id, target=None: (
+            user_id == 200 and target == "device-1" and callback in {
+                "proc:0", "killq:42", "kill:42", "back:device", "menu:main",
+            }
+        ),
+    )
+    monkeypatch.setattr(bot, "LAST_PROCESSES", {
+        "device-1": {
+            "ts": time.time(),
+            "items": [
+                {"pid": 42, "name": "worker-alpha", "mem_percent": 4.5},
+                {"pid": 43, "name": "worker-beta", "mem_percent": 2.0},
+            ],
+        },
+    })
+    rendered = []
+
+    class FakeCallback:
+        data = "proc:0"
+        from_user = SimpleNamespace(id=200)
+
+        async def answer(self, *args, **kwargs):
+            pass
+
+    async def replace(_cq, text, reply_markup=None):
+        rendered.append((text, reply_markup))
+
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    asyncio.run(bot.on_proc_page(FakeCallback()))
+
+    text, markup = rendered[-1]
+    callbacks = set(_callback_data(markup))
+    assert "worker-alpha" in text and "worker-beta" in text
+    assert "<code>42</code>" in text and "4.5%" in text
+    assert "killq:42" in callbacks
+    assert "killq:43" not in callbacks
+
+
+def test_narrow_input_grant_is_reachable_from_terminal_section(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from roles import AdminFilter
+
+    _setup(monkeypatch, {"device-1": {"name": "PC", "os": "Windows"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "device-1"})
+    monkeypatch.setattr(bot.access_store, "FILE", tmp_path / "access.json")
+    monkeypatch.setattr(bot.access_store, "AUDIT_FILE", tmp_path / "audit.jsonl")
+    owner_id, user_id = int(bot.ADMIN_ID), 200
+    bot.access_store.register_start(SimpleNamespace(
+        id=user_id, username="narrow", first_name="Narrow", last_name="User",
+    ))
+    assert bot.access_store.set_role(owner_id, user_id, bot.Role.USER, owner_id)
+    assert bot.access_store.toggle_device(owner_id, user_id, "device-1", owner_id)
+    assert bot.access_store.toggle_callback(owner_id, user_id, "cmd:clipset", owner_id)
+    monkeypatch.setattr(
+        bot, "get_user_role",
+        lambda current_user: bot.access_store.get_role(current_user, owner_id),
+    )
+
+    rendered = []
+
+    class FakeCallback:
+        from_user = SimpleNamespace(id=user_id)
+
+        def __init__(self, data):
+            self.data = data
+
+        async def answer(self, *args, **kwargs):
+            pass
+
+    async def replace(_cq, _text, reply_markup=None):
+        rendered.append(reply_markup)
+
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    device_callbacks = set(_callback_data(bot.device_menu("device-1", user_id)))
+    assert "cat:terminal" in device_callbacks
+    assert "cat:input" not in device_callbacks
+
+    terminal_callback = FakeCallback("cat:terminal")
+    assert asyncio.run(AdminFilter()(terminal_callback)) is True
+    asyncio.run(bot.on_cat_terminal(terminal_callback))
+    terminal_callbacks = set(_callback_data(rendered[-1]))
+    assert "cat:input" in terminal_callbacks
+
+    input_callback = FakeCallback("cat:input")
+    assert asyncio.run(AdminFilter()(input_callback)) is True
+    asyncio.run(bot.on_cat_input(input_callback))
+    input_callbacks = set(_callback_data(rendered[-1]))
+    assert "cmd:clipset" in input_callbacks
+    assert "cmd:clipboard" not in input_callbacks
+    assert "fun:type" not in input_callbacks
+    assert "fun:hotkey" not in input_callbacks
+    assert asyncio.run(AdminFilter()(FakeCallback("cmd:clipset"))) is True
+    assert asyncio.run(AdminFilter()(FakeCallback("cmd:clipboard"))) is False
+    assert asyncio.run(AdminFilter()(FakeCallback("fun:type"))) is False
 
 
 def test_process_refresh_rechecks_grant_immediately_before_publish(monkeypatch):

@@ -1198,7 +1198,7 @@ def wallpaper_menu(user_id: int | None = None):
     return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
-def input_menu():
+def input_menu(user_id: int | None = None):
     kb = InlineKeyboardBuilder()
     kb.button(text=_lex("input_clipboard_read_button"), callback_data="cmd:clipboard", style="success")
     kb.button(text=_lex("input_clipboard_paste_button"), callback_data="cmd:clipset", style="primary")
@@ -1209,7 +1209,7 @@ def input_menu():
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 2, 2)
-    return _filter_device_keyboard(kb.as_markup())
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
 def system_menu(user_id: int | None = None):
@@ -1313,19 +1313,20 @@ def files_menu():
     return _filter_device_keyboard(kb.as_markup())
 
 
-def terminal_menu():
+def terminal_menu(user_id: int | None = None):
     kb = InlineKeyboardBuilder()
     kb.button(text=_lex("terminal_processes_button"), callback_data="proc:0", style="primary")
     kb.button(text=_lex("terminal_kill_process_button"), callback_data="cmd:prockillname", style="danger")
     kb.button(text=_lex("terminal_shell_button"), callback_data="cfm:shell", style="danger")
     kb.button(text=_lex("terminal_open_app_button"), callback_data="cmd:open_app", style="primary")
+    kb.button(text=_nav("input"), callback_data="cat:input", style="primary")
     kb.button(text=_lex("terminal_startup_button"), callback_data="cmd:startup", style="primary")
     kb.button(text=_lex("terminal_services_button"), callback_data="cmd:services", style="primary")
     kb.button(text=_lex("terminal_history_button"), callback_data="cmd:cmdhistory", style="primary")
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2)
-    return _filter_device_keyboard(kb.as_markup())
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
 # Псевдонимы обратной совместимости
@@ -4531,7 +4532,7 @@ async def on_cat_input(cq: CallbackQuery):
         return
     await _replace_callback_message(cq,
         _lex_html("category_input", device=target_label(target)),
-        reply_markup=input_menu(),
+        reply_markup=input_menu(cq.from_user.id if cq.from_user else None),
     )
     await cq.answer()
 
@@ -4585,7 +4586,7 @@ async def on_cat_terminal(cq: CallbackQuery):
         return
     await _replace_callback_message(cq,
         _lex_html("category_terminal", device=target_label(target)),
-        reply_markup=terminal_menu(),
+        reply_markup=terminal_menu(cq.from_user.id if cq.from_user else None),
     )
     await cq.answer()
 
@@ -4694,6 +4695,12 @@ async def on_proc_page(cq: CallbackQuery):
     for it in chunk:
         label = f"🔪 {it.get('name', '?')} · {it.get('mem_percent', 0)}%"
         kb.button(text=_limit_button_label(label), callback_data=f"killq:{it.get('pid')}", style="danger")
+    details = []
+    for item in chunk:
+        pid = html.escape(str(item.get("pid", "?"))[:16])
+        name = html.escape(str(item.get("name") or "?")[:48])
+        memory = html.escape(str(item.get("mem_percent", 0))[:12])
+        details.append(f"• <code>{pid}</code> · {name} · {memory}%")
     if pages > 1:
         if page > 0:
             kb.button(text="◀️", callback_data=f"proc:{page - 1}", style="primary")
@@ -4704,7 +4711,10 @@ async def on_proc_page(cq: CallbackQuery):
     kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(1)
-    text = f"⚙️ <b>Процессы</b> · {html.escape(target_label(target))} (топ-{len(items)})"
+    text = (
+        f"⚙️ <b>Процессы</b> · {html.escape(target_label(target)[:80])} (топ-{len(items)})"
+        + ("\n" + "\n".join(details) if details else "")
+    )
     await _replace_callback_message(
         cq,
         text,
