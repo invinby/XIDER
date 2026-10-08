@@ -1,0 +1,99 @@
+# Bilingual Documentation and GitHub Pages Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `subagent-driven-development` (recommended) or `executing-plans` after owner approval. Publishing repository metadata or Pages needs a separate publish approval.
+
+**Goal:** Подготовить точную двуязычную документацию и доступную публичную страницу проекта с проверяемой локальной сборкой.
+
+**Architecture:** Сначала automated RU/EN/link/diagram parity checks, затем статическая landing page и PR build validation. Live Pages deployment и GitHub metadata меняются только после подтверждения canonical URL.
+
+**Tech Stack:** Markdown, Python validation scripts, pinned `@mermaid-js/mermaid-cli` 12.0.0 (Node.js >=22.13.0), HTML/CSS, GitHub Actions Pages workflow.
+
+**Spec:** `docs/superpowers/specs/2026-10-08-tarped-product-redesign-design.md`, разделы 13–14.
+
+## Global Constraints
+
+- README and landing page stay semantically equal in RU/EN.
+- Do not claim unperformed Mac/Windows/Telegram/VPS acceptance.
+- Fix Mermaid syntax and validate actual fenced diagrams before publication.
+- Honor keyboard accessibility, mobile layout, and `prefers-reduced-motion`.
+- No analytics, trackers, secrets, or unapproved GitHub metadata/domain change.
+- “GitHub profile” here means the `invinby/XIDER` project repository metadata, not the owner’s personal account profile; keep the short repository description bilingual within the field limit.
+
+## Review Focus
+
+1. RU and EN copy disagree on permissions/status — parity checker fails.
+2. Mermaid parser fails because of labels/line breaks — PR validation fails.
+3. Reduced-motion is enabled — optional animation is removed.
+4. Narrow viewport or keyboard-only navigation — page remains readable/usable.
+5. Canonical URL is not approved — deployment and homepage update remain disabled.
+
+---
+
+**Дата:** 2026-10-08  
+**Статус:** ждёт одобрения реализации/публикации  
+**Спецификация:** раздел 13 и документальные критерии раздела 14 [TARPED redesign](../specs/2026-10-08-tarped-product-redesign-design.md)
+
+## Цель
+
+Сделать GitHub-страницу XIDER понятной на русском и английском, с одинаковыми фактами, валидной архитектурной диаграммой и отдельной аккуратной продуктовой страницей. Не менять X-LEX и не публиковать URL, который владелец не подтвердил.
+
+## Этапы TDD/контента
+
+### Implementation tasks
+
+#### Task 1: RU/EN README parity checker and Mermaid validation
+
+**Files:** Preserve the already-requested edits to `README.md`, `README.ru.md`, and `tools/test_readme_mermaid.py` when moving from the current branch to the approved `origin/main` work branch; extend the existing Mermaid regression coverage rather than duplicate it. Create `tools/test_readme_parity.py`, `tools/validate_mermaid.py`, `tools/test_validate_mermaid.py`, and pinned `tools/package.json`/`tools/package-lock.json`; modify `README.md`, `README.ru.md`, `CHANGELOG.md`, `SECURITY.md`, `.github/workflows/ci.yml`.
+
+**Interface:** `check_readme_pair(english: str, russian: str) -> list[str]` returns missing required sections, broken local links, unmatched fences or language-only status claims. `validate_mermaid.py` extracts every fenced diagram and sends each to the pinned Mermaid CLI parser, returning nonzero with file/block/line diagnostics for invalid syntax.
+
+- [ ] Add tests for a missing translation section, broken relative link, unclosed code fence, missing Mermaid block and malformed Mermaid syntax.
+- [ ] Run `python -m pytest tools/test_readme_parity.py -q` from repo root; expected: fixture cases fail before checker implementation.
+- [ ] Implement required section mapping for purpose, architecture, components, OS support, install/update/rollback, permissions/security, diagnostics, limitations, license and status; use the pinned Mermaid CLI (not a hand-written regex-only check) to parse every fenced diagram.
+- [ ] Compare the full Russian and English content semantically, not just headings; validate relative/HTTPS links, code fences and status claims without asserting unperformed device/live checks.
+- [ ] Cross-check root `CHANGELOG.md` and `SECURITY.md` against the same release/security facts and verify README links to them plus the GitHub release notes; keep the canonical release URL distinct from the repository homepage/Pages URL.
+- [ ] Align both READMEs and correct every Mermaid diagram; do not claim unperformed live/device acceptance.
+- [ ] Rerun; expected: both documents pass parity/format checks.
+- [ ] Commit checker and bilingual README.
+
+#### Task 2: Landing-page source and accessibility checks
+
+**Files:** Create `site/index.html`, `site/styles.css`, assets only if needed, `tools/check_site.py`, and `tools/test_site.py`.
+
+**Interface:** Static page works without JavaScript; RU/EN switch uses ordinary links; optional animation obeys `prefers-reduced-motion`.
+
+- [ ] Add checker tests for missing title/lang, broken internal link, reduced-motion rule and keyboard-visible focus.
+- [ ] Run `python -m pytest tools/test_site.py -q`; expected: failures for missing site/checker.
+- [ ] Build responsive semantic HTML/CSS with no remote fonts, analytics, trackers or secrets.
+- [ ] Run `python tools/check_site.py`; expected: exit 0 with no accessibility/link violations.
+- [ ] Inspect local desktop and narrow-viewport render and note actual results.
+- [ ] Commit page and checks.
+
+#### Task 3: Pages workflow and guarded publication
+
+**Files:** Create `.github/workflows/pages.yml`; update `.github/workflows/ci.yml` for the Python static syntax check; add workflow assertions using a focused `tools/test_pages_workflow.py`.
+
+**Interface:** PR jobs build/check only; deployment is limited to an approved branch/environment and a confirmed canonical URL.
+
+- [ ] Test that pull requests do not deploy and unapproved refs cannot publish.
+- [ ] Run `python -m pytest tools/test_pages_workflow.py -q`; expected: tests fail until guarded workflow exists.
+- [ ] Add least-privilege, pinned-action workflow consistent with existing CI policy.
+- [ ] Add `python -m compileall -q TG-BOT-SERVER XGENT-WDS XGENT-MCS ops tools deploy` to CI, alongside existing bash and Windows PowerShell syntax checks; exclude generated virtual environments and build outputs.
+- [ ] Rerun workflow and site checks; expected: PR validation passes without live publication.
+- [ ] Commit workflow. Do not deploy until separate owner confirmation.
+
+#### Task 4: GitHub metadata and live page acceptance
+
+**Files:** GitHub repository settings only; no source edit required for the repository description or homepage fields. Scope is the `invinby/XIDER` project profile, not the personal GitHub account profile.
+
+- [ ] Confirm exact canonical Pages URL with the owner.
+- [ ] After separate publish approval, publish and set the project repository description in concise Russian and English, plus the confirmed canonical Pages homepage URL; do not edit the personal account profile.
+- [ ] Open the actual URL and verify served build and links; if credentials/DNS are unavailable, leave it unverified.
+
+## Коммиты
+
+1. Parity checker and docs baseline.
+2. Bilingual README content and diagram validation.
+3. Site source/design and accessibility checks.
+4. Pages CI workflow.
+5. Publish metadata only after explicit confirmation of canonical URL.

@@ -30,12 +30,16 @@ irm https://invinby.github.io/XIDER/win.ps1 | iex
 
 ```mermaid
 graph LR
-    User[Владелец в Telegram] -->|HTTPS| Bot[TG-BOT-SERVER]
-    Bot <-->|MQTT| Broker[MQTT broker]
-    Broker <-->|подписанные сообщения| Win[XGENT-WDS · Windows]
-    Broker <-->|подписанные сообщения| Mac[XGENT-MCS · macOS]
-    Win <--> GKW[Guard Keeper · Windows]
-    Mac <--> GKM[Guard Keeper · macOS]
+    User["Владелец в Telegram"] -->|HTTPS запрос| Bot["TG-BOT-SERVER"]
+    Bot -->|HTTPS ответ| User
+    Bot -->|MQTT команды и подписки| Broker["MQTT broker"]
+    Broker -->|MQTT статусы и результаты| Bot
+    Broker -->|Подписанные команды| Win["XGENT-WDS - Windows"]
+    Win -->|Подписанные события| Broker
+    Broker -->|Подписанные команды| Mac["XGENT-MCS - macOS"]
+    Mac -->|Подписанные события| Broker
+    Win <--> GKW["Guard Keeper - Windows"]
+    Mac <--> GKM["Guard Keeper - macOS"]
 ```
 
 - **TG-BOT-SERVER** — Telegram-интерфейс, роли, проверка разрешений, каталог релизов и управление устройствами.

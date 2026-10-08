@@ -78,16 +78,21 @@ Designed with a **Zero-Trust** security architecture, XIDER treats the network t
 
 ```mermaid
 graph TD
-    User([Telegram User / Admin]) <-->|Telegram Bot API over HTTPS| BotServer["TG-BOT-SERVER (aiogram 3)"]
+    User["Telegram User / Admin"] -->|Telegram Bot API request over HTTPS| BotServer["TG-BOT-SERVER (aiogram 3)"]
+    BotServer -->|Telegram Bot API response over HTTPS| User
     
     subgraph Secure Messaging Mesh
-        BotServer <-->|TLS 1.3| Broker[Mosquitto MQTT Broker]
+        BotServer -->|TLS 1.3 commands and subscriptions| Broker["Mosquitto MQTT Broker"]
+        Broker -->|TLS 1.3 status and results| BotServer
     end
 
-    subgraph Endpoints [Managed Devices]
-        Broker <-->|HMAC-SHA256 + AES-256-GCM| WDS[XGENT-WDS<br/>Windows Endpoint Agent]
-        Broker <-->|HMAC-SHA256 + AES-256-GCM| MCS[XGENT-MCS<br/>macOS Endpoint Agent]
-        Broker <-->|HMAC-SHA256 + AES-256-GCM| Guardian[Guard Keeper<br/>Windows/macOS Supervisor]
+    subgraph Endpoints[Managed Devices]
+        Broker -->|HMAC-SHA256 and AES-256-GCM commands| WDS["XGENT-WDS - Windows Endpoint Agent"]
+        WDS -->|HMAC-SHA256 and AES-256-GCM telemetry| Broker
+        Broker -->|HMAC-SHA256 and AES-256-GCM commands| MCS["XGENT-MCS - macOS Endpoint Agent"]
+        MCS -->|HMAC-SHA256 and AES-256-GCM telemetry| Broker
+        Broker -->|HMAC-SHA256 and AES-256-GCM commands| Guardian["Guard Keeper - Windows/macOS Supervisor"]
+        Guardian -->|HMAC-SHA256 and AES-256-GCM status| Broker
     end
 
     classDef server fill:#2b3a42,stroke:#4f5d75,stroke-width:2px,color:#fff;
