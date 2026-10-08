@@ -286,6 +286,69 @@ def _command_available(name: str, fallback_paths: tuple[str, ...]) -> bool:
     return bool(shutil.which(name) or any(Path(path).is_file() for path in fallback_paths))
 
 
+def _shell_approval_runtime(client):
+    """Load the separate Ed25519 verifier and durable replay store lazily."""
+    try:
+        if not getattr(sys, "frozen", False):
+            shared_dir = str(Path(__file__).resolve().parent)
+            if not sys.path or sys.path[0] != shared_dir:
+                if shared_dir in sys.path:
+                    sys.path.remove(shared_dir)
+                sys.path.insert(0, shared_dir)
+            for module_name in ("command_signing", "command_replay"):
+                loaded = sys.modules.get(module_name)
+                loaded_path = getattr(loaded, "__file__", None)
+                expected_path = Path(shared_dir) / f"{module_name}.py"
+                if loaded_path and Path(loaded_path).resolve() != expected_path.resolve():
+                    sys.modules.pop(module_name, None)
+        signing = importlib.import_module("command_signing")
+        replay = importlib.import_module("command_replay")
+        ledger = getattr(client, "_command_replay_ledger", None)
+        if ledger is None:
+            ledger = replay.CommandReplayLedger()
+            client._command_replay_ledger = ledger
+        return signing, ledger
+    except Exception:
+        return None, None
+
+
+def _command_approval_protocol_enabled(client) -> bool:
+    """Advertise schema 1 only when its public keyset and replay store are usable."""
+    signing, ledger = _shell_approval_runtime(client)
+    if signing is None or ledger is None:
+        return False
+    try:
+        return signing.trusted_command_keys_ready() and ledger.ensure_available(now=int(time.time()))
+    except Exception:
+        return False
+
+
+def _reserve_shell_approval(client, payload: dict) -> bool:
+    """Verify exact command bytes and persist the signed request ID before execution."""
+    if type(payload) is not dict:
+        return False
+    command = payload.get("command")
+    envelope = payload.get("approval")
+    if not isinstance(command, str) or type(envelope) is not dict:
+        return False
+    signing, ledger = _shell_approval_runtime(client)
+    if signing is None or ledger is None:
+        return False
+    try:
+        now = int(time.time())
+        verified = signing.verify_approved_command(
+            envelope,
+            command=command,
+            expected_device_id=DEVICE_ID,
+            now=now,
+        )
+        if verified is None:
+            return False
+        return ledger.reserve(verified["request_id"], verified["expires_at"], now=now)
+    except Exception:
+        return False
+
+
 def _detect_feature_status() -> dict[str, str]:
     """Report prerequisites only; never claim a live hardware/permission test."""
     statuses = {
@@ -936,6 +999,8 @@ class XgentClient:
             "release_update_ready": trusted_release_keys_ready() and not getattr(sys, "frozen", False),
             "status": status,
         }
+        if _command_approval_protocol_enabled(self):
+            payload["command_approval_protocol"] = 1
         body = encrypt_payload(payload) if ENCRYPT_PAYLOAD else payload
         envelope = sign_message(body)
         self._client.publish(f"{MQTT_PREFIX}/{DEVICE_ID}/status", json.dumps(envelope, ensure_ascii=False), qos=1)
@@ -1281,8 +1346,16 @@ class XgentClient:
             })
 
     def _do_shell(self, payload: dict) -> None:
-        cmd = (payload.get("command") or "").strip()
-        if not cmd: return
+        if not _reserve_shell_approval(self, payload):
+            self._publish_response("shell", {
+                "type": "shell", "device_id": DEVICE_ID, "ok": False,
+                "error": "approval_invalid_or_replayed", "returncode": -1,
+            })
+            log.warning("Shell request rejected by approval or replay guard")
+            return
+        cmd = payload["command"]
+        if not cmd.strip():
+            return
         timeout_s = int(payload.get("timeout", 20))
         if timeout_s <= 0 or timeout_s > 60: timeout_s = 20
         try:
@@ -1299,7 +1372,7 @@ class XgentClient:
 
     def _do_capabilities(self, payload: dict) -> None:
         feature_status = _detect_feature_status()
-        self._publish_response("capabilities", {
+        response = {
             "type": "capabilities", "device_id": DEVICE_ID, "platform": PLATFORM,
             "version": VERSION, "hostname": socket.gethostname(),
             "commands": sorted(SUPPORTED_COMMANDS),
@@ -1314,7 +1387,10 @@ class XgentClient:
             },
             "feature_status": feature_status,
             **_capability_snapshot(feature_status),
-        })
+        }
+        if _command_approval_protocol_enabled(self):
+            response["command_approval_protocol"] = 1
+        self._publish_response("capabilities", response)
 
     def _do_lock_screen(self, payload: dict) -> None:
         subprocess.run(["pmset", "displaysleepnow"], check=False)

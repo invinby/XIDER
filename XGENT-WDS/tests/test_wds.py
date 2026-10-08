@@ -565,6 +565,9 @@ def test_shell_routing_uses_capture(client, monkeypatch):
         return r
 
     monkeypatch.setattr(wds.subprocess, "run", fake_run)
+    # Exercise the subprocess/result path independently; signature and replay
+    # rejection are covered by test_shell_approval_gate.py.
+    monkeypatch.setattr(wds, "_reserve_shell_approval", lambda _client, _payload: True)
     client._dispatch({"type": "shell", "command": "whoami", "id": "s1"})
     topics = _wait_for_topic(client, "/shell")
     assert captured["cmd"] == "whoami"
@@ -580,6 +583,7 @@ def test_shell_timeout_reports_error(client, monkeypatch):
     def fake_run(*a, **kw):
         raise wds.subprocess.TimeoutExpired(cmd="x", timeout=20)
     monkeypatch.setattr(wds.subprocess, "run", fake_run)
+    monkeypatch.setattr(wds, "_reserve_shell_approval", lambda _client, _payload: True)
     client._dispatch({"type": "shell", "command": "sleep 999"})
     topics = _wait_for_topic(client, "/shell")
     payload = next(p for t, p in topics if t.endswith("/shell"))

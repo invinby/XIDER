@@ -250,3 +250,11 @@ def verify_approved_command(
         return payload
     except (InvalidSignature, TypeError, ValueError, UnicodeError, binascii.Error):
         return None
+
+
+def trusted_command_keys_ready() -> bool:
+    """Return whether a valid public-only command keyset is configured."""
+    try:
+        return bool(_decode_keyset())
+    except (TypeError, ValueError, UnicodeError, binascii.Error):
+        return False

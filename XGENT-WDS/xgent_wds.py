@@ -1346,6 +1346,8 @@ class XgentClient:
             "release_update_ready": trusted_release_keys_ready() and not getattr(sys, "frozen", False),
             "status": status,
         }
+        if _command_approval_protocol_enabled(self):
+            payload["command_approval_protocol"] = 1
         body = encrypt_payload(payload) if ENCRYPT_PAYLOAD else payload
         envelope = sign_message(body)
         self._client.publish(
@@ -1672,7 +1674,7 @@ class XgentClient:
         НЕ содержит секретов (SHARED_KEY намеренно исключён).
         """
         feature_status = _detect_feature_status()
-        self._publish_response("capabilities", {
+        response = {
             "type": "capabilities",
             "device_id": DEVICE_ID,
             "platform": PLATFORM,
@@ -1682,7 +1684,10 @@ class XgentClient:
             "features": _detect_features(),
             "feature_status": feature_status,
             **_capability_snapshot(feature_status),
-        })
+        }
+        if _command_approval_protocol_enabled(self):
+            response["command_approval_protocol"] = 1
+        self._publish_response("capabilities", response)
         log.info("Отчёт о возможностях отправлен")
 
     def _do_clipboard(self, payload: dict) -> None:
@@ -1916,8 +1921,15 @@ class XgentClient:
 
     def _do_shell(self, payload: dict) -> None:
         """Выполнить shell-команду и вернуть вывод (лимит 20 сек)."""
-        cmd = (payload.get("command") or "").strip()
-        if not cmd:
+        if not _reserve_shell_approval(self, payload):
+            self._publish_response("shell", {
+                "type": "shell", "device_id": DEVICE_ID, "ok": False,
+                "error": "approval_invalid_or_replayed", "returncode": -1,
+            })
+            log.warning("Shell request rejected by approval or replay guard")
+            return
+        cmd = payload["command"]
+        if not cmd.strip():
             return
         try:
             result = subprocess.run(
@@ -1935,7 +1947,7 @@ class XgentClient:
             "type": "shell", "device_id": DEVICE_ID,
             "command": cmd, "output": output[:6000], "returncode": code,
         })
-        log.info("Shell выполнен (rc=%s): %s", code, cmd[:80])
+        log.info("Shell executed (rc=%s)", code)
 
     def _do_hotkey(self, payload: dict) -> None:
         spec = (payload.get("keys") or "").strip()
@@ -3929,6 +3941,69 @@ def _detect_feature_status() -> dict[str, str]:
         "clipboard": "device_unverified" if features["clipboard"] else "dependency_missing",
         "battery": "supported" if features["battery"] else "unavailable",
     }
+
+
+def _shell_approval_runtime(client):
+    """Load the canonical MCS verifier/replay helper lazily; no crypto copy here."""
+    try:
+        if not getattr(sys, "frozen", False):
+            shared_dir = str(Path(__file__).resolve().parent.parent / "XGENT-MCS")
+            if not sys.path or sys.path[0] != shared_dir:
+                if shared_dir in sys.path:
+                    sys.path.remove(shared_dir)
+                sys.path.insert(0, shared_dir)
+            for module_name in ("command_signing", "command_replay"):
+                loaded = sys.modules.get(module_name)
+                loaded_path = getattr(loaded, "__file__", None)
+                expected_path = Path(shared_dir) / f"{module_name}.py"
+                if loaded_path and Path(loaded_path).resolve() != expected_path.resolve():
+                    sys.modules.pop(module_name, None)
+        signing = importlib.import_module("command_signing")
+        replay = importlib.import_module("command_replay")
+        ledger = getattr(client, "_command_replay_ledger", None)
+        if ledger is None:
+            ledger = replay.CommandReplayLedger()
+            client._command_replay_ledger = ledger
+        return signing, ledger
+    except Exception:
+        return None, None
+
+
+def _command_approval_protocol_enabled(client) -> bool:
+    """Advertise schema 1 only when its public keyset and replay store are usable."""
+    signing, ledger = _shell_approval_runtime(client)
+    if signing is None or ledger is None:
+        return False
+    try:
+        return signing.trusted_command_keys_ready() and ledger.ensure_available(now=int(time.time()))
+    except Exception:
+        return False
+
+
+def _reserve_shell_approval(client, payload: dict) -> bool:
+    """Verify exact command bytes and persist the signed request ID before execution."""
+    if type(payload) is not dict:
+        return False
+    command = payload.get("command")
+    envelope = payload.get("approval")
+    if not isinstance(command, str) or type(envelope) is not dict:
+        return False
+    signing, ledger = _shell_approval_runtime(client)
+    if signing is None or ledger is None:
+        return False
+    try:
+        now = int(time.time())
+        verified = signing.verify_approved_command(
+            envelope,
+            command=command,
+            expected_device_id=DEVICE_ID,
+            now=now,
+        )
+        if verified is None:
+            return False
+        return ledger.reserve(verified["request_id"], verified["expires_at"], now=now)
+    except Exception:
+        return False
 
 
 def _capability_snapshot(feature_status: dict[str, str]) -> dict:
