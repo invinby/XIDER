@@ -37,6 +37,8 @@ MAX_FILE_PUT_B64_CHARS = 4 * ((MAX_FILE_PUT_BYTES + 2) // 3)
 MAX_SCREENSHOT_BYTES = 30 * 1024 * 1024
 SCREENSHOT_TIMEOUT = 10.0
 _SCREENSHOT_CAPTURE_LOCK = threading.Lock()
+_OPEN_URL_OPERATION_TTL_SEC = 600.0
+_OPEN_URL_OPERATION_LIMIT = 256
 
 
 def _bounded_screen_grab():
@@ -113,8 +115,8 @@ def _validated_open_url(payload: dict) -> tuple[str, int]:
     if port is not None and not 1 <= port <= 65535:
         raise ValueError("URL port is invalid")
     count = payload.get("count", 1)
-    if type(count) is not int or not 1 <= count <= 5:
-        raise ValueError("Open count must be an integer from 1 to 5")
+    if type(count) is not int or count not in {1, 2, 3, 5}:
+        raise ValueError("Open count must be one of 1, 2, 3, or 5")
     return url, count
 
 
@@ -947,6 +949,8 @@ class XgentClient:
         )
         self._standby = False
         self._command_context = threading.local()
+        self._open_url_operations: dict[str, dict] = {}
+        self._open_url_operations_lock = threading.Lock()
         self._handlers = {
             "open_url": self._do_open_url,
             "notify": self._do_notify,
@@ -1208,10 +1212,105 @@ class XgentClient:
             log.warning("Неизвестная команда: %s", action)
             self._publish_ack(action or "?", "error", detail="unknown_command", cmd_id=cmd_id)
             return
+        if action == "open_url":
+            operation_state, cached_result = self._claim_open_url_operation(payload)
+            if operation_state == "pending":
+                self._publish_ack(action, "received", cmd_id=cmd_id)
+                return
+            if operation_state == "complete":
+                self._publish_response("output", cached_result)
+                self._publish_ack(
+                    action,
+                    "ok" if cached_result.get("ok") is True else "error",
+                    cmd_id=cmd_id,
+                )
+                return
+            if operation_state == "conflict":
+                self._publish_response("output", {
+                    "type": "open_url", "device_id": DEVICE_ID, "id": cmd_id,
+                    "ok": False, "requested_count": payload.get("count"),
+                    "accepted_count": 0,
+                    "detail": "Request id was reused with different URL parameters",
+                })
+                self._publish_ack(action, "error", detail="operation_id_conflict", cmd_id=cmd_id)
+                return
+            if operation_state == "full":
+                self._publish_response("output", {
+                    "type": "open_url", "device_id": DEVICE_ID, "id": cmd_id,
+                    "ok": False, "requested_count": payload.get("count", 1),
+                    "accepted_count": 0,
+                    "detail": "operation_cache_full",
+                })
+                self._publish_ack(action, "error", detail="operation_cache_full", cmd_id=cmd_id)
+                return
         log.info("Выполняю команду: %s", action)
         # Подтверждение получения — часть протокола acknowledgement.
         self._publish_ack(action, "received", cmd_id=cmd_id)
         self._run_threaded(action, cmd_id, handler, payload)
+
+    def _open_url_signature(self, payload: dict) -> str:
+        try:
+            return json.dumps(
+                [payload.get("url"), payload.get("count", 1)],
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        except (TypeError, ValueError):
+            return repr((payload.get("url"), payload.get("count", 1)))
+
+    def _claim_open_url_operation(self, payload: dict) -> tuple[str, dict | None]:
+        """Reserve one MQTT command id for an identical open_url request."""
+        cmd_id = payload.get("id")
+        if not isinstance(cmd_id, str) or not cmd_id or len(cmd_id) > 128:
+            return "new", None
+        signature = self._open_url_signature(payload)
+        now = time.monotonic()
+        with self._open_url_operations_lock:
+            for old_id, entry in list(self._open_url_operations.items()):
+                if (
+                    entry.get("result") is not None
+                    and now - entry["updated_at"] >= _OPEN_URL_OPERATION_TTL_SEC
+                ):
+                    self._open_url_operations.pop(old_id, None)
+            entry = self._open_url_operations.get(cmd_id)
+            if entry is not None:
+                if entry["signature"] != signature:
+                    return "conflict", None
+                entry["updated_at"] = now
+                result = entry.get("result")
+                return ("complete", dict(result)) if result is not None else ("pending", None)
+            if len(self._open_url_operations) >= _OPEN_URL_OPERATION_LIMIT:
+                completed_ids = [
+                    old_id for old_id, old_entry in self._open_url_operations.items()
+                    if old_entry.get("result") is not None
+                ]
+                if not completed_ids:
+                    return "full", None
+                oldest_id = min(
+                    completed_ids,
+                    key=lambda key: self._open_url_operations[key]["updated_at"],
+                )
+                self._open_url_operations.pop(oldest_id, None)
+            self._open_url_operations[cmd_id] = {
+                "signature": signature,
+                "updated_at": now,
+                "result": None,
+            }
+        return "new", None
+
+    def _remember_open_url_result(self, payload: dict, result: dict) -> None:
+        cmd_id = payload.get("id")
+        if not isinstance(cmd_id, str) or not cmd_id:
+            cmd_id = getattr(self._command_context, "cmd_id", None)
+        if not isinstance(cmd_id, str) or not cmd_id:
+            return
+        signature = self._open_url_signature(payload)
+        with self._open_url_operations_lock:
+            entry = self._open_url_operations.get(cmd_id)
+            if entry is not None and entry["signature"] == signature:
+                entry["result"] = dict(result)
+                entry["updated_at"] = time.monotonic()
 
     def _run_threaded(self, action, cmd_id, func, payload) -> None:
         """Запускает обработчик в потоке, отправляет ack ok/error + логирует."""
@@ -1300,12 +1399,51 @@ class XgentClient:
 
     # ---------- действия ----------
 
-    def _do_open_url(self, payload: dict) -> None:
-        url, count = _validated_open_url(payload)
+    def _do_open_url(self, payload: dict) -> dict:
+        cmd_id = payload.get("id") or getattr(self._command_context, "cmd_id", None)
+        try:
+            url, count = _validated_open_url(payload)
+        except ValueError as exc:
+            result = {
+                "type": "open_url", "device_id": DEVICE_ID, "ok": False,
+                "requested_count": payload.get("count", 1), "accepted_count": 0,
+                "detail": str(exc)[:200],
+            }
+            if isinstance(cmd_id, str) and cmd_id:
+                result["id"] = cmd_id
+            self._remember_open_url_result(payload, result)
+            self._publish_response("output", result)
+            raise
+
+        accepted_count = 0
+        failure_detail = None
         for _ in range(count):
-            if webbrowser.open_new_tab(url) is False:
-                raise RuntimeError("Default browser refused the URL")
-        self._notify_text(f"Открыто запросов: {count} · {url}")
+            try:
+                accepted = webbrowser.open_new_tab(url)
+            except Exception:
+                failure_detail = "Default browser failed to accept a launch request"
+                break
+            if accepted is not True:
+                failure_detail = "Default browser did not confirm accepting a launch request"
+                break
+            accepted_count += 1
+        result = {
+            "type": "open_url", "device_id": DEVICE_ID,
+            "ok": accepted_count == count,
+            "url": url,
+            "requested_count": count,
+            "accepted_count": accepted_count,
+        }
+        if isinstance(cmd_id, str) and cmd_id:
+            result["id"] = cmd_id
+        if failure_detail:
+            result["detail"] = failure_detail
+        self._remember_open_url_result(payload, result)
+        self._publish_response("output", result)
+        if failure_detail:
+            raise RuntimeError(failure_detail)
+        self._notify_text(f"Принято браузером к запуску: {accepted_count} из {count} · {url}")
+        return result
 
     def _do_notify(self, payload: dict) -> None:
         self._notify_text(payload.get("text", ""))

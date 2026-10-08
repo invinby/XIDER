@@ -2362,7 +2362,7 @@ FUN_RESPONSE_TYPES = {
     # Файлы и папки
     "dir_list", "find_file", "path_open", "file_put", "file_del",
     # Сеть и система
-    "ext_ip", "wifi_info", "usb_devices", "netstat", "startup_list",
+    "open_url", "ext_ip", "wifi_info", "usb_devices", "netstat", "startup_list",
     "env_get", "net_wifi_passwords", "net_bluetooth_list",
     "storage_smart", "sys_installed_apps", "sys_history_cmd",
     # Управление вводом и дисплей
@@ -4047,8 +4047,57 @@ def _url_count_state_matches(current_state) -> bool:
     return current_state == Form.wait_url_count.state or current_state is Form.wait_url_count
 
 
+def _open_url_result_text(result: dict | None, *, command_id: str, target: str, url: str, count: int) -> str:
+    """Separate MQTT publish acceptance from browser launch-request acceptance."""
+    prefix = (
+        f"✅ MQTT принял команду для <b>{html.escape(target_label(target))}</b> "
+        f"· ID <code>{html.escape(command_id)}</code>"
+    )
+    if not isinstance(result, dict) or result.get("type") != "open_url" or result.get("id") != command_id:
+        return (
+            f"{prefix}\nФактический результат браузера не получен; число принятых "
+            f"запросов неизвестно. Ссылка: <code>{html.escape(url)}</code>"
+        )
+    accepted_count = result.get("accepted_count")
+    requested_count = result.get("requested_count")
+    if (
+        type(accepted_count) is not int
+        or not 0 <= accepted_count <= count
+        or requested_count != count
+    ):
+        return (
+            f"{prefix}\nАгент прислал некорректный результат; число принятых браузером "
+            f"запросов неизвестно. Ссылка: <code>{html.escape(url)}</code>"
+        )
+    text = (
+        f"{prefix}\nБраузер принял к запуску {accepted_count} из {count} запросов. "
+        f"Ссылка: <code>{html.escape(url)}</code>"
+    )
+    detail = str(result.get("detail") or "").strip()[:200]
+    return text + (f"\n<pre>{html.escape(detail)}</pre>" if detail else "")
+
+
 @router.callback_query(ReadOnlyFilter(), F.data.startswith("url:count:"))
 async def on_url_count_select(cq: CallbackQuery, state: FSMContext):
+    message = getattr(cq, "message", None)
+    if message is None:
+        return await _url_count_select_unlocked(cq, state)
+    key = (
+        int(cq.from_user.id) if cq.from_user else 0,
+        int(message.chat.id),
+        int(message.message_id),
+    )
+    if key in _ACTIVE_UI_COMMANDS:
+        await cq.answer(_lex("command_already_running"), show_alert=True)
+        return None
+    _ACTIVE_UI_COMMANDS.add(key)
+    try:
+        return await _url_count_select_unlocked(cq, state)
+    finally:
+        _ACTIVE_UI_COMMANDS.discard(key)
+
+
+async def _url_count_select_unlocked(cq: CallbackQuery, state: FSMContext):
     count_text = str(cq.data or "").rsplit(":", 1)[-1]
     if count_text not in {"1", "2", "3", "5"}:
         await cq.answer(_lex("url_invalid"), show_alert=True)
@@ -4068,27 +4117,36 @@ async def on_url_count_select(cq: CallbackQuery, state: FSMContext):
         await _replace_callback_message(cq, _lex("url_invalid"), reply_markup=back_to_device_kb())
         await cq.answer()
         return
+    count = int(count_text)
     if callback != "cmd:url" or not _device_action_still_allowed(user_id, callback, target):
         await state.clear()
         await _replace_callback_message(cq, _lex("input_access_revoked"), reply_markup=back_to_device_kb())
         await cq.answer()
         return
 
-    count = int(count_text)
-    if not publish("open_url", _target=target, url=url, count=count):
+    sent, command_id = publish_tracked("open_url", _target=target, url=url, count=count)
+    if not sent:
         await state.clear()
         await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
         await cq.answer()
         return
 
     await state.clear()
-    audit("url.open", user_id=user_id, target=target, count=count)
+    audit("url.open", user_id=user_id, target=target, count=count, command_id=command_id)
+    await cq.answer("Команда принята MQTT; жду ответ агента.")
+    result = await fun_text_collector.wait_for(target, "open_url", 15.0, command_id)
+    if not _device_action_still_allowed(user_id, callback, target):
+        await _replace_callback_message(
+            cq, _lex("action_result_hidden_after_revoke"), reply_markup=back_to_device_kb()
+        )
+        return
     await _replace_callback_message(
         cq,
-        _lex_html("url_multiple_request_sent", device=target_label(target), url=url, count=str(count)),
+        _open_url_result_text(
+            result, command_id=command_id, target=target, url=url, count=count,
+        ),
         reply_markup=back_to_device_kb(),
     )
-    await cq.answer()
 
 
 @router.callback_query(ReadOnlyFilter(), F.data == "url:cancel")

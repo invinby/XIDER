@@ -46,6 +46,8 @@ def _make_client():
     client._pending_command_subacks = set()
     client._command_subscriptions_failed = False
     client.on_stop_requested = None
+    client._responses = []
+    client._publish_response = lambda topic, payload: client._responses.append((topic, dict(payload))) or True
     return client
 
 

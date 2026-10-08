@@ -921,6 +921,7 @@ def test_url_input_waits_for_an_explicit_open_count_and_dispatches_selected_coun
     state = FakeState()
     shown = []
     published = []
+    waits = []
     monkeypatch.setattr(bot, "_pending_device_input_still_allowed", lambda *_args: True)
 
     async def replace_user(_message, text, reply_markup=None):
@@ -932,7 +933,23 @@ def test_url_input_waits_for_an_explicit_open_count_and_dispatches_selected_coun
     monkeypatch.setattr(bot, "_replace_user_card", replace_user)
     monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: True)
     monkeypatch.setattr(bot, "target_label", lambda target: target)
-    monkeypatch.setattr(bot, "publish", lambda action, **kwargs: published.append((action, kwargs)) or True)
+    monkeypatch.setattr(
+        bot, "publish_tracked",
+        lambda action, **kwargs: published.append((action, kwargs)) or (True, "open-operation-1"),
+    )
+    monkeypatch.setattr(bot, "publish", lambda *_args, **_kwargs: pytest.fail("URL flow must retain its operation id"))
+
+    async def wait_for(device_id, action_type, timeout, command_id):
+        waits.append((device_id, action_type, timeout, command_id))
+        return {
+            "type": "open_url",
+            "id": command_id,
+            "ok": True,
+            "requested_count": 3,
+            "accepted_count": 3,
+        }
+
+    monkeypatch.setattr(bot.fun_text_collector, "wait_for", wait_for)
     monkeypatch.setattr(bot, "_replace_callback_message", replace_callback)
 
     class Message:
@@ -955,7 +972,151 @@ def test_url_input_waits_for_an_explicit_open_count_and_dispatches_selected_coun
 
     asyncio.run(bot.on_url_count_select(Callback(), state))
     assert published == [("open_url", {"_target": "device-1", "url": "https://example.com/docs", "count": 3})]
+    assert waits and waits[0][:2] == ("device-1", "open_url")
+    assert waits[0][3] == "open-operation-1"
+    assert "3 из 3" in shown[-1][0]
+    assert "MQTT" in shown[-1][0]
     assert state.cleared
+
+
+def test_revalidates_revoked_grant(monkeypatch):
+    class FakeState:
+        def __init__(self):
+            self.current = bot.Form.wait_url_count
+            self.cleared = False
+
+        async def get_state(self):
+            return self.current
+
+        async def get_data(self):
+            allowed[0] = False
+            return {
+                "url": "https://example.com/docs",
+                "authorization_target": "device-1",
+                "authorization_callback": "cmd:url",
+            }
+
+        async def clear(self):
+            self.cleared = True
+
+    allowed = [True]
+    checks = []
+    shown = []
+    published = []
+    state = FakeState()
+    monkeypatch.setattr(
+        bot, "_device_action_still_allowed",
+        lambda *_args: checks.append(allowed[0]) or allowed[0],
+    )
+    monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: published.append((args, kwargs)))
+
+    async def replace(_cq, text, reply_markup=None):
+        shown.append(text)
+
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+
+    class Callback:
+        data = "url:count:3"
+        from_user = type("User", (), {"id": bot.ADMIN_ID})()
+
+        async def answer(self, *args, **kwargs):
+            pass
+
+    asyncio.run(bot.on_url_count_select(Callback(), state))
+
+    assert checks == [False]
+    assert published == []
+    assert shown[-1] == bot._lex("input_access_revoked")
+    assert state.cleared
+
+
+def test_duplicate_operation_id_launches_once(monkeypatch):
+    class FakeState:
+        def __init__(self):
+            self.current = bot.Form.wait_url_count
+            self.data = {
+                "url": "https://example.com/docs",
+                "authorization_target": "device-1",
+                "authorization_callback": "cmd:url",
+            }
+            self.cleared = False
+            self.data_reads = 0
+            self.first_data_read = asyncio.Event()
+            self.second_arrived = asyncio.Event()
+            self.release_data = asyncio.Event()
+
+        async def get_state(self):
+            return self.current
+
+        async def get_data(self):
+            self.data_reads += 1
+            if self.data_reads == 1:
+                self.first_data_read.set()
+            elif self.data_reads == 2:
+                self.second_arrived.set()
+            await self.release_data.wait()
+            return dict(self.data)
+
+        async def clear(self):
+            self.cleared = True
+            self.current = None
+
+    published = []
+    state = FakeState()
+    monkeypatch.setattr(bot, "_ACTIVE_UI_COMMANDS", set())
+    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: True)
+    monkeypatch.setattr(
+        bot, "publish_tracked",
+        lambda action, **kwargs: published.append((action, kwargs)) or (True, "same-operation-id"),
+    )
+    monkeypatch.setattr(bot, "publish", lambda *_args, **_kwargs: pytest.fail("URL flow must use tracked MQTT ids"))
+    monkeypatch.setattr(
+        bot.fun_text_collector,
+        "wait_for",
+        lambda *_args, **_kwargs: asyncio.sleep(0, result={
+            "type": "open_url", "id": "same-operation-id", "ok": True,
+            "requested_count": 1, "accepted_count": 1,
+        }),
+    )
+    monkeypatch.setattr(bot, "target_label", lambda target: target)
+
+    async def replace(*_args, **_kwargs):
+        pass
+
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+
+    class Callback:
+        def __init__(self):
+            self.data = "url:count:1"
+            self.from_user = type("User", (), {"id": bot.ADMIN_ID})()
+            self.state = state
+            self.message = type("Message", (), {
+                "chat": type("Chat", (), {"id": 1})(),
+                "message_id": 44,
+            })()
+            self.answers = []
+
+        async def answer(self, *args, **kwargs):
+            self.answers.append((args, kwargs))
+            self.state.second_arrived.set()
+
+    async def scenario():
+        first = Callback()
+        second = Callback()
+        first_task = asyncio.create_task(bot.on_url_count_select(first, state))
+        await state.first_data_read.wait()
+        second_task = asyncio.create_task(bot.on_url_count_select(second, state))
+        await asyncio.wait_for(state.second_arrived.wait(), 2)
+        state.release_data.set()
+        await asyncio.gather(first_task, second_task)
+        await bot.on_url_count_select(second, state)
+        return second
+
+    second = asyncio.run(scenario())
+
+    assert published == [("open_url", {"_target": "device-1", "url": "https://example.com/docs", "count": 1})]
+    assert second.answers[0] == ((bot._lex("command_already_running"),), {"show_alert": True})
+    assert second.answers[1] == ((bot._lex("url_request_expired"),), {"show_alert": True})
 
 
 def test_url_count_keyboard_is_bounded_and_saving_is_owner_only():
