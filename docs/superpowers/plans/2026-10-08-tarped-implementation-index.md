@@ -82,7 +82,7 @@
 
 Это только автоматический Windows-host прогон; Linux/macOS shell fixtures, физический Mac, Telegram live и VPS этим запуском не проверялись.
 
-Свежий контроль X-LEX перед реализацией: `TG-BOT-SERVER/xlex.py` совпадает с `origin/main` по Git blob (`bd97c4bdf337e129adcb7092bf423dce102fbcb2`) и имеет SHA-256 `A75B7235EC458636F297A5DABF8919D2EA19CC24EB94F42B7F2B81F9C3D86D28`; целевые тесты `python -m pytest -q TG-BOT-SERVER/tests/test_tarped.py TG-BOT-SERVER/tests/test_bot_ui.py -k xlex` — **15 passed, 176 deselected**. После реализации повторить сравнение Git blob, хэш и тот же набор тестов.
+Свежий контроль X-LEX перед реализацией: `TG-BOT-SERVER/xlex.py` совпадает с `origin/main` по Git blob (`bd97c4bdf337e129adcb7092bf423dce102fbcb2`) и имеет SHA-256 `1D5D9A179DCC7CC94234B907C0DE6069DC3AC9B0688A1705EB281119E9A87B23` в этом Windows checkout; целевые тесты `python -m pytest -q TG-BOT-SERVER/tests/test_tarped.py TG-BOT-SERVER/tests/test_bot_ui.py -k xlex` — **15 passed, 178 deselected**. После реализации повторить сравнение Git blob, хэш и тот же набор тестов.
 
 В продолжении 2026-10-08 отдельно прогнаны `tools/test_readme_mermaid.py` (**1 passed**) и `@mermaid-js/mermaid-cli` **12.0.0**: каждый README извлёк и отрендерил по одной Mermaid-диаграмме без ошибки. Это локальная проверка Mermaid-парсера, не подтверждение опубликованного GitHub-рендера.
 
