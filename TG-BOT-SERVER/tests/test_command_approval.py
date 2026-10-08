@@ -252,12 +252,29 @@ def test_nonce_is_random_and_not_reused_for_pending_requests():
 @pytest.mark.parametrize(
     ("field", "replacement"),
     [
+        ("request_id", "replacement-request"),
+        ("requester_id", REQUESTER_ID + 1),
         ("owner_id", OWNER_ID + 1),
         ("device_id", "another-device"),
+        ("_command_text", "replacement command"),
         ("command_hash", "0" * 64),
+        ("created_at", 1_700_000_000),
+        ("expires_at", 1_700_000_120),
+        ("nonce", "replacement-nonce"),
         ("command_text", "replacement command"),
     ],
-    ids=["owner_id", "device_id", "command_hash", "command_text"],
+    ids=[
+        "request_id",
+        "requester_id",
+        "owner_id",
+        "device_id",
+        "_command_text",
+        "command_hash",
+        "created_at",
+        "expires_at",
+        "nonce",
+        "command_text",
+    ],
 )
 def test_pending_command_fields_cannot_be_reassigned(field, replacement):
     pending = create_request()
