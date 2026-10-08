@@ -30,7 +30,7 @@
 ---
 
 **Дата:** 2026-10-08  
-**Статус:** ждёт одобрения реализации  
+**Статус:** реализация одобрена; Task 1 принят ревью, готовится Task 2
 **Спецификация:** раздел 10 и security-требования раздела 14 [TARPED redesign](../specs/2026-10-08-tarped-product-redesign-design.md)  
 **Зависимость:** план бота/RBAC; до его приёмки не подключать новый маршрут к кнопке.
 
@@ -50,13 +50,15 @@
 
 **Files:** Create `TG-BOT-SERVER/command_approval.py` and `TG-BOT-SERVER/tests/test_command_approval.py`.
 
-**Interface:** `PendingCommand(request_id: str, requester_id: int, device_id: str, command_text: str, command_hash: str, created_at: int, expires_at: int, nonce: str)`. `command_text` is temporary process-memory state with `repr=False`, displayed verbatim only in the owner’s approval card, never serialized or written to audit. `create_pending(requester_id: int, device_id: str, command: str, now: int) -> PendingCommand` stores the exact UTF-8 text and computes its hash; `consume_pending(request_id: str, approver_id: int, device_id: str, command_hash: str, now: int) -> PendingCommand | None` atomically removes/returns it once; `cancel_pending(request_id: str, actor_id: int) -> bool`. Restart discards all pending requests, so old callback IDs fail closed.
+**Interface:** `PendingCommand(request_id: str, requester_id: int, owner_id: int, device_id: str, command_text: str, command_hash: str, created_at: int, expires_at: int, nonce: str)`. The object is immutable; `command_text` is temporary process-memory state, omitted from `repr`, public metadata, serialization, and audit. `create_pending(requester_id: int, owner_id: int, device_id: str, command: str, now: int) -> PendingCommand` stores the exact UTF-8 text and computes its hash. `consume_pending(request_id: str, approver_id: int, device_id: str, command_hash: str, now: int) -> PendingCommand | None` atomically removes/returns it once and checks the owner captured at creation. `cancel_pending(request_id: str, actor_id: int) -> bool` allows only the requester or captured owner. Binding `owner_id` is required so the model can distinguish owner cancellation from an arbitrary actor. Restart discards all pending requests, so old callback IDs fail closed.
 
-- [ ] Add tests for valid consume, unchanged command/hash, altered hash/device, expiry at 120 seconds, replay, cancel, restart invalidation, command absence from serialization/audit and concurrent double-consume.
-- [ ] Run `python -m pytest tests/test_command_approval.py -q` from `TG-BOT-SERVER`; expected: import/behavior failures.
-- [ ] Implement bounded state and cryptographic nonce; compute hash from exact UTF-8 command bytes.
-- [ ] Rerun; expected: one successful consume at most, all invalid state transitions rejected.
-- [ ] Commit the model and tests.
+- [x] Add tests for valid consume, unchanged command/hash, altered hash/device, expiry at 120 seconds, replay, cancel, restart invalidation, command absence from serialization/audit and concurrent double-consume.
+- [x] Run `python -m pytest tests/test_command_approval.py -q` from `TG-BOT-SERVER`; the baseline failed as expected before the model existed.
+- [x] Implement bounded state and cryptographic nonce; compute hash from exact UTF-8 command bytes.
+- [x] Rerun; at most one consume succeeds and invalid state transitions are rejected.
+- [x] Commit the model and tests (`9e6e632`), then add full-field immutability regression coverage (`6b1404d`, `ecda9f2`).
+
+Task 1 review accepted: fresh review of the model found no Critical/Important issue; fresh review of `ecda9f2` confirmed all nine stored slots plus the public `command_text` property are covered by reassignment tests. Verification: focused 25 passed; full bot suite 471 passed; X-LEX golden suite 34 passed. No live Telegram/MQTT/VPS action was performed.
 
 #### Task 2: Server-only signing and agent enforcement
 
