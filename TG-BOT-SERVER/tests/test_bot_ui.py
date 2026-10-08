@@ -10,9 +10,9 @@ import pytest
 
 import bot
 
-NINE_CATEGORIES = {
-    "cat:media", "cat:screen", "cat:input", "cat:system",
-    "cat:network", "cat:files", "cat:terminal", "cat:power", "cat:pranks",
+DEVICE_SECTIONS = {
+    "cat:system", "cat:screen", "cat:files", "cat:network", "cat:terminal",
+    "cat:power", "versions:device", "cat:device", "cat:pranks",
 }
 
 
@@ -1691,7 +1691,186 @@ def test_capabilities_text_stays_within_telegram_message_limit():
 def test_device_menu_has_nine_category_buttons(monkeypatch):
     _setup(monkeypatch, {"dev1": {"name": "Dev"}})
     cbs = _callback_data(bot.device_menu("dev1"))
-    assert NINE_CATEGORIES.issubset(set(cbs))
+    assert DEVICE_SECTIONS.issubset(set(cbs))
+    assert "cat:media" not in cbs
+    assert "cat:input" not in cbs
+
+
+def test_navigation_uses_the_approved_root_and_device_hierarchy(monkeypatch):
+    _setup(monkeypatch, {"dev1": {"name": "Dev", "os": "Windows"}})
+    monkeypatch.setattr(
+        bot, "get_user_role",
+        lambda user_id: {
+            100: bot.Role.OWNER,
+            200: bot.Role.USER,
+            300: bot.Role.GUEST,
+            400: bot.Role.BLOCKED,
+        }[user_id],
+    )
+    monkeypatch.setattr(bot, "SESSION", {"target": "dev1"})
+    monkeypatch.setattr(
+        bot.access_store, "can_use_callback",
+        lambda user_id, callback, _owner_id, target=None:
+            user_id == 100 or (
+                user_id == 200 and target == "dev1" and callback in {
+                    "cat:system", "cat:screen", "cat:files", "cat:network",
+                    "cat:terminal", "cat:power", "cat:device", "cat:pranks",
+                    "cmd:screenshot", "files:list", "cmd:apps", "proc:0", "dev:dev1",
+                }
+            ),
+    )
+
+    assert _callback_data(bot.main_menu(100)) == [
+        "menu:devices", "menu:server", "menu:admin", "menu:about",
+    ]
+    assert _callback_data(bot.main_menu(200)) == [
+        "menu:devices", "menu:server", "menu:about",
+    ]
+    assert _callback_data(bot.main_menu(300)) == [
+        "menu:guest_devices", "menu:server", "menu:about",
+    ]
+    assert _callback_data(bot.main_menu(400)) == []
+
+    expected_owner_sections = {
+        "cat:system", "cat:screen", "cat:files", "cat:network", "cat:terminal",
+        "cat:power", "versions:device", "cat:device", "cat:pranks",
+    }
+    owner_device = set(_callback_data(bot.device_menu("dev1", 100)))
+    assert expected_owner_sections <= owner_device
+    assert "dev:all" in _callback_data(bot.devices_menu(100))
+    assert "ev:menu" in _callback_data(bot.admin_menu())
+
+    user_device = set(_callback_data(bot.device_menu("dev1", 200)))
+    assert {
+        "cat:system", "cat:screen", "cat:files", "cat:network", "cat:terminal",
+        "cat:power", "cat:device", "cat:pranks",
+    } <= user_device
+    assert "versions:device" not in user_device
+    assert not any(callback.startswith(("devmg:", "admin:", "server:")) for callback in user_device)
+
+
+def test_non_owner_action_screens_require_the_current_device_action_grant(monkeypatch):
+    _setup(monkeypatch, {
+        "device-1": {"name": "Granted Mac", "os": "macOS", "favorites": ["screenshot"]},
+        "device-2": {"name": "Other PC", "os": "Windows"},
+    })
+    monkeypatch.setattr(bot, "SESSION", {"target": "device-1"})
+    monkeypatch.setattr(
+        bot, "get_user_role",
+        lambda user_id: bot.Role.OWNER if user_id == 100 else
+        bot.Role.GUEST if user_id == 300 else bot.Role.BLOCKED if user_id == 400 else bot.Role.USER,
+    )
+    grants = {"cmd:screenshot", "cat:media", "back:device", "menu:main"}
+    grant_devices = {"device-1"}
+
+    def can_use(user_id, callback, _owner_id, target=None):
+        if user_id == 100:
+            return True
+        return (
+            user_id == 200
+            and target in grant_devices
+            and (callback in grants or callback == "dev:device-1")
+        )
+
+    monkeypatch.setattr(bot.access_store, "can_use_callback", can_use)
+
+    media = set(_callback_data(bot.media_menu(200)))
+    assert "cmd:screenshot" in media
+    assert "cmd:webcam" not in media
+    assert "mic:opts" not in media
+    assert "cmd:sound" not in media
+    assert "dev:device-1" in _callback_data(bot.devices_menu(200))
+    assert "dev:device-2" not in _callback_data(bot.devices_menu(200))
+
+    # Revoking the action hides it on the next render, even while the selected
+    # device remains the same. A different target cannot inherit the grant.
+    grants.clear()
+    assert "cmd:screenshot" not in _callback_data(bot.media_menu(200))
+    monkeypatch.setattr(bot, "SESSION", {"target": "device-2"})
+    grants.add("cmd:screenshot")
+    assert "cmd:screenshot" not in _callback_data(bot.media_menu(200))
+    assert not any(
+        button.callback_data.startswith("cmd:")
+        for row in bot.media_menu(300).inline_keyboard for button in row
+    )
+    assert not any(
+        button.callback_data.startswith("cmd:")
+        for row in bot.media_menu(400).inline_keyboard for button in row
+    )
+
+
+def test_nightlight_is_hidden_and_direct_callback_rejected_on_macos(monkeypatch):
+    from types import SimpleNamespace
+
+    _setup(monkeypatch, {"mac1": {"name": "Mac", "os": "macOS 27"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "mac1"})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    published = []
+    answers = []
+
+    class FakeCollector:
+        async def wait_for(self, *args, **kwargs):
+            return {"ok": True, "text": "unexpected"}
+
+    class FakeCallback:
+        data = "cmd:nightlight"
+        from_user = SimpleNamespace(id=bot.ADMIN_ID)
+
+        async def answer(self, *args, **kwargs):
+            answers.append((args, kwargs))
+
+    monkeypatch.setattr(
+        bot, "publish_tracked",
+        lambda *args, **kwargs: published.append((args, kwargs)) or (True, "op-1"),
+    )
+    monkeypatch.setattr(bot.fun_text_collector, "wait_for", FakeCollector().wait_for)
+    monkeypatch.setattr(bot, "_replace_callback_message", lambda *args, **kwargs: asyncio.sleep(0))
+    assert "cmd:nightlight" not in _callback_data(bot.screen_menu("mac1"))
+
+    asyncio.run(bot.on_cmd_nightlight(FakeCallback()))
+
+    assert published == []
+    assert answers
+
+
+def test_granted_user_shell_confirm_cannot_publish_or_approve(monkeypatch):
+    from types import SimpleNamespace
+    from roles import AdminFilter, OwnerFilter
+    import roles
+
+    _setup(monkeypatch, {"device-1": {"name": "PC", "os": "Windows"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "device-1"})
+    monkeypatch.setattr(roles, "get_user_role", lambda user_id: bot.Role.USER if user_id == 200 else bot.Role.OWNER)
+    monkeypatch.setattr(
+        bot.access_store, "can_use_callback",
+        lambda user_id, callback, _owner_id, target=None:
+            user_id == 200 and target == "device-1" and callback == "cfm:shell",
+    )
+    published = []
+    rendered = []
+
+    class FakeCallback:
+        data = "cfm:shell"
+        from_user = SimpleNamespace(id=200)
+
+        async def answer(self, *args, **kwargs):
+            pass
+
+    async def replace(_cq, text, reply_markup=None):
+        rendered.append((text, reply_markup))
+
+    monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: published.append((args, kwargs)))
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+
+    callback = FakeCallback()
+    assert asyncio.run(AdminFilter()(callback)) is True
+    asyncio.run(bot.on_confirm_action(callback))
+    assert "shell:ok" not in _callback_data(rendered[-1][1])
+    assert asyncio.run(OwnerFilter()(callback)) is False
+
+    callback.data = "shell:ok"
+    assert asyncio.run(OwnerFilter()(callback)) is False
+    assert published == []
 
 
 def test_manual_install_is_owner_only_and_uses_published_one_line_commands(monkeypatch):
@@ -1701,6 +1880,10 @@ def test_manual_install_is_owner_only_and_uses_published_one_line_commands(monke
     monkeypatch.setattr(
         bot, "get_user_role",
         lambda user_id: bot.Role.OWNER if user_id == 100 else bot.Role.USER,
+    )
+    monkeypatch.setattr(
+        bot.access_store, "can_use_callback",
+        lambda user_id, _callback, _owner_id, _target=None: user_id == 100,
     )
     assert "install:manual" in _callback_data(bot.devices_menu(100))
     assert "install:manual" not in _callback_data(bot.devices_menu(200))
@@ -1806,9 +1989,8 @@ def test_primary_navigation_is_grouped_into_compact_dashboard_rows(monkeypatch):
         for row in bot.main_menu(bot.ADMIN_ID).inline_keyboard
     ]
     assert main_rows == [
-        ["menu:devices", "dev:all"],
-        ["menu:server", "ev:menu"],
-        ["menu:about", "menu:admin"],
+        ["menu:devices", "menu:server"],
+        ["menu:admin", "menu:about"],
     ]
 
     device_rows = [
@@ -1816,12 +1998,195 @@ def test_primary_navigation_is_grouped_into_compact_dashboard_rows(monkeypatch):
         for row in bot.device_menu("dev1").inline_keyboard
     ]
     assert device_rows[:5] == [
-        ["cat:media", "cat:screen"],
-        ["cat:input", "cat:system"],
-        ["cat:network", "cat:files"],
+        ["cat:system", "cat:screen"],
+        ["cat:files", "cat:network"],
         ["cat:terminal", "cat:power"],
-        ["cat:pranks", "cat:device"],
+        ["versions:device", "cat:device"],
+        ["cat:pranks", "cfm:stop"],
     ]
+    assert device_rows[-1] == ["menu:target", "menu:main"]
+
+
+def test_device_action_screens_keep_back_and_home_navigation(monkeypatch):
+    _setup(monkeypatch, {"device-1": {"name": "PC", "os": "Windows"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "device-1"})
+    builders = (
+        bot.screen_menu, bot.input_menu, bot.system_menu, bot.network_menu,
+        bot.files_menu, bot.terminal_menu, bot.power_menu, bot.power_menu_new,
+        bot.guardian_menu, bot.pranks_menu, bot.device_settings_menu,
+        bot.mic_options_menu, bot.vol_options_menu, bot.wallpaper_menu,
+        lambda: bot._favorites_kb("device-1", []),
+        lambda: bot.confirm_power_menu("shutdown"),
+    )
+
+    for builder in builders:
+        callbacks = set(_callback_data(builder()))
+        # Nested screens may preserve their established exact callback contract;
+        # their Back route leads to a parent screen that exposes Home.
+        assert callbacks & {"menu:main", "back:device", "cat:power"}, builder
+        assert callbacks.intersection({
+            "back:device", "menu:devices", "menu:target", "cat:screen",
+            "cat:media", "cat:power",
+        }), f"{builder} has no back route"
+
+
+def test_guest_navigation_shows_only_safe_device_and_server_overview_controls(monkeypatch):
+    _setup(monkeypatch, {
+        "device-1": {
+            "name": "Guest-visible PC", "os": "Windows", "version": "4.1.0",
+            "location": {"lat": 51.5, "lon": -0.1},
+        },
+    })
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.GUEST)
+
+    guest_devices = _callback_data(bot.guest_devices_menu())
+    guest_server = _callback_data(bot.server_menu(300))
+    overview = bot.server_overview_text(approval=True, connected=True)
+
+    assert guest_devices == ["guest:readonly", "menu:main"]
+    assert guest_server == ["menu:main"]
+    assert "51.5" not in overview and "-0.1" not in overview
+    assert not any(
+        callback.startswith(("cmd:", "files:", "server:", "versions:"))
+        for callback in [*guest_devices, *guest_server]
+    )
+
+
+def test_process_results_filter_kill_controls_and_keep_granted_pagination(monkeypatch):
+    from types import SimpleNamespace
+
+    _setup(monkeypatch, {"device-1": {"name": "PC", "os": "Windows"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "device-1"})
+    monkeypatch.setattr(bot, "get_user_role", lambda user_id: bot.Role.USER if user_id == 200 else bot.Role.OWNER)
+    monkeypatch.setattr(
+        bot.access_store, "can_use_callback",
+        lambda user_id, callback, _owner_id, target=None: (
+            user_id == 100 or (
+                user_id == 200 and target == "device-1" and (
+                    callback in {"proc:0", "back:device", "menu:main"}
+                    or callback == "proc:refresh"
+                    or callback == "proc:1"
+                )
+            )
+        ),
+    )
+    monkeypatch.setattr(bot, "LAST_PROCESSES", {
+        "device-1": {
+            "ts": time.time(),
+            "items": [{"pid": pid, "name": f"process-{pid}", "mem_percent": 1} for pid in range(10)],
+        },
+    })
+    rendered = []
+
+    class FakeCallback:
+        data = "proc:0"
+        from_user = SimpleNamespace(id=200)
+
+        async def answer(self, *args, **kwargs):
+            pass
+
+    async def replace(_cq, text, reply_markup=None):
+        rendered.append((text, reply_markup))
+
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    asyncio.run(bot.on_proc_page(FakeCallback()))
+
+    callbacks = set(_callback_data(rendered[-1][1]))
+    assert "proc:1" in callbacks
+    assert "proc:refresh" in callbacks
+    assert "back:device" in callbacks
+    assert "menu:main" in callbacks
+    assert not any(callback.startswith("killq:") for callback in callbacks)
+
+
+def test_process_refresh_rechecks_grant_immediately_before_publish(monkeypatch):
+    from types import SimpleNamespace
+
+    _setup(monkeypatch, {"device-1": {"name": "PC", "os": "Windows"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "device-1"})
+    checks = []
+    published = []
+    rendered = []
+
+    def still_allowed(user_id, callback, target):
+        checks.append((user_id, callback, target))
+        return len(checks) == 1
+
+    class FakeCallback:
+        data = "proc:refresh"
+        from_user = SimpleNamespace(id=200)
+
+        async def answer(self, *args, **kwargs):
+            pass
+
+    class FakeCollector:
+        def reset(self):
+            pass
+
+        async def wait(self, _timeout):
+            return {"top": []}
+
+    async def replace(_cq, text, reply_markup=None):
+        rendered.append((text, reply_markup))
+
+    monkeypatch.setattr(bot, "_device_action_still_allowed", still_allowed)
+    monkeypatch.setattr(bot, "processes_collector", FakeCollector())
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    monkeypatch.setattr(
+        bot.transport, "publish_command",
+        lambda *args, **kwargs: published.append((args, kwargs)) or True,
+    )
+
+    asyncio.run(bot.on_proc_page(FakeCallback()))
+
+    assert checks == [
+        (200, "proc:refresh", "device-1"),
+        (200, "proc:refresh", "device-1"),
+    ]
+    assert published == []
+    assert rendered
+
+
+def test_process_refresh_hides_results_if_grant_is_revoked_while_waiting(monkeypatch):
+    from types import SimpleNamespace
+
+    _setup(monkeypatch, {"device-1": {"name": "PC", "os": "Windows"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "device-1"})
+    checks = []
+    rendered = []
+
+    def still_allowed(user_id, callback, target):
+        checks.append((user_id, callback, target))
+        return len(checks) < 3
+
+    class FakeCallback:
+        data = "proc:refresh"
+        from_user = SimpleNamespace(id=200)
+
+        async def answer(self, *args, **kwargs):
+            pass
+
+    class FakeCollector:
+        def reset(self):
+            pass
+
+        async def wait(self, _timeout):
+            return {"top": [{"pid": 42, "name": "secret-process", "mem_percent": 1}]}
+
+    async def replace(_cq, text, reply_markup=None):
+        rendered.append((text, reply_markup))
+
+    monkeypatch.setattr(bot, "_device_action_still_allowed", still_allowed)
+    monkeypatch.setattr(bot, "processes_collector", FakeCollector())
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    monkeypatch.setattr(bot.transport, "publish_command", lambda *_args, **_kwargs: True)
+
+    asyncio.run(bot.on_proc_page(FakeCallback()))
+
+    assert checks == [(200, "proc:refresh", "device-1")] * 3
+    assert len(rendered) == 1
+    assert "secret-process" not in rendered[0][0]
+    assert bot._lex("action_result_hidden_after_revoke").lower() in rendered[0][0].lower()
 
 
 def test_admin_menu_pairs_access_audit_and_text_controls(monkeypatch):
@@ -1833,7 +2198,8 @@ def test_admin_menu_pairs_access_audit_and_text_controls(monkeypatch):
     assert admin_rows == [
         ["admin:users", "admin:audit"],
         ["admin:texts", "admin:style"],
-        ["menu:server", "menu:main"],
+        ["ev:menu", "menu:server"],
+        ["menu:main"],
     ]
 
 
@@ -3569,8 +3935,16 @@ def test_user_device_menu_only_shows_granted_devices_and_no_global_controls(monk
         lambda user_id: bot.Role.USER if user_id == 200 else bot.Role.OWNER,
     )
     monkeypatch.setattr(
-        bot.access_store, "get_user",
-        lambda user_id: {"permissions": {"devices": ["device-1"]}} if user_id == 200 else None,
+        bot.access_store, "can_use_callback",
+        lambda user_id, callback, _owner_id, target=None: (
+            user_id == 100
+            or (
+                user_id == 200
+                and callback in {"menu:devices", "menu:main", "back:device", "cmd:autorun_status"}
+                and target == "device-1"
+            )
+            or (user_id == 200 and callback == "dev:device-1" and target == "device-1")
+        ),
     )
     monkeypatch.setattr(bot, "SESSION", {"target": "device-1"})
 
@@ -3597,7 +3971,7 @@ def test_single_action_grants_filter_categories_and_submenus(monkeypatch):
     })
     monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.USER)
     monkeypatch.setattr(bot, "SESSION", {"target": "device-1"})
-    grants = {"cmd:screenshot", "cat:media", "back:device", "menu:main"}
+    grants = {"cmd:screenshot", "cat:screen", "back:device", "menu:main"}
     monkeypatch.setattr(
         bot.access_store, "can_use_callback",
         lambda _user_id, callback, _owner_id, _target: callback in grants,
@@ -3608,7 +3982,7 @@ def test_single_action_grants_filter_categories_and_submenus(monkeypatch):
     system_callbacks = _callback_data(bot.system_menu(200))
     power_callbacks = _callback_data(bot.power_menu_new(200))
 
-    assert "cat:media" in device_callbacks
+    assert "cat:screen" in device_callbacks
     assert not any(callback in device_callbacks for callback in ("cat:system", "cat:power"))
     assert "cmd:screenshot" in media_callbacks
     assert "cmd:webcam" not in media_callbacks
@@ -3622,6 +3996,56 @@ def test_single_action_grants_filter_categories_and_submenus(monkeypatch):
     assert "cmd:lock" in locked_power_callbacks
     assert "power:shutdown" not in locked_power_callbacks
     assert "power:reboot" not in locked_power_callbacks
+
+    # Legacy action submenus and confirmations must not leak guessed actions
+    # even when a user reaches them from a stale card or hand-crafted callback.
+    from contextvars import ContextVar
+    monkeypatch.setattr(bot, "CURRENT_TG_USER", ContextVar("ui_user", default=200))
+    assert "cmd:wallpaper_random_meme" not in _callback_data(bot.wallpaper_menu())
+    assert "fav:toggle:shutdown" not in _callback_data(bot._favorites_kb("device-1", []))
+    assert "shell:ok" not in _callback_data(bot.confirm_kb("shell:ok"))
+
+
+def test_url_count_screen_uses_the_fsm_bound_url_grant(monkeypatch):
+    from contextvars import ContextVar
+
+    _setup(monkeypatch, {"device-1": {"name": "PC", "os": "Windows"}})
+    monkeypatch.setattr(bot, "CURRENT_TG_USER", ContextVar("ui_user", default=200))
+    monkeypatch.setattr(bot, "SESSION", {"target": "device-1"})
+    monkeypatch.setattr(
+        bot, "get_user_role",
+        lambda user_id: bot.Role.OWNER if user_id == 100 else bot.Role.USER,
+    )
+    granted = True
+    monkeypatch.setattr(
+        bot.access_store, "can_use_callback",
+        lambda user_id, callback, _owner_id, target=None:
+            user_id == 100 or (
+                user_id == 200 and (
+                    callback == "menu:main"
+                    or (
+                        target == "device-1"
+                        and callback == "cmd:url"
+                        and granted
+                    )
+                )
+            ),
+    )
+
+    visible = set(_callback_data(bot.url_count_keyboard(
+        is_owner=False, user_id=200, target="device-1",
+    )))
+    assert {
+        "url:count:1", "url:count:2", "url:count:3", "url:count:5",
+        "url:cancel", "menu:main",
+    } <= visible
+
+    granted = False
+    revoked = set(_callback_data(bot.url_count_keyboard(
+        is_owner=False, user_id=200, target="device-1",
+    )))
+    assert "url:count:1" not in revoked
+    assert revoked == {"url:cancel", "menu:main"}
 
 
 def test_device_status_notices_confirm_transitions_without_heartbeat_starvation(monkeypatch):
@@ -3744,7 +4168,7 @@ def test_custom_ui_mode_changes_admin_label_and_main_menu(monkeypatch):
     markup = bot.main_menu(bot.ADMIN_ID)
     texts = [b.text for row in markup.inline_keyboard for b in row]
     assert "Устройства · кто тут живой?" in texts
-    assert "Все устройства · полный состав" in texts
+    assert "Серверная · сердце этой штуки" in texts
 
 
 def test_start_sends_visible_card_before_deleting_old_one(monkeypatch):

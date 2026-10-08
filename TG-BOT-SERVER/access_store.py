@@ -43,9 +43,52 @@ USER_NAVIGATION_CALLBACKS = frozenset({"menu:main", "menu:about", "menu:devices"
 # individual actions. Entering a category must never imply permission for the
 # other buttons inside it; the UI filters those buttons separately.
 CATEGORY_REQUIRED_GRANTS = {
-    "cat:media": frozenset({"cmd:screenshot"}),
-    "cat:system": frozenset({"cmd:status", "cmd:sysinfo", "cmd:battery"}),
-    "cat:power": frozenset({"cmd:lock"}),
+    "cat:media": frozenset({
+        "cmd:screenshot", "cmd:webcam", "mic:opts", "cmd:sound", "vol:opts", "cmd:volume",
+    }),
+    "cat:screen": frozenset({
+        "cmd:screenshot", "cmd:webcam", "mic:opts", "cmd:sound", "vol:opts", "cmd:volume",
+        "cmd:geo_location", "fun:screenoff", "fun:screensaver", "menu:wallpaper",
+        "cmd:brightness", "cmd:nightlight",
+        "cmd:rotate", "cmd:wallpaper_random_meme", "cmd:wallpaper_photo_guide", "fun:wallpaper",
+        "cmd:prank_restore_wallpaper", "rotate:0", "rotate:90", "rotate:180", "rotate:270",
+    }),
+    "cat:input": frozenset({
+        "cmd:clipboard", "cmd:clipset", "fun:type", "fun:hotkey", "prank:swapmouse", "prank:crazycursor",
+    }),
+    "cat:system": frozenset({
+        "cmd:status", "cmd:sysinfo", "cmd:battery", "cmd:sys_uptime", "cmd:disks", "cmd:smart",
+        "cmd:sys_clean_temp", "cmd:apps", "cmd:capabilities",
+    }),
+    "cat:network": frozenset({
+        "fun:extip", "cmd:net_ping", "cmd:network", "cmd:wifi", "cmd:usb", "cmd:bluetooth",
+        "cmd:netstat", "cmd:apps", "cmd:url",
+    }),
+    "menu:wallpaper": frozenset({
+        "cmd:wallpaper_random_meme", "cmd:wallpaper_photo_guide", "fun:wallpaper",
+        "cmd:prank_restore_wallpaper",
+    }),
+    "cat:files": frozenset({"files:list", "files:find", "files:get", "files:put", "files:del", "files:open", "cmd:disks"}),
+    "cat:terminal": frozenset({
+        "proc:0", "cmd:prockillname", "cfm:shell", "cmd:open_app", "cmd:startup", "cmd:services",
+        "cmd:cmdhistory", "hist:0", "rep:0",
+    }),
+    "cat:power": frozenset({
+        "cmd:lock", "power:sleep", "power:reboot", "power:shutdown", "cmd:wol", "cmd:autorun_status",
+        "cmd:autorun_enable", "cmd:autorun_disable", "cmd:standby_sleep", "cmd:wake", "cmd:guardian_menu",
+        "cfm:stop", "guardianstop:ok", "stop:ok", "sleep:ok",
+    }),
+    "cat:device": frozenset({
+        "fav:menu", "hist:0", "cmd:autorun_status", "cmd:autorun_enable", "cmd:autorun_disable",
+        "cmd:capabilities",
+    }),
+}
+
+CATEGORY_REQUIRED_GRANT_PREFIXES = {
+    # Dynamic prank names are an existing wire namespace. Pagination is read-only
+    # navigation within that exact grant family, never an additional privilege.
+    "cat:pranks": ("prank:", "cmd:prank_"),
+    "prankpage:": ("prank:", "cmd:prank_"),
 }
 
 # `full_device` expands only into callbacks that operate on the currently
@@ -376,5 +419,19 @@ def can_use_callback(user_id: int, callback: str | None, owner_id: int,
         return False
     if "full_device" in callbacks or data in callbacks:
         return True
+    if data.startswith("proc:"):
+        proc_action = data.split(":", 1)[1]
+        if (proc_action == "refresh" or proc_action.isdigit()) and "proc:0" in callbacks:
+            return True
     required_grants = CATEGORY_REQUIRED_GRANTS.get(data)
-    return bool(required_grants and callbacks.intersection(required_grants))
+    if required_grants and callbacks.intersection(required_grants):
+        return True
+    for category_or_prefix, required_prefixes in CATEGORY_REQUIRED_GRANT_PREFIXES.items():
+        if data == category_or_prefix or data.startswith(category_or_prefix):
+            if any(
+                grant.startswith(prefix)
+                for grant in callbacks
+                for prefix in required_prefixes
+            ):
+                return True
+    return False

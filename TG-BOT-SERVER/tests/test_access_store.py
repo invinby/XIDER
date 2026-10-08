@@ -91,6 +91,39 @@ def test_category_access_comes_only_from_granted_action_in_same_device(monkeypat
     assert store.can_use_callback(200, "power:shutdown", 100, "laptop-a") is False
 
 
+def test_process_pagination_uses_the_process_list_grant_without_granting_kill(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    store.register_start(_user(200))
+    store.set_role(100, 200, store.Role.USER, 100)
+    store.toggle_device(100, 200, "laptop-a", 100)
+    store.toggle_callback(100, 200, "proc:0", 100)
+
+    assert store.can_use_callback(200, "proc:1", 100, "laptop-a") is True
+    assert store.can_use_callback(200, "proc:refresh", 100, "laptop-a") is True
+    assert store.can_use_callback(200, "proc:invalid", 100, "laptop-a") is False
+    assert store.can_use_callback(200, "killq:123", 100, "laptop-a") is False
+    assert store.can_use_callback(200, "proc:1", 100, "laptop-b") is False
+
+    store.set_blocked(100, 200, True, 100)
+    assert store.can_use_callback(200, "proc:1", 100, "laptop-a") is False
+
+
+def test_screen_category_and_wallpaper_entry_follow_their_action_grants(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    store.register_start(_user(200))
+    store.set_role(100, 200, store.Role.USER, 100)
+    store.toggle_device(100, 200, "laptop-a", 100)
+
+    store.toggle_callback(100, 200, "cmd:geo_location", 100)
+    assert store.can_use_callback(200, "cat:screen", 100, "laptop-a") is True
+    assert store.can_use_callback(200, "cmd:geo_location", 100, "laptop-a") is True
+    store.toggle_callback(100, 200, "cmd:apps", 100)
+    assert store.can_use_callback(200, "cat:network", 100, "laptop-a") is True
+
+    store.toggle_callback(100, 200, "cmd:wallpaper_random_meme", 100)
+    assert store.can_use_callback(200, "menu:wallpaper", 100, "laptop-a") is True
+
+
 def test_legacy_coowner_is_downgraded_and_cannot_be_granted(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     store.register_start(_user(200))

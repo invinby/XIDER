@@ -60,7 +60,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BufferedInputFile, CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import bot_settings
@@ -844,21 +844,20 @@ def main_menu(user_id: int | None = None):
     user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
     role = get_user_role(user_id)
     kb = InlineKeyboardBuilder()
+    if role == Role.BLOCKED:
+        return kb.as_markup()
     if role == Role.OWNER:
         kb.button(text=_lex("devices_button"), callback_data="menu:devices", style="primary")
-        kb.button(text=_nav("all_devices"), callback_data="dev:all", style="primary")
         kb.button(text=_lex("server_button"), callback_data="menu:server", style="primary")
-        kb.button(text=_nav("events"), callback_data="ev:menu", style="primary")
     elif role == Role.USER:
         kb.button(text=_lex("my_devices_button"), callback_data="menu:devices", style="primary")
         kb.button(text=_lex("server_overview_button"), callback_data="menu:server", style="primary")
     else:
         kb.button(text=_lex("guest_devices_button"), callback_data="menu:guest_devices", style="primary")
         kb.button(text=_lex("server_overview_button"), callback_data="menu:server", style="primary")
-    kb.button(text=_lex("about_button"), callback_data="menu:about", style="primary")
     if role == Role.OWNER:
         kb.button(text=_nav("admin"), callback_data="menu:admin", style="danger")
-    # Compact dashboard rows group devices, operations, then information/admin.
+    kb.button(text=_lex("about_button"), callback_data="menu:about", style="primary")
     kb.adjust(2)
     return kb.as_markup()
 
@@ -866,23 +865,38 @@ def main_menu(user_id: int | None = None):
 def _visible_device_items(user_id: int | None = None) -> dict[str, dict]:
     user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
     all_devices = devices.all()
-    role = get_user_role(user_id)
-    if role == Role.OWNER:
-        return all_devices
-    if role != Role.USER:
-        return {}
-    record = access_store.get_user(user_id) or {}
-    permitted = set((record.get("permissions") or {}).get("devices") or [])
-    return {device_id: info for device_id, info in all_devices.items() if device_id in permitted}
+    return {
+        device_id: info
+        for device_id, info in all_devices.items()
+        if access_store.can_use_callback(
+            user_id, f"dev:{device_id}", ADMIN_ID, device_id
+        )
+    }
+
+
+_UNSUPPORTED_ACTION_CALLBACKS_BY_OS = {
+    # macOS deliberately reports this action as unavailable: its agent has no
+    # stable public CLI for Night Shift/night-light control.
+    "cmd:nightlight": {"macos", "darwin"},
+}
+
+
+def _device_supports_callback(callback: str, target: str | None) -> bool:
+    if not target or target == "all":
+        return True
+    info = devices.get(target) or {}
+    os_name = str(info.get("os") or "").strip().lower()
+    unsupported_markers = _UNSUPPORTED_ACTION_CALLBACKS_BY_OS.get(callback, set())
+    return not any(marker in os_name for marker in unsupported_markers)
 
 
 def _callback_visible_to_user(callback: str, user_id: int | None = None) -> bool:
     """Render a device action only when the same server-side gate will allow it."""
     user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
-    if get_user_role(user_id) == Role.OWNER:
-        return True
-    return access_store.can_use_callback(
-        user_id, callback, ADMIN_ID, SESSION.get("target")
+    target = SESSION.get("target")
+    return (
+        access_store.can_use_callback(user_id, callback, ADMIN_ID, target)
+        and _device_supports_callback(callback, target)
     )
 
 
@@ -890,6 +904,53 @@ def _action_button(kb: InlineKeyboardBuilder, *, text: str, callback: str,
                    style: str = "primary", user_id: int | None = None) -> None:
     if _callback_visible_to_user(callback, user_id):
         kb.button(text=text, callback_data=callback, style=style)
+
+
+def _filter_device_keyboard(
+    markup: InlineKeyboardMarkup, user_id: int | None = None
+) -> InlineKeyboardMarkup:
+    """Fail-closed rendering for every action in a device-scoped keyboard.
+
+    Device submenu builders have legacy direct ``button`` calls; filtering the
+    completed markup ensures each action uses the same callback/device grant as
+    its AdminFilter handler. Public ``url:cancel`` remains a ReadOnlyFilter
+    escape from an input form.
+    """
+    user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
+    role = get_user_role(user_id)
+    rows = []
+    for row in markup.inline_keyboard:
+        visible = []
+        for button in row:
+            callback = button.callback_data
+            action_target = (
+                callback.split(":", 1)[1]
+                if callback and callback.startswith("dev:")
+                else SESSION.get("target")
+            )
+            if not callback:
+                visible.append(button)
+            elif callback == "url:cancel":
+                if role != Role.BLOCKED:
+                    visible.append(button)
+            elif callback.startswith("url:count:"):
+                target = SESSION.get("target")
+                if role == Role.OWNER or (
+                    target
+                    and target != "all"
+                    and access_store.can_use_callback(
+                        user_id, "cmd:url", ADMIN_ID, target
+                    )
+                ):
+                    visible.append(button)
+            elif access_store.can_use_callback(user_id, callback, ADMIN_ID, action_target) and (
+                not callback.startswith("cmd:")
+                or _device_supports_callback(callback, action_target)
+            ):
+                visible.append(button)
+        if visible:
+            rows.append(visible)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def devices_menu(user_id: int | None = None):
@@ -916,6 +977,8 @@ def devices_menu(user_id: int | None = None):
             style="success" if is_online else "danger",
         )
     if is_owner:
+        kb.button(text=_nav("all_devices"), callback_data="dev:all", style="primary")
+    if is_owner:
         kb.button(text=_lex("devices_add_button"), callback_data="devmg:manualadd", style="primary")
         kb.button(text=_lex("manual_install_button"), callback_data="install:manual", style="success")
         kb.button(text=_lex("devices_blocked_button"), callback_data="devmg:blocked", style="danger")
@@ -923,9 +986,9 @@ def devices_menu(user_id: int | None = None):
     kb.button(text=_nav("refresh"), callback_data="menu:devices", style="success")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     dev_count = len(devs)
-    adjust_pattern = [1] * dev_count + ([2, 2, 2] if is_owner else [1, 1])
+    adjust_pattern = [1] * (dev_count + (1 if is_owner else 0)) + ([2, 2, 2] if is_owner else [1, 1])
     kb.adjust(*adjust_pattern)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
 def manual_install_os_keyboard(*, selected_os: str | None = None):
@@ -978,18 +1041,18 @@ def device_menu(device_id: str, user_id: int | None = None):
     is_owner = get_user_role(user_id) == Role.OWNER
     kb = InlineKeyboardBuilder()
 
-    # Exact-action grants reveal only the categories that contain a granted
-    # action. `full_device` keeps the complete owner-style device menu.
-    _action_button(kb, text=_nav("media"), callback="cat:media", style="success", user_id=user_id)
-    _action_button(kb, text=_nav("screen"), callback="cat:screen", user_id=user_id)
-    _action_button(kb, text=_nav("input"), callback="cat:input", user_id=user_id)
-    _action_button(kb, text=_nav("system"), callback="cat:system", user_id=user_id)
-    _action_button(kb, text=_nav("network"), callback="cat:network", user_id=user_id)
-    _action_button(kb, text=_nav("files"), callback="cat:files", user_id=user_id)
-    _action_button(kb, text=_nav("terminal"), callback="cat:terminal", user_id=user_id)
-    _action_button(kb, text=_nav("power"), callback="cat:power", style="danger", user_id=user_id)
-    _action_button(kb, text=_nav("pranks"), callback="cat:pranks", style="success", user_id=user_id)
-    _action_button(kb, text=_nav("device_settings"), callback="cat:device", user_id=user_id)
+    # The nine user-facing sections are an information architecture only;
+    # existing action callbacks remain unchanged for saved keyboards/clients.
+    category_buttons = (
+        (_nav("system"), "cat:system", "primary"),
+        (_nav("screen"), "cat:screen", "success"),
+        (_nav("files"), "cat:files", "primary"),
+        (_nav("network"), "cat:network", "primary"),
+        (_nav("terminal"), "cat:terminal", "primary"),
+        (_nav("power"), "cat:power", "danger"),
+    )
+    for text, callback, style in category_buttons:
+        _action_button(kb, text=text, callback=callback, style=style, user_id=user_id)
 
     # Favorite actions (if configured)
     favs = devices.get_favorites(device_id)[:4]
@@ -1003,13 +1066,15 @@ def device_menu(device_id: str, user_id: int | None = None):
         )
 
     info = devices.get(device_id) or {}
-    if is_owner:
-        agent_ver = str(info.get("version") or "?")
-        keeper_ver = str((info.get("guardian") or {}).get("version") or "?")
-        kb.button(
-            text=_limit_button_label(_lex("versions_button", agent=agent_ver, keeper=keeper_ver)),
-            callback_data="versions:device", style="success",
-        )
+    agent_ver = str(info.get("version") or "?")
+    keeper_ver = str((info.get("guardian") or {}).get("version") or "?")
+    _action_button(
+        kb,
+        text=_limit_button_label(_lex("versions_button", agent=agent_ver, keeper=keeper_ver)),
+        callback="versions:device", style="success", user_id=user_id,
+    )
+    _action_button(kb, text=_nav("device_settings"), callback="cat:device", user_id=user_id)
+    _action_button(kb, text=_nav("pranks"), callback="cat:pranks", style="success", user_id=user_id)
     _action_button(
         kb, text=_lex("device_stop_agent_button"), callback="cfm:stop",
         style="danger", user_id=user_id,
@@ -1021,9 +1086,10 @@ def device_menu(device_id: str, user_id: int | None = None):
         callback_data="menu:target" if is_owner else "menu:devices",
         style="danger",
     )
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
 
     kb.adjust(2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
 def all_menu():
@@ -1037,7 +1103,7 @@ def all_menu():
     kb.button(text=_lex("devices_back_list_button"), callback_data="menu:target", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup())
 
 
 def back_to_device_kb():
@@ -1055,8 +1121,9 @@ def power_menu():
     kb.button(text=_lex("power_reboot_button"), callback_data="power:reboot", style="danger")
     kb.button(text=_lex("power_shutdown_button"), callback_data="power:shutdown", style="danger")
     kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 1)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup())
 
 
 def confirm_power_menu(action: str):
@@ -1070,8 +1137,9 @@ def confirm_power_menu(action: str):
     kb = InlineKeyboardBuilder()
     kb.button(text=_lex("power_confirm_button", action=label), callback_data=f"power_confirm:{action}", style="danger")
     kb.button(text=_nav("cancel"), callback_data="back:device", style="primary")
-    kb.adjust(1, 1)
-    return kb.as_markup()
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
+    kb.adjust(1, 2)
+    return _filter_device_keyboard(kb.as_markup())
 
 
 def rotate_menu():
@@ -1083,10 +1151,17 @@ def rotate_menu():
     kb.button(text=_lex("rotate_screen_button"), callback_data="cat:screen", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup())
 
 
 def media_menu(user_id: int | None = None):
+    # Backward-compatible entry point; display and media share one screen.
+    return screen_menu(user_id=user_id)
+
+
+def screen_menu(target: str | None = None, user_id: int | None = None):
+    target = target or SESSION.get("target") or ""
+    is_nl = bool(SESSION.get(f"nightlight_{target}", False))
     kb = InlineKeyboardBuilder()
     _action_button(kb, text=_lex("media_screenshot_button"), callback="cmd:screenshot", style="success", user_id=user_id)
     _action_button(kb, text=_limit_button_label("⚠️ " + _lex("geo_beta")), callback="cmd:geo_location", user_id=user_id)
@@ -1095,32 +1170,23 @@ def media_menu(user_id: int | None = None):
     _action_button(kb, text=_lex("media_speak_button"), callback="cmd:sound", user_id=user_id)
     _action_button(kb, text=_lex("media_volume_button"), callback="vol:opts", user_id=user_id)
     _action_button(kb, text=_lex("media_mute_button"), callback="cmd:volume", user_id=user_id)
+    _action_button(kb, text=_lex("screen_off_button"), callback="fun:screenoff", style="danger", user_id=user_id)
+    _action_button(kb, text=_lex("screen_saver_button"), callback="fun:screensaver", user_id=user_id)
+    _action_button(kb, text=_lex("screen_wallpaper_button"), callback="menu:wallpaper", style="success", user_id=user_id)
+    _action_button(kb, text=_lex("screen_brightness_button"), callback="cmd:brightness", style="success", user_id=user_id)
+    if _device_supports_callback("cmd:nightlight", target):
+        if is_nl:
+            _action_button(kb, text=_lex("screen_nightlight_enabled_button"), callback="cmd:nightlight", style="danger", user_id=user_id)
+        else:
+            _action_button(kb, text=_lex("screen_nightlight_disabled_button"), callback="cmd:nightlight", user_id=user_id)
+    _action_button(kb, text=_lex("screen_rotate_button"), callback="cmd:rotate", user_id=user_id)
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 2, 2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
-def screen_menu(target: str | None = None):
-    target = target or SESSION.get("target") or ""
-    is_nl = bool(SESSION.get(f"nightlight_{target}", False))
-    kb = InlineKeyboardBuilder()
-    kb.button(text=_lex("screen_off_button"), callback_data="fun:screenoff", style="danger")
-    kb.button(text=_lex("screen_saver_button"), callback_data="fun:screensaver", style="primary")
-    kb.button(text=_lex("screen_wallpaper_button"), callback_data="menu:wallpaper", style="success")
-    kb.button(text=_lex("screen_brightness_button"), callback_data="cmd:brightness", style="success")
-    if is_nl:
-        kb.button(text=_lex("screen_nightlight_enabled_button"), callback_data="cmd:nightlight", style="danger")
-    else:
-        kb.button(text=_lex("screen_nightlight_disabled_button"), callback_data="cmd:nightlight", style="primary")
-    kb.button(text=_lex("screen_rotate_button"), callback_data="cmd:rotate", style="primary")
-    kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
-    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
-    kb.adjust(2, 2, 2, 2)
-    return kb.as_markup()
-
-
-def wallpaper_menu():
+def wallpaper_menu(user_id: int | None = None):
     kb = InlineKeyboardBuilder()
     kb.button(text=_lex("wallpaper_random_meme_button"), callback_data="cmd:wallpaper_random_meme", style="success")
     kb.button(text=_lex("wallpaper_photo_button"), callback_data="cmd:wallpaper_photo_guide", style="primary")
@@ -1129,7 +1195,7 @@ def wallpaper_menu():
     kb.button(text=_lex("wallpaper_back_screen_button"), callback_data="cat:screen", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
 def input_menu():
@@ -1143,7 +1209,7 @@ def input_menu():
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 2, 2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup())
 
 
 def system_menu(user_id: int | None = None):
@@ -1158,45 +1224,58 @@ def system_menu(user_id: int | None = None):
     _action_button(kb, text=_lex("system_capabilities_button"), callback="cmd:capabilities", user_id=user_id)
     _action_button(kb, text=_lex("system_refresh_status_button"), callback="cmd:status", style="success", user_id=user_id)
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
-def network_menu():
+def network_menu(user_id: int | None = None):
     kb = InlineKeyboardBuilder()
-    kb.button(text=_lex("network_external_ip_button"), callback_data="fun:extip", style="success")
-    kb.button(text=_lex("network_ping_button"), callback_data="cmd:net_ping", style="success")
-    kb.button(text=_lex("network_adapters_button"), callback_data="cmd:network", style="primary")
-    kb.button(text=_lex("network_wifi_button"), callback_data="cmd:wifi", style="primary")
-    kb.button(text=_lex("network_usb_button"), callback_data="cmd:usb", style="primary")
-    kb.button(text=_lex("network_bluetooth_button"), callback_data="cmd:bluetooth", style="primary")
-    kb.button(text=_lex("network_netstat_button"), callback_data="cmd:netstat", style="primary")
-    _action_button(kb, text=_lex("network_open_url_button"), callback="cmd:url", style="success")
-    if get_user_role(CURRENT_TG_USER.get()) == Role.OWNER:
+    _action_button(kb, text=_lex("network_external_ip_button"), callback="fun:extip", style="success", user_id=user_id)
+    _action_button(kb, text=_lex("network_ping_button"), callback="cmd:net_ping", style="success", user_id=user_id)
+    _action_button(kb, text=_lex("network_adapters_button"), callback="cmd:network", user_id=user_id)
+    _action_button(kb, text=_lex("network_wifi_button"), callback="cmd:wifi", user_id=user_id)
+    _action_button(kb, text=_lex("network_usb_button"), callback="cmd:usb", user_id=user_id)
+    _action_button(kb, text=_lex("network_bluetooth_button"), callback="cmd:bluetooth", user_id=user_id)
+    _action_button(kb, text=_lex("network_netstat_button"), callback="cmd:netstat", user_id=user_id)
+    _action_button(kb, text=_lex("system_apps_button"), callback="cmd:apps", user_id=user_id)
+    _action_button(kb, text=_lex("network_open_url_button"), callback="cmd:url", style="success", user_id=user_id)
+    if get_user_role(user_id if user_id is not None else CURRENT_TG_USER.get()) == Role.OWNER:
         kb.button(text=_lex("url_favorites_button"), callback_data="url:favorites", style="primary")
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
-def url_count_keyboard(*, is_owner: bool = False):
+def url_count_keyboard(
+    *, is_owner: bool = False, user_id: int | None = None, target: str | None = None
+):
     kb = InlineKeyboardBuilder()
-    for count in (1, 2, 3, 5):
-        kb.button(
-            text=_lex("url_count_button", count=str(count)),
-            callback_data=f"url:count:{count}",
-            style="success" if count == 1 else "primary",
-        )
-    if is_owner:
+    user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
+    target = str(target or SESSION.get("target") or "")
+    owner = get_user_role(user_id) == Role.OWNER
+    url_granted = owner or (
+        target != "all"
+        and access_store.can_use_callback(user_id, "cmd:url", ADMIN_ID, target)
+    )
+    if url_granted:
+        for count in (1, 2, 3, 5):
+            kb.button(
+                text=_lex("url_count_button", count=str(count)),
+                callback_data=f"url:count:{count}",
+                style="success" if count == 1 else "primary",
+            )
+    if owner and is_owner:
         kb.button(
             text=_lex("url_favorite_save_button"),
             callback_data="url:fav:save",
             style="primary",
         )
     kb.button(text=_lex("url_cancel_button"), callback_data="url:cancel", style="danger")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
 def url_favorites_keyboard(*, is_owner: bool = False):
@@ -1231,7 +1310,7 @@ def files_menu():
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 2, 2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup())
 
 
 def terminal_menu():
@@ -1244,8 +1323,9 @@ def terminal_menu():
     kb.button(text=_lex("terminal_services_button"), callback_data="cmd:services", style="primary")
     kb.button(text=_lex("terminal_history_button"), callback_data="cmd:cmdhistory", style="primary")
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup())
 
 
 # Псевдонимы обратной совместимости
@@ -1275,7 +1355,7 @@ def power_menu_new(user_id: int | None = None):
     kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
 def guardian_menu():
@@ -1288,7 +1368,7 @@ def guardian_menu():
     kb.button(text=_lex("guardian_auto_disable_button"), callback_data="cmd:guardian_auto_off", style="danger")
     kb.button(text=_lex("guardian_back_power_button"), callback_data="cat:power", style="primary")
     kb.adjust(2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup())
 
 
 def pranks_menu(page: int = 1, target: str | None = None):
@@ -1380,7 +1460,7 @@ def pranks_menu(page: int = 1, target: str | None = None):
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
 
     kb.adjust(1, 2, 2, 2, 2, 2, 5, 2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup())
 
 
 def device_settings_menu(user_id: int | None = None):
@@ -1404,7 +1484,7 @@ def device_settings_menu(user_id: int | None = None):
     kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
 def mic_options_menu():
@@ -1418,7 +1498,7 @@ def mic_options_menu():
     kb.button(text=_nav("media"), callback_data="cat:media", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup())
 
 
 def vol_options_menu():
@@ -1430,11 +1510,17 @@ def vol_options_menu():
             style="primary",
         )
     kb.button(text=_nav("media"), callback_data="cat:media", style="danger")
-    kb.adjust(3, 2, 1)
-    return kb.as_markup()
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
+    kb.adjust(3, 2, 2)
+    return _filter_device_keyboard(kb.as_markup())
 
 
-def confirm_kb(yes_cb: str, yes_text: str | None = None, no_cb: str = "back:device"):
+def confirm_kb(
+    yes_cb: str,
+    yes_text: str | None = None,
+    no_cb: str = "back:device",
+    user_id: int | None = None,
+):
     kb = InlineKeyboardBuilder()
     kb.button(
         text=_limit_button_label(yes_text or _lex("confirm_execute_button")),
@@ -1442,8 +1528,9 @@ def confirm_kb(yes_cb: str, yes_text: str | None = None, no_cb: str = "back:devi
         style="danger",
     )
     kb.button(text=_nav("cancel"), callback_data=no_cb, style="primary")
-    kb.adjust(1, 1)
-    return kb.as_markup()
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
+    kb.adjust(1, 2)
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
 def events_menu():
@@ -1609,6 +1696,7 @@ def admin_menu():
         callback_data="admin:style",
         style="success",
     )
+    kb.button(text=_nav("events"), callback_data="ev:menu", style="primary")
     kb.button(text=_nav("admin_server"), callback_data="menu:server", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2)
@@ -1860,7 +1948,7 @@ def blocked_menu():
     return kb.as_markup()
 
 
-def _favorites_kb(device_id: str, favs: list):
+def _favorites_kb(device_id: str, favs: list, user_id: int | None = None):
     kb = InlineKeyboardBuilder()
     for action in FAVORITABLE:
         is_fav = action in favs
@@ -1873,8 +1961,9 @@ def _favorites_kb(device_id: str, favs: list):
             style="success" if is_fav else "primary",
         )
     kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
-    kb.adjust(1)
-    return kb.as_markup()
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
+    kb.adjust(1, 2)
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
 # =====================================================================
@@ -2759,7 +2848,9 @@ async def on_url_input(message: Message, state: FSMContext):
     await _replace_user_card(
         message,
         _lex_html("url_count_prompt", device=target_label(target)),
-        reply_markup=url_count_keyboard(is_owner=is_owner),
+        reply_markup=url_count_keyboard(
+            is_owner=is_owner, user_id=message.from_user.id, target=target,
+        ),
     )
 
 @router.message(AdminFilter(), Form.wait_text)
@@ -3802,7 +3893,9 @@ async def on_url_favorite_open(cq: CallbackQuery, state: FSMContext):
     await _replace_callback_message(
         cq,
         _lex_html("url_count_prompt", device=target_label(target)),
-        reply_markup=url_count_keyboard(is_owner=True),
+        reply_markup=url_count_keyboard(
+            is_owner=True, user_id=cq.from_user.id, target=target,
+        ),
     )
     await cq.answer()
 
@@ -4411,8 +4504,8 @@ async def on_cat_media(cq: CallbackQuery):
         await cq.answer(_lex("device_required"), show_alert=True)
         return
     await _replace_callback_message(cq,
-        _lex_html("category_media", device=target_label(target)),
-        reply_markup=media_menu(cq.from_user.id if cq.from_user else None),
+        _lex_html("category_screen", device=target_label(target)),
+        reply_markup=screen_menu(target=target, user_id=cq.from_user.id if cq.from_user else None),
     )
     await cq.answer()
 
@@ -4425,7 +4518,7 @@ async def on_cat_screen(cq: CallbackQuery):
         return
     await _replace_callback_message(cq,
         _lex_html("category_screen", device=target_label(target)),
-        reply_markup=screen_menu(),
+        reply_markup=screen_menu(target=target, user_id=cq.from_user.id if cq.from_user else None),
     )
     await cq.answer()
 
@@ -4464,7 +4557,7 @@ async def on_cat_network(cq: CallbackQuery):
         return
     await _replace_callback_message(cq,
         _lex_html("category_network", device=target_label(target)),
-        reply_markup=network_menu(),
+        reply_markup=network_menu(cq.from_user.id if cq.from_user else None),
     )
     await cq.answer()
 
@@ -4545,18 +4638,38 @@ async def on_proc_page(cq: CallbackQuery):
     if not target or target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
+    user_id = int(cq.from_user.id) if cq.from_user else 0
+    callback = str(cq.data or "")
+    if not _device_action_still_allowed(user_id, callback, target):
+        await cq.answer(_lex("input_access_revoked"), show_alert=True)
+        return
     refresh = cq.data == "proc:refresh"
     page = 0 if refresh else int(cq.data.split(":", 1)[1] or 0)
     cache = None if refresh else LAST_PROCESSES.get(target)
     if not cache or time.time() - cache["ts"] > 30:
         await cq.answer("⚙️ Запрашиваю процессы...")
         processes_collector.reset()
+        # The role/device grant may have changed after the callback filter ran.
+        # Recheck at the side-effect boundary; a visible/stale button is not authority.
+        if not _device_action_still_allowed(user_id, callback, target):
+            await _replace_callback_message(
+                cq, _lex("input_access_revoked"), reply_markup=back_to_device_kb()
+            )
+            return
         if not transport.publish_command(target, "processes", top_n=15):
             await _replace_callback_message(
                 cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb()
             )
             return
         res = await processes_collector.wait(15.0)
+        # Process names are sensitive device data. Do not cache or display a late
+        # response after a grant has been removed while the request was in flight.
+        if not _device_action_still_allowed(user_id, callback, target):
+            await _replace_callback_message(
+                cq, _lex("action_result_hidden_after_revoke"),
+                reply_markup=back_to_device_kb(),
+            )
+            return
         if not res:
             await _replace_callback_message(
                 cq,
@@ -4567,6 +4680,11 @@ async def on_proc_page(cq: CallbackQuery):
             return
         cache = {"ts": time.time(), "items": res.get("top", [])}
         LAST_PROCESSES[target] = cache
+    elif not _device_action_still_allowed(user_id, callback, target):
+        await _replace_callback_message(
+            cq, _lex("input_access_revoked"), reply_markup=back_to_device_kb()
+        )
+        return
     items = cache.get("items", [])
     per = 8
     pages = max(1, (len(items) + per - 1) // per)
@@ -4584,9 +4702,16 @@ async def on_proc_page(cq: CallbackQuery):
             kb.button(text="▶️", callback_data=f"proc:{page + 1}", style="primary")
     kb.button(text=_nav("refresh"), callback_data="proc:refresh", style="success")
     kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(1)
     text = f"⚙️ <b>Процессы</b> · {html.escape(target_label(target))} (топ-{len(items)})"
-    await _replace_callback_message(cq, text, reply_markup=kb.as_markup())
+    await _replace_callback_message(
+        cq,
+        text,
+        reply_markup=_filter_device_keyboard(
+            kb.as_markup(), cq.from_user.id if cq.from_user else None,
+        ),
+    )
     await cq.answer()
 
 
@@ -4597,7 +4722,8 @@ async def on_kill_confirm(cq: CallbackQuery):
         cq,
         f"🔪 Убить процесс <code>{html.escape(pid)}</code>?",
         reply_markup=confirm_kb(
-            f"kill:{pid}", yes_text=_lex("confirm_kill_process_button")
+            f"kill:{pid}", yes_text=_lex("confirm_kill_process_button"),
+            user_id=cq.from_user.id if cq.from_user else None,
         ),
     )
     await cq.answer()
@@ -5035,7 +5161,7 @@ async def on_fav_menu(cq: CallbackQuery):
     favs = devices.get_favorites(target)
     await _replace_callback_message(cq,
         _lex_html("favorites_page_intro", device=target_label(target)),
-        reply_markup=_favorites_kb(target, favs),
+        reply_markup=_favorites_kb(target, favs, cq.from_user.id if cq.from_user else None),
     )
     await cq.answer()
 
@@ -5051,7 +5177,7 @@ async def on_fav_toggle(cq: CallbackQuery):
     favs = devices.get_favorites(target)
     await _replace_callback_message(cq,
         _lex_html("favorites_page_intro", device=target_label(target)),
-        reply_markup=_favorites_kb(target, favs),
+        reply_markup=_favorites_kb(target, favs, cq.from_user.id if cq.from_user else None),
     )
     await cq.answer("Добавлено ⭐" if added else "Убрано")
 
@@ -5138,7 +5264,11 @@ async def on_confirm_action(cq: CallbackQuery):
     await _replace_callback_message(
         cq,
         f"⚠️ {text}",
-        reply_markup=confirm_kb(yes_cb, yes_text=_lex("confirm_yes_button")),
+        reply_markup=confirm_kb(
+            yes_cb,
+            yes_text=_lex("confirm_yes_button"),
+            user_id=cq.from_user.id if cq.from_user else None,
+        ),
     )
     await cq.answer()
 
@@ -5237,7 +5367,10 @@ def _device_action_still_allowed(user_id: int, callback: str, target: str) -> bo
     """Recheck the action and target immediately before publishing to MQTT."""
     if not target or target == "all" or devices.get(target) is None:
         return False
-    return access_store.can_use_callback(user_id, callback, ADMIN_ID, target)
+    return (
+        access_store.can_use_callback(user_id, callback, ADMIN_ID, target)
+        and _device_supports_callback(callback, target)
+    )
 
 
 async def _callback_result_access_or_report(
@@ -6278,6 +6411,9 @@ async def on_cmd_nightlight(cq: CallbackQuery):
     target = SESSION.get("target")
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
+        return
+    if not _device_action_still_allowed(int(cq.from_user.id), cq.data or "", target):
+        await cq.answer("Действие недоступно для этого устройства.", show_alert=True)
         return
     current_state = bool(SESSION.get(f"nightlight_{target}", False))
     new_state = not current_state
