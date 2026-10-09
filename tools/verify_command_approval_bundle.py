@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import zipfile
 
-REQUIRED = {"command_module_loader", "command_signing", "command_replay",
+REQUIRED = {"command_module_loader", "command_signing", "command_replay", "shell_execution",
             "release_signature", "update_package",
             "cryptography.hazmat.primitives.asymmetric.ed25519"}
 PRIVATE_KEY_BASENAMES = {"id_rsa", "id_ecdsa", "id_ed25519", "id_dsa"}
@@ -46,7 +46,7 @@ def verify_executable(path):
             raise ValueError("Frozen probe failed: " + detail)
         data = json.loads(report.read_text(encoding="utf-8"))
         if data.get("ok") is not True or set(data.get("modules", [])) != REQUIRED.intersection({
-                "command_module_loader", "command_signing", "command_replay"}):
+                "command_module_loader", "command_signing", "command_replay", "shell_execution"}):
             raise ValueError("Invalid frozen probe result")
         return data
 

@@ -8,7 +8,7 @@ MAC_AGENT_DIR = REPO_ROOT / 'XGENT-MCS'
 datas = []
 binaries = []
 hiddenimports = ['pystray._win32', 'comtypes.stream',
-                 'command_module_loader', 'command_signing', 'command_replay',
+                 'command_module_loader', 'command_signing', 'command_replay', 'shell_execution',
                  'cryptography.hazmat.primitives.asymmetric.ed25519',
                  'winrt.windows.devices.geolocation',
                  'winrt.windows.security.authorization.appcapabilityaccess']

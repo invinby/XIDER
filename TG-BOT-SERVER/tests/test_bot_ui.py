@@ -317,6 +317,35 @@ def test_shell_malformed_result_status_does_not_enter_audit_or_response(monkeypa
     assert bot.access_store.recent_audit()[0]["status"] == "completed"
 
 
+def test_shell_audit_attempt_precedes_publication(monkeypatch, tmp_path):
+    Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
+    def publish(*args, **kwargs):
+        rows = bot.access_store.recent_audit()
+        row = next(row for row in rows if row["kind"] == "command_execution")
+        assert row["status"] == "attempting"
+        assert row["request_id"] == kwargs["id"]
+        published.append((args, kwargs))
+        return True
+    monkeypatch.setattr(bot.transport, "publish_command", publish)
+    async def scenario():
+        pending = await request()
+        await bot.on_shell_approve(Callback(f"cmd:shell-approve:{pending.request_id}"))
+    asyncio.run(scenario())
+    assert len(published) == 1
+
+
+def test_shell_audit_write_failure_prevents_publication(monkeypatch, tmp_path):
+    Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
+    async def scenario():
+        pending = await request()
+        def unavailable(row):
+            raise OSError("synthetic unavailable audit storage")
+        monkeypatch.setattr(bot.access_store, "_write_audit_row", unavailable)
+        await bot.on_shell_approve(Callback(f"cmd:shell-approve:{pending.request_id}"))
+    asyncio.run(scenario())
+    assert not published
+
+
 def test_shell_failed_owner_preview_discards_pending_request(monkeypatch, tmp_path):
     Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
     async def undelivered(*args, **kwargs):

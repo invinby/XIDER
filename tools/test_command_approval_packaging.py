@@ -9,7 +9,7 @@ import zipfile
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-MODULES = {"command_module_loader", "command_signing", "command_replay"}
+MODULES = {"command_module_loader", "command_signing", "command_replay", "shell_execution"}
 
 
 @pytest.mark.parametrize("component", ["XGENT-WDS", "XGENT-MCS"])

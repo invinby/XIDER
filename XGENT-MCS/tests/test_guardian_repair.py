@@ -458,7 +458,7 @@ def signed_recovery(guardian_module, monkeypatch, tmp_path):
     })
     archive = tmp_path / "source.zip"
     payloads = {name: f"# signed recovery source: {name}\n".encode() for name in recovery.RECOVERY_FILES}
-    for name in ("command_module_loader.py", "command_signing.py", "command_replay.py"):
+    for name in ("command_module_loader.py", "command_signing.py", "command_replay.py", "shell_execution.py"):
         assert name in payloads
     with zipfile.ZipFile(archive, "w") as output:
         for name, payload in payloads.items():

@@ -394,7 +394,7 @@ def test_windows_update_stages_shared_verifier_and_updater_from_mcs(tmp_path):
     archive = tmp_path / "windows-shared-release.zip"
     stage = tmp_path / "windows-shared-stage"
     expected = ("xgent_wds.py", "release_signature.py", "update_package.py",
-                "command_module_loader.py", "command_signing.py", "command_replay.py")
+                "command_module_loader.py", "command_signing.py", "command_replay.py", "shell_execution.py")
     _zip(archive, [
         ("XIDER-source/XGENT-WDS/xgent_wds.py", b"print('windows')", None),
         ("XIDER-source/XGENT-MCS/release_signature.py", b"VALUE = 'verifier'", None),
@@ -402,6 +402,7 @@ def test_windows_update_stages_shared_verifier_and_updater_from_mcs(tmp_path):
         ("XIDER-source/XGENT-MCS/command_module_loader.py", b"# loader", None),
         ("XIDER-source/XGENT-MCS/command_signing.py", b"# signing", None),
         ("XIDER-source/XGENT-MCS/command_replay.py", b"# replay", None),
+        ("XIDER-source/XGENT-MCS/shell_execution.py", b"# shell_execution", None),
     ])
 
     result = package.extract_agent_files(

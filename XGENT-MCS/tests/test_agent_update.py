@@ -281,7 +281,7 @@ def source_update(monkeypatch, tmp_path):
     monkeypatch.setattr(mcs.sys, "frozen", False, raising=False)
     files = (
         "release_signature.py", "update_package.py", "guardian_recovery.py", "start_agent.sh",
-        "command_module_loader.py", "command_signing.py", "command_replay.py",
+        "command_module_loader.py", "command_signing.py", "command_replay.py", "shell_execution.py",
         "xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py",
         "fake_update_screen.py",
         "xider_guardian.py", "requirements.txt", "setup_mac.py",

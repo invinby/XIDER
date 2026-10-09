@@ -186,7 +186,7 @@ def _redact_credentials(text: str) -> str:
     text = re.sub(
         r"(?i)\b((?:bot[_-]?)?token|password|passwd|secret|shared[_-]?key|"
         r"mqtt[_-]?password|api[_-]?key|ssh[_-]?key|private[_-]?key|authorization)"
-        r"\s*[:=]\s*[^\s,;]+",
+        r'''[ \t]*[:=][ \t]*(?!\[REDACTED\])[^"'\s][^\r\n]*''',
         r"\1=[REDACTED]",
         text,
     )
@@ -240,7 +240,7 @@ def append_command_audit(*, request_id: str, command_hash: str, status: str,
                          requester_id: int, approver_id: int, device_id: str,
                          exit_code: int | None) -> None:
     """Typed execution metadata. This API cannot accept command text/output."""
-    statuses = {"sent", "completed", "failed", "timeout", "error", "rejected",
+    statuses = {"attempting", "sent", "completed", "failed", "timeout", "error", "rejected",
                 "signing_unavailable", "publish_failed", "result_timeout"}
     if (not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request_id)
             or not isinstance(command_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", command_hash)

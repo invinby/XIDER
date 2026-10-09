@@ -558,6 +558,7 @@ def test_shell_routing_uses_capture(client, monkeypatch):
     def fake_run(cmd, **kwargs):
         captured["cmd"] = cmd
         captured["kwargs"] = kwargs
+        kwargs["stdout"].write(b"ok\n")
         r = type("R", (), {})()
         r.stdout = "ok\n"
         r.stderr = ""

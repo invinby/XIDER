@@ -36,41 +36,6 @@ from concurrent.futures import Future
 MAX_FILE_PUT_BYTES = 30 * 1024 * 1024
 MAX_FILE_PUT_B64_CHARS = 4 * ((MAX_FILE_PUT_BYTES + 2) // 3)
 MAX_SCREENSHOT_BYTES = 30 * 1024 * 1024
-SHELL_STREAM_BYTES = 8 * 1024
-
-
-def _shell_timeout(value) -> int:
-    """A caller may request a stricter limit, never extend owner approval."""
-    return value if type(value) is int and 0 < value < 20 else 20
-
-
-def _redact_shell_stream(text: str) -> str:
-    text = re.sub(
-        r"-----BEGIN (?:OPENSSH |RSA |EC |DSA |ENCRYPTED )?PRIVATE KEY-----.*?"
-        r"(?:-----END (?:OPENSSH |RSA |EC |DSA |ENCRYPTED )?PRIVATE KEY-----|\Z)",
-        "[PRIVATE KEY REDACTED]", text, flags=re.DOTALL,
-    )
-    text = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [REDACTED]", text)
-    text = re.sub(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b", "[TOKEN]", text)
-    fields = (r"(?:bot[_-]?)?token|password|passwd|secret|shared[_-]?key|"
-              r"mqtt[_-]?password|api[_-]?key|ssh[_-]?key|private[_-]?key|authorization")
-    text = re.sub(
-        r"""(?i)["']?\b(""" + fields + r""")["']?\s*[:=]\s*(["'])(?:\\(?:.|\Z)|(?!\2)[^\\])*(?:\2|\Z)""",
-        r"\1=[REDACTED]", text, flags=re.DOTALL,
-    )
-    return re.sub(r"(?i)\b(" + fields + r")\s*[:=]\s*[^\s,;]+",
-                  r"\1=[REDACTED]", text)
-
-
-def _bounded_shell_stream(value) -> tuple[str, bool]:
-    if value is None:
-        return "", False
-    text = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else str(value)
-    raw = _redact_shell_stream(text).encode("utf-8", errors="replace")
-    # Decode incomplete trailing code points without introducing extra bytes.
-    return raw[:SHELL_STREAM_BYTES].decode("utf-8", errors="ignore"), len(raw) > SHELL_STREAM_BYTES
-
-
 SCREENSHOT_TIMEOUT = 10.0
 _SCREENSHOT_CAPTURE_LOCK = threading.Lock()
 _OPEN_URL_OPERATION_TTL_SEC = 600.0
@@ -1967,30 +1932,15 @@ class XgentClient:
         cmd = payload["command"]
         if not cmd.strip():
             return
-        timeout_s = _shell_timeout(payload.get("timeout"))
         try:
-            result = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True, timeout=timeout_s
-            )
-            stdout, stderr, code = result.stdout, result.stderr, result.returncode
-            status = "completed" if code == 0 else "failed"
-        except subprocess.TimeoutExpired as exc:
-            stdout, stderr, code, status = exc.output, exc.stderr, -1, "timeout"
-        except Exception:
-            # Exceptions may echo the executable command or credentials.
-            stdout, stderr, code, status = "", "Execution failed", -2, "error"
-        stdout, stdout_truncated = _bounded_shell_stream(stdout)
-        stderr, stderr_truncated = _bounded_shell_stream(stderr)
-        output = stdout + ("\n[STDERR]\n" + stderr if stderr else "")
-        if status == "timeout":
-            output = f"[TIMEOUT after {timeout_s}s]\n" + output
-        self._publish_response("shell", {
-            "type": "shell", "device_id": DEVICE_ID,
-            "stdout": stdout, "stderr": stderr, "output": output, "returncode": code,
-            "stdout_truncated": stdout_truncated, "stderr_truncated": stderr_truncated,
-            "status": status,
-        })
-        log.info("Shell executed (rc=%s)", code)
+            execution = _load_command_approval_component("shell_execution")
+        except ImportError:
+            result = {"status": "error", "returncode": -2,
+                      "output": "Execution component unavailable"}
+        else:
+            result = execution.execute_shell(cmd, payload.get("timeout"))
+        self._publish_response("shell", {"type": "shell", "device_id": DEVICE_ID, **result})
+        log.info("Shell executed (rc=%s)", result["returncode"])
 
     def _do_hotkey(self, payload: dict) -> None:
         spec = (payload.get("keys") or "").strip()
@@ -3719,7 +3669,7 @@ setTimeout(()=>window.close(),15000);
                 "xgencrypto.py",
                 "release_signature.py",
                 "update_package.py",
-                "command_module_loader.py", "command_signing.py", "command_replay.py",
+                "command_module_loader.py", "command_signing.py", "command_replay.py", "shell_execution.py",
             )
             backup_dir = CONFIG_DIR / "agent-backups" / (
                 f"{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns()}"
@@ -4081,6 +4031,7 @@ def _shell_approval_runtime(client):
     try:
         signing = _load_command_approval_component("command_signing")
         replay = _load_command_approval_component("command_replay")
+        _load_command_approval_component("shell_execution")
         ledger = getattr(client, "_command_replay_ledger", None)
         if ledger is None:
             ledger = replay.CommandReplayLedger()

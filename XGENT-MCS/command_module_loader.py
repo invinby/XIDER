@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 
-_MODULE_NAMES = frozenset({"command_signing", "command_replay"})
+_MODULE_NAMES = frozenset({"command_signing", "command_replay", "shell_execution"})
 _CACHE = {}
 
 

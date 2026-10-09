@@ -505,6 +505,11 @@ async def on_shell_approve(cq: CallbackQuery):
             expected_device_id=approved.device_id, now=int(time.time()),
         ) is None:
             raise command_signing.CommandSigningUnavailable("command signing configuration is invalid")
+        try:
+            _audit_shell_result(approved, actor, "attempting", None)
+        except OSError:
+            await cq.answer("Журнал выполнения недоступен. Команда не отправлена.", show_alert=True)
+            return
         sent = transport.publish_command(approved.device_id, "shell", id=approved.request_id,
                                          command=approved.command_text, approval=envelope)
     except (ValueError, command_signing.CommandSigningUnavailable):

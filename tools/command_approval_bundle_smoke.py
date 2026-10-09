@@ -40,6 +40,10 @@ def _probe():
     loader.exec_module(shared)
     signing = shared.load_component("command_signing", source_root=root)
     replay = shared.load_component("command_replay", source_root=root)
+    execution = shared.load_component("shell_execution", source_root=root)
+    require(execution.shell_timeout(60) == 20, "Bundled execution timeout policy is missing")
+    require(execution.bounded_stream("x" * 9000) == ("x" * 8192, True),
+            "Bundled output cap policy is missing")
 
     # Characterize PyInstaller's real filesystem fallback: it must be rejected
     # even when a valid source module exists and the helper is already cached.
@@ -80,7 +84,7 @@ def _probe():
         path = Path(temporary) / "replay.json"
         require(replay.CommandReplayLedger(path).reserve("bundle_probe", 220, now=101), "Reservation failed")
         require(not replay.CommandReplayLedger(path).reserve("bundle_probe", 220, now=101), "Replay accepted")
-    return {"ok": True, "frozen": True, "modules": ["command_module_loader", "command_signing", "command_replay"],
+    return {"ok": True, "frozen": True, "modules": ["command_module_loader", "command_signing", "command_replay", "shell_execution"],
             "filesystem_fallback_rejected": True, "valid_signature": True,
             "tamper_rejected": True, "durable_replay_rejected": True}
 

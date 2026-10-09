@@ -78,9 +78,15 @@ def _fake_run(calls, before_run=None):
         calls.append((command, kwargs))
         if before_run is not None:
             before_run()
-        return SimpleNamespace(stdout="ok\n", stderr="", returncode=0)
+        return _stream_result(kwargs, stdout="ok\n", stderr="", returncode=0)
 
     return run
+
+
+def _stream_result(kwargs, *, stdout, stderr, returncode):
+    kwargs["stdout"].write(stdout if isinstance(stdout, bytes) else stdout.encode("utf-8"))
+    kwargs["stderr"].write(stderr if isinstance(stderr, bytes) else stderr.encode("utf-8"))
+    return SimpleNamespace(stdout=None, stderr=None, returncode=returncode)
 
 
 @pytest.mark.parametrize("requested,expected", [(None, 20), (60, 20), (5, 5), (0, 20), ("bad", 20)])
@@ -88,6 +94,7 @@ def test_shell_enforces_execution_timeout(monkeypatch, tmp_path, requested, expe
     client = _client(monkeypatch, tmp_path)
     def expired(command, **kwargs):
         assert kwargs["timeout"] == expected
+        _stream_result(kwargs, stdout=b"partial", stderr=b"error", returncode=0)
         raise wds.subprocess.TimeoutExpired(command, expected, output=b"partial", stderr=b"error")
     monkeypatch.setattr(wds.subprocess, "run", expired)
     client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval(), "timeout": requested})
@@ -101,7 +108,7 @@ def test_shell_enforces_execution_timeout(monkeypatch, tmp_path, requested, expe
 
 def test_shell_caps_each_utf8_stream_before_transport(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
-    monkeypatch.setattr(wds.subprocess, "run", lambda *a, **kw: SimpleNamespace(
+    monkeypatch.setattr(wds.subprocess, "run", lambda *a, **kw: _stream_result(kw,
         stdout="а" * 5000, stderr="🙂" * 3000, returncode=7))
     client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
     result = client.responses[-1][1]
@@ -118,7 +125,7 @@ def test_shell_caps_each_utf8_stream_before_transport(monkeypatch, tmp_path):
 
 def test_shell_exact_limit_is_not_marked_truncated(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
-    monkeypatch.setattr(wds.subprocess, "run", lambda *a, **kw: SimpleNamespace(
+    monkeypatch.setattr(wds.subprocess, "run", lambda *a, **kw: _stream_result(kw,
         stdout="x" * 8192, stderr="", returncode=0))
     client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
     result = client.responses[-1][1]
@@ -142,7 +149,7 @@ def test_shell_exception_does_not_echo_command_or_exception_credentials(monkeypa
 
 def test_shell_redacts_each_stream_before_byte_cap(monkeypatch, tmp_path, caplog):
     client = _client(monkeypatch, tmp_path)
-    monkeypatch.setattr(wds.subprocess, "run", lambda *a, **kw: SimpleNamespace(
+    monkeypatch.setattr(wds.subprocess, "run", lambda *a, **kw: _stream_result(kw,
         stdout='password="synthetic long password"\ntoken=synthetic-token\n' + "x" * 9000,
         stderr='-----BEGIN OPENSSH PRIVATE KEY-----\nprivate-fixture', returncode=0))
     client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
@@ -156,7 +163,7 @@ def test_shell_redacts_each_stream_before_byte_cap(monkeypatch, tmp_path, caplog
 
 def test_shell_drops_incomplete_utf8_codepoint_at_cap(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
-    monkeypatch.setattr(wds.subprocess, "run", lambda *a, **kw: SimpleNamespace(
+    monkeypatch.setattr(wds.subprocess, "run", lambda *a, **kw: _stream_result(kw,
         stdout="x" * 8191 + "🙂", stderr="", returncode=0))
     client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
     assert client.responses[-1][1]["stdout"] == "x" * 8191
@@ -164,15 +171,60 @@ def test_shell_drops_incomplete_utf8_codepoint_at_cap(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("raw,secret", [
+    ('Authorization: Basic c3ludGhldGljLXBhc3N3b3Jk', 'c3ludGhldGljLXBhc3N3b3Jk'),
+    ('password=first synthetic-second', 'synthetic-second'),
     ('password="first synthetic-second' + chr(92), "synthetic-second"),
     ('123456:abcdefghijklmnopqrstuvwxyz', '123456:abcdefghijklmnopqrstuvwxyz'),
     ('Bearer synthetic-bearer', 'synthetic-bearer'),
     ('-----BEGIN ENCRYPTED PRIVATE KEY-----\nencrypted-fixture', 'encrypted-fixture'),
 ])
 def test_shell_stream_redaction_handles_truncated_and_token_forms(raw, secret):
-    safe, truncated = wds._bounded_shell_stream(raw)
+    safe, truncated = wds._load_command_approval_component("shell_execution").bounded_stream(raw)
     assert secret not in safe
     assert len(safe.encode("utf-8")) <= 8192
+
+
+def test_shell_execution_policy_is_loaded_from_canonical_module():
+    helper = wds._load_command_approval_component("shell_execution")
+    canonical = Path(__file__).resolve().parents[2] / "XGENT-MCS" / "shell_execution.py"
+    assert Path(helper.__spec__.origin).resolve() == canonical.resolve()
+    assert helper.shell_timeout(60) == 20
+    assert helper.bounded_stream("x" * 9000) == ("x" * 8192, True)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows inherited-pipe regression")
+def test_shell_returns_on_timeout_with_child_holding_inherited_output(monkeypatch, tmp_path):
+    import psutil
+    import time
+    client = _client(monkeypatch, tmp_path)
+    script = tmp_path / "inherited_output_fixture.py"
+    pids = tmp_path / "fixture_pids.json"
+    script.write_text(
+        "import json, os, subprocess, sys, time\n"
+        "from pathlib import Path\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)', 'xider-inherited-output-fixture'])\n"
+        "Path(sys.argv[1]).write_text(json.dumps([os.getpid(), child.pid]), encoding='utf-8')\n"
+        "print('fixture ready', flush=True)\n"
+        "time.sleep(5)\n", encoding="utf-8")
+    command = wds.subprocess.list2cmdline([sys.executable, str(script), str(pids)])
+    started = time.monotonic()
+    try:
+        client._do_shell({"type": "shell", "command": command,
+                          "approval": _approval(command=command), "timeout": 1})
+        elapsed = time.monotonic() - started
+        assert elapsed < 2.5, "handler waited for the grandchild's inherited pipes"
+        assert client.responses[-1][1]["status"] == "timeout"
+    finally:
+        if pids.exists():
+            for pid in json.loads(pids.read_text(encoding="utf-8")):
+                try:
+                    process = psutil.Process(pid)
+                    args = process.cmdline()
+                    if str(script) in args or "xider-inherited-output-fixture" in args:
+                        process.terminate()
+                        process.wait(timeout=2)
+                except (psutil.NoSuchProcess, psutil.ZombieProcess):
+                    pass
 
 
 def test_windows_unsigned_and_hmac_only_shell_never_reach_subprocess(monkeypatch, tmp_path):
@@ -221,7 +273,7 @@ def test_windows_missing_public_key_fails_closed(monkeypatch, tmp_path):
     assert calls == []
 
 
-@pytest.mark.parametrize("missing_module", ["command_signing", "command_replay"])
+@pytest.mark.parametrize("missing_module", ["command_signing", "command_replay", "shell_execution"])
 def test_windows_missing_approval_component_fails_closed(monkeypatch, tmp_path, missing_module):
     client = _client(monkeypatch, tmp_path)
     original_loader = wds._load_command_approval_component
@@ -419,7 +471,7 @@ def test_windows_concurrent_duplicate_approval_runs_once(monkeypatch, tmp_path):
         calls.append((command, kwargs))
         entered.set()
         release.wait(timeout=2)
-        return SimpleNamespace(stdout="ok", stderr="", returncode=0)
+        return _stream_result(kwargs, stdout="ok", stderr="", returncode=0)
 
     monkeypatch.setattr(wds.subprocess, "run", blocking_run)
     request = {"type": "shell", "command": COMMAND, "approval": _approval()}
