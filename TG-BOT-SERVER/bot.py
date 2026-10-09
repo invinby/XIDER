@@ -7847,7 +7847,7 @@ async def on_versions_detail(cq: CallbackQuery):
     if not release:
         await cq.answer(_lex("versions_not_found"), show_alert=True)
         return
-    available = release.has_package(component)
+    available = release.signed_package(component)
     status = _lex("versions_package_found" if available else "versions_package_missing")
     notes = release.notes.strip() or _lex("versions_notes_empty")
     note_chunks = await asyncio.to_thread(_split_html_escaped_text, notes)
@@ -8089,7 +8089,13 @@ async def on_versions_install_confirm(cq: CallbackQuery):
         return
 
     with _PENDING_VERSION_INSTALLS_LOCK:
+        # Refresh can outlive the confirmation window while the agent remains
+        # online. Check expiry again immediately before consuming/dispatching.
+        expired = time.time() - float(pending.get("created_at") or 0) > 180
         _PENDING_VERSION_INSTALLS.pop(user_id, None)
+    if expired:
+        await cq.answer(_lex("versions_install_expired"), show_alert=True)
+        return
     await simple_command(
         cq,
         "agent_update",

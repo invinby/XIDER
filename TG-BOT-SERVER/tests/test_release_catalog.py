@@ -88,7 +88,7 @@ def test_available_version_requires_package_inside_signed_inventory(signed_catal
     assert ledger.version_state("4.0.1", advertised, "windows_agent")["available"] is None
 
 
-@pytest.mark.parametrize("change", ["none", "unknown", "os", "signature", "role", "grant", "display"])
+@pytest.mark.parametrize("change", ["none", "unknown", "os", "signature", "role", "grant", "display", "expires_during_refresh"])
 def test_rollback_confirmation_revalidates_exact_signed_selection(monkeypatch, signed_release, change):
     import bot
     release, manifest = signed_release
@@ -134,9 +134,52 @@ def test_rollback_confirmation_revalidates_exact_signed_selection(monkeypatch, s
         monkeypatch.setattr(bot, "get_user_role", lambda user: bot.Role.GUEST)
     elif change == "grant":
         monkeypatch.setattr(bot, "_simple_command_still_allowed", lambda *args: False)
+    elif change == "expires_during_refresh":
+        clock = [time.time()]
+        monkeypatch.setattr(bot.time, "time", lambda: clock[0])
+        def delayed_refresh(**kwargs):
+            clock[0] += 181
+            info["last_seen"] = clock[0]
+            return available
+        monkeypatch.setattr(ledger.catalog, "list", delayed_refresh)
     asyncio.run(bot.on_versions_install_confirm(Callback("versions:install_confirm:v4.1.0")))
     if change == "none":
         assert commands == [("agent_update", {"timeout": 110.0, "update": True, "release_tag": "v4.1.0"})]
         assert info["version"] == "4.2.0"
     else:
         assert commands == []
+    if change == "expires_during_refresh":
+        assert bot.ADMIN_ID not in bot._PENDING_VERSION_INSTALLS
+
+
+@pytest.mark.parametrize("trust", ["unsigned", "tampered"])
+def test_release_detail_never_announces_unverified_package(monkeypatch, signed_release, trust):
+    import bot
+    release, manifest = signed_release
+    if trust == "unsigned":
+        manifest = None
+    else:
+        manifest = copy.deepcopy(manifest)
+        manifest["assets"][0]["sha256"] = "c" * 64
+    release = dataclasses.replace(release, manifest=manifest)
+    session = bot.SessionRegistry()
+    session["target"] = "pc"
+    monkeypatch.setattr(bot, "SESSION", session)
+    info = {"os": "Windows", "version": "4.2.0", "update_mode": "source", "release_update_ready": True, "last_seen": time.time(), "online": True}
+    monkeypatch.setattr(bot, "devices", SimpleNamespace(get=lambda target: info))
+    monkeypatch.setattr(ledger.catalog, "list", lambda: [release])
+    cards = []
+    async def replace(cq, text, reply_markup=None):
+        cards.append((text, reply_markup))
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    class Callback:
+        from_user = SimpleNamespace(id=bot.ADMIN_ID)
+        data = "versions:detail:agent:v4.1.0"
+        async def answer(self, *args, **kwargs):
+            pass
+    asyncio.run(bot.on_versions_detail(Callback()))
+    text, keyboard = cards[-1]
+    assert bot._lex("versions_package_found") not in text
+    assert bot._lex("versions_package_missing") in text
+    assert "Доступная версия: unknown" in text
+    assert not any(button.callback_data.startswith("versions:install:") for row in keyboard.inline_keyboard for button in row)
