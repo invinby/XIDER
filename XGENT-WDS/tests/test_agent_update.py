@@ -106,6 +106,7 @@ def test_source_update_validates_and_installs_only_windows_allowlist(monkeypatch
     assert installed[0]["files"] == (
         "xgent_wds.py", "config.py", "crypto.py", "xgencrypto.py",
         "release_signature.py", "update_package.py",
+        "command_module_loader.py", "command_signing.py", "command_replay.py",
     )
     assert installed[0]["install_dir"] == Path(wds.__file__).resolve().parent
     assert installed[0]["transaction_path"] == tmp_path / wds.UPDATE_STATE_NAME

@@ -37,27 +37,20 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r XGENT-WDS/requirements.txt
-          pip install pyinstaller
+          pip install pyinstaller==6.22.3
 
       - name: "Build Windows EXE via PyInstaller"
         run: |
           cd XGENT-WDS
           pyinstaller --clean XGENT-WDS.spec
-          $contents = pyi-archive_viewer -l -r -b .\dist\XGENT-WDS.exe | Out-String
-          if ($LASTEXITCODE -ne 0) { throw "Could not inspect XGENT-WDS.exe archive." }
-          if ($contents -notmatch '(?m)^\s*release_signature\s*$') {
-            throw "The Windows executable does not contain release_signature."
-          }
-          if ($contents -notmatch '(?m)^\s*update_package\s*$') {
-            throw "The Windows executable does not contain update_package."
-          }
-          if ($contents -notmatch 'cryptography\.hazmat\.primitives\.asymmetric\.ed25519') {
-            throw "The Windows executable does not contain Ed25519 verification support."
-          }
+          python ..\tools\verify_command_approval_bundle.py --executable dist/XGENT-WDS.exe
           Copy-Item .env.example dist/.env.example
           Copy-Item install_agent.ps1 dist/install_agent.ps1
           Copy-Item start_agent.bat dist/start_agent.bat
           Copy-Item stop_agent.bat dist/stop_agent.bat
+          $package = Join-Path $env:RUNNER_TEMP 'XGENT-WDS-Windows.zip'
+          Compress-Archive -Path .\dist\* -DestinationPath $package -Force
+          python ..\tools\verify_command_approval_bundle.py --public-only-zip $package
 
       - name: "Upload Windows EXE Artifact"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -104,7 +97,7 @@ jobs:
       - name: "Install dependencies"
         run: |
           python -m pip install --upgrade pip
-          pip install -r XGENT-MCS/requirements.txt pyinstaller
+          pip install -r XGENT-MCS/requirements.txt pyinstaller==6.22.3
 
       - name: "Build and verify the signed app before packaging"
         run: |
@@ -113,13 +106,7 @@ jobs:
           codesign -dv --verbose=4 dist/XIDER.app
           plutil -p dist/XIDER.app/Contents/Info.plist
           python ../tools/verify_macos_bundle.py dist/XIDER.app
-          contents="$(pyi-archive_viewer -l -r -b dist/XIDER.app/Contents/MacOS/XGENT-MCS)"
-          for module in release_signature update_package fake_update_screen location_adapter; do
-            if ! printf '%s\n' "$contents" | grep -Eq "^[[:space:]]*$module[[:space:]]*$"; then
-              echo "The macOS app executable is missing required support: $module" >&2
-              exit 1
-            fi
-          done
+          python ../tools/verify_command_approval_bundle.py --executable dist/XIDER.app/Contents/MacOS/XGENT-MCS
 
       - name: "Notarize and staple without changing signed app contents"
         run: |
@@ -135,6 +122,7 @@ jobs:
           cp start_agent.sh stop_agent.sh dist/
           cd dist
           zip -r XGENT-MCS-macos-bundle.zip XIDER.app .env.example start_agent.sh stop_agent.sh
+          python ../../tools/verify_command_approval_bundle.py --public-only-zip XGENT-MCS-macos-bundle.zip
           mkdir "$RUNNER_TEMP/xider-final-extracted"
           ditto -x -k XGENT-MCS-macos-bundle.zip "$RUNNER_TEMP/xider-final-extracted"
           python ../../tools/verify_macos_bundle.py "$RUNNER_TEMP/xider-final-extracted/XIDER.app" --distribution
@@ -205,6 +193,11 @@ jobs:
             unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Fxq "$file"
           done
           git archive --format=zip --output=artifacts/X-STAB-server.zip HEAD TG-BOT-SERVER deploy
+          python tools/verify_command_approval_bundle.py \
+            --public-only-zip artifacts/XIDER-source.zip \
+            --public-only-zip artifacts/Guard-Keeper-Windows.zip \
+            --public-only-zip artifacts/Guard-Keeper-macOS.zip \
+            --public-only-zip artifacts/X-STAB-server.zip
 
       - name: "Upload component packages"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

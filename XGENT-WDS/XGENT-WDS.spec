@@ -8,6 +8,8 @@ MAC_AGENT_DIR = REPO_ROOT / 'XGENT-MCS'
 datas = []
 binaries = []
 hiddenimports = ['pystray._win32', 'comtypes.stream',
+                 'command_module_loader', 'command_signing', 'command_replay',
+                 'cryptography.hazmat.primitives.asymmetric.ed25519',
                  'winrt.windows.devices.geolocation',
                  'winrt.windows.security.authorization.appcapabilityaccess']
 tmp_ret = collect_all('soundfile')
@@ -24,7 +26,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[str(REPO_ROOT / 'tools' / 'command_approval_bundle_smoke.py')],
     excludes=[],
     noarchive=False,
     optimize=0,

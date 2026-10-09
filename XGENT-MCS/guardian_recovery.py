@@ -31,6 +31,7 @@ from update_package import (
 RECOVERY_FILES = (
     "xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py",
     "release_signature.py", "update_package.py", "guardian_recovery.py",
+    "command_module_loader.py", "command_signing.py", "command_replay.py",
     "xider_guardian.py", "requirements.txt", "setup_mac.py", "fake_update_screen.py",
     "start_agent.sh", "stop_agent.sh", "start_guardian.sh",
 )

@@ -2628,6 +2628,7 @@ end tell'''
         # remaining files.
         files = (
             "release_signature.py", "update_package.py", "guardian_recovery.py", "start_agent.sh",
+            "command_module_loader.py", "command_signing.py", "command_replay.py",
             "xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py",
             "fake_update_screen.py",
             "xider_guardian.py", "requirements.txt", "setup_mac.py",

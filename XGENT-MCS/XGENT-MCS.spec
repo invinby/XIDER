@@ -15,8 +15,11 @@ a = Analysis(
     ['xgent_mcs.py'], pathex=[], binaries=[], datas=[],
     hiddenimports=['paho.mqtt.client', 'psutil', 'cryptography',
                    'cryptography.hazmat.primitives.ciphers.aead',
+                   'cryptography.hazmat.primitives.asymmetric.ed25519',
+                   'command_module_loader', 'command_signing', 'command_replay',
                    'fake_update_screen', 'AppKit', 'Foundation', 'CoreLocation', 'location_adapter'],
-    hookspath=[], hooksconfig={}, runtime_hooks=[],
+    hookspath=[], hooksconfig={},
+    runtime_hooks=[str(Path(SPECPATH).resolve().parent / 'tools' / 'command_approval_bundle_smoke.py')],
     excludes=['tkinter', 'test', 'unittest'], noarchive=False,
 )
 pyz = PYZ(a.pure)

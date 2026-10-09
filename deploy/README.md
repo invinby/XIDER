@@ -217,12 +217,14 @@ required to carry an Ed25519 publisher signature over the canonical inventory.
 The macOS source-agent updater checks the signature against its pinned key ring,
 then checks the selected source archive's size and SHA-256 before extraction.
 The Windows source agent imports the shared verifier, and the PyInstaller spec
-includes its module path. The Windows EXE was rebuilt locally on 2026-10-01 with
-Python 3.12.10 and PyInstaller 6.22.2; archive inspection confirms
-`release_signature`, Ed25519, and `config` are packaged. The Windows build
-workflow now fails if either module is absent from the EXE. The executable was
-not launched. Its remote updater remains disabled until the Windows transaction
-installer is complete.
+includes its module path. On 2026-10-09, the Windows EXE was rebuilt locally
+with Python 3.12.10 and PyInstaller 6.22.3. Archive inspection and the
+service-free frozen smoke confirmed `command_module_loader`, `command_signing`,
+`command_replay`, Ed25519 support, valid-signature acceptance, tamper rejection,
+filesystem-shadow rejection, and durable replay rejection. The smoke invoked
+only the package probe; normal agent startup and physical-device behavior remain
+unverified. The Windows workflow enforces the same archive checks on release
+builds.
 The current source pins release key ID `521c56c0c89f0ddd`; the matching private
 key is stored outside the checkout and is never included in source, archives,
 or either VPS. The protected GitHub environment secret was configured on

@@ -11,6 +11,7 @@ case "${XIDER_MACOS_SIGNING_IDENTITY:-}" in
   "Apple Development:"*|"Developer ID Application:"*) ;;
   *) echo "BLOCKED: Core Location requires a proper non-ad-hoc Apple signing identity." >&2; exit 1 ;;
 esac
+python3 -m pip install pyinstaller==6.22.3
 python3 -m PyInstaller --clean --noconfirm XGENT-MCS.spec
 python3 ../tools/verify_macos_bundle.py dist/XIDER.app
 echo "Built signed XIDER.app $AGENT_VERSION; physical Core Location acceptance remains required."

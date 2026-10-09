@@ -393,11 +393,15 @@ def test_extracts_only_allowlisted_windows_component_files(tmp_path):
 def test_windows_update_stages_shared_verifier_and_updater_from_mcs(tmp_path):
     archive = tmp_path / "windows-shared-release.zip"
     stage = tmp_path / "windows-shared-stage"
-    expected = ("xgent_wds.py", "release_signature.py", "update_package.py")
+    expected = ("xgent_wds.py", "release_signature.py", "update_package.py",
+                "command_module_loader.py", "command_signing.py", "command_replay.py")
     _zip(archive, [
         ("XIDER-source/XGENT-WDS/xgent_wds.py", b"print('windows')", None),
         ("XIDER-source/XGENT-MCS/release_signature.py", b"VALUE = 'verifier'", None),
         ("XIDER-source/XGENT-MCS/update_package.py", b"VALUE = 'updater'", None),
+        ("XIDER-source/XGENT-MCS/command_module_loader.py", b"# loader", None),
+        ("XIDER-source/XGENT-MCS/command_signing.py", b"# signing", None),
+        ("XIDER-source/XGENT-MCS/command_replay.py", b"# replay", None),
     ])
 
     result = package.extract_agent_files(
@@ -410,6 +414,8 @@ def test_windows_update_stages_shared_verifier_and_updater_from_mcs(tmp_path):
     assert (result / "xgent_wds.py").read_bytes() == b"print('windows')"
     assert (result / "release_signature.py").read_bytes() == b"VALUE = 'verifier'"
     assert (result / "update_package.py").read_bytes() == b"VALUE = 'updater'"
+    for name in expected[3:]:
+        assert (result / name).read_bytes() == ("# " + name.removeprefix("command_").removesuffix(".py").replace("module_loader", "loader")).encode()
 
 
 def test_windows_update_rejects_duplicate_shared_helpers(tmp_path):

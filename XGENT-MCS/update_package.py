@@ -38,7 +38,8 @@ _RELEASE_TAG = re.compile(r"^v\d{1,6}\.\d{1,6}\.\d{1,6}$")
 _ALLOWED_RELEASE_HOSTS = frozenset({
     "github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com",
 })
-_WINDOWS_SHARED_UPDATE_FILES = frozenset({"release_signature.py", "update_package.py"})
+_WINDOWS_SHARED_UPDATE_FILES = frozenset({"release_signature.py", "update_package.py",
+    "command_module_loader.py", "command_signing.py", "command_replay.py"})
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _RECOVERY_SLOT = re.compile(r"^v\d{1,6}\.\d{1,6}\.\d{1,6}-[0-9a-f]{64}$")
 UPDATE_STATE_NAME = "agent-update-state.json"
@@ -46,6 +47,7 @@ UPDATE_BACKUP_DIR = "agent-backups"
 AGENT_UPDATE_FILES = frozenset({
     "xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py",
     "release_signature.py", "update_package.py", "guardian_recovery.py", "xider_guardian.py",
+    "command_module_loader.py", "command_signing.py", "command_replay.py",
     "fake_update_screen.py",
     "requirements.txt", "setup_mac.py",
     "start_agent.sh", "stop_agent.sh", "start_guardian.sh",
