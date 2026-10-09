@@ -215,6 +215,14 @@ def consume_pending(
         return pending
 
 
+def get_pending(request_id: str) -> PendingCommand | None:
+    """Fetch immutable server state; callback metadata is never authoritative."""
+    if not isinstance(request_id, str) or not request_id or len(request_id) > MAX_REQUEST_ID_CHARS:
+        return None
+    with _LOCK:
+        return _PENDING_COMMANDS.get(request_id)
+
+
 def cancel_pending(request_id: str, actor_id: int) -> bool:
     """Cancel a pending request only for its requester or captured owner."""
 

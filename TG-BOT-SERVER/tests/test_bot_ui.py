@@ -11,6 +11,245 @@ import pytest
 import bot
 
 
+@pytest.mark.parametrize("actor", [100, 200])
+def test_shell_input_routes_exact_preview_to_owner_without_publish(monkeypatch, tmp_path, actor):
+    from types import SimpleNamespace
+    Callback, rendered = _admin_fixture(monkeypatch, tmp_path)
+    bot.access_store.set_role(100, 200, bot.Role.USER, 100)
+    bot.access_store.toggle_device(100, 200, "a", 100)
+    bot.access_store.toggle_callback(100, 200, "shell_request", 100)
+    _setup(monkeypatch, {"a": {"name": "Laptop", "command_approval_protocol": 1}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "a"})
+    notices = []
+    async def notify(text, reply_markup=None, **kwargs):
+        notices.append((text, reply_markup))
+    monkeypatch.setattr(bot, "_notify_owner", notify)
+    monkeypatch.setattr(bot, "publish_tracked", lambda *a, **kw: pytest.fail("raw command published"))
+    class State:
+        async def get_data(self):
+            return {"command_target": "a"}
+        async def clear(self):
+            pass
+    command = "  printf '<exact>'\nwhoami  "
+    asyncio.run(bot.on_shell_input(SimpleNamespace(text=command, from_user=SimpleNamespace(id=actor)), State()))
+    assert len(notices) == 1
+    assert "  printf &#x27;&lt;exact&gt;&#x27;\nwhoami  " in notices[0][0]
+    assert f"{actor}" in notices[0][0]
+    actions = _callback_data(notices[0][1])
+    assert any(value.startswith("cmd:shell-approve:") for value in actions)
+    assert any(value.startswith("cmd:shell-cancel:") for value in actions)
+
+
+def _shell_fixture(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives import serialization
+    Callback, rendered = _admin_fixture(monkeypatch, tmp_path)
+    bot.access_store.set_role(100, 200, bot.Role.USER, 100)
+    bot.access_store.toggle_device(100, 200, "a", 100)
+    bot.access_store.toggle_callback(100, 200, "shell_request", 100)
+    _setup(monkeypatch, {"a": {"name": "Laptop", "command_approval_protocol": 1}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "a"})
+    monkeypatch.setattr(bot.command_approval, "_PENDING_COMMANDS", {})
+    key = Ed25519PrivateKey.generate()
+    keyfile = tmp_path / "signing.pem"
+    keyfile.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+    import hashlib
+    import json
+    public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    key_id = hashlib.sha256(public).hexdigest()[:16]
+    encoded_public = base64.urlsafe_b64encode(public).decode().rstrip("=")
+    keyset = json.dumps({key_id: encoded_public}, sort_keys=True, separators=(",", ":")).encode()
+    monkeypatch.setenv("XIDER_COMMAND_VERIFY_KEYSET_B64", base64.urlsafe_b64encode(keyset).decode().rstrip("="))
+    monkeypatch.setattr(bot.command_signing, "_PRIVATE_KEY_PATH", keyfile)
+    published = []
+    monkeypatch.setattr(bot.transport, "publish_command", lambda *args, **kw: published.append((args, kw)) or True)
+    async def result(*args):
+        return {"output": "done"}
+    monkeypatch.setattr(bot.shell_collector, "wait_for", result)
+    monkeypatch.setattr(bot, "publish", lambda *args, **kw: pytest.fail("generic publish leaks command into logs/history"))
+    async def notify(text, reply_markup=None, **kwargs):
+        rendered.append((text, reply_markup))
+    monkeypatch.setattr(bot, "_notify_owner", notify)
+    class State:
+        async def get_data(self):
+            return {"command_target": "a"}
+        async def clear(self):
+            pass
+    async def request(actor=200):
+        await bot.on_shell_input(SimpleNamespace(text="  whoami  ", from_user=SimpleNamespace(id=actor)), State())
+        return next(iter(bot.command_approval._PENDING_COMMANDS.values()), None)
+    return Callback, request, published, rendered
+
+
+@pytest.mark.parametrize("failure", ["guest", "blocked", "ungranted", "device", "old_protocol", "changed_target"])
+def test_shell_request_denies_invalid_current_authority(monkeypatch, tmp_path, failure):
+    Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
+    if failure == "guest":
+        bot.access_store.set_role(100, 200, bot.Role.GUEST, 100)
+    elif failure == "blocked":
+        bot.access_store.set_blocked(100, 200, True, 100)
+    elif failure == "ungranted":
+        bot.access_store.toggle_callback(100, 200, "shell_request", 100)
+    elif failure == "device":
+        bot.access_store.toggle_device(100, 200, "a", 100)
+    elif failure == "old_protocol":
+        bot.devices.get("a").pop("command_approval_protocol")
+    elif failure == "changed_target":
+        bot.SESSION["target"] = "b"
+    assert asyncio.run(request()) is None
+    assert not published
+
+
+@pytest.mark.parametrize("failure", ["actor", "owner", "guest", "blocked", "grant", "device", "expiry", "command", "hash", "callback", "key", "keyset"])
+def test_shell_approval_invalid_paths_never_publish(monkeypatch, tmp_path, failure):
+    Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
+    pending = asyncio.run(request())
+    actor = 200 if failure == "actor" else 100
+    if failure == "owner":
+        monkeypatch.setattr(bot, "ADMIN_ID", 300)
+    elif failure == "guest":
+        bot.access_store.set_role(100, 200, bot.Role.GUEST, 100)
+    elif failure == "blocked":
+        bot.access_store.set_blocked(100, 200, True, 100)
+    elif failure == "grant":
+        bot.access_store.toggle_callback(100, 200, "shell_request", 100)
+    elif failure == "device":
+        bot.access_store.toggle_device(100, 200, "a", 100)
+    elif failure == "expiry":
+        monkeypatch.setattr(bot.time, "time", lambda: pending.expires_at)
+    elif failure == "command":
+        object.__setattr__(pending, "_command_text", "different")
+    elif failure == "hash":
+        object.__setattr__(pending, "command_hash", "0" * 64)
+    elif failure == "key":
+        bot.command_signing._PRIVATE_KEY_PATH.unlink()
+    elif failure == "keyset":
+        monkeypatch.delenv("XIDER_COMMAND_VERIFY_KEYSET_B64")
+    callback = f"cmd:shell-approve:{pending.request_id}" + (":b" if failure == "callback" else "")
+    asyncio.run(bot.on_shell_approve(Callback(callback, actor)))
+    assert not published
+
+
+def test_shell_owner_approval_is_signed_atomic_and_bound_to_preview(monkeypatch, tmp_path, caplog):
+    Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
+    async def scenario():
+        pending = await request()
+        bot.SESSION["target"] = "other-owner-screen"
+        callback = f"cmd:shell-approve:{pending.request_id}"
+        await asyncio.gather(bot.on_shell_approve(Callback(callback)), bot.on_shell_approve(Callback(callback)))
+        await bot.on_shell_approve(Callback(callback))
+        return pending
+    pending = asyncio.run(scenario())
+    assert len(published) == 1
+    args, payload = published[0]
+    assert args == ("a", "shell")
+    assert payload["command"] == "  whoami  "
+    assert payload["approval"]["requester_id"] == 200
+    assert payload["approval"]["approver_id"] == 100
+    assert payload["approval"]["command_hash"] == pending.command_hash
+    assert "signature" in payload["approval"]
+    assert bot.command_signing.verify_approved_command(payload["approval"], command=payload["command"], expected_device_id="a", now=int(time.time())) is not None
+    assert "whoami" not in caplog.text
+    assert bot.command_approval.get_pending(pending.request_id) is None
+
+
+def test_shell_cancel_requires_current_owner_and_prevents_later_approval(monkeypatch, tmp_path):
+    Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
+    async def scenario():
+        pending = await request()
+        callback = f"cmd:shell-cancel:{pending.request_id}"
+        await bot.on_shell_cancel(Callback(callback, 200))
+        assert bot.command_approval.get_pending(pending.request_id) is pending
+        await bot.on_shell_cancel(Callback(callback))
+        await bot.on_shell_approve(Callback(f"cmd:shell-approve:{pending.request_id}"))
+    asyncio.run(scenario())
+    assert not published
+
+
+def test_shell_old_owner_cannot_cancel(monkeypatch, tmp_path):
+    Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
+    pending = asyncio.run(request())
+    monkeypatch.setattr(bot, "ADMIN_ID", 300)
+    asyncio.run(bot.on_shell_cancel(Callback(f"cmd:shell-cancel:{pending.request_id}", 100)))
+    assert bot.command_approval.get_pending(pending.request_id) is pending
+    assert not published
+
+
+def test_shell_transport_refuses_unsigned_and_tampered_messages(monkeypatch, tmp_path):
+    from transport import MQTTTransport
+    Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
+    pending = asyncio.run(request())
+    envelope = bot.command_signing.sign_approved_command(
+        request_id=pending.request_id, requester_id=200, approver_id=100, device_id="a",
+        command=pending.command_text, issued_at=pending.created_at, expires_at=pending.expires_at,
+        nonce=pending.nonce, key_id=bot.command_signing.signing_key_id(),
+    )
+    transport = MQTTTransport(lambda *args: None)
+    transport.connected.set()
+    boundary = []
+    from types import SimpleNamespace
+    transport._client.publish = lambda *args, **kw: boundary.append((args, kw)) or SimpleNamespace(rc=0)
+    assert not transport.publish_command("a", "shell", command=pending.command_text)
+    assert not transport.publish_command("a", "shell", command="different", approval=envelope)
+    assert not boundary
+    assert transport.publish_command("a", "shell", command=pending.command_text, approval=envelope)
+    assert len(boundary) == 1
+
+
+def test_shell_request_grant_is_reachable_and_never_inferred_from_full_device(monkeypatch, tmp_path):
+    Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
+    assert "cmd:shell" in _callback_data(bot.terminal_menu(200))
+    assert "shell_request" in bot.USER_PERMISSION_CHOICES
+    bot.access_store.toggle_callback(100, 200, "shell_request", 100)
+    bot.access_store.toggle_callback(100, 200, "full_device", 100)
+    assert not bot.access_store.can_use_callback(200, "cmd:shell", 100, "a")
+
+
+def test_signed_status_preserves_protocol_and_legacy_report_revokes_it(monkeypatch, tmp_path):
+    from device_store import DeviceStore
+    monkeypatch.setattr(DeviceStore, "FILE", tmp_path / "devices.json")
+    monkeypatch.setattr(bot, "devices", DeviceStore())
+    monkeypatch.setattr(bot, "verify_message_detailed", lambda data: (data, "ok"))
+    monkeypatch.setattr(bot, "ENCRYPT_PAYLOAD", False)
+    monkeypatch.setattr(bot.bot_settings, "is_blocked", lambda _id: False)
+    topic = f"{bot.MQTT_PREFIX}/a/status"
+    bot.on_mqtt_message(topic, {"type": "status", "command_approval_protocol": 1})
+    assert bot._shell_request_allowed(bot.ADMIN_ID, "a")
+    bot.on_mqtt_message(topic, {"type": "status"})
+    assert not bot._shell_request_allowed(bot.ADMIN_ID, "a")
+
+
+def test_shell_approval_waits_for_matching_result_on_owner_card(monkeypatch, tmp_path):
+    Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
+    async def result(device, action, timeout, request_id):
+        assert (device, action, timeout) == ("a", "shell", 20.0)
+        assert request_id == published[0][1]["id"]
+        return {"output": "result <exact>"}
+    monkeypatch.setattr(bot.shell_collector, "wait_for", result)
+    async def scenario():
+        pending = await request()
+        await bot.on_shell_approve(Callback(f"cmd:shell-approve:{pending.request_id}"))
+    asyncio.run(scenario())
+    assert "result &lt;exact&gt;" in rendered[-1][0]
+
+
+def test_shell_failed_owner_preview_discards_pending_request(monkeypatch, tmp_path):
+    Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
+    async def undelivered(*args, **kwargs):
+        return False
+    monkeypatch.setattr(bot, "_notify_owner", undelivered)
+    assert asyncio.run(request()) is None
+    assert not published
+
+
+def test_shell_strict_owner_preview_reports_failed_telegram_delivery(monkeypatch):
+    async def failed(*args, **kwargs):
+        raise RuntimeError("boundary failed")
+    monkeypatch.setattr(bot.bot, "send_message", failed)
+    assert asyncio.run(bot._notify_owner("exact preview", strict_delivery=True)) is False
+
+
 @pytest.fixture(autouse=True)
 def isolated_card_index(monkeypatch, tmp_path):
     monkeypatch.setattr(bot.ui_cards, "FILE", tmp_path / "ui-cards.json")
@@ -680,7 +919,6 @@ def test_text_command_flows_reuse_the_existing_chat_card():
     tree = ast.parse(Path(bot.__file__).read_text(encoding="utf-8"))
     target_functions = {
         "on_cmd_shell": "_replace_callback_message",
-        "on_shell_ok": "_replace_callback_message",
         "on_shell_input": "_replace_user_card",
         "on_cmd_open_app": "_replace_callback_message",
         "on_openapp_ok": "_replace_callback_message",
@@ -705,7 +943,7 @@ def test_text_command_flows_reuse_the_existing_chat_card():
         "on_prockill_input": "_replace_user_card",
     }
     prompt_functions = {
-        "on_cmd_shell", "on_shell_ok", "on_cmd_open_app", "on_openapp_ok",
+        "on_cmd_shell", "on_cmd_open_app", "on_openapp_ok",
         "on_cmd_url", "on_cmd_text", "on_cmd_sound",
         "on_cmd_clipset", "on_fun_type", "on_fun_hotkey",
         "on_fun_wallpaper", "on_cmd_brightness", "on_cmd_prockillname",
@@ -775,7 +1013,6 @@ def test_text_command_flows_reuse_the_existing_chat_card():
 @pytest.mark.parametrize(
     ("handler_name", "action", "input_text"),
     [
-        ("on_shell_input", "shell", "whoami"),
         ("on_open_app_input", "open_app", "Calculator"),
         ("on_text_input", "notify", "hello"),
         ("on_sound_input", "sound", "beep"),
@@ -3502,6 +3739,7 @@ def _rendered_callback_inventory(monkeypatch):
         "device_id": "device-1", "info_book": bot.info_book, "index": 1,
         "it": {"pid": 123}, "page": 1, "i": 0, "notes_page": 1,
         "token": "0123456789abcdef0123456789abcdef",
+        "approve_callback": "cmd:shell-approve:sample", "cancel_callback": "cmd:shell-cancel:sample",
         "release": SimpleNamespace(tag="v4.1.0"),
         "bootstrap_release": SimpleNamespace(tag="v4.1.0"), "tag": "v4.1.0",
     }
@@ -3561,8 +3799,8 @@ def test_rendered_menu_callbacks_match_a_registered_route(monkeypatch):
 
 def _expected_callback_gate(callback):
     """Independent route contract: never inferred from the installed filter."""
-    if callback in {"cmd:shell", "shell:ok", "menu:admin", "menu:target", "url:favorites", "versions:server"} or callback.startswith(
-        ("admin:", "devmg:", "install:", "server:", "server_confirm:", "url:fav:", "versions:bootstrap:")
+    if callback in {"shell:ok", "menu:admin", "menu:target", "url:favorites", "versions:server"} or callback.startswith(
+        ("admin:", "devmg:", "install:", "server:", "server_confirm:", "url:fav:", "versions:bootstrap:", "cmd:shell-approve:", "cmd:shell-cancel:")
     ):
         return "OwnerFilter"
     if callback in {"menu:main", "menu:about", "menu:server", "menu:guest_devices", "guest:readonly", "url:cancel"} or callback.startswith(("about:chapter:", "url:count:")):
@@ -3714,6 +3952,14 @@ for _guardian_route in (
 _DEPENDENT_ACTION_CONTRACTS["on_stopall_ok"] = dict(
     category="power", os_support=("Windows", "macOS"), timeout=0.0,
     result_sensitivity="acknowledgment", risk="all-device agent interruption",
+)
+_DEPENDENT_ACTION_CONTRACTS["on_shell_approve"] = dict(
+    category="terminal", os_support=("Windows", "macOS"), timeout=20.0,
+    result_sensitivity="private shell output", risk="arbitrary code execution",
+)
+_DEPENDENT_ACTION_CONTRACTS["on_shell_cancel"] = dict(
+    category="terminal", os_support=("server host",), timeout=0.0,
+    result_sensitivity="request metadata", risk="non-action",
 )
 
 

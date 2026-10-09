@@ -281,6 +281,14 @@ def sign_approved_command(
     return {**payload, "signature": _b64url_encode(signature)}
 
 
+def signing_key_id() -> str:
+    """Identify the provisioned key without exporting private material."""
+    key = _load_private_key()
+    return _key_id(key.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw,
+    ))
+
+
 def verify_approved_command(
     envelope: dict,
     *,

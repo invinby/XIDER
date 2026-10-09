@@ -16,6 +16,7 @@ import paho.mqtt.client as mqtt
 from config import ENCRYPT_PAYLOAD, MQTT_BROKER, MQTT_PASSWORD, MQTT_PORT, MQTT_PREFIX, MQTT_TLS, MQTT_USERNAME
 from crypto import sign_message
 from xgencrypto import encrypt_payload
+from command_signing import verify_approved_command
 
 log = logging.getLogger("xgent.transport")
 
@@ -195,6 +196,12 @@ class MQTTTransport:
         Каждая команда получает короткий id (correlation) и публикуется с QoS 1,
         результат publish проверяется по коду возврата rc.
         """
+        if cmd_type == "shell" and verify_approved_command(
+            kwargs.get("approval"), command=kwargs.get("command"),
+            expected_device_id=device_id, now=int(time.time()),
+        ) is None:
+            log.warning("Shell publish refused: approval is missing or invalid")
+            return False
         if not self.connected.is_set():
             log.warning("Команда %s не отправлена: нет соединения с брокером", cmd_type)
             return False

@@ -33,9 +33,10 @@ class Role:
     ALL = (OWNER, COOWNER, USER, GUEST, BLOCKED)
 
 
-OWNER_ONLY_CALLBACKS = frozenset({"cmd:shell", "menu:target", "cfm:stop_all"})
+OWNER_ONLY_CALLBACKS = frozenset({"menu:target", "cfm:stop_all"})
 OWNER_ONLY_CALLBACK_PREFIXES = (
     "admin:", "devmg:", "server:", "versions:", "ev:", "adm:", "all:",
+    "cmd:shell-approve:", "cmd:shell-cancel:",
 )
 USER_NAVIGATION_CALLBACKS = frozenset({"menu:main", "menu:about", "menu:devices", "back:device"})
 
@@ -73,6 +74,7 @@ CATEGORY_REQUIRED_GRANTS = {
     }),
     "cat:files": frozenset({"files:list", "files:find", "files:get", "files:put", "files:del", "files:open", "cmd:disks"}),
     "cat:terminal": frozenset({
+        "shell_request",
         "proc:0", "cmd:prockillname", "cfm:shell", "cmd:open_app", "cmd:startup", "cmd:services",
         "cmd:cmdhistory", "hist:0", "rep:0",
     }) | INPUT_ACTION_CALLBACKS,
@@ -438,6 +440,9 @@ def can_use_callback(user_id: int, callback: str | None, owner_id: int,
     perms = record.get("permissions") or {}
     callbacks = set(perms.get("callbacks") or [])
     device_ids = set(perms.get("devices") or [])
+    if data == "cmd:shell":
+        return bool(selected_device and selected_device != "all"
+                    and selected_device in device_ids and "shell_request" in callbacks)
     if data in USER_NAVIGATION_CALLBACKS:
         return True
     if data.startswith("dev:"):

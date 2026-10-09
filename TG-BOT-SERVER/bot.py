@@ -14,6 +14,7 @@ import contextvars
 from contextlib import asynccontextmanager
 import datetime
 import html
+import hashlib
 import io
 import json
 import logging
@@ -69,6 +70,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import bot_settings
 import access_store
+import command_approval
+import command_signing
 import text_store
 import xlex
 import release_catalog
@@ -382,7 +385,14 @@ async def on_cmd_mic(cq: CallbackQuery):
         )
 
 
-@router.callback_query(OwnerFilter(), F.data == "cmd:shell")
+def _shell_request_allowed(user_id: int, target: str) -> bool:
+    info = devices.get(target) if target and target != "all" else None
+    protocol = (info.get("command_approval_protocol", (info.get("capabilities") or {}).get("command_approval_protocol"))) if info else None
+    return (type(protocol) is int and protocol >= 1
+            and access_store.can_use_callback(user_id, "cmd:shell", ADMIN_ID, target))
+
+
+@router.callback_query(AdminFilter(), F.data == "cmd:shell")
 async def on_cmd_shell(cq: CallbackQuery, state: FSMContext):
     target = SESSION.get("target")
     if not target:
@@ -391,8 +401,10 @@ async def on_cmd_shell(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_shell)
-    await state.update_data(command_target=target)
+    if not _shell_request_allowed(cq.from_user.id, target):
+        await cq.answer("Запрос терминала недоступен: проверьте права и версию агента.", show_alert=True)
+        return
+    await _start_authorized_input(state, Form.wait_shell, "cmd:shell", target, command_target=target)
     await _replace_callback_message(
         cq,
         _lex("shell_prompt"),
@@ -401,12 +413,12 @@ async def on_cmd_shell(cq: CallbackQuery, state: FSMContext):
     await cq.answer()
 
 
-@router.message(OwnerFilter(), Form.wait_shell)
+@router.message(AdminFilter(), Form.wait_shell)
 async def on_shell_input(message: Message, state: FSMContext):
     form_data = await state.get_data()
     await state.clear()
-    cmd = (message.text or "").strip()
-    if not cmd:
+    cmd = message.text or ""
+    if not cmd.strip():
         await _replace_user_card(
             message, _lex("generic_empty_command"), reply_markup=back_to_device_kb()
         )
@@ -422,46 +434,98 @@ async def on_shell_input(message: Message, state: FSMContext):
             message, _lex("single_device_only"), reply_markup=back_to_device_kb()
         )
         return
-    sent, command_id = publish_tracked("shell", _target=target, command=cmd)
+    if SESSION.get("target") != target or not _shell_request_allowed(message.from_user.id, target):
+        await _replace_user_card(message, "Запрос терминала недоступен: права или версия агента изменились.", reply_markup=back_to_device_kb())
+        return
+    # Telegram cards have a 4096-character limit. Reject oversized previews,
+    # never truncate an executable command into a misleading approval card.
+    if len(cmd.encode("utf-8")) > 3000:
+        await _replace_user_card(message, "Команда слишком длинная для точного предпросмотра (3000 байт).", reply_markup=back_to_device_kb())
+        return
+    try:
+        pending = command_approval.create_pending(message.from_user.id, ADMIN_ID, target, cmd, int(time.time()))
+    except (ValueError, command_approval.PendingStoreFull):
+        await _replace_user_card(message, "Не удалось создать запрос подтверждения.", reply_markup=back_to_device_kb())
+        return
+    kb = InlineKeyboardBuilder()
+    approve_callback = f"cmd:shell-approve:{pending.request_id}"
+    cancel_callback = f"cmd:shell-cancel:{pending.request_id}"
+    kb.button(text=_lex("confirm_yes_button"), callback_data=approve_callback)
+    kb.button(text=_lex("versions_install_cancel_button"), callback_data=cancel_callback)
+    kb.adjust(2)
+    await _replace_user_card(
+        message, "Запрос передан владельцу на подтверждение.", reply_markup=back_to_device_kb(),
+    )
+    delivered = await _notify_owner(
+        f"<b>Подтверждение команды</b>\nУстройство: {html.escape(target)}\n"
+        f"Запросил: {pending.requester_id}\nСоздан: {pending.created_at}\n"
+        f"Действует до: {pending.expires_at}\nЛимит выполнения: 20 секунд\n"
+        f"SHA-256: <code>{pending.command_hash}</code>\n<pre>{html.escape(cmd)}</pre>",
+        reply_markup=kb.as_markup(),
+        strict_delivery=True,
+    )
+    if delivered is False:
+        command_approval.cancel_pending(pending.request_id, pending.owner_id)
+        await _replace_user_card(message, "Предпросмотр не доставлен владельцу. Запрос отменён.", reply_markup=back_to_device_kb())
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("cmd:shell-approve:"))
+async def on_shell_approve(cq: CallbackQuery):
+    actor = cq.from_user.id if cq.from_user else None
+    if actor != ADMIN_ID:
+        await cq.answer("Подтверждение доступно только владельцу.", show_alert=True)
+        return
+    pending = command_approval.get_pending(str(cq.data or "").removeprefix("cmd:shell-approve:"))
+    if (pending is None or pending.owner_id != ADMIN_ID
+            or hashlib.sha256(pending.command_text.encode("utf-8")).hexdigest() != pending.command_hash
+            or not _shell_request_allowed(pending.requester_id, pending.device_id)):
+        await cq.answer("Запрос недействителен или права изменились.", show_alert=True)
+        return
+    # No await between the current authorization check and atomic consumption.
+    approved = command_approval.consume_pending(pending.request_id, actor, pending.device_id, pending.command_hash, int(time.time()))
+    if approved is None:
+        await cq.answer("Запрос истёк или уже обработан.", show_alert=True)
+        return
+    try:
+        envelope = command_signing.sign_approved_command(
+            request_id=approved.request_id, requester_id=approved.requester_id,
+            approver_id=actor, device_id=approved.device_id, command=approved.command_text,
+            issued_at=approved.created_at, expires_at=approved.expires_at,
+            nonce=approved.nonce, key_id=command_signing.signing_key_id(),
+        )
+        if command_signing.verify_approved_command(
+            envelope, command=approved.command_text,
+            expected_device_id=approved.device_id, now=int(time.time()),
+        ) is None:
+            raise command_signing.CommandSigningUnavailable("command signing configuration is invalid")
+        sent = transport.publish_command(approved.device_id, "shell", id=approved.request_id,
+                                         command=approved.command_text, approval=envelope)
+    except (ValueError, command_signing.CommandSigningUnavailable):
+        await cq.answer("Подпись команды недоступна. Создайте новый запрос после настройки сервера.", show_alert=True)
+        return
+    await cq.answer()
+    await _replace_callback_message(cq, "Команда отправлена." if sent else _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
     if not sent:
-        await _replace_user_card(
-            message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb()
-        )
         return
-
-    await _replace_user_card(
-        message,
-        _lex_html("command_waiting", emoji="💻", label="Shell", device=target_label(target)),
-        reply_markup=back_to_device_kb(),
-    )
-    result = await shell_collector.wait_for(target, "shell", 20.0, command_id)
-    if result is None:
-        await _replace_user_card(
-            message,
-            _lex("device_timeout", seconds="20"),
-            reply_markup=back_to_device_kb(),
-        )
+    result = await shell_collector.wait_for(approved.device_id, "shell", 20.0, approved.request_id)
+    if actor != ADMIN_ID:
         return
+    output = html.escape(access_store.redact_text(str((result or {}).get("output", "")))[:3000])
+    text = (_lex("command_result", emoji="💻", label="Shell", device=html.escape(target_label(approved.device_id)), text=output)
+            if result is not None else _lex("device_timeout", seconds="20"))
+    await _replace_callback_message(cq, text, reply_markup=back_to_device_kb())
 
-    output = str(result.get("output", ""))
-    safe_out = html.escape(output)
-    if len(safe_out) > 3800:
-        safe_out = safe_out[:3800]
-        if safe_out.rfind("&") > safe_out.rfind(";"):
-            safe_out = safe_out[:safe_out.rfind("&")]
-        safe_out += "\n...[ОБРЕЗАНО]"
 
-    await _replace_user_card(
-        message,
-        _lex(
-            "command_result",
-            emoji="💻",
-            label="Shell",
-            device=html.escape(target_label(target)),
-            text=safe_out,
-        ),
-        reply_markup=back_to_device_kb(),
-    )
+@router.callback_query(OwnerFilter(), F.data.startswith("cmd:shell-cancel:"))
+async def on_shell_cancel(cq: CallbackQuery):
+    actor = cq.from_user.id if cq.from_user else None
+    pending = command_approval.get_pending(str(cq.data or "").removeprefix("cmd:shell-cancel:"))
+    if actor != ADMIN_ID or pending is None or pending.owner_id != ADMIN_ID:
+        await cq.answer("Отмена недоступна.", show_alert=True)
+        return
+    command_approval.cancel_pending(pending.request_id, actor)
+    await cq.answer()
+    await _replace_callback_message(cq, "Запрос отменён.", reply_markup=back_to_device_kb())
 
 
 @router.callback_query(AdminFilter(), F.data == "cmd:open_app")
@@ -1326,7 +1390,7 @@ def terminal_menu(user_id: int | None = None):
     kb = InlineKeyboardBuilder()
     kb.button(text=_lex("terminal_processes_button"), callback_data="proc:0", style="primary")
     kb.button(text=_lex("terminal_kill_process_button"), callback_data="cmd:prockillname", style="danger")
-    kb.button(text=_lex("terminal_shell_button"), callback_data="cfm:shell", style="danger")
+    kb.button(text=_lex("terminal_shell_button"), callback_data="cmd:shell", style="danger")
     kb.button(text=_lex("terminal_open_app_button"), callback_data="cmd:open_app", style="primary")
     kb.button(text=_nav("input"), callback_data="cat:input", style="primary")
     kb.button(text=_lex("terminal_startup_button"), callback_data="cmd:startup", style="primary")
@@ -1653,6 +1717,7 @@ ROLE_XLEX_KEYS = {
 }
 
 USER_PERMISSION_CHOICES = {
+    "shell_request": "terminal",
     "cmd:status": "perm_status",
     "cmd:sysinfo": "perm_sysinfo",
     "cmd:battery": "perm_battery",
@@ -2464,17 +2529,24 @@ def _schedule_admin_notice(text: str, reply_markup=None) -> None:
     )
 
 
-async def _notify_owner(text: str, reply_markup=None) -> None:
+async def _notify_owner(text: str, reply_markup=None, *, strict_delivery: bool = False) -> bool:
     try:
         owner = int(ADMIN_ID)
+        if strict_delivery:
+            # Approval previews are owner security alerts. A separate message
+            # provides a real delivery result, rather than a stale-card fallback.
+            await bot.send_message(owner, text, reply_markup=reply_markup)
+            return True
         async def answer(value, **kwargs):
             return await bot.send_message(owner, value, **kwargs)
         await _replace_user_card(
             SimpleNamespace(chat=SimpleNamespace(id=owner), from_user=SimpleNamespace(id=owner), answer=answer),
             text, reply_markup=reply_markup if reply_markup is not None else main_menu(owner),
         )
+        return True
     except Exception:
         log.exception("Не удалось отправить владельцу результат операции жизненного цикла")
+        return False
 
 
 def _schedule_owner_notice(text: str, reply_markup=None) -> bool:
@@ -2635,6 +2707,7 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             "version": str(payload.get("version") or "?"),
             "online": online,
             "standby": is_standby,
+            "command_approval_protocol": payload.get("command_approval_protocol") if type(payload.get("command_approval_protocol")) is int else 0,
         }
         update_mode = payload.get("update_mode")
         info["update_mode"] = (
@@ -2732,6 +2805,7 @@ def on_mqtt_message(topic: str, data: dict) -> None:
         # reports without commands; a previous declaration must not remain fresh.
         devices.upsert(device_id, {
             "capabilities": {
+                "command_approval_protocol": payload.get("command_approval_protocol") if type(payload.get("command_approval_protocol")) is int else 0,
                 "commands": clean_commands,
                 "features": clean_features,
                 "feature_status": clean_status,
@@ -5825,21 +5899,10 @@ async def on_confirm_action(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data == "shell:ok")
 async def on_shell_ok(cq: CallbackQuery, state: FSMContext):
-    target = SESSION.get("target")
-    if not target:
-        await cq.answer(_lex("target_required"), show_alert=True)
+    if not cq.from_user or cq.from_user.id != ADMIN_ID:
+        await cq.answer("Доступно только владельцу.", show_alert=True)
         return
-    if target == "all":
-        await cq.answer(_lex("single_device_only"), show_alert=True)
-        return
-    await state.set_state(Form.wait_shell)
-    await state.update_data(command_target=target)
-    await _replace_callback_message(
-        cq,
-        _lex("shell_prompt"),
-        reply_markup=back_to_device_kb(),
-    )
-    await cq.answer()
+    await on_cmd_shell(cq, state)
 
 
 @router.callback_query(AdminFilter(), F.data == "openapp:ok")
