@@ -196,8 +196,15 @@ class MQTTTransport:
         Каждая команда получает короткий id (correlation) и публикуется с QoS 1,
         результат publish проверяется по коду возврата rc.
         """
-        if cmd_type == "shell" and verify_approved_command(
-            kwargs.get("approval"), command=kwargs.get("command"),
+        if "type" in kwargs and kwargs["type"] != cmd_type:
+            log.warning("Command publish refused: payload type override")
+            return False
+        cmd_id = kwargs.pop("id", uuid.uuid4().hex[:8])
+        # Reserved routing fields win over caller kwargs. Validate the actual
+        # serialized type so a non-shell entry cannot smuggle a shell payload.
+        payload = {**kwargs, "type": cmd_type, "id": cmd_id}
+        if payload["type"] == "shell" and verify_approved_command(
+            payload.get("approval"), command=payload.get("command"),
             expected_device_id=device_id, now=int(time.time()),
         ) is None:
             log.warning("Shell publish refused: approval is missing or invalid")
@@ -206,8 +213,6 @@ class MQTTTransport:
             log.warning("Команда %s не отправлена: нет соединения с брокером", cmd_type)
             return False
         topic = f"{MQTT_PREFIX}/all/cmd" if device_id == "all" else f"{MQTT_PREFIX}/{device_id}/cmd"
-        cmd_id = kwargs.pop("id", uuid.uuid4().hex[:8])
-        payload = {"type": cmd_type, "id": cmd_id, **kwargs}
         if ENCRYPT_PAYLOAD:
             body = encrypt_payload(payload)
         else:

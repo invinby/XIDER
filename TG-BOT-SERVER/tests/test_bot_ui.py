@@ -23,6 +23,7 @@ def test_shell_input_routes_exact_preview_to_owner_without_publish(monkeypatch, 
     notices = []
     async def notify(text, reply_markup=None, **kwargs):
         notices.append((text, reply_markup))
+        return True
     monkeypatch.setattr(bot, "_notify_owner", notify)
     monkeypatch.setattr(bot, "publish_tracked", lambda *a, **kw: pytest.fail("raw command published"))
     class State:
@@ -70,6 +71,7 @@ def _shell_fixture(monkeypatch, tmp_path):
     monkeypatch.setattr(bot, "publish", lambda *args, **kw: pytest.fail("generic publish leaks command into logs/history"))
     async def notify(text, reply_markup=None, **kwargs):
         rendered.append((text, reply_markup))
+        return True
     monkeypatch.setattr(bot, "_notify_owner", notify)
     class State:
         async def get_data(self):
@@ -248,6 +250,47 @@ def test_shell_strict_owner_preview_reports_failed_telegram_delivery(monkeypatch
         raise RuntimeError("boundary failed")
     monkeypatch.setattr(bot.bot, "send_message", failed)
     assert asyncio.run(bot._notify_owner("exact preview", strict_delivery=True)) is False
+
+
+def test_transport_rejects_shell_type_override_before_mqtt(monkeypatch):
+    from transport import MQTTTransport
+    from types import SimpleNamespace
+    transport = MQTTTransport(lambda *args: None)
+    transport.connected.set()
+    boundary = []
+    monkeypatch.setattr(transport._client, "publish", lambda *args, **kwargs: boundary.append((args, kwargs)) or SimpleNamespace(rc=0))
+    assert transport.publish_command("a", "status_request", type="shell", command="whoami") is False
+    assert boundary == []
+
+
+@pytest.mark.parametrize("boundary", ["requester", "owner"])
+@pytest.mark.parametrize("failure", ["cancel", "exception"])
+def test_shell_interrupted_preview_discards_request_and_cannot_approve(monkeypatch, tmp_path, boundary, failure):
+    Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
+    async def scenario():
+        reached = asyncio.Event()
+        captured = []
+        async def interrupted(*args, **kwargs):
+            captured.append(next(iter(bot.command_approval._PENDING_COMMANDS.values())))
+            reached.set()
+            if failure == "exception":
+                raise RuntimeError("preview boundary failure")
+            await asyncio.Event().wait()
+        monkeypatch.setattr(bot, "_replace_user_card" if boundary == "requester" else "_notify_owner", interrupted)
+        task = asyncio.create_task(request())
+        await reached.wait()
+        pending = captured[0]
+        if failure == "cancel":
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            with pytest.raises(RuntimeError, match="preview boundary failure"):
+                await task
+        assert bot.command_approval.get_pending(pending.request_id) is None
+        await bot.on_shell_approve(Callback(f"cmd:shell-approve:{pending.request_id}"))
+        assert not published
+    asyncio.run(scenario())
 
 
 @pytest.fixture(autouse=True)

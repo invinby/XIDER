@@ -447,25 +447,32 @@ async def on_shell_input(message: Message, state: FSMContext):
     except (ValueError, command_approval.PendingStoreFull):
         await _replace_user_card(message, "Не удалось создать запрос подтверждения.", reply_markup=back_to_device_kb())
         return
-    kb = InlineKeyboardBuilder()
-    approve_callback = f"cmd:shell-approve:{pending.request_id}"
-    cancel_callback = f"cmd:shell-cancel:{pending.request_id}"
-    kb.button(text=_lex("confirm_yes_button"), callback_data=approve_callback)
-    kb.button(text=_lex("versions_install_cancel_button"), callback_data=cancel_callback)
-    kb.adjust(2)
-    await _replace_user_card(
-        message, "Запрос передан владельцу на подтверждение.", reply_markup=back_to_device_kb(),
-    )
-    delivered = await _notify_owner(
-        f"<b>Подтверждение команды</b>\nУстройство: {html.escape(target)}\n"
-        f"Запросил: {pending.requester_id}\nСоздан: {pending.created_at}\n"
-        f"Действует до: {pending.expires_at}\nЛимит выполнения: 20 секунд\n"
-        f"SHA-256: <code>{pending.command_hash}</code>\n<pre>{html.escape(cmd)}</pre>",
-        reply_markup=kb.as_markup(),
-        strict_delivery=True,
-    )
-    if delivered is False:
-        command_approval.cancel_pending(pending.request_id, pending.owner_id)
+    preview_delivered = False
+    try:
+        kb = InlineKeyboardBuilder()
+        approve_callback = f"cmd:shell-approve:{pending.request_id}"
+        cancel_callback = f"cmd:shell-cancel:{pending.request_id}"
+        kb.button(text=_lex("confirm_yes_button"), callback_data=approve_callback)
+        kb.button(text=_lex("versions_install_cancel_button"), callback_data=cancel_callback)
+        kb.adjust(2)
+        await _replace_user_card(
+            message, "Запрос передан владельцу на подтверждение.", reply_markup=back_to_device_kb(),
+        )
+        delivered = await _notify_owner(
+            f"<b>Подтверждение команды</b>\nУстройство: {html.escape(target)}\n"
+            f"Запросил: {pending.requester_id}\nСоздан: {pending.created_at}\n"
+            f"Действует до: {pending.expires_at}\nЛимит выполнения: 20 секунд\n"
+            f"SHA-256: <code>{pending.command_hash}</code>\n<pre>{html.escape(cmd)}</pre>",
+            reply_markup=kb.as_markup(),
+            strict_delivery=True,
+        )
+        preview_delivered = delivered is True
+    finally:
+        # Synchronous cleanup also runs on CancelledError before delivery.
+        # The original cancellation/exception propagates after invalidation.
+        if not preview_delivered:
+            command_approval.cancel_pending(pending.request_id, pending.owner_id)
+    if not preview_delivered:
         await _replace_user_card(message, "Предпросмотр не доставлен владельцу. Запрос отменён.", reply_markup=back_to_device_kb())
 
 
