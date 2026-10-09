@@ -171,6 +171,8 @@ def test_shell_drops_incomplete_utf8_codepoint_at_cap(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("raw,secret", [
+    ('password=[REDACTED]synthetic-second', 'synthetic-second'),
+    ('password=[REDACTED] first synthetic-second', 'synthetic-second'),
     ('Authorization: Basic c3ludGhldGljLXBhc3N3b3Jk', 'c3ludGhldGljLXBhc3N3b3Jk'),
     ('password=first synthetic-second', 'synthetic-second'),
     ('password="first synthetic-second' + chr(92), "synthetic-second"),
@@ -182,6 +184,21 @@ def test_shell_stream_redaction_handles_truncated_and_token_forms(raw, secret):
     safe, truncated = wds._load_command_approval_component("shell_execution").bounded_stream(raw)
     assert secret not in safe
     assert len(safe.encode("utf-8")) <= 8192
+
+
+@pytest.mark.parametrize("padding", [8165, 8240, 8298, 8305])
+def test_shell_raw_capture_boundary_never_transmits_token_fragment(monkeypatch, tmp_path, padding):
+    client = _client(monkeypatch, tmp_path)
+    raw = 'password="' + 'a' * padding + '"\n123456:abcdefghijklmnopqrstuvwxyz'
+    monkeypatch.setattr(wds.subprocess, "run", lambda *a, **kw: _stream_result(
+        kw, stdout=raw, stderr=raw, returncode=0))
+    client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
+    result = client.responses[-1][1]
+    for stream in ("stdout", "stderr", "output"):
+        assert "12345" not in result[stream]
+    assert len(result["stdout"].encode("utf-8")) <= 8192
+    assert len(result["stderr"].encode("utf-8")) <= 8192
+    assert result["stdout_truncated"] and result["stderr_truncated"]
 
 
 def test_shell_execution_policy_is_loaded_from_canonical_module():
@@ -212,6 +229,12 @@ def test_shell_returns_on_timeout_with_child_holding_inherited_output(monkeypatc
         client._do_shell({"type": "shell", "command": command,
                           "approval": _approval(command=command), "timeout": 1})
         elapsed = time.monotonic() - started
+        assert pids.is_file(), "controlled child fixture never reached readiness"
+        parent_pid, child_pid = json.loads(pids.read_text(encoding="utf-8"))
+        assert parent_pid != child_pid
+        assert str(script) in psutil.Process(parent_pid).cmdline()
+        assert "xider-inherited-output-fixture" in psutil.Process(child_pid).cmdline()
+        assert "fixture ready" in client.responses[-1][1]["stdout"]
         assert elapsed < 2.5, "handler waited for the grandchild's inherited pipes"
         assert client.responses[-1][1]["status"] == "timeout"
     finally:

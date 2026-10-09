@@ -177,20 +177,21 @@ def _redact_credentials(text: str) -> str:
     )
     text = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [REDACTED]", text)
     text = re.sub(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b", "[TOKEN]", text)
+    # Raw redaction-marker text is not trusted; mask an unquoted line before
+    # quoted-value replacement introduces any markers of our own.
     text = re.sub(
+        r"(?i)\b((?:bot[_-]?)?token|password|passwd|secret|shared[_-]?key|"
+        r"mqtt[_-]?password|api[_-]?key|ssh[_-]?key|private[_-]?key|authorization)"
+        r'''[ \t]*[:=][ \t]*[^"'\s][^\r\n]*''',
+        r"\1=[REDACTED]",
+        text,
+    )
+    return re.sub(
         r'''(?i)["']?\b((?:bot[_-]?)?token|password|passwd|secret|shared[_-]?key|'''
         r'''mqtt[_-]?password|api[_-]?key|ssh[_-]?key|private[_-]?key|authorization)["']?'''
         r'''\s*[:=]\s*(["'])(?:\\(?:.|\Z)|(?!\2)[^\\])*(?:\2|\Z)''',
         r"\1=[REDACTED]", text, flags=re.DOTALL,
     )
-    text = re.sub(
-        r"(?i)\b((?:bot[_-]?)?token|password|passwd|secret|shared[_-]?key|"
-        r"mqtt[_-]?password|api[_-]?key|ssh[_-]?key|private[_-]?key|authorization)"
-        r'''[ \t]*[:=][ \t]*(?!\[REDACTED\])[^"'\s][^\r\n]*''',
-        r"\1=[REDACTED]",
-        text,
-    )
-    return text
 
 
 def redact_shell_output(text: str) -> str:

@@ -9,6 +9,9 @@ import tempfile
 
 
 STREAM_BYTES = 8192
+# Look beyond the output cap before classifying credential shapes. The token
+# suffix minimum is 20 characters; do not let a raw cut hide that evidence.
+_CAPTURE_BYTES = STREAM_BYTES + 128 + 1
 _CREDENTIAL_FIELDS = (r"(?:bot[_-]?)?token|password|passwd|secret|shared[_-]?key|"
                       r"mqtt[_-]?password|api[_-]?key|ssh[_-]?key|private[_-]?key|authorization")
 
@@ -25,14 +28,15 @@ def redact_stream(text: str) -> str:
     )
     text = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [REDACTED]", text)
     text = re.sub(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b", "[TOKEN]", text)
-    text = re.sub(
+    # Unquoted values have no safe space delimiter (Basic auth or passwords
+    # with spaces). Run this before introducing our own quoted-value markers:
+    # an arbitrary raw [REDACTED] prefix must not gain trusted status.
+    text = re.sub(r"(?i)\b(" + _CREDENTIAL_FIELDS + r''')[ \t]*[:=][ \t]*[^"'\s][^\r\n]*''',
+                  r"\1=[REDACTED]", text)
+    return re.sub(
         r"""(?i)["']?\b(""" + _CREDENTIAL_FIELDS + r""")["']?\s*[:=]\s*(["'])(?:\\(?:.|\Z)|(?!\2)[^\\])*(?:\2|\Z)""",
         r"\1=[REDACTED]", text, flags=re.DOTALL,
     )
-    # Unquoted values have no safe space delimiter (Basic auth or passwords
-    # with spaces). Conservatively remove the complete remainder of that line.
-    return re.sub(r"(?i)\b(" + _CREDENTIAL_FIELDS + r''')[ \t]*[:=][ \t]*(?!\[REDACTED\])[^"'\s][^\r\n]*''',
-                  r"\1=[REDACTED]", text)
 
 
 def bounded_stream(value) -> tuple[str, bool]:
@@ -45,8 +49,14 @@ def bounded_stream(value) -> tuple[str, bool]:
 
 def _read_stream(handle) -> tuple[str, bool]:
     handle.seek(0)
-    prefix = handle.read(STREAM_BYTES + 1)
-    text, redacted_truncated = bounded_stream(prefix)
+    prefix = handle.read(_CAPTURE_BYTES)
+    text = prefix.decode("utf-8", errors="ignore")
+    if len(prefix) == _CAPTURE_BYTES:
+        # Lookahead itself is bounded: a token may straddle its new boundary,
+        # including the numeric id before its colon. Do not transport a tail
+        # that could become a complete credential only beyond the raw cut.
+        text = re.sub(r"\b\d+(?::[A-Za-z0-9_-]*)?\Z", "[TOKEN]", text)
+    text, redacted_truncated = bounded_stream(text)
     return text, len(prefix) > STREAM_BYTES or redacted_truncated
 
 

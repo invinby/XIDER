@@ -265,6 +265,43 @@ def test_shell_results_redact_both_streams_and_audit_only_metadata(monkeypatch, 
     assert "whoami" not in json.dumps(rows)
 
 
+@pytest.mark.parametrize("raw,secret", [
+    ('password=[REDACTED]synthetic-second', 'synthetic-second'),
+    ('password=[REDACTED] first synthetic-second', 'synthetic-second'),
+])
+def test_shell_rendering_does_not_trust_raw_redaction_marker(monkeypatch, tmp_path, raw, secret):
+    Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
+    async def result(*args):
+        return {"stdout": raw, "stderr": raw, "status": "completed", "returncode": 0}
+    monkeypatch.setattr(bot.shell_collector, "wait_for", result)
+    async def scenario():
+        pending = await request()
+        await bot.on_shell_approve(Callback(f"cmd:shell-approve:{pending.request_id}"))
+    asyncio.run(scenario())
+    assert secret not in rendered[-1][0]
+
+
+def test_shell_capture_boundary_token_fragment_never_reaches_telegram(monkeypatch, tmp_path):
+    import importlib.util
+    import io
+    root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location("boundary_shell_fixture", root / "XGENT-MCS" / "shell_execution.py")
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    raw = ('password="' + 'a' * 8165 + '"\n123456:abcdefghijklmnopqrstuvwxyz').encode()
+    safe, truncated = helper._read_stream(io.BytesIO(raw))
+    Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
+    async def result(*args):
+        return {"stdout": safe, "stdout_truncated": truncated,
+                "status": "completed", "returncode": 0}
+    monkeypatch.setattr(bot.shell_collector, "wait_for", result)
+    async def scenario():
+        pending = await request()
+        await bot.on_shell_approve(Callback(f"cmd:shell-approve:{pending.request_id}"))
+    asyncio.run(scenario())
+    assert "123456:" not in rendered[-1][0]
+
+
 @pytest.mark.parametrize("outcome", ["timeout", "publish_failed", "signing_unavailable"])
 def test_shell_failure_outcomes_keep_metadata_audit(monkeypatch, tmp_path, outcome):
     Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)

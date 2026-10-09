@@ -172,6 +172,8 @@ def test_shell_drops_incomplete_utf8_codepoint_at_cap(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("raw,secret", [
+    ('password=[REDACTED]synthetic-second', 'synthetic-second'),
+    ('password=[REDACTED] first synthetic-second', 'synthetic-second'),
     ('Authorization: Basic c3ludGhldGljLXBhc3N3b3Jk', 'c3ludGhldGljLXBhc3N3b3Jk'),
     ('password=first synthetic-second', 'synthetic-second'),
     ('password="first synthetic-second' + chr(92), "synthetic-second"),
@@ -183,6 +185,33 @@ def test_shell_stream_redaction_handles_truncated_and_token_forms(raw, secret):
     safe, truncated = mcs._load_command_approval_component("shell_execution").bounded_stream(raw)
     assert secret not in safe
     assert len(safe.encode("utf-8")) <= 8192
+
+
+@pytest.mark.parametrize("padding", [8165, 8240, 8298, 8305])
+def test_shell_raw_capture_boundary_never_transmits_token_fragment(monkeypatch, tmp_path, padding):
+    client = _client(monkeypatch, tmp_path)
+    raw = 'password="' + 'a' * padding + '"\n123456:abcdefghijklmnopqrstuvwxyz'
+    monkeypatch.setattr(mcs.subprocess, "run", lambda *a, **kw: _stream_result(
+        kw, stdout=raw, stderr=raw, returncode=0))
+    client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
+    result = client.responses[-1][1]
+    for stream in ("stdout", "stderr", "output"):
+        assert "12345" not in result[stream]
+    assert len(result["stdout"].encode("utf-8")) <= 8192
+    assert len(result["stderr"].encode("utf-8")) <= 8192
+    assert result["stdout_truncated"] and result["stderr_truncated"]
+
+
+def test_shell_capture_read_stays_bounded_before_final_output_cap():
+    import io
+    class BoundedCapture(io.BytesIO):
+        def read(self, size=-1):
+            assert 0 < size <= 16384, "unbounded output read"
+            return super().read(size)
+    helper = mcs._load_command_approval_component("shell_execution")
+    safe, truncated = helper._read_stream(BoundedCapture(b"x" * 1000000))
+    assert safe == "x" * 8192
+    assert truncated
 
 
 def test_shell_execution_policy_is_loaded_from_canonical_module():

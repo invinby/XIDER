@@ -27,6 +27,8 @@ def test_command_audit_is_typed_metadata_only(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("raw,secret", [
+    ('password=[REDACTED]synthetic-second', 'synthetic-second'),
+    ('password=[REDACTED] first synthetic-second', 'synthetic-second'),
     ('Authorization: Basic c3ludGhldGljLXBhc3N3b3Jk', 'c3ludGhldGljLXBhc3N3b3Jk'),
     ('password=first synthetic-second', 'synthetic-second'),
     ('password="synthetic password"', "synthetic password"),
