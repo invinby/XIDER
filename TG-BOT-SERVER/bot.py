@@ -508,19 +508,50 @@ async def on_shell_approve(cq: CallbackQuery):
         sent = transport.publish_command(approved.device_id, "shell", id=approved.request_id,
                                          command=approved.command_text, approval=envelope)
     except (ValueError, command_signing.CommandSigningUnavailable):
+        _audit_shell_result(approved, actor, "signing_unavailable", None)
         await cq.answer("Подпись команды недоступна. Создайте новый запрос после настройки сервера.", show_alert=True)
         return
+    _audit_shell_result(approved, actor, "sent" if sent else "publish_failed", None)
     await cq.answer()
     await _replace_callback_message(cq, "Команда отправлена." if sent else _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
     if not sent:
         return
     result = await shell_collector.wait_for(approved.device_id, "shell", 20.0, approved.request_id)
+    code = (result or {}).get("returncode")
+    code = code if type(code) is int else None
+    status = (result or {}).get("status")
+    if result is None:
+        status = "result_timeout"
+    elif not isinstance(status, str) or status not in {"completed", "failed", "timeout", "error", "rejected"}:
+        status = "completed" if code == 0 else "failed" if code is not None else "error"
+    _audit_shell_result(approved, actor, status, code)
     if actor != ADMIN_ID:
         return
-    output = html.escape(access_store.redact_text(str((result or {}).get("output", "")))[:3000])
+    if result is not None and ("stdout" in result or "stderr" in result):
+        # Redact the entire capped stream before limiting the Telegram card.
+        raw_output = str(result.get("stdout") or "")
+        stderr = str(result.get("stderr") or "")
+        if stderr:
+            raw_output += "\n[STDERR]\n" + stderr
+    else:
+        raw_output = str((result or {}).get("output") or "")
+    safe_output = access_store.redact_shell_output(raw_output)
+    suffix = f"\n[{status}; exit={code}]"
+    for stream in ("stdout", "stderr"):
+        if (result or {}).get(f"{stream}_truncated") is True:
+            suffix += f"\n[{stream.upper()}: вывод ограничен 8192 байт]"
+    output = html.escape(safe_output[:2800] + suffix)
     text = (_lex("command_result", emoji="💻", label="Shell", device=html.escape(target_label(approved.device_id)), text=output)
             if result is not None else _lex("device_timeout", seconds="20"))
     await _replace_callback_message(cq, text, reply_markup=back_to_device_kb())
+
+
+def _audit_shell_result(approved, actor: int, status: str, exit_code: int | None) -> None:
+    access_store.append_command_audit(
+        request_id=approved.request_id, command_hash=approved.command_hash,
+        status=status, requester_id=approved.requester_id, approver_id=actor,
+        device_id=approved.device_id, exit_code=exit_code,
+    )
 
 
 @router.callback_query(OwnerFilter(), F.data.startswith("cmd:shell-cancel:"))

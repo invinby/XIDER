@@ -166,11 +166,11 @@ def _identity(user: Any) -> dict[str, str]:
     }
 
 
-def _redact(text: str) -> str:
-    """Keep useful audit context without copying credentials into the log."""
+def _redact_credentials(text: str) -> str:
+    """Redact before truncation, including a key cut off by the stream cap."""
     text = re.sub(
-        r"-----BEGIN (?:OPENSSH |RSA |EC |DSA )?PRIVATE KEY-----.*?"
-        r"-----END (?:OPENSSH |RSA |EC |DSA )?PRIVATE KEY-----",
+        r"-----BEGIN (?:OPENSSH |RSA |EC |DSA |ENCRYPTED )?PRIVATE KEY-----.*?"
+        r"(?:-----END (?:OPENSSH |RSA |EC |DSA |ENCRYPTED )?PRIVATE KEY-----|\Z)",
         "[PRIVATE KEY REDACTED]",
         text,
         flags=re.DOTALL,
@@ -180,7 +180,7 @@ def _redact(text: str) -> str:
     text = re.sub(
         r'''(?i)["']?\b((?:bot[_-]?)?token|password|passwd|secret|shared[_-]?key|'''
         r'''mqtt[_-]?password|api[_-]?key|ssh[_-]?key|private[_-]?key|authorization)["']?'''
-        r'''\s*[:=]\s*(["'])(?:\\.|(?!\2)[^\\])*\2''',
+        r'''\s*[:=]\s*(["'])(?:\\(?:.|\Z)|(?!\2)[^\\])*(?:\2|\Z)''',
         r"\1=[REDACTED]", text, flags=re.DOTALL,
     )
     text = re.sub(
@@ -190,6 +190,17 @@ def _redact(text: str) -> str:
         r"\1=[REDACTED]",
         text,
     )
+    return text
+
+
+def redact_shell_output(text: str) -> str:
+    """Preserve useful multiline output; credential patterns never reach Telegram."""
+    return _redact_credentials(str(text))
+
+
+def _redact(text: str) -> str:
+    """Keep useful audit context without copying credentials into the log."""
+    text = _redact_credentials(text)
     # An unquoted Windows path has no reliable delimiter: spaces, commas and
     # semicolons can all be part of directory names. Mask its whole remainder.
     text = re.sub(r"(?i)\b[A-Z]:[\\/][^\r\n]*|(?<!\w)/(?:[^\s,;]+)", "[PATH REDACTED]", text)
@@ -222,6 +233,30 @@ def append_audit(kind: str, *, actor_id: int | None = None, target_id: int | Non
         "target_id": int(target_id) if target_id is not None else None,
         "detail": _redact(str(detail)),
     }
+    _write_audit_row(row)
+
+
+def append_command_audit(*, request_id: str, command_hash: str, status: str,
+                         requester_id: int, approver_id: int, device_id: str,
+                         exit_code: int | None) -> None:
+    """Typed execution metadata. This API cannot accept command text/output."""
+    statuses = {"sent", "completed", "failed", "timeout", "error", "rejected",
+                "signing_unavailable", "publish_failed", "result_timeout"}
+    if (not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request_id)
+            or not isinstance(command_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", command_hash)
+            or status not in statuses
+            or type(requester_id) is not int or type(approver_id) is not int
+            or (exit_code is not None and type(exit_code) is not int)):
+        raise ValueError("Invalid command audit metadata")
+    _write_audit_row({
+        "kind": "command_execution", "at": int(time.time()),
+        "request_id": request_id, "command_hash": command_hash, "status": status,
+        "requester_id": requester_id, "approver_id": approver_id,
+        "device_id": _redact_credentials(str(device_id))[:256], "exit_code": exit_code,
+    })
+
+
+def _write_audit_row(row: dict) -> None:
     with _LOCK:
         AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
         with AUDIT_FILE.open("a", encoding="utf-8") as handle:

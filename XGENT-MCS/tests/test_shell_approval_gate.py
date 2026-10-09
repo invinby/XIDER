@@ -84,6 +84,98 @@ def _fake_run(calls, before_run=None):
     return run
 
 
+@pytest.mark.parametrize("requested,expected", [(None, 20), (60, 20), (5, 5), (0, 20), ("bad", 20)])
+def test_shell_enforces_execution_timeout(monkeypatch, tmp_path, requested, expected):
+    client = _client(monkeypatch, tmp_path)
+    def expired(command, **kwargs):
+        assert kwargs["timeout"] == expected
+        raise mcs.subprocess.TimeoutExpired(command, expected, output=b"partial", stderr=b"error")
+    monkeypatch.setattr(mcs.subprocess, "run", expired)
+    client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval(), "timeout": requested})
+    result = client.responses[-1][1]
+    assert result["status"] == "timeout"
+    assert result["returncode"] == -1
+    assert result["stdout"] == "partial"
+    assert result["stderr"] == "error"
+    assert "command" not in result
+
+
+def test_shell_caps_each_utf8_stream_before_transport(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(mcs.subprocess, "run", lambda *a, **kw: SimpleNamespace(
+        stdout="а" * 5000, stderr="🙂" * 3000, returncode=7))
+    client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
+    result = client.responses[-1][1]
+    assert result["stdout"] == "а" * 4096
+    assert result["stderr"] == "🙂" * 2048
+    assert len(result["stdout"].encode("utf-8")) <= 8192
+    assert len(result["stderr"].encode("utf-8")) <= 8192
+    assert result["stdout_truncated"] is True
+    assert result["stderr_truncated"] is True
+    assert result["status"] == "failed"
+    assert result["returncode"] == 7
+    assert "command" not in result
+
+
+def test_shell_exact_limit_is_not_marked_truncated(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(mcs.subprocess, "run", lambda *a, **kw: SimpleNamespace(
+        stdout="x" * 8192, stderr="", returncode=0))
+    client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
+    result = client.responses[-1][1]
+    assert result["stdout"] == "x" * 8192
+    assert result["stdout_truncated"] is False
+    assert result["stderr_truncated"] is False
+    assert result["status"] == "completed"
+
+
+def test_shell_exception_does_not_echo_command_or_exception_credentials(monkeypatch, tmp_path, caplog):
+    client = _client(monkeypatch, tmp_path)
+    def failed(*args, **kwargs):
+        raise OSError("password=synthetic-password command=" + COMMAND)
+    monkeypatch.setattr(mcs.subprocess, "run", failed)
+    client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
+    result = client.responses[-1][1]
+    assert result["status"] == "error"
+    assert "synthetic-password" not in json.dumps(result) + caplog.text
+    assert COMMAND not in json.dumps(result) + caplog.text
+
+
+def test_shell_redacts_each_stream_before_byte_cap(monkeypatch, tmp_path, caplog):
+    client = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(mcs.subprocess, "run", lambda *a, **kw: SimpleNamespace(
+        stdout='password="synthetic long password"\ntoken=synthetic-token\n' + "x" * 9000,
+        stderr='-----BEGIN OPENSSH PRIVATE KEY-----\nprivate-fixture', returncode=0))
+    client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
+    result = client.responses[-1][1]
+    captured = json.dumps(result) + caplog.text
+    assert all(secret not in captured for secret in ("synthetic long password", "synthetic-token", "private-fixture"))
+    assert result["stdout_truncated"] is True
+    assert len(result["stdout"].encode("utf-8")) <= 8192
+    assert len(result["stderr"].encode("utf-8")) <= 8192
+
+
+def test_shell_drops_incomplete_utf8_codepoint_at_cap(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(mcs.subprocess, "run", lambda *a, **kw: SimpleNamespace(
+        stdout="x" * 8191 + "🙂", stderr="", returncode=0))
+    client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
+    assert client.responses[-1][1]["stdout"] == "x" * 8191
+    assert client.responses[-1][1]["stdout_truncated"] is True
+
+
+@pytest.mark.parametrize("raw,secret", [
+    ('password="first synthetic-second' + chr(92), "synthetic-second"),
+    ('123456:abcdefghijklmnopqrstuvwxyz', '123456:abcdefghijklmnopqrstuvwxyz'),
+    ('Bearer synthetic-bearer', 'synthetic-bearer'),
+    ('-----BEGIN ENCRYPTED PRIVATE KEY-----\nencrypted-fixture', 'encrypted-fixture'),
+])
+def test_shell_stream_redaction_handles_truncated_and_token_forms(raw, secret):
+    safe, truncated = mcs._bounded_shell_stream(raw)
+    assert secret not in safe
+    assert len(safe.encode("utf-8")) <= 8192
+
+
 def test_mac_unsigned_and_hmac_only_shell_never_reach_subprocess(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     calls = []

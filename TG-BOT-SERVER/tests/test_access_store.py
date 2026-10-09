@@ -6,6 +6,42 @@ import roles
 import pytest
 
 
+def test_command_audit_is_typed_metadata_only(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    store.append_command_audit(request_id="request_123", command_hash="a" * 64,
+        status="completed", requester_id=200, approver_id=100,
+        device_id="MacBook-Air.local", exit_code=0)
+    row = store.recent_audit()[0]
+    assert row["request_id"] == "request_123"
+    assert row["command_hash"] == "a" * 64
+    assert row["status"] == "completed"
+    assert row["requester_id"] == 200 and row["approver_id"] == 100
+    assert row["device_id"] == "MacBook-Air.local" and row["exit_code"] == 0
+    assert type(row["at"]) is int
+    assert set(row) == {"kind", "at", "request_id", "command_hash", "status",
+                        "requester_id", "approver_id", "device_id", "exit_code"}
+    with pytest.raises(TypeError):
+        store.append_command_audit(request_id="request_123", command_hash="a" * 64,
+            status="completed", requester_id=200, approver_id=100,
+            device_id="a", exit_code=0, output="secret output")
+
+
+@pytest.mark.parametrize("raw,secret", [
+    ('password="synthetic password"', "synthetic password"),
+    ('token=synthetic-token', "synthetic-token"),
+    ('123456:abcdefghijklmnopqrstuvwxyz', "123456:abcdefghijklmnopqrstuvwxyz"),
+    ('-----BEGIN PRIVATE KEY-----\nprivate-fixture\n-----END PRIVATE KEY-----', "private-fixture"),
+    ('-----BEGIN OPENSSH PRIVATE KEY-----\ntruncated-fixture', "truncated-fixture"),
+    ('password="truncated quoted password', "quoted password"),
+    ('password="first synthetic-second' + chr(92), "synthetic-second"),
+    ('-----BEGIN ENCRYPTED PRIVATE KEY-----\nencrypted-fixture', "encrypted-fixture"),
+])
+def test_shell_output_redacts_credentials_without_losing_nonsecret_lines(raw, secret):
+    safe = store.redact_shell_output("first line\n" + raw)
+    assert secret not in safe
+    assert safe.startswith("first line\n")
+
+
 @pytest.mark.parametrize("operation", [
     lambda actor, target: store.set_role(actor, target, store.Role.USER, 100),
     lambda actor, target: store.set_blocked(actor, target, True, 100),

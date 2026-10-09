@@ -236,6 +236,87 @@ def test_shell_approval_waits_for_matching_result_on_owner_card(monkeypatch, tmp
     assert "result &lt;exact&gt;" in rendered[-1][0]
 
 
+def test_shell_results_redact_both_streams_and_audit_only_metadata(monkeypatch, tmp_path):
+    import json
+    Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
+    secrets = ["synthetic-password", "synthetic-token", "private-fixture"]
+    async def result(*args):
+        return {"stdout": "good line\npassword=synthetic-password\n",
+                "stderr": "token=synthetic-token\n-----BEGIN PRIVATE KEY-----\nprivate-fixture",
+                "stdout_truncated": False, "stderr_truncated": True,
+                "status": "failed", "returncode": 3}
+    monkeypatch.setattr(bot.shell_collector, "wait_for", result)
+    async def scenario():
+        pending = await request()
+        await bot.on_shell_approve(Callback(f"cmd:shell-approve:{pending.request_id}"))
+        return pending
+    pending = asyncio.run(scenario())
+    card = rendered[-1][0]
+    rows = bot.access_store.recent_audit()
+    row = next(row for row in rows if row["kind"] == "command_execution")
+    assert "good line" in card
+    assert "STDERR" in card and "8192" in card
+    assert all(secret not in card + json.dumps(rows) for secret in secrets)
+    assert row["request_id"] == pending.request_id
+    assert row["command_hash"] == pending.command_hash
+    assert row["status"] == "failed" and row["exit_code"] == 3
+    assert row["requester_id"] == 200 and row["approver_id"] == 100
+    assert row["device_id"] == "a"
+    assert "whoami" not in json.dumps(rows)
+
+
+@pytest.mark.parametrize("outcome", ["timeout", "publish_failed", "signing_unavailable"])
+def test_shell_failure_outcomes_keep_metadata_audit(monkeypatch, tmp_path, outcome):
+    Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
+    if outcome == "publish_failed":
+        monkeypatch.setattr(bot.transport, "publish_command", lambda *a, **kw: False)
+    elif outcome == "signing_unavailable":
+        monkeypatch.setattr(bot.command_signing, "signing_key_id", lambda: (_ for _ in ()).throw(
+            bot.command_signing.CommandSigningUnavailable("password=hidden-fixture")))
+    async def no_result(*args):
+        return None
+    monkeypatch.setattr(bot.shell_collector, "wait_for", no_result)
+    async def scenario():
+        pending = await request()
+        await bot.on_shell_approve(Callback(f"cmd:shell-approve:{pending.request_id}"))
+        return pending
+    pending = asyncio.run(scenario())
+    rows = bot.access_store.recent_audit()
+    row = next(row for row in rows if row["kind"] == "command_execution")
+    assert row["status"] == ("result_timeout" if outcome == "timeout" else outcome)
+    assert row["request_id"] == pending.request_id
+    assert row["exit_code"] is None
+
+
+def test_shell_sent_audit_survives_interrupted_telegram_card(monkeypatch, tmp_path):
+    Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
+    async def interrupted(*args, **kwargs):
+        raise asyncio.CancelledError()
+    async def scenario():
+        pending = await request()
+        monkeypatch.setattr(bot, "_replace_callback_message", interrupted)
+        with pytest.raises(asyncio.CancelledError):
+            await bot.on_shell_approve(Callback(f"cmd:shell-approve:{pending.request_id}"))
+        return pending
+    pending = asyncio.run(scenario())
+    assert len(published) == 1
+    row = next(row for row in bot.access_store.recent_audit() if row["kind"] == "command_execution")
+    assert row["status"] == "sent" and row["request_id"] == pending.request_id
+
+
+def test_shell_malformed_result_status_does_not_enter_audit_or_response(monkeypatch, tmp_path):
+    Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
+    async def result(*args):
+        return {"output": "done", "returncode": 0, "status": ["password=malformed-fixture"]}
+    monkeypatch.setattr(bot.shell_collector, "wait_for", result)
+    async def scenario():
+        pending = await request()
+        await bot.on_shell_approve(Callback(f"cmd:shell-approve:{pending.request_id}"))
+    asyncio.run(scenario())
+    assert "malformed-fixture" not in rendered[-1][0]
+    assert bot.access_store.recent_audit()[0]["status"] == "completed"
+
+
 def test_shell_failed_owner_preview_discards_pending_request(monkeypatch, tmp_path):
     Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
     async def undelivered(*args, **kwargs):

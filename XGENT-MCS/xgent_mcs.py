@@ -14,6 +14,7 @@ import os
 import plistlib
 import platform
 import random
+import re
 import shutil
 import socket
 import subprocess
@@ -30,6 +31,41 @@ from logging.handlers import RotatingFileHandler
 MAX_FILE_PUT_BYTES = 30 * 1024 * 1024
 MAX_FILE_PUT_B64_CHARS = 4 * ((MAX_FILE_PUT_BYTES + 2) // 3)
 MAX_SCREENSHOT_BYTES = 30 * 1024 * 1024
+SHELL_STREAM_BYTES = 8 * 1024
+
+
+def _shell_timeout(value) -> int:
+    """A caller may request a stricter limit, never extend owner approval."""
+    return value if type(value) is int and 0 < value < 20 else 20
+
+
+def _redact_shell_stream(text: str) -> str:
+    text = re.sub(
+        r"-----BEGIN (?:OPENSSH |RSA |EC |DSA |ENCRYPTED )?PRIVATE KEY-----.*?"
+        r"(?:-----END (?:OPENSSH |RSA |EC |DSA |ENCRYPTED )?PRIVATE KEY-----|\Z)",
+        "[PRIVATE KEY REDACTED]", text, flags=re.DOTALL,
+    )
+    text = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [REDACTED]", text)
+    text = re.sub(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b", "[TOKEN]", text)
+    fields = (r"(?:bot[_-]?)?token|password|passwd|secret|shared[_-]?key|"
+              r"mqtt[_-]?password|api[_-]?key|ssh[_-]?key|private[_-]?key|authorization")
+    text = re.sub(
+        r"""(?i)["']?\b(""" + fields + r""")["']?\s*[:=]\s*(["'])(?:\\(?:.|\Z)|(?!\2)[^\\])*(?:\2|\Z)""",
+        r"\1=[REDACTED]", text, flags=re.DOTALL,
+    )
+    return re.sub(r"(?i)\b(" + fields + r")\s*[:=]\s*[^\s,;]+",
+                  r"\1=[REDACTED]", text)
+
+
+def _bounded_shell_stream(value) -> tuple[str, bool]:
+    if value is None:
+        return "", False
+    text = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else str(value)
+    raw = _redact_shell_stream(text).encode("utf-8", errors="replace")
+    # Decode incomplete trailing code points without introducing extra bytes.
+    return raw[:SHELL_STREAM_BYTES].decode("utf-8", errors="ignore"), len(raw) > SHELL_STREAM_BYTES
+
+
 _OPEN_URL_OPERATION_TTL_SEC = 600.0
 _OPEN_URL_OPERATION_LIMIT = 256
 
@@ -1428,22 +1464,35 @@ class XgentClient:
         if not _reserve_shell_approval(self, payload):
             self._publish_response("shell", {
                 "type": "shell", "device_id": DEVICE_ID, "ok": False,
-                "error": "approval_invalid_or_replayed", "returncode": -1,
+                "error": "approval_invalid_or_replayed", "returncode": -1, "status": "rejected",
             })
             log.warning("Shell request rejected by approval or replay guard")
             return
         cmd = payload["command"]
         if not cmd.strip():
             return
-        timeout_s = int(payload.get("timeout", 20))
-        if timeout_s <= 0 or timeout_s > 60: timeout_s = 20
+        timeout_s = _shell_timeout(payload.get("timeout"))
         try:
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout_s)
-            output = result.stdout or ""
-            if result.stderr: output += "\n[STDERR]\n" + result.stderr
-            self._publish_response("shell", {"type": "shell", "device_id": DEVICE_ID, "output": output, "returncode": result.returncode})
-        except subprocess.TimeoutExpired:
-            self._publish_response("shell", {"type": "shell", "device_id": DEVICE_ID, "output": f"[TIMEOUT after {timeout_s}s]", "returncode": -1})
+            stdout, stderr, code = result.stdout, result.stderr, result.returncode
+            status = "completed" if code == 0 else "failed"
+        except subprocess.TimeoutExpired as exc:
+            stdout, stderr, code, status = exc.output, exc.stderr, -1, "timeout"
+        except Exception:
+            # Exceptions may echo the executable command or credentials.
+            stdout, stderr, code, status = "", "Execution failed", -2, "error"
+        stdout, stdout_truncated = _bounded_shell_stream(stdout)
+        stderr, stderr_truncated = _bounded_shell_stream(stderr)
+        output = stdout + ("\n[STDERR]\n" + stderr if stderr else "")
+        if status == "timeout":
+            output = f"[TIMEOUT after {timeout_s}s]\n" + output
+        self._publish_response("shell", {
+            "type": "shell", "device_id": DEVICE_ID,
+            "stdout": stdout, "stderr": stderr, "output": output, "returncode": code,
+            "stdout_truncated": stdout_truncated, "stderr_truncated": stderr_truncated,
+            "status": status,
+        })
+        log.info("Shell executed (rc=%s)", code)
 
     def _do_open_app(self, payload: dict) -> None:
         app = (payload.get("app") or "").strip()
