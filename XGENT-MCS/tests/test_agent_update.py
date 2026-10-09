@@ -128,7 +128,7 @@ def test_geo_location_has_one_bounded_response(monkeypatch):
 def test_agent_update_passes_release_tag_to_verifier_and_fails_closed(monkeypatch, tmp_path):
     client = _make_client()
     sent = []
-    client._publish_response = lambda topic, payload: sent.append((topic, payload))
+    client._publish_response = lambda topic, payload: sent.append((topic, payload)) if topic == "output" else None
     monkeypatch.setattr(mcs, "CONFIG_DIR", tmp_path)
     monkeypatch.setenv("XIDER_UPDATE_BRANCH", "attacker-controlled-branch")
     observed = {}
@@ -295,7 +295,7 @@ def source_update(monkeypatch, tmp_path):
         )
     sent, cache_calls, restarts = [], [], []
     client = _make_client()
-    client._publish_response = lambda topic, payload: sent.append((topic, payload))
+    client._publish_response = lambda topic, payload: sent.append((topic, payload)) if topic == "output" else None
 
     def download(manifest, archive, *, release_tag=None):
         Path(manifest).write_text("{}", encoding="utf-8")
@@ -422,7 +422,16 @@ def test_old_worker_reconnect_cannot_commit_pending_update(source_update):
 
 def test_new_worker_health_activates_cache_before_committing(source_update, monkeypatch):
     old, install, state_root, _, _, _, _ = source_update
-    old._do_agent_update({"release_tag": "v4.2.0"})
+    progress = []
+    old._publish_response = lambda topic, payload: progress.append((topic, payload))
+    old._do_agent_update({"release_tag": "v4.2.0", "id": "bot-op-health"})
+    assert [item[1]["update_state"] for item in progress] == [
+        "queued", "downloading", "verifying", "installing", "reconnecting",
+    ]
+    assert {item[1]["operation_id"] for item in progress} == {"bot-op-health"}
+    receipt = package.read_agent_update_result(state_root / package.UPDATE_STATE_NAME)
+    assert receipt["update_state"] == "health_check"
+    assert receipt["operation_id"] == "bot-op-health"
     assert package.prepare_agent_update_start(state_root / package.UPDATE_STATE_NAME, install) == "pending"
     new = _make_client()
     new._publish_status = lambda: None
@@ -436,6 +445,9 @@ def test_new_worker_health_activates_cache_before_committing(source_update, monk
     assert activations == [(state_root / "recovery", "v4.2.0-" + "a" * 64)]
     assert new._update_health.is_set()
     assert not (state_root / package.UPDATE_STATE_NAME).exists()
+    receipt = package.read_agent_update_result(state_root / package.UPDATE_STATE_NAME)
+    assert receipt["update_state"] == "succeeded"
+    assert receipt["operation_id"] == "bot-op-health"
 
 
 def test_health_timeout_does_not_restart_after_explicit_stop(monkeypatch, tmp_path):

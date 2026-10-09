@@ -59,7 +59,12 @@ def test_agent_mqtt_callbacks_write_connected_and_disconnected_health(client, mo
     monkeypatch.setattr(wds, "write_runtime_health", lambda component, connected: written.append((component, connected)))
     monkeypatch.setattr(wds.sys, "frozen", True, raising=False)
 
+    client._client.subscribe.side_effect = [(0, 101), (0, 102)]
     client._on_connect(client._client, None, None, 0)
+    assert written == []
+    client._on_subscribe(client._client, None, 101, [0])
+    assert written == []
+    client._on_subscribe(client._client, None, 102, [0])
     client._on_disconnect(client._client, None, None, 7)
 
     assert written == [("agent", True), ("agent", False)]

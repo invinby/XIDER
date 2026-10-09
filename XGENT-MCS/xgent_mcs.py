@@ -169,6 +169,8 @@ from update_package import (
     prepare_agent_update_start,
     rollback_unhealthy_agent,
     validate_source_update_requirements,
+    read_agent_update_result,
+    update_operation_id,
 )
 from release_signature import trusted_release_keys_ready
 
@@ -868,6 +870,7 @@ class XgentClient:
                 ):
                     self._update_health.set()
                     log.info("Проверка здоровья обновлённого агента прошла: MQTT подтвердил обе командные подписки.")
+                    self._publish_status()
                     self._restart_existing_guardian_after_update()
         except Exception:
             log.exception("Не удалось подтвердить здоровье установленного обновления")
@@ -1082,6 +1085,9 @@ class XgentClient:
         }
         if _command_approval_protocol_enabled(self):
             payload["command_approval_protocol"] = 1
+        receipt = read_agent_update_result(CONFIG_DIR / UPDATE_STATE_NAME)
+        if receipt:
+            payload["agent_update"] = receipt
         body = encrypt_payload(payload) if ENCRYPT_PAYLOAD else payload
         envelope = sign_message(body)
         self._client.publish(f"{MQTT_PREFIX}/{DEVICE_ID}/status", json.dumps(envelope, ensure_ascii=False), qos=1)
@@ -2593,6 +2599,8 @@ end tell'''
                 "device_id": DEVICE_ID,
                 "ok": False,
                 "state": "unsupported_package",
+                "operation_id": update_operation_id(payload, getattr(getattr(self, "_command_context", None), "cmd_id", None)),
+                "update_state": "failed",
                 "text": (
                     "⚠️ Автообнова этой сборки XGENT пока не поддерживается. "
                     "Ничего не менял: нужен проверенный установщик PyInstaller-пакета."
@@ -2604,6 +2612,8 @@ end tell'''
             self._publish_response("output", {
                 "type": "agent_update", "device_id": DEVICE_ID, "ok": False,
                 "state": "update_busy", "text": "⏳ Обновление уже выполняется; дождитесь результата.",
+                "operation_id": update_operation_id(payload, getattr(getattr(self, "_command_context", None), "cmd_id", None)),
+                "update_state": "failed",
             })
             return
         restart_scheduled = False
@@ -2613,6 +2623,8 @@ end tell'''
                     self._publish_response("output", {
                         "type": "agent_update", "device_id": DEVICE_ID, "ok": False,
                         "state": "update_cancelled", "text": "Агент остановлен; установка и перезапуск отменены.",
+                        "operation_id": update_operation_id(payload, getattr(getattr(self, "_command_context", None), "cmd_id", None)),
+                        "update_state": "failed",
                     })
                     return
             restart_scheduled = self._install_source_update(payload)
@@ -2623,6 +2635,8 @@ end tell'''
     def _install_source_update(self, payload: dict) -> bool:
         """Install under the update guard, kept until restart or cancellation."""
         cmd_id = payload.get("id", getattr(getattr(self, "_command_context", None), "cmd_id", None))
+        operation_id = update_operation_id(payload, cmd_id)
+        self._publish_update_progress(operation_id, "queued")
         script_dir = Path(__file__).resolve().parent
         backup_dir = CONFIG_DIR / "agent-backups" / f"{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns()}"
         # Replace the recovery helper and launcher first. If power is lost after
@@ -2641,11 +2655,13 @@ end tell'''
             with tempfile.TemporaryDirectory(prefix="xgent-update-") as tmp:
                 archive = Path(tmp) / "XIDER-source.zip"
                 manifest = Path(tmp) / "release-manifest.json"
+                self._publish_update_progress(operation_id, "downloading")
                 release_tag = download_verified_source_archive(
                     manifest,
                     archive,
                     release_tag=payload.get("release_tag"),
                 )
+                self._publish_update_progress(operation_id, "verifying")
                 source = extract_agent_files(archive, Path(tmp) / "agent-stage", files)
                 for name in files:
                     candidate = source / name
@@ -2658,6 +2674,7 @@ end tell'''
                     recovery_slot = stage_recovery_package(
                         manifest, archive, CONFIG_DIR / "recovery", activate=False,
                     )
+                    self._publish_update_progress(operation_id, "installing")
                     backup_dir = install_agent_files(
                         source,
                         script_dir,
@@ -2665,6 +2682,7 @@ end tell'''
                         files,
                         transaction_path=CONFIG_DIR / UPDATE_STATE_NAME,
                         recovery_slot=recovery_slot,
+                        operation_id=operation_id, release_tag=release_tag,
                     )
                     installed = True
             text = (
@@ -2679,9 +2697,10 @@ end tell'''
                     "type": "agent_update", "device_id": DEVICE_ID, "ok": True,
                     "state": "restarting", "release_tag": release_tag,
                     "health_check": "pending", "text": text,
+                    "operation_id": operation_id, "update_state": "reconnecting",
                 })
                 threading.Thread(
-                    target=self._restart_after_update, args=(script_dir, cmd_id),
+                    target=self._restart_after_update, args=(script_dir, cmd_id, operation_id),
                     name="xgent-update-restart", daemon=True,
                 ).start()
             return True
@@ -2696,11 +2715,18 @@ end tell'''
             self._publish_response("output", {
                 "type": "agent_update", "device_id": DEVICE_ID, "ok": False,
                 "state": "dependency_install_required" if isinstance(exc, DependencyUpdateRequired) else "update_failed",
+                "operation_id": operation_id, "update_state": "failed",
                 "text": f"❌ Не удалось завершить обновление: {exc}. Проверьте состояние файлов и каталог резервной копии.",
             })
             return False
 
-    def _restart_after_update(self, script_dir: Path, cmd_id=None) -> None:
+    def _publish_update_progress(self, operation_id: str, state: str) -> None:
+        self._publish_response("update_progress", {
+            "type": "agent_update_progress", "device_id": DEVICE_ID,
+            "operation_id": operation_id, "update_state": state,
+        })
+
+    def _restart_after_update(self, script_dir: Path, cmd_id=None, operation_id=None) -> None:
         try:
             time.sleep(1.5)
             with self._lifecycle_lock:
@@ -2714,15 +2740,21 @@ end tell'''
                 ])
         except Exception as exc:
             log.exception("Не удалось перезапустить обновлённого агента; возвращаю предыдущие файлы")
+            rollback_detail = ""
+            if operation_id:
+                self._publish_update_progress(operation_id, "rolling_back")
             try:
                 with self._lifecycle_lock:
                     rollback_unhealthy_agent(CONFIG_DIR / UPDATE_STATE_NAME, script_dir)
-            except Exception:
+            except Exception as rollback_error:
+                rollback_detail = f" Автоматический откат неполон: {rollback_error}"
                 log.exception("Не удалось завершить откат после ошибки перезапуска")
             self._publish_response("output", {
                 "type": "agent_update", "device_id": DEVICE_ID, "ok": False,
-                "state": "restart_failed", "text": f"❌ Перезапуск не выполнен: {exc}. Предыдущий процесс продолжает работу.",
+                "state": "restart_failed", "text": f"❌ Перезапуск не выполнен: {exc}.{rollback_detail}",
                 **({"id": cmd_id} if cmd_id is not None else {}),
+                "operation_id": operation_id,
+                "update_state": (read_agent_update_result(CONFIG_DIR / UPDATE_STATE_NAME) or {}).get("update_state", "failed"),
             })
         finally:
             self._update_lock.release()

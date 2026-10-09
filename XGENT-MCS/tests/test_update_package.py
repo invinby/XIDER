@@ -2,7 +2,7 @@ import hashlib
 import json
 from pathlib import Path
 import sys
-from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo, BadZipFile
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -166,8 +166,8 @@ def test_source_update_does_not_delete_a_preexisting_archive_destination(tmp_pat
     assert archive_path.read_bytes() == b"owner data"
 
 
-def test_source_update_can_pin_a_semver_release_tag(tmp_path, monkeypatch):
-    tag = "v4.2.0"
+@pytest.mark.parametrize("tag", ["v4.2.0", "v3.9.9"])
+def test_source_update_can_pin_a_semver_release_tag(tmp_path, monkeypatch, tag):
     routes = _release_routes(tag)
     api_doc = json.loads(routes.pop(f"{package.RELEASE_API}/latest"))
     routes[f"{package.RELEASE_API}/tags/{tag}"] = json.dumps(api_doc).encode()
@@ -505,6 +505,88 @@ def test_extract_enforces_uncompressed_size_and_empty_stage(tmp_path):
     with pytest.raises(ValueError, match="пустым"):
         package.extract_agent_files(archive, existing, ("xgent_mcs.py", "config.py"))
     assert (existing / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.parametrize("outcome", ["healthy", "rollback", "rollback_failure", "commit_interruption"])
+def test_transaction_receipt_preserves_operation_and_user_configuration(tmp_path, monkeypatch, outcome):
+    source, install = tmp_path / "stage", tmp_path / "install"
+    source.mkdir()
+    install.mkdir()
+    (source / "xgent_mcs.py").write_text("new", encoding="utf-8")
+    (install / "xgent_mcs.py").write_text("old", encoding="utf-8")
+    (install / ".env").write_text("private fixture", encoding="utf-8")
+    (install / "preferences.json").write_text("user fixture", encoding="utf-8")
+    state = tmp_path / package.UPDATE_STATE_NAME
+    package.install_agent_files(source, install, tmp_path / package.UPDATE_BACKUP_DIR / "previous",
+                                ("xgent_mcs.py",), transaction_path=state,
+                                operation_id="op-fixture", release_tag="v4.0.1")
+    assert package.read_agent_update_result(state)["state"] == "health_check"
+    assert package.read_agent_update_result(state)["operation_id"] == "op-fixture"
+    package.begin_agent_start(state, install)
+    if outcome == "healthy":
+        package.mark_agent_update_healthy(state, install)
+        expected = "succeeded"
+    elif outcome == "commit_interruption":
+        original_unlink = Path.unlink
+        def fail_journal_unlink(path, *args, **kwargs):
+            if path == state:
+                raise OSError("journal removal denied")
+            return original_unlink(path, *args, **kwargs)
+        monkeypatch.setattr(Path, "unlink", fail_journal_unlink)
+        with pytest.raises(OSError, match="journal removal denied"):
+            package.mark_agent_update_healthy(state, install)
+        expected = "health_check"
+        assert state.exists()
+    elif outcome == "rollback":
+        package.rollback_unhealthy_agent(state, install)
+        expected = "rolled_back"
+        assert (install / "xgent_mcs.py").read_text(encoding="utf-8") == "old"
+    else:
+        monkeypatch.setattr(package, "_atomic_copy", lambda *_: (_ for _ in ()).throw(OSError("restore denied")))
+        with pytest.raises(RuntimeError, match="restore denied"):
+            package.rollback_unhealthy_agent(state, install)
+        expected = "failed"
+        assert state.exists()
+    result = package.read_agent_update_result(state)
+    assert result["state"] == expected
+    assert result["operation_id"] == "op-fixture"
+    assert result["release_tag"] == "v4.0.1"
+    assert (install / ".env").read_text(encoding="utf-8") == "private fixture"
+    assert (install / "preferences.json").read_text(encoding="utf-8") == "user fixture"
+    assert not list(install.glob("*.tmp"))
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_failed_backup_removes_partial_backup_without_touching_installed_config(tmp_path, monkeypatch):
+    source, install = tmp_path / "stage", tmp_path / "install"
+    source.mkdir()
+    install.mkdir()
+    for root in (source, install):
+        for name in ("xgent_mcs.py", "config.py"):
+            (root / name).write_text(root.name, encoding="utf-8")
+    (install / ".env").write_text("private", encoding="utf-8")
+    original = package._atomic_copy
+    def fail_second_backup(src, dst):
+        if Path(dst).name == "config.py":
+            raise OSError("backup disk error")
+        original(src, dst)
+    monkeypatch.setattr(package, "_atomic_copy", fail_second_backup)
+    backup = tmp_path / package.UPDATE_BACKUP_DIR / "partial"
+    with pytest.raises(OSError, match="backup disk error"):
+        package.install_agent_files(source, install, backup, ("xgent_mcs.py", "config.py"))
+    assert not backup.exists()
+    assert not (tmp_path / package.UPDATE_STATE_NAME).exists()
+    assert (install / "xgent_mcs.py").read_text(encoding="utf-8") == "install"
+    assert (install / ".env").read_text(encoding="utf-8") == "private"
+
+
+def test_corrupt_signed_archive_cannot_create_stage(tmp_path):
+    archive = tmp_path / "source.zip"
+    archive.write_bytes(b"not a zip")
+    stage = tmp_path / "stage"
+    with pytest.raises(BadZipFile):
+        package.extract_agent_files(archive, stage, ("xgent_mcs.py",))
+    assert not stage.exists() or not list(stage.iterdir())
 
 
 def test_install_agent_files_backs_up_existing_files_and_adds_new_ones(tmp_path, monkeypatch):

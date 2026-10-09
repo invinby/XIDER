@@ -18,6 +18,7 @@ import time
 import urllib.parse
 import urllib.request
 import zipfile
+import uuid
 from pathlib import Path, PurePosixPath
 from typing import Callable
 
@@ -44,6 +45,49 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _RECOVERY_SLOT = re.compile(r"^v\d{1,6}\.\d{1,6}\.\d{1,6}-[0-9a-f]{64}$")
 UPDATE_STATE_NAME = "agent-update-state.json"
 UPDATE_BACKUP_DIR = "agent-backups"
+UPDATE_RESULT_NAME = "agent-update-result.json"
+
+
+def _write_update_result(state_path: Path, state: dict, outcome: str) -> None:
+    if "operation_id" not in state:
+        return  # legacy journals remain recoverable
+    _atomic_write_json(Path(state_path).parent / UPDATE_RESULT_NAME, {
+        "schema": 1, "operation_id": state["operation_id"],
+        "release_tag": state.get("release_tag"), "state": outcome,
+        "update_state": outcome, "updated_at": int(time.time()),
+    })
+
+
+def read_agent_update_result(state_path: Path) -> dict | None:
+    """Read bounded terminal evidence for status reconciliation; never include configuration."""
+    path = Path(state_path).parent / UPDATE_RESULT_NAME
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 4096:
+            return None
+        result = json.loads(path.read_text(encoding="utf-8"))
+        if (not isinstance(result, dict) or result.get("schema") != 1
+                or not isinstance(result.get("operation_id"), str)
+                or not 1 <= len(result["operation_id"]) <= 128
+                or result.get("update_state") not in {"health_check", "rolling_back", "succeeded", "rolled_back", "failed"}
+                or not isinstance(result.get("release_tag"), str)
+                or not _RELEASE_TAG.fullmatch(result["release_tag"])
+                or type(result.get("updated_at")) is not int
+                or result.get("state") != result.get("update_state")):
+            return None
+        if result["update_state"] == "succeeded" and Path(state_path).exists():
+            result.update(state="health_check", update_state="health_check")
+        return {key: result[key] for key in ("operation_id", "release_tag", "state", "update_state", "updated_at")}
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def update_operation_id(payload: dict, command_id=None) -> str:
+    value = payload.get("id", command_id) or payload.get("operation_id")
+    if value is None:
+        return str(uuid.uuid4())
+    if not isinstance(value, str) or not 1 <= len(value) <= 128:
+        raise ValueError("Некорректный идентификатор операции обновления.")
+    return value
 AGENT_UPDATE_FILES = frozenset({
     "xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py",
     "release_signature.py", "update_package.py", "guardian_recovery.py", "xider_guardian.py",
@@ -141,6 +185,11 @@ def _read_update_state(state_path: Path, expected_install_dir: Path) -> dict | N
         raise ValueError("Список файлов в журнале обновления некорректен.")
     if state.get("status") not in {"installing", "awaiting_health"}:
         raise ValueError("Некорректное состояние транзакции обновления.")
+    if "operation_id" in state and (
+        not isinstance(state["operation_id"], str) or not 1 <= len(state["operation_id"]) <= 128
+        or not isinstance(state.get("release_tag"), str) or not _RELEASE_TAG.fullmatch(state["release_tag"])
+    ):
+        raise ValueError("Некорректная операция обновления в журнале.")
     if "recovery_slot" in state and (
         not isinstance(state["recovery_slot"], str)
         or not _RECOVERY_SLOT.fullmatch(state["recovery_slot"])
@@ -166,6 +215,21 @@ def _rollback_update(state_path: Path, expected_install_dir: Path) -> dict:
     state = _read_update_state(state_path, expected_install_dir)
     if state is None:
         return {"restored": [], "removed": []}
+    try:
+        return _restore_update(state_path, state)
+    except Exception:
+        try:
+            _write_update_result(state_path, state, "failed")
+        except (OSError, ValueError):
+            pass
+        raise
+
+
+def _restore_update(state_path: Path, state: dict) -> dict:
+    try:
+        _write_update_result(state_path, state, "rolling_back")
+    except OSError:
+        pass  # status storage failure must not prevent restoration
     install_dir = Path(state["install_dir"]).resolve()
     backup_dir = Path(state["backup_dir"]).resolve()
     files = state["files"]
@@ -210,6 +274,7 @@ def _rollback_update(state_path: Path, expected_install_dir: Path) -> dict:
         else:
             raise ValueError("Некорректный предыдущий слот recovery cache при откате.")
     _fsync_directory(install_dir)
+    _write_update_result(state_path, state, "rolled_back")
     state_path.unlink(missing_ok=True)
     _fsync_directory(state_path.parent)
     return {"restored": restored, "removed": removed}
@@ -272,6 +337,7 @@ def mark_agent_update_healthy(
             _atomic_write_json(Path(state_path), state)
         activate_recovery(recovery_slot)
     state_path = Path(state_path)
+    _write_update_result(state_path, state, "succeeded")
     state_path.unlink()
     _fsync_directory(state_path.parent)
     return True
@@ -591,6 +657,8 @@ def install_agent_files(
     *,
     transaction_path: Path | None = None,
     recovery_slot: str | None = None,
+    operation_id: str | None = None,
+    release_tag: str | None = None,
 ) -> Path:
     """Back up, replace allowlisted files, and leave a restart-health journal.
 
@@ -603,6 +671,11 @@ def install_agent_files(
     install_dir = Path(install_dir).resolve()
     backup_dir = Path(backup_dir).resolve()
     names = tuple(files)
+    if operation_id is not None and (
+        not isinstance(operation_id, str) or not 1 <= len(operation_id) <= 128
+        or not isinstance(release_tag, str) or not _RELEASE_TAG.fullmatch(release_tag)
+    ):
+        raise ValueError("Некорректная операция обновления.")
     if recovery_slot is not None and (
         not isinstance(recovery_slot, str) or not _RECOVERY_SLOT.fullmatch(recovery_slot)
     ):
@@ -650,12 +723,18 @@ def install_agent_files(
     backup_dir.parent.mkdir(parents=True, exist_ok=True)
     backup_dir.mkdir(exist_ok=False)
     # Complete and flush every backup before the first live file is touched.
-    for name in names:
-        if name in existing:
-            _atomic_copy(install_dir / name, backup_dir / name)
-    _fsync_directory(backup_dir)
-    _fsync_directory(backup_dir.parent)
-    _fsync_directory(state_root)
+    try:
+        for name in names:
+            if name in existing:
+                _atomic_copy(install_dir / name, backup_dir / name)
+        _fsync_directory(backup_dir)
+        _fsync_directory(backup_dir.parent)
+        _fsync_directory(state_root)
+    except Exception:
+        # Only the directory created above is disposable: no live replacement
+        # has begun and no durable journal depends on this incomplete backup.
+        shutil.rmtree(backup_dir, ignore_errors=True)
+        raise
 
     state = {
         "schema": 1,
@@ -668,6 +747,8 @@ def install_agent_files(
     }
     if recovery_slot is not None:
         state["recovery_slot"] = recovery_slot
+    if operation_id is not None:
+        state.update(operation_id=operation_id, release_tag=release_tag)
     _atomic_write_json(transaction_path, state)
 
     try:
@@ -679,6 +760,7 @@ def install_agent_files(
         state["status"] = "awaiting_health"
         state["created_at"] = int(time.time())
         _atomic_write_json(transaction_path, state)
+        _write_update_result(transaction_path, state, "health_check")
     except Exception as install_error:
         try:
             _rollback_update(transaction_path, install_dir)

@@ -214,6 +214,8 @@ if not getattr(sys, "frozen", False):
         mark_agent_update_healthy,
         prepare_agent_update_start,
         rollback_unhealthy_agent,
+        read_agent_update_result,
+        update_operation_id,
     )
 
     if __name__ == "__main__":
@@ -934,6 +936,9 @@ class XgentClient:
         self._running = threading.Event()
         self._running.set()
         self._update_health = threading.Event()
+        self._subscription_lock = threading.RLock()
+        self._pending_command_subacks = set()
+        self._command_subscriptions_failed = False
         self._client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
             client_id=f"xgent-wds-{DEVICE_ID}",
@@ -944,6 +949,7 @@ class XgentClient:
         self._client.on_connect = self._on_connect
         self._client.on_connect_fail = self._on_connect_fail
         self._client.on_disconnect = self._on_disconnect
+        self._client.on_subscribe = self._on_subscribe
         self._client.on_message = self._on_message
         self._heartbeat = threading.Thread(
             target=self._heartbeat_loop, name="xgent-heartbeat", daemon=True
@@ -1128,32 +1134,50 @@ class XgentClient:
     # ---------- колбэки paho-mqtt ----------
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
+        with self._subscription_lock:
+            self._pending_command_subacks.clear()
+            self._command_subscriptions_failed = reason_code != 0
         if reason_code == 0:
-            client.subscribe(f"{MQTT_PREFIX}/{DEVICE_ID}/cmd", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/all/cmd", qos=0)
+            with self._subscription_lock:
+                for topic in (f"{MQTT_PREFIX}/{DEVICE_ID}/cmd", f"{MQTT_PREFIX}/all/cmd"):
+                    try:
+                        result, mid = client.subscribe(topic, qos=0)
+                        if result != mqtt.MQTT_ERR_SUCCESS or type(mid) is not int or mid <= 0 or mid in self._pending_command_subacks:
+                            raise RuntimeError(f"subscribe rejected: rc={result}, mid={mid}")
+                        self._pending_command_subacks.add(mid)
+                    except Exception:
+                        self._command_subscriptions_failed = True
+                        log.exception("Не удалось запросить командную MQTT-подписку %s", topic)
             log.info("Подключено к %s:%s", MQTT_BROKER, MQTT_PORT)
-            try:
-                write_runtime_health("agent", True)
-            except Exception:
-                log.exception("Не удалось записать локальное подтверждение MQTT агента")
             # Подписки восстанавливаются при каждом переподключении.
             self._publish_status()
-            if not getattr(sys, "frozen", False):
-                try:
-                    if mark_agent_update_healthy(
-                        CONFIG_DIR / UPDATE_STATE_NAME,
-                        Path(__file__).resolve().parent,
-                    ):
-                        self._update_health.set()
-                        log.info("Обновлённый Windows-агент прошёл проверку: MQTT доступен.")
-                except Exception:
-                    log.exception("Не удалось подтвердить здоровье обновлённого Windows-агента")
         else:
             log.warning("Не удалось подключиться к брокеру: %s", reason_code)
             try:
                 write_runtime_health("agent", False)
             except Exception:
                 log.exception("Не удалось обновить локальное состояние MQTT агента")
+
+    def _on_subscribe(self, client, userdata, mid, reason_codes, properties=None):
+        with self._subscription_lock:
+            if mid not in self._pending_command_subacks:
+                return
+            self._pending_command_subacks.remove(mid)
+            grants = [getattr(reason, "value", reason) for reason in (reason_codes or ())]
+            if len(grants) != 1 or any(type(grant) is not int or grant not in (0, 1, 2) for grant in grants):
+                self._command_subscriptions_failed = True
+                return
+            if self._pending_command_subacks or self._command_subscriptions_failed or not self._running.is_set():
+                return
+            try:
+                write_runtime_health("agent", True)
+                if not getattr(sys, "frozen", False) and mark_agent_update_healthy(
+                    CONFIG_DIR / UPDATE_STATE_NAME, Path(__file__).resolve().parent,
+                ):
+                    self._update_health.set()
+                    self._publish_status()
+            except Exception:
+                log.exception("Не удалось подтвердить здоровье обновлённого Windows-агента")
 
     def _on_connect_fail(self, client, userdata, reason_code=None):
         log.warning(
@@ -1162,6 +1186,9 @@ class XgentClient:
         )
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
+        with self._subscription_lock:
+            self._pending_command_subacks.clear()
+            self._command_subscriptions_failed = True
         try:
             write_runtime_health("agent", False)
         except Exception:
@@ -1349,6 +1376,10 @@ class XgentClient:
         }
         if _command_approval_protocol_enabled(self):
             payload["command_approval_protocol"] = 1
+        if not getattr(sys, "frozen", False):
+            receipt = read_agent_update_result(CONFIG_DIR / UPDATE_STATE_NAME)
+            if receipt:
+                payload["agent_update"] = receipt
         body = encrypt_payload(payload) if ENCRYPT_PAYLOAD else payload
         envelope = sign_message(body)
         self._client.publish(
@@ -3653,6 +3684,8 @@ setTimeout(()=>window.close(),15000);
                 "device_id": DEVICE_ID,
                 "ok": False,
                 "state": "unsupported_package",
+                "operation_id": payload.get("id", payload.get("operation_id")),
+                "update_state": "failed",
                 "text": (
                     "⚠️ Эта сборка Windows EXE пока не поддерживает транзакционное "
                     "обновление. Ничего не менял; файлы пакета не тронуты."
@@ -3661,6 +3694,8 @@ setTimeout(()=>window.close(),15000);
             return
 
         if payload.get("update"):
+            operation_id = update_operation_id(payload, getattr(getattr(self, "_command_context", None), "cmd_id", None))
+            self._publish_update_progress(operation_id, "queued")
             script_dir = Path(__file__).resolve().parent
             files = (
                 "xgent_wds.py",
@@ -3674,15 +3709,18 @@ setTimeout(()=>window.close(),15000);
             backup_dir = CONFIG_DIR / "agent-backups" / (
                 f"{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns()}"
             )
+            installed = False
             try:
                 with tempfile.TemporaryDirectory(prefix="xgent-wds-update-") as tmp:
                     archive = Path(tmp) / "XIDER-source.zip"
                     manifest = Path(tmp) / "release-manifest.json"
+                    self._publish_update_progress(operation_id, "downloading")
                     release_tag = download_verified_source_archive(
                         manifest,
                         archive,
                         release_tag=payload.get("release_tag"),
                     )
+                    self._publish_update_progress(operation_id, "verifying")
                     source = extract_agent_files(
                         archive,
                         Path(tmp) / "agent-stage",
@@ -3692,13 +3730,16 @@ setTimeout(()=>window.close(),15000);
                     for name in files:
                         candidate = source / name
                         compile(candidate.read_text(encoding="utf-8"), str(candidate), "exec")
+                    self._publish_update_progress(operation_id, "installing")
                     backup_dir = install_agent_files(
                         source,
                         script_dir,
                         backup_dir,
                         files,
                         transaction_path=CONFIG_DIR / UPDATE_STATE_NAME,
+                        operation_id=operation_id, release_tag=release_tag,
                     )
+                    installed = True
 
                 self._publish_response("output", {
                     "type": "agent_update",
@@ -3707,6 +3748,7 @@ setTimeout(()=>window.close(),15000);
                     "state": "restarting",
                     "release_tag": release_tag,
                     "health_check": "pending",
+                    "operation_id": operation_id, "update_state": "reconnecting",
                     "text": (
                         f"📦 Подписанный релиз {release_tag} проверен; исходники Windows-агента "
                         f"установлены. Копия прежних файлов: {backup_dir.name}. Перезапускаюсь; "
@@ -3723,31 +3765,48 @@ setTimeout(()=>window.close(),15000);
                         )
                     except Exception as restart_error:
                         log.exception("Не удалось перезапустить Windows-агент после обновления")
+                        rollback_state = "rolled_back"
+                        rollback_detail = ""
+                        self._publish_update_progress(operation_id, "rolling_back")
                         try:
                             rollback_unhealthy_agent(
                                 CONFIG_DIR / UPDATE_STATE_NAME,
                                 script_dir,
                             )
-                        except Exception:
+                        except Exception as rollback_error:
+                            rollback_state = "failed"
+                            rollback_detail = f" Откат неполон: {rollback_error}"
                             log.exception("Не удалось вернуть прежние файлы после ошибки перезапуска")
                         self._publish_response("output", {
                             "type": "agent_update",
                             "device_id": DEVICE_ID,
                             "ok": False,
-                            "state": "rolled_back",
-                            "text": f"❌ Перезапуск не удался; выполнен откат. Причина: {restart_error}",
+                            "state": rollback_state, "update_state": rollback_state,
+                            "operation_id": operation_id,
+                            **({"id": payload["id"]} if payload.get("id") else {}),
+                            "text": f"❌ Перезапуск не удался: {restart_error}.{rollback_detail}",
                         })
 
                 threading.Thread(target=_reboot_agent, name="xgent-wds-update-restart", daemon=True).start()
             except Exception as exc:
                 log.exception("Windows agent self-update failed")
+                outcome = "failed"
+                rollback_detail = ""
+                if installed:
+                    self._publish_update_progress(operation_id, "rolling_back")
+                    try:
+                        rollback_unhealthy_agent(CONFIG_DIR / UPDATE_STATE_NAME, script_dir)
+                        outcome = "rolled_back"
+                    except Exception as rollback_error:
+                        rollback_detail = f" Автоматический откат неполон: {rollback_error}"
                 self._publish_response("output", {
                     "type": "agent_update",
                     "device_id": DEVICE_ID,
                     "ok": False,
                     "state": "failed",
+                    "operation_id": operation_id, "update_state": outcome,
                     "text": (
-                        f"❌ Обновление не подтверждено: {exc}. "
+                        f"❌ Обновление не подтверждено: {exc}.{rollback_detail} "
                         "Перед новой попыткой проверь журнал агента и резервную копию."
                     ),
                 })
@@ -3773,6 +3832,12 @@ setTimeout(()=>window.close(),15000);
                 os._exit(0)
             threading.Thread(target=_reboot_agent, daemon=True).start()
         self._publish_response("output", {"type": "agent_update", "device_id": DEVICE_ID, "ok": True, "text": text})
+
+    def _publish_update_progress(self, operation_id: str, state: str) -> None:
+        self._publish_response("update_progress", {
+            "type": "agent_update_progress", "device_id": DEVICE_ID,
+            "operation_id": operation_id, "update_state": state,
+        })
 
     def _do_uninstall_agent(self, payload: dict) -> None:
         """Полное удаление агента с ПК: автозапуск, конфиги, логи и завершение процесса."""
@@ -3993,7 +4058,7 @@ def _load_trusted_command_module_loader():
             ):
                 raise ImportError("Shared command loader is not bundled in the active PYZ")
         else:
-            root = (Path(__file__).resolve().parent.parent / "XGENT-MCS").resolve(strict=True)
+            root = _command_approval_source_root().resolve(strict=True)
             expected = root / f"{module_name}.py"
             if expected.is_symlink() or not expected.is_file() or not _same_absolute_path(expected.resolve(strict=True), expected):
                 raise ImportError("Shared command loader is missing or outside XGENT-MCS")
@@ -4021,9 +4086,18 @@ def _load_command_approval_component(module_name: str):
     """Load only the canonical MCS verifier/replay helpers; no crypto copy here."""
     return _load_trusted_command_module_loader().load_component(
         module_name,
-        source_root=(Path(__file__).resolve().parent.parent / "XGENT-MCS"),
+        source_root=_command_approval_source_root(),
         frozen=getattr(sys, "frozen", False),
     )
+
+
+def _command_approval_source_root():
+    """Use the transaction-owned helper set, or the initial checkout's shared set."""
+    windows = Path(__file__).resolve().parent
+    candidate = windows / "command_module_loader.py"
+    if candidate.exists() or candidate.is_symlink():
+        return windows
+    return windows.parent / "XGENT-MCS"
 
 
 def _shell_approval_runtime(client):
@@ -4150,17 +4224,20 @@ def main() -> None:
         def _rollback_if_unhealthy() -> None:
             if client._update_health.wait(120):
                 return
-            state_path = CONFIG_DIR / UPDATE_STATE_NAME
-            if not state_path.exists():
-                log.error("Нет журнала обновления и нет MQTT health подтверждения; откат невозможен")
-                return
-            try:
-                rollback_unhealthy_agent(state_path, Path(__file__).resolve().parent)
-            except Exception:
-                log.exception("Критическая ошибка: откат обновления Windows-агента не завершён")
-                return
-            log.error("Новая версия не подключилась к MQTT за 120 секунд; возвращаю предыдущие файлы")
-            os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]])
+            with client._subscription_lock:
+                if client._update_health.is_set() or not client._running.is_set():
+                    return
+                state_path = CONFIG_DIR / UPDATE_STATE_NAME
+                if not state_path.exists():
+                    log.error("Нет журнала обновления и нет MQTT health подтверждения; откат невозможен")
+                    return
+                try:
+                    rollback_unhealthy_agent(state_path, Path(__file__).resolve().parent)
+                except Exception:
+                    log.exception("Критическая ошибка: откат обновления Windows-агента не завершён")
+                    return
+                log.error("Новая версия не подключилась к MQTT за 120 секунд; возвращаю предыдущие файлы")
+                os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]])
 
         threading.Thread(
             target=_rollback_if_unhealthy,
