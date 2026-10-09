@@ -214,6 +214,23 @@ def test_shell_capture_read_stays_bounded_before_final_output_cap():
     assert truncated
 
 
+@pytest.mark.parametrize("hyphens", ["-", "---"])
+def test_shell_hyphen_token_beyond_output_cap_is_redacted(monkeypatch, tmp_path, hyphens):
+    client = _client(monkeypatch, tmp_path)
+    suffix = "abcdefghijklmnopqrs" + hyphens
+    raw = 'password="' + 'a' * 8240 + '"\n123456:' + suffix
+    monkeypatch.setattr(mcs.subprocess, "run", lambda *a, **kw: _stream_result(
+        kw, stdout=raw, stderr=raw, returncode=0))
+    client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
+    result = client.responses[-1][1]
+    for stream in ("stdout", "stderr", "output"):
+        assert "123456" not in result[stream]
+        assert suffix not in result[stream]
+    for stream in ("stdout", "stderr"):
+        assert len(result[stream].encode("utf-8")) <= 8192
+        assert result[stream + "_truncated"]
+
+
 def test_shell_execution_policy_is_loaded_from_canonical_module():
     helper = mcs._load_command_approval_component("shell_execution")
     canonical = Path(__file__).resolve().parents[2] / "XGENT-MCS" / "shell_execution.py"

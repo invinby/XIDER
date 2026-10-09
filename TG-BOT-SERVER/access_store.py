@@ -176,7 +176,7 @@ def _redact_credentials(text: str) -> str:
         flags=re.DOTALL,
     )
     text = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [REDACTED]", text)
-    text = re.sub(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b", "[TOKEN]", text)
+    text = re.sub(r"\b\d{6,}:[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])", "[TOKEN]", text)
     # Raw redaction-marker text is not trusted; mask an unquoted line before
     # quoted-value replacement introduces any markers of our own.
     text = re.sub(

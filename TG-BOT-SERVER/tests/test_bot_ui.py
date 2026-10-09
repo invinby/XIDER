@@ -302,6 +302,34 @@ def test_shell_capture_boundary_token_fragment_never_reaches_telegram(monkeypatc
     assert "123456:" not in rendered[-1][0]
 
 
+@pytest.mark.parametrize("captured", [False, True], ids=["bot-redaction", "agent-capture"])
+@pytest.mark.parametrize("hyphens", ["-", "---"])
+def test_shell_hyphen_token_beyond_output_cap_never_reaches_telegram(monkeypatch, tmp_path, captured, hyphens):
+    import importlib.util
+    import io
+    suffix = "abcdefghijklmnopqrs" + hyphens
+    raw = 'password="' + 'a' * 8240 + '"\n123456:' + suffix
+    safe, truncated = raw, True
+    if captured:
+        root = Path(__file__).resolve().parents[2]
+        spec = importlib.util.spec_from_file_location("hyphen_shell_fixture", root / "XGENT-MCS" / "shell_execution.py")
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        safe, truncated = helper._read_stream(io.BytesIO(raw.encode()))
+    Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
+    async def result(*args):
+        return {"stdout": safe, "stderr": safe, "output": safe,
+                "stdout_truncated": truncated, "stderr_truncated": truncated,
+                "status": "completed", "returncode": 0}
+    monkeypatch.setattr(bot.shell_collector, "wait_for", result)
+    async def scenario():
+        pending = await request()
+        await bot.on_shell_approve(Callback(f"cmd:shell-approve:{pending.request_id}"))
+    asyncio.run(scenario())
+    assert "123456" not in rendered[-1][0]
+    assert suffix not in rendered[-1][0]
+
+
 @pytest.mark.parametrize("outcome", ["timeout", "publish_failed", "signing_unavailable"])
 def test_shell_failure_outcomes_keep_metadata_audit(monkeypatch, tmp_path, outcome):
     Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)

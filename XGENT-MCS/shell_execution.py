@@ -27,7 +27,7 @@ def redact_stream(text: str) -> str:
         "[PRIVATE KEY REDACTED]", text, flags=re.DOTALL,
     )
     text = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [REDACTED]", text)
-    text = re.sub(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b", "[TOKEN]", text)
+    text = re.sub(r"\b\d{6,}:[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])", "[TOKEN]", text)
     # Unquoted values have no safe space delimiter (Basic auth or passwords
     # with spaces). Run this before introducing our own quoted-value markers:
     # an arbitrary raw [REDACTED] prefix must not gain trusted status.
