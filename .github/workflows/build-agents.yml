@@ -192,7 +192,7 @@ jobs:
             XGENT-MCS/requirements.txt XGENT-MCS/.env.example; do
             unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Fxq "$file"
           done
-          git archive --format=zip --output=artifacts/X-STAB-server.zip HEAD TG-BOT-SERVER deploy
+          git archive --format=zip --output=artifacts/X-STAB-server.zip HEAD TG-BOT-SERVER deploy XGENT-MCS/release_signature.py
           python tools/verify_command_approval_bundle.py \
             --public-only-zip artifacts/XIDER-source.zip \
             --public-only-zip artifacts/Guard-Keeper-Windows.zip \

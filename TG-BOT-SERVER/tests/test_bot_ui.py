@@ -3467,7 +3467,7 @@ def test_check_update_allows_current_windows_source_agent(monkeypatch):
     ],
 )
 def test_selected_release_install_requires_confirmation_and_dispatches_exact_tag(
-    monkeypatch, os_name, component_asset,
+    monkeypatch, os_name, component_asset, signed_catalog_release,
 ):
     import release_catalog
     from types import SimpleNamespace
@@ -3486,7 +3486,8 @@ def test_selected_release_install_requires_confirmation_and_dispatches_exact_tag
         published_at="2026-10-01T00:00:00Z", notes="Safe selected release",
         asset_names=frozenset({component_asset, "XIDER-source.zip", "release-manifest.json"}),
     )
-    monkeypatch.setattr(bot.release_catalog.catalog, "list", lambda: [release])
+    release = signed_catalog_release(release)
+    monkeypatch.setattr(bot.release_catalog.catalog, "list", lambda **kwargs: [release])
     cards = []
 
     async def replace(_cq, text, reply_markup=None):
@@ -3529,7 +3530,7 @@ def test_selected_release_install_requires_confirmation_and_dispatches_exact_tag
     assert dispatched[0][1]["timeout"] == 110.0
 
 
-def test_agent_release_catalog_has_a_direct_install_action(monkeypatch):
+def test_agent_release_catalog_has_a_direct_install_action(monkeypatch, signed_catalog_release):
     import release_catalog
     from types import SimpleNamespace
 
@@ -3548,7 +3549,8 @@ def test_agent_release_catalog_has_a_direct_install_action(monkeypatch):
             "XGENT-MCS-macos-bundle.zip", "XIDER-source.zip", "release-manifest.json",
         }),
     )
-    monkeypatch.setattr(bot.release_catalog.catalog, "list", lambda: [release])
+    release = signed_catalog_release(release)
+    monkeypatch.setattr(bot.release_catalog.catalog, "list", lambda **kwargs: [release])
     cards = []
 
     async def replace(_cq, text, reply_markup=None):

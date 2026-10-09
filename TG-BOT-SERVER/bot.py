@@ -7606,8 +7606,12 @@ def _version_install_block_reason(kind: str, release, component: str, info: dict
         return "versions_install_component_unsupported"
     if not release.has_source_update_payload(component):
         return "versions_install_payload_missing"
+    if not release.signed_source_update_payload(component):
+        return "versions_install_trust_missing"
     if not info:
         return "versions_missing_device"
+    if release_catalog.component_for(str(info.get("os") or "")) != component:
+        return "versions_install_component_unsupported"
     if not release_catalog.supports_release_manifest_update(str(info.get("version") or "")):
         return "versions_install_requires_agent"
     if info.get("update_mode") != "source":
@@ -7617,6 +7621,39 @@ def _version_install_block_reason(kind: str, release, component: str, info: dict
     if _status_dot(info) == "⚪":
         return "versions_install_offline"
     return None
+
+
+def _version_state_text(current: str, release, component: str) -> str:
+    state = release_catalog.version_state(current, release, component)
+    return (
+        f"Доступная версия: {html.escape(state['available'] or 'unknown')}\n"
+        f"ОС: {html.escape(state['os'])}\n"
+        f"Подпись: {state['signature']}\n"
+        f"Состояние установленной версии: {'unknown' if state['unknown'] else 'installed'}\n"
+        f"Поддержка компонента: {'unsupported' if state['unsupported'] else 'supported'}"
+    )
+
+
+_DISPLAYED_VERSION_RELEASES: dict[int, dict[str, dict]] = {}
+
+
+def _version_selection(release, component: str, target: str, info: dict) -> dict:
+    return {"target": str(target), "tag": release.tag, "component": component,
+            "os": str(info.get("os") or ""),
+            "manifest": hashlib.sha256(release_catalog.manifest_signing_bytes(release.manifest)).hexdigest()}
+
+
+def _remember_version_selection(user_id: int, release, component: str, target: str, info: dict) -> None:
+    with _PENDING_VERSION_INSTALLS_LOCK:
+        now = time.time()
+        # A displayed keyboard expires as a unit; retain only the current page.
+        choices = _DISPLAYED_VERSION_RELEASES.setdefault(user_id, {})
+        for tag in list(choices):
+            if now - choices[tag]["created_at"] > 180:
+                choices.pop(tag)
+        if len(choices) >= 16:
+            choices.clear()
+        choices[release.tag] = {**_version_selection(release, component, target, info), "created_at": now}
 
 
 def _version_install_confirmation_kb(tag: str):
@@ -7719,7 +7756,7 @@ async def on_versions_list(cq: CallbackQuery):
             None,
         )
     for release in shown:
-        available = release.has_package(component)
+        available = release.signed_package(component)
         phrase_key = "versions_release_available" if available else "versions_release_missing"
         lines.append(_lex_html(phrase_key, tag=release.tag, name=release.name[:55]))
         icon = "✅" if available else "○"
@@ -7729,6 +7766,7 @@ async def on_versions_list(cq: CallbackQuery):
             style="success" if available else "primary",
         )
         if kind == "agent" and _version_install_block_reason(kind, release, component, info) is None:
+            _remember_version_selection(int(cq.from_user.id), release, component, target, info)
             kb.button(
                 text=_limit_button_label(_lex("versions_install_button", tag=release.tag)),
                 callback_data=f"versions:install:agent:{release.tag}",
@@ -7825,6 +7863,7 @@ async def on_versions_detail(cq: CallbackQuery):
     if notes_page + 1 < note_count:
         kb.button(text=_lex("versions_notes_next"), callback_data=f"versions:detail:{kind}:{tag}:{notes_page + 1}", style="primary")
     if install_reason is None:
+        _remember_version_selection(int(cq.from_user.id), release, component, target, info)
         kb.button(
             text=_limit_button_label(_lex("versions_install_button", tag=release.tag)),
             callback_data=f"versions:install:agent:{release.tag}",
@@ -7846,6 +7885,7 @@ async def on_versions_detail(cq: CallbackQuery):
         cq,
         f"<b>{_lex_html('versions_detail_title', title=title, tag=release.tag)}</b>\n"
         f"{_lex_html('versions_installed', version=current)}\n"
+        f"{_version_state_text(current, release, component)}\n"
         f"{_lex_html('versions_published', date=release.published_at[:10] or '—')}\n"
         f"{html.escape(status)}\n\n"
         f"<b>{_lex('versions_notes_title', page=str(notes_page + 1), count=str(note_count))}</b>\n"
@@ -7924,7 +7964,7 @@ async def on_versions_install_select(cq: CallbackQuery):
         return
     _, component, _ = context
     try:
-        releases = await asyncio.to_thread(release_catalog.catalog.list)
+        releases = await asyncio.to_thread(release_catalog.catalog.list, refresh=True)
     except (OSError, ValueError):
         await cq.answer(_lex("versions_catalog_unavailable"), show_alert=True)
         return
@@ -7932,6 +7972,10 @@ async def on_versions_install_select(cq: CallbackQuery):
     if release is None:
         await cq.answer(_lex("versions_not_found"), show_alert=True)
         return
+    if SESSION.get("target") != target or not _simple_command_still_allowed(int(cq.from_user.id), cq.data, target):
+        await cq.answer(_lex("input_access_revoked"), show_alert=True)
+        return
+    info = devices.get(target)
     reason = _version_install_block_reason("agent", release, component, info)
     if reason:
         await cq.answer(_lex(reason), show_alert=True)
@@ -7939,8 +7983,14 @@ async def on_versions_install_select(cq: CallbackQuery):
 
     user_id = int(cq.from_user.id)
     with _PENDING_VERSION_INSTALLS_LOCK:
+        displayed = _DISPLAYED_VERSION_RELEASES.get(user_id, {}).get(tag)
+    selection = _version_selection(release, component, target, info)
+    if not displayed or time.time() - displayed["created_at"] > 180 or any(displayed.get(key) != value for key, value in selection.items()):
+        await cq.answer(_lex("versions_install_expired"), show_alert=True)
+        return
+    with _PENDING_VERSION_INSTALLS_LOCK:
         _PENDING_VERSION_INSTALLS[user_id] = {
-            "target": str(target), "tag": tag, "created_at": time.time(),
+            **selection, "created_at": time.time(),
         }
     await cq.answer()
     await _replace_callback_message(
@@ -8009,7 +8059,7 @@ async def on_versions_install_confirm(cq: CallbackQuery):
         return
     _, component, _ = context
     try:
-        releases = await asyncio.to_thread(release_catalog.catalog.list)
+        releases = await asyncio.to_thread(release_catalog.catalog.list, refresh=True)
     except (OSError, ValueError):
         _clear_pending_version_install(user_id)
         await cq.answer(_lex("versions_catalog_unavailable"), show_alert=True)
@@ -8018,6 +8068,19 @@ async def on_versions_install_confirm(cq: CallbackQuery):
     if release is None:
         _clear_pending_version_install(user_id)
         await cq.answer(_lex("versions_not_found"), show_alert=True)
+        return
+    info = devices.get(target)
+    allowed = get_user_role(user_id) in {Role.OWNER, Role.COOWNER, Role.USER} and _simple_command_still_allowed(user_id, cq.data, target)
+    same_selection = (
+        SESSION.get("target") == target and info
+        and pending.get("component") == component
+        and pending.get("os") == str(info.get("os") or "")
+        and release_catalog.verify_release_metadata(release, release.manifest)
+        and pending.get("manifest") == hashlib.sha256(release_catalog.manifest_signing_bytes(release.manifest)).hexdigest()
+    )
+    if not allowed or not same_selection:
+        _clear_pending_version_install(user_id)
+        await cq.answer(_lex("input_access_revoked"), show_alert=True)
         return
     reason = _version_install_block_reason("agent", release, component, info)
     if reason:

@@ -21,3 +21,27 @@ os.environ.setdefault("MQTT_PREFIX", "xgent/v1")
 BOT_DIR = Path(__file__).resolve().parents[1]
 if str(BOT_DIR) not in sys.path:
     sys.path.insert(0, str(BOT_DIR))
+
+
+import pytest
+
+
+@pytest.fixture
+def signed_catalog_release(monkeypatch):
+    """Sign inventory with an ephemeral test publisher, never a production key."""
+    import dataclasses
+    import release_catalog
+    import release_signature
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    key = Ed25519PrivateKey.generate()
+    public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    monkeypatch.setattr(release_signature, "TRUSTED_RELEASE_KEYS", {release_signature.release_key_id(public): public})
+    def sign(release):
+        assets = []
+        for name in sorted(release.asset_names - {"release-manifest.json"}):
+            component = next((component for component, names in release_catalog._ASSET_NAMES.items() if name in names), "source")
+            assets.append({"name": name, "component": component, "platform": release_catalog._PLATFORMS.get(component, "all"), "size": 3, "sha256": "a" * 64})
+        manifest = release_signature.sign_manifest({"schema": 1, "release": release.tag, "assets": assets}, key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+        return dataclasses.replace(release, manifest=manifest)
+    return sign
