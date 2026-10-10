@@ -7248,13 +7248,23 @@ async def _coordinated_agent_update(cq, label, timeout, release_tag, update_devi
                 return False
             return True
         def send(op):
-            return publish("agent_update", _target=op.device_id, id=op.operation_id,
-                           update=True, release_tag=op.release_tag, manifest_digest=op.manifest_digest)
+            try:
+                return publish("agent_update", _target=op.device_id, id=op.operation_id,
+                               update=True, release_tag=op.release_tag, manifest_digest=op.manifest_digest)
+            except Exception:
+                log.exception("Неопределённый результат отправки обновления %s", op.operation_id)
+                return None
         update_coordinator.dispatch_ready(operation.batch_id, send, now=time.time(), eligible=eligible)
     except (OSError, ValueError):
         await _replace_callback_message(cq, "Состояние обновления неизвестно. Журнал недоступен или есть другая активная операция.", reply_markup=back_to_device_kb())
         return None
     observed = update_coordinator.observed(operation.operation_id, now=time.time())
+    if observed and observed.state == "queued" and update_coordinator.store.trusted and not update_coordinator.store.is_published(operation.operation_id):
+        if not _simple_command_still_allowed(user_id, callback, target):
+            await _replace_callback_message(cq, _lex("action_result_hidden_after_revoke"), reply_markup=back_to_device_kb())
+            return None
+        await _replace_callback_message(cq, "Команда обновления не отправлена. Можно повторить установку; операция сохранена для повторной попытки.", reply_markup=back_to_device_kb())
+        return {"ok": False, "operation_id": operation.operation_id, "update_state": "queued", "sent": False, "retryable": True}
     status_msg = await _replace_callback_message(cq, _update_operation_text(observed or operation), reply_markup=back_to_device_kb())
     result = await _wait_update_operation(operation.operation_id, timeout, status_msg, user_id)
     if not _simple_command_still_allowed(user_id, callback, target):

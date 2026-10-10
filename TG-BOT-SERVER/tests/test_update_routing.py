@@ -144,6 +144,60 @@ def test_enqueue_uses_persisted_id_and_reports_unknown_without_receipt(coordinat
     assert len(published) == 1
 
 
+@pytest.mark.parametrize('outcome', [False, True, None, 'exception', 'already_published', 'already_succeeded'])
+def test_coordinated_publish_unsent_returns_immediately_but_ambiguous_waits(coordinator, monkeypatch, signed_catalog_release, outcome):
+    import release_catalog
+    c, _ = coordinator
+    release = signed_catalog_release(release_catalog.Release('v4.2.0', (4, 2, 0), 'release', 'date', 'notes', frozenset({'XGENT-MCS-macos-bundle.zip', 'XIDER-source.zip', 'release-manifest.json'})))
+    monkeypatch.setattr(bot, 'SESSION', {'target': 'mac2'})
+    monkeypatch.setattr(bot.devices, 'get', lambda device: {'os': 'macOS 27', 'online': True, 'last_seen': 1010, 'version': '4.2.0', 'update_mode': 'source', 'release_update_ready': True, 'update_manifest_binding_protocol': 1})
+    monkeypatch.setattr(bot, '_simple_command_still_allowed', lambda *args: True)
+    if outcome in {'already_published', 'already_succeeded'}:
+        digest = bot.hashlib.sha256(release_catalog.manifest_signing_bytes(release.manifest)).hexdigest()
+        old = c.start_batch(['mac2'], 'v4.2.0', 'mac_agent', now=1000, manifest_digest=digest)[0]
+        c.store.mark_published(old.operation_id)
+        if outcome == 'already_succeeded':
+            assert c.reconcile('mac2', {'operation_id': old.operation_id, 'release_tag': old.release_tag,
+                'component': old.component, 'manifest_digest': digest, 'update_state': 'succeeded', 'updated_at': 1010},
+                received_at=1010, heartbeat_at=1010)
+    def publish(*args, **kwargs):
+        if outcome in {'already_published', 'already_succeeded'}:
+            pytest.fail('existing operation must not be republished')
+        if outcome == 'exception':
+            raise RuntimeError('ambiguous transport exception')
+        return outcome
+    monkeypatch.setattr(bot, 'publish', publish)
+    waited = []
+    async def wait(operation_id, timeout, *args):
+        if outcome is False:
+            pytest.fail('definitely unsent update must not wait 110 seconds')
+        waited.append((operation_id, timeout))
+        return c.store.get(operation_id)
+    monkeypatch.setattr(bot, '_wait_update_operation', wait)
+    rendered = []
+    async def render(*args, **kwargs):
+        rendered.append(args[1])
+        return SimpleNamespace()
+    monkeypatch.setattr(bot, '_replace_callback_message', render)
+    monkeypatch.setattr(bot, '_replace_message_card', render)
+    async def answer(*args, **kwargs):
+        pass
+    cq = SimpleNamespace(data='versions:install_confirm:v4.2.0', from_user=SimpleNamespace(id=1), answer=answer)
+    result = asyncio.run(bot._coordinated_agent_update(cq, 'update', 110, 'v4.2.0', update_release=release))
+    if outcome is False:
+        assert result['sent'] is False and result['retryable'] is True
+        assert result['update_state'] == 'queued'
+        assert 'не отправлена' in rendered[-1]
+        assert not c.store.is_published(result['operation_id'])
+        assert c.store.get(result['operation_id']).state == 'queued'
+    else:
+        assert len(waited) == 1 and waited[0][1] == 110
+        assert c.store.is_published(result['operation_id'])
+        expected = 'succeeded' if outcome == 'already_succeeded' else 'queued' if outcome is True or outcome == 'already_published' else 'unknown'
+        assert result['update_state'] == expected
+        assert result.get('sent') is not False
+
+
 @pytest.mark.parametrize('healthy,changed_manifest,preflight', [(False, False, None), (True, False, None), (True, True, None), (True, False, 'offline'), (True, False, 'revoked')])
 def test_owner_rollout_requires_fresh_canary_and_revalidates_signed_release(coordinator, monkeypatch, signed_catalog_release, healthy, changed_manifest, preflight):
     import release_catalog
