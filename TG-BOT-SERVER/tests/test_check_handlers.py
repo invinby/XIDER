@@ -10,6 +10,8 @@ import bot
 import check_store
 import pytest
 
+REAL_REPLACE_CARD = bot._replace_message_card
+
 
 @pytest.fixture
 def check_ui(tmp_path, monkeypatch):
@@ -193,3 +195,131 @@ def test_check_latency_excludes_telegram_progress_edit(check_ui, monkeypatch):
     monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (True, "abc123"))
     asyncio.run(bot._simple_command_unlocked(cq, "sys_uptime", "X", "fixture"))
     assert store.get_last_check("device-a", "cmd:sys_uptime").latency_ms == 125
+
+
+def test_current_timeout_survives_failed_persistence(check_ui, monkeypatch):
+    store, cq, edits = check_ui
+    previous = check_store.CheckRecord("device-a", "cmd:sys_uptime", "windows", "4.1.2",
+        datetime.now(timezone.utc).isoformat(), 5, "succeeded", "previous")
+    store.record_check(previous)
+    def fail_replace(*args):
+        raise OSError("fixture disk failure")
+    monkeypatch.setattr(check_store.os, "replace", fail_replace)
+    class Collector:
+        async def wait_for(self, *args, **kwargs):
+            return None
+    monkeypatch.setattr(bot, "fun_text_collector", Collector())
+    monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (True, "abc123"))
+    asyncio.run(bot._simple_command_unlocked(cq, "sys_uptime", "X", "fixture", timeout=.01))
+    assert "timed_out" in edits[-1]
+    assert "succeeded" not in edits[-1]
+    assert store.get_last_check("device-a", "cmd:sys_uptime") == previous
+
+
+def test_private_check_delivery_rechecks_grant_during_card_retry(tmp_path, monkeypatch):
+    allowed = [True]
+    delivered = []
+    attempts = []
+    monkeypatch.setattr(bot.ui_cards, "FILE", tmp_path / "cards.json")
+    monkeypatch.setattr(bot, "_simple_command_still_allowed", lambda *args: allowed[0])
+    class Message:
+        chat = SimpleNamespace(id=900)
+        message_id = 33
+        async def edit_text(self, text, **kwargs):
+            attempts.append(text)
+            if len(attempts) == 1:
+                allowed[0] = False
+                raise RuntimeError("temporary connection error")
+            delivered.append(text)
+        async def answer(self, text, **kwargs):
+            delivered.append(text)
+            return self
+    async def no_sleep(*args):
+        pass
+    monkeypatch.setattr(bot.asyncio, "sleep", no_sleep)
+    assert "delivery_guard" in __import__("inspect").signature(bot._replace_message_card).parameters, "delivery-time guard missing"
+    asyncio.run(bot._replace_message_card(Message(), 1, "PRIVATE metadata", delivery_guard=lambda: allowed[0]))
+    assert not delivered
+
+
+def test_private_check_delivery_rechecks_after_lock_wait(tmp_path, monkeypatch):
+    from contextlib import asynccontextmanager
+    delivered = []
+    allowed = [True]
+    monkeypatch.setattr(bot.ui_cards, "FILE", tmp_path / "cards.json")
+    @asynccontextmanager
+    async def lock(*args):
+        allowed[0] = False
+        yield
+    monkeypatch.setattr(bot, "_card_update", lock)
+    class Message:
+        chat = SimpleNamespace(id=901)
+        message_id = 34
+        async def edit_text(self, text, **kwargs):
+            delivered.append(text)
+        async def answer(self, text, **kwargs):
+            delivered.append(text)
+            return self
+    assert "delivery_guard" in __import__("inspect").signature(bot._replace_message_card).parameters, "delivery-time guard missing"
+    asyncio.run(bot._replace_message_card(Message(), 1, "PRIVATE metadata", delivery_guard=lambda: allowed[0]))
+    assert not delivered
+
+
+def test_handler_wires_final_summary_guard_through_retry(check_ui, monkeypatch, tmp_path):
+    store, cq, edits = check_ui
+    allowed = [True]
+    attempts = []
+    delivered = []
+    monkeypatch.setattr(bot.ui_cards, "FILE", tmp_path / "cards.json")
+    monkeypatch.setattr(bot, "_replace_message_card", REAL_REPLACE_CARD)
+    monkeypatch.setattr(bot, "_simple_command_still_allowed", lambda *args: allowed[0])
+    async def edit(text, **kwargs):
+        attempts.append(text)
+        if len(attempts) == 1:
+            allowed[0] = False
+            raise RuntimeError("temporary connection error")
+        delivered.append(text)
+    cq.message.edit_text = edit
+    async def no_sleep(*args):
+        pass
+    monkeypatch.setattr(bot.asyncio, "sleep", no_sleep)
+    class Collector:
+        async def wait_for(self, *args, **kwargs):
+            return {"ok": True, "device_id": "device-a", "type": "sys_uptime", "id": "abc123"}
+    monkeypatch.setattr(bot, "fun_text_collector", Collector())
+    monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (True, "abc123"))
+    asyncio.run(bot._simple_command_unlocked(cq, "sys_uptime", "X", "fixture"))
+    assert len(attempts) == 1
+    assert not delivered
+
+
+def test_private_check_fallback_rechecks_after_stale_card_await(tmp_path, monkeypatch):
+    allowed = [True]
+    delivered = []
+    monkeypatch.setattr(bot.ui_cards, "FILE", tmp_path / "cards.json")
+    async def stale(*args):
+        allowed[0] = False
+        return True
+    monkeypatch.setattr(bot, "_stale_card_allows_replacement", stale)
+    class Message:
+        chat = SimpleNamespace(id=902)
+        message_id = 35
+        async def edit_text(self, text, **kwargs):
+            raise RuntimeError("message can't be edited")
+        async def answer(self, text, **kwargs):
+            delivered.append(text)
+            return self
+    asyncio.run(bot._replace_message_card(Message(), 1, "PRIVATE", delivery_guard=lambda: allowed[0]))
+    assert not delivered
+
+
+def test_public_card_delivery_is_unchanged_without_guard(tmp_path, monkeypatch):
+    delivered = []
+    monkeypatch.setattr(bot.ui_cards, "FILE", tmp_path / "cards.json")
+    class Message:
+        chat = SimpleNamespace(id=903)
+        message_id = 36
+        async def edit_text(self, text, **kwargs):
+            delivered.append(text)
+    asyncio.run(bot._replace_message_card(Message(), 2, "public notice"))
+    assert delivered == ["public notice"]

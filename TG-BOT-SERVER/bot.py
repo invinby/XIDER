@@ -2185,7 +2185,16 @@ async def _stale_card_allows_replacement(chat_id: int, message_id: int, exc: Exc
         return False
 
 
-async def _edit_card_with_retry(message: Message, text: str, reply_markup=None):
+def _delivery_allowed(delivery_guard) -> bool:
+    if delivery_guard is None:
+        return True
+    try:
+        return bool(delivery_guard())
+    except Exception:
+        return False
+
+
+async def _edit_card_with_retry(message: Message, text: str, reply_markup=None, *, delivery_guard=None):
     """Retry one transient Telegram edit failure; return a terminal error otherwise."""
     stale_markers = (
         "message to edit not found",
@@ -2194,6 +2203,8 @@ async def _edit_card_with_retry(message: Message, text: str, reply_markup=None):
         "message identifier is not specified",
     )
     for attempt in range(2):
+        if not _delivery_allowed(delivery_guard):
+            return None
         try:
             await message.edit_text(text, reply_markup=reply_markup)
             return None
@@ -2228,9 +2239,12 @@ async def _replace_media_card_with_text(
     reply_markup=None,
     *,
     old_message_id: int | None = None,
+    delivery_guard=None,
 ):
     """Replace a media card with a text card, then remove the old media card."""
     media_message_id = old_message_id or message.message_id
+    if not _delivery_allowed(delivery_guard):
+        return message
     try:
         sent = await message.answer(text, reply_markup=reply_markup)
     except Exception:
@@ -2299,9 +2313,10 @@ async def _replace_callback_with_media_unlocked(
     return sent
 
 
-async def _replace_callback_message(cq: CallbackQuery, text: str, reply_markup=None):
+async def _replace_callback_message(cq: CallbackQuery, text: str, reply_markup=None, *, delivery_guard=None):
     """Edit the current card; avoid duplicates on transient Telegram failures."""
-    return await _replace_message_card(cq.message, cq.from_user.id, text, reply_markup)
+    options = {"delivery_guard": delivery_guard} if delivery_guard is not None else {}
+    return await _replace_message_card(cq.message, cq.from_user.id, text, reply_markup, **options)
 
 
 def _card_message(message: Message, message_id: int):
@@ -2317,19 +2332,25 @@ def _card_message(message: Message, message_id: int):
     )
 
 
-async def _replace_message_card(message: Message, user_id: int, text: str, reply_markup=None):
+async def _replace_message_card(message: Message, user_id: int, text: str, reply_markup=None, *, delivery_guard=None):
     async with _card_update(message.chat.id, user_id):
-        return await _replace_message_card_unlocked(message, user_id, text, reply_markup)
+        if not _delivery_allowed(delivery_guard):
+            return message
+        options = {"delivery_guard": delivery_guard} if delivery_guard is not None else {}
+        return await _replace_message_card_unlocked(message, user_id, text, reply_markup, **options)
 
 
-async def _replace_message_card_unlocked(message: Message, user_id: int, text: str, reply_markup=None):
+async def _replace_message_card_unlocked(message: Message, user_id: int, text: str, reply_markup=None, *, delivery_guard=None):
     """Replace one known operation card, creating a new one only if old is proven stale."""
+    if not _delivery_allowed(delivery_guard):
+        return message
+    options = {"delivery_guard": delivery_guard} if delivery_guard is not None else {}
     current_id = ui_cards.get(message.chat.id, user_id)
     if current_id:
         message = _card_message(message, current_id)
     if _message_has_media(message):
-        return await _replace_media_card_with_text(message, user_id, text, reply_markup)
-    exc = await _edit_card_with_retry(message, text, reply_markup)
+        return await _replace_media_card_with_text(message, user_id, text, reply_markup, **options)
+    exc = await _edit_card_with_retry(message, text, reply_markup, **options)
     if exc is None:
         try:
             ui_cards.set_card(message.chat.id, user_id, message.message_id)
@@ -2337,11 +2358,13 @@ async def _replace_message_card_unlocked(message: Message, user_id: int, text: s
             log.exception("Не удалось сохранить ID карточки")
         return message
     if _is_media_text_edit_error(exc):
-        return await _replace_media_card_with_text(message, user_id, text, reply_markup)
+        return await _replace_media_card_with_text(message, user_id, text, reply_markup, **options)
     if not await _stale_card_allows_replacement(
         message.chat.id, message.message_id, exc
     ):
         log.warning("Не удалось обновить карточку %s: %s", message.message_id, exc)
+        return message
+    if not _delivery_allowed(delivery_guard):
         return message
     try:
         sent = await message.answer(text, reply_markup=reply_markup)
@@ -7348,9 +7371,13 @@ def _is_read_only_check(callback: str, action: str, publish_kwargs: dict) -> boo
     return check_store.READ_ONLY_CHECKS.get(callback) == action and not publish_kwargs
 
 
+def _check_delivery_allowed(user_id: int, target: str, callback: str) -> bool:
+    return (get_user_role(user_id) in (Role.OWNER, Role.USER)
+            and _simple_command_still_allowed(user_id, callback, target))
+
+
 def _last_check_summary(user_id: int, target: str, callback: str) -> str:
-    if (get_user_role(user_id) not in (Role.OWNER, Role.USER)
-            or not _simple_command_still_allowed(user_id, callback, target)):
+    if not _check_delivery_allowed(user_id, target, callback):
         return ""
     try:
         return check_store.summary(check_store.get_last_check(target, callback))
@@ -7377,21 +7404,36 @@ def _correlated_check_outcome(result, target: str, action: str, command_id: str)
 
 
 def _save_action_check(target: str, callback: str, command_id: str, outcome: str,
-                       info: dict, latency_ms: int | None) -> None:
+                       info: dict, latency_ms: int | None) -> check_store.CheckRecord | None:
     component = release_catalog.component_for(str(info.get("os") or ""))
     platform = {"windows_agent": "windows", "mac_agent": "macos"}.get(component, "unknown")
     version = str(info.get("version") or "unknown")
     if not check_store._VERSION.fullmatch(version):
         version = "unknown"
     try:
-        check_store.record_check(check_store.CheckRecord(
+        record = check_store.CheckRecord(
             device_id=target, callback=callback, platform=platform, agent_version=version,
             checked_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
             latency_ms=latency_ms, outcome=outcome, correlation_id=command_id,
-        ))
+        )
+        check_store._validate(record)
+    except (ValueError, TypeError):
+        return None
+    try:
+        check_store.record_check(record)
     except (OSError, ValueError, TypeError):
         # No exception details: even invalid identifiers could contain private data.
         log.warning("Could not persist sanitized action check metadata")
+    # Current evidence is independent of persistence. Never substitute an older row.
+    return record
+
+
+def _current_check_summary(user_id, target, callback, record, outcome):
+    if not _check_delivery_allowed(user_id, target, callback):
+        return ""
+    if record is None:
+        return f"Последняя проверка (текущий запрос): {outcome}; metadata недоступна."
+    return check_store.summary(record).replace("Последняя проверка:", "Последняя проверка (текущий запрос):", 1)
 
 
 async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, label: str, timeout: float = 12.0, **publish_kwargs):
@@ -7413,6 +7455,8 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
         )
         return None
     is_check = _is_read_only_check(authorization_callback, action, publish_kwargs)
+    delivery_options = ({"delivery_guard": lambda: _check_delivery_allowed(user_id, target, authorization_callback)}
+                        if is_check else {})
     check_info = dict(devices.get(target) or {}) if is_check else {}
     # Another update can change SESSION while answer() is awaiting Telegram.
     # Pin the target captured before that await into the publish itself.
@@ -7422,9 +7466,9 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
     if not sent:
         text = _lex("mqtt_disconnected")
         if is_check:
-            _save_action_check(target, authorization_callback, command_id, "unknown", check_info, None)
-            text += "\n\n" + _last_check_summary(user_id, target, authorization_callback)
-        await _replace_callback_message(cq, text, reply_markup=back_to_device_kb())
+            current_check = _save_action_check(target, authorization_callback, command_id, "unknown", check_info, None)
+            text += "\n\n" + _current_check_summary(user_id, target, authorization_callback, current_check, "unknown")
+        await _replace_callback_message(cq, text, reply_markup=back_to_device_kb(), **delivery_options)
         return
 
     # Одна карточка на всю операцию: меню -> прогресс -> результат.
@@ -7432,11 +7476,12 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
         "command_waiting", emoji=emoji, label=label, device=target_label(target),
     )
     if is_check:
-        waiting_text += "\n\n" + _last_check_summary(user_id, target, authorization_callback)
+        waiting_text += "\n\nПредыдущая сохранённая проверка:\n" + _last_check_summary(user_id, target, authorization_callback)
     status_msg = await _replace_callback_message(
         cq,
         waiting_text,
         reply_markup=back_to_device_kb(),
+        **delivery_options,
     )
 
     # A single real progress state is more reliable than a rapid, decorative
@@ -7446,7 +7491,7 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
     result = await fun_text_collector.wait_for(target, action, timeout=timeout, command_id=command_id)
     if is_check:
         outcome = "timed_out" if result is None else _correlated_check_outcome(result, target, action, command_id)
-        _save_action_check(target, authorization_callback, command_id, outcome, check_info,
+        current_check = _save_action_check(target, authorization_callback, command_id, outcome, check_info,
                            min(86400000, max(0, int((time.monotonic() - started_at) * 1000))))
 
     # Results can contain private device data (for example saved Wi-Fi
@@ -7463,7 +7508,7 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
 
     if is_check:
         # Metadata-only diagnostics do not echo exception text, paths or raw output.
-        text = _last_check_summary(user_id, target, authorization_callback)
+        text = _current_check_summary(user_id, target, authorization_callback, current_check, outcome)
     elif result is None:
         text = _lex("device_timeout", seconds=str(int(timeout)))
     else:
@@ -7488,6 +7533,7 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
         final_text,
         reply_markup=(_location_result_keyboard(result or {}, user_id)
                       if action == "geo_location" else back_to_device_kb()),
+        **delivery_options,
     )
     if is_check:
         return {"ok": outcome == "succeeded", "outcome": outcome, "id": command_id}
