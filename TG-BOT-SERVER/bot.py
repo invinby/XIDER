@@ -90,6 +90,7 @@ from xgencrypto import decrypt_payload
 from version import BUILD_CODE, BUILD_DATE, VERSION
 import server_ops
 import companion_status
+import check_store
 
 logging.basicConfig(
     level=logging.INFO,
@@ -7342,6 +7343,57 @@ async def _coordinated_agent_update(cq, label, timeout, release_tag, update_devi
     return {"ok": result.state == "succeeded", "operation_id": result.operation_id, "update_state": result.state}
 
 
+def _is_read_only_check(callback: str, action: str, publish_kwargs: dict) -> bool:
+    # Never let arguments or a reused wire action turn a mutation into a check.
+    return check_store.READ_ONLY_CHECKS.get(callback) == action and not publish_kwargs
+
+
+def _last_check_summary(user_id: int, target: str, callback: str) -> str:
+    if (get_user_role(user_id) not in (Role.OWNER, Role.USER)
+            or not _simple_command_still_allowed(user_id, callback, target)):
+        return ""
+    try:
+        return check_store.summary(check_store.get_last_check(target, callback))
+    except (OSError, ValueError, TypeError):
+        return "Последняя проверка: нет достоверных данных."
+
+
+def _correlated_check_outcome(result, target: str, action: str, command_id: str) -> str:
+    if not isinstance(result, dict) or not command_id or (
+        result.get("device_id"), result.get("type"), result.get("id")
+    ) != (target, action, command_id):
+        return "unknown"
+    # Only structured codes are evidence. Free-form text is not classified or stored.
+    state = result.get("outcome") or result.get("state")
+    if state in ("unsupported", "not_supported"):
+        return "unsupported"
+    if state in ("needs_permission", "permission_denied"):
+        return "needs_permission"
+    if result.get("ok") is True:
+        return "succeeded"
+    if result.get("ok") is False:
+        return "failed"
+    return "unknown"
+
+
+def _save_action_check(target: str, callback: str, command_id: str, outcome: str,
+                       info: dict, latency_ms: int | None) -> None:
+    component = release_catalog.component_for(str(info.get("os") or ""))
+    platform = {"windows_agent": "windows", "mac_agent": "macos"}.get(component, "unknown")
+    version = str(info.get("version") or "unknown")
+    if not check_store._VERSION.fullmatch(version):
+        version = "unknown"
+    try:
+        check_store.record_check(check_store.CheckRecord(
+            device_id=target, callback=callback, platform=platform, agent_version=version,
+            checked_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            latency_ms=latency_ms, outcome=outcome, correlation_id=command_id,
+        ))
+    except (OSError, ValueError, TypeError):
+        # No exception details: even invalid identifiers could contain private data.
+        log.warning("Could not persist sanitized action check metadata")
+
+
 async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, label: str, timeout: float = 12.0, **publish_kwargs):
     if action == "agent_update":
         return await _coordinated_agent_update(cq, label, timeout, publish_kwargs.get("release_tag"), publish_kwargs.get("update_devices"), publish_kwargs.get("update_release"))
@@ -7360,30 +7412,42 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
             cq, _lex("input_access_revoked"), reply_markup=back_to_device_kb()
         )
         return None
+    is_check = _is_read_only_check(authorization_callback, action, publish_kwargs)
+    check_info = dict(devices.get(target) or {}) if is_check else {}
     # Another update can change SESSION while answer() is awaiting Telegram.
     # Pin the target captured before that await into the publish itself.
     sent, command_id = publish_tracked(
         action, **{**publish_kwargs, "_target": target}
     )
     if not sent:
-        await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
+        text = _lex("mqtt_disconnected")
+        if is_check:
+            _save_action_check(target, authorization_callback, command_id, "unknown", check_info, None)
+            text += "\n\n" + _last_check_summary(user_id, target, authorization_callback)
+        await _replace_callback_message(cq, text, reply_markup=back_to_device_kb())
         return
 
     # Одна карточка на всю операцию: меню -> прогресс -> результат.
+    waiting_text = _lex_html(
+        "command_waiting", emoji=emoji, label=label, device=target_label(target),
+    )
+    if is_check:
+        waiting_text += "\n\n" + _last_check_summary(user_id, target, authorization_callback)
     status_msg = await _replace_callback_message(
         cq,
-        _lex_html(
-            "command_waiting",
-            emoji=emoji,
-            label=label,
-            device=target_label(target),
-        ),
+        waiting_text,
         reply_markup=back_to_device_kb(),
     )
 
     # A single real progress state is more reliable than a rapid, decorative
     # edit loop that can hit Telegram rate limits and look like a freeze.
+    # Collector-wait latency excludes unrelated Telegram progress-card delivery.
+    started_at = time.monotonic()
     result = await fun_text_collector.wait_for(target, action, timeout=timeout, command_id=command_id)
+    if is_check:
+        outcome = "timed_out" if result is None else _correlated_check_outcome(result, target, action, command_id)
+        _save_action_check(target, authorization_callback, command_id, outcome, check_info,
+                           min(86400000, max(0, int((time.monotonic() - started_at) * 1000))))
 
     # Results can contain private device data (for example saved Wi-Fi
     # passwords). Do not deliver or return them if the exact original grant was
@@ -7397,7 +7461,10 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
         )
         return None
 
-    if result is None:
+    if is_check:
+        # Metadata-only diagnostics do not echo exception text, paths or raw output.
+        text = _last_check_summary(user_id, target, authorization_callback)
+    elif result is None:
         text = _lex("device_timeout", seconds=str(int(timeout)))
     else:
         text = (format_location_result(result) if action == "geo_location"
@@ -7422,6 +7489,8 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
         reply_markup=(_location_result_keyboard(result or {}, user_id)
                       if action == "geo_location" else back_to_device_kb()),
     )
+    if is_check:
+        return {"ok": outcome == "succeeded", "outcome": outcome, "id": command_id}
     return result
 
 
