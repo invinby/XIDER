@@ -222,6 +222,7 @@ class SessionRegistry(dict):
 
 @dp.update.outer_middleware()
 async def _live_log_middleware(handler, event, data):
+    server_ops.observe("telegram_polling", "update_received")
     user = None
     kind = "update"
     detail = ""
@@ -1989,17 +1990,25 @@ def server_menu(user_id: int | None = None):
 
 def server_overview_text(*, approval: bool, connected: bool) -> str:
     approval_state = "включено" if approval else "выключено"
-    broker_state = "подключён" if connected else "ожидает подключения"
+    states = server_ops.health_states()
+    broker_state = states["broker"]["state"] if connected else "disconnected"
+    observations = "\n".join(
+        f"{name}: {item['state']} · checked_at={item['checked_at']}"
+        for name, item in states.items()
+    )
     return (
         f"<b>{html.escape(_lex('server_overview_title'))}</b>\n"
         f"{html.escape(_lex('server_build_line', build=XIDER_BUILD_CODE))}\n"
         f"{html.escape(_lex('server_mqtt_line', state=broker_state))}\n"
         f"{html.escape(_lex('server_approval_line', state=approval_state))}\n"
+        f"<pre>{html.escape(observations)}</pre>\n"
         f"{html.escape(_lex('server_secret_notice'))}"
     )
 
 
 def server_confirmation_text(action: str) -> str:
+    if action == "approval":
+        return "<b>Подтвердить изменение политики допуска устройств?</b>\nПодтверждение действует 120 секунд."
     action_keys = {
         "restart": "server_action_restart",
         "update": "server_action_update",
@@ -2015,27 +2024,39 @@ def server_confirmation_text(action: str) -> str:
     )
 
 
-def server_confirm_menu(action: str):
+def server_confirm_menu(action: str, token: str | None = None):
     label_keys = {
         "restart": "server_action_short_restart",
         "update": "server_action_short_update",
         "rollback": "server_action_short_rollback",
     }
     kb = InlineKeyboardBuilder()
-    if action in label_keys:
-        label = _lex("server_confirm_button", action=_lex(label_keys[action]))
-        kb.button(text=_limit_button_label(label), callback_data=f"server_confirm:{action}", style="danger")
-    kb.button(text=_nav("cancel"), callback_data="menu:server", style="primary")
+    if token and (action in label_keys or action == "approval"):
+        label = "Подтвердить изменение" if action == "approval" else _lex("server_confirm_button", action=_lex(label_keys[action]))
+        kb.button(text=_limit_button_label(label), callback_data=f"server_confirm:{token}", style="danger")
+        kb.button(text=_nav("cancel"), callback_data=f"server_cancel:{token}", style="primary")
+    else:
+        kb.button(text=_nav("cancel"), callback_data="menu:server", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
 
 def server_metrics_text(snapshot: dict) -> str:
+    def display(key, component):
+        item = snapshot.get("states", {}).get(component, {})
+        value = snapshot.get(key)
+        stamp = item.get("checked_at", snapshot.get("checked_at"))
+        if stamp is not None and (time.time() - stamp > server_ops.FRESHNESS_SECONDS or stamp > time.time()):
+            return f"stale (checked_at={stamp})"
+        if value is None or item.get("state") in {"unavailable", "stale", "unknown"} or stamp is None:
+            return f"{item.get('state', 'unknown')} (checked_at={stamp})"
+        return f"{float(value):.1f}% (checked_at={stamp})"
     return (
         f"<b>{html.escape(_lex('server_metrics_title'))}</b>\n"
-        f"{html.escape(_lex('server_cpu'))}: <b>{float(snapshot['load']):.1f}%</b>\n"
-        f"{html.escape(_lex('server_ram'))}: <b>{float(snapshot['memory']):.1f}%</b>\n"
-        f"{html.escape(_lex('server_disk'))}: <b>{float(snapshot['disk']):.1f}%</b>\n\n"
+        f"{html.escape(_lex('server_cpu'))}: <b>{html.escape(display('load', 'cpu'))}</b>\n"
+        f"{html.escape(_lex('server_ram'))}: <b>{html.escape(display('memory', 'ram'))}</b>\n"
+        f"{html.escape(_lex('server_disk'))}: <b>{html.escape(display('disk', 'disk'))}</b>\n\n"
+        "CPU: оценка по load average, не измерение занятости процессора.\n"
         f"{html.escape(_lex('server_metrics_hint'))}"
     )
 
@@ -2711,6 +2732,7 @@ def _maybe_battery_alert(device_id: str, payload: dict) -> None:
 
 def on_mqtt_message(topic: str, data: dict) -> None:
     """Вызывается из потока MQTT при получении сообщения от клиента."""
+    server_ops.observe("broker", "message_received")
     payload, verification_reason = verify_message_detailed(data)
     if payload is None:
         log.warning(
@@ -2958,6 +2980,20 @@ async def _device_offline_watchdog() -> None:
 
 transport = MQTTTransport(on_mqtt_message)
 
+
+def _server_mqtt_health_callback(callback):
+    """Timestamp transport events independently of Telegram and host metrics."""
+    def observed(*args, **kwargs):
+        result = callback(*args, **kwargs)
+        connected = callback.__self__.connected.is_set()
+        server_ops.observe("broker", "connected" if connected else "disconnected")
+        return result
+    return observed
+
+
+transport._client.on_connect = _server_mqtt_health_callback(transport._client.on_connect)
+transport._client.on_disconnect = _server_mqtt_health_callback(transport._client.on_disconnect)
+
 # =====================================================================
 #  Хендлеры: текстовые сообщения
 # =====================================================================
@@ -3186,6 +3222,8 @@ async def on_sound_input(message: Message, state: FSMContext):
 
 @router.callback_query(ReadOnlyFilter(), F.data == "menu:server")
 async def on_menu_server(cq: CallbackQuery):
+    if get_user_role(cq.from_user.id) == Role.OWNER:
+        await asyncio.to_thread(server_ops.status)
     await _replace_callback_message(cq,
         server_overview_text(
             approval=bool(bot_settings.get("require_device_approval", True)),
@@ -3198,21 +3236,19 @@ async def on_menu_server(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data == "server:approval")
 async def on_server_approval(cq: CallbackQuery):
-    value = bot_settings.toggle("require_device_approval")
-    access_store.append_audit("device_approval_policy", actor_id=cq.from_user.id, detail=str(value))
-    await _replace_callback_message(cq,
-        server_overview_text(approval=bool(value), connected=transport.connected.is_set()),
-        reply_markup=server_menu(cq.from_user.id),
-    )
-    await cq.answer(_lex("server_approval_on_answer" if value else "server_approval_off_answer"))
+    await on_server_dangerous_request(cq)
 
 
 @router.callback_query(OwnerFilter(), F.data.in_({"server:restart", "server:update", "server:rollback"}))
 async def on_server_dangerous_request(cq: CallbackQuery):
     action = cq.data.split(":", 1)[1]
+    token = server_ops.request_confirmation(action, cq.from_user.id, is_owner=get_user_role(cq.from_user.id) == Role.OWNER)
+    if token is None:
+        await cq.answer("Операция недоступна.", show_alert=True)
+        return
     await _replace_callback_message(cq,
         server_confirmation_text(action),
-        reply_markup=server_confirm_menu(action),
+        reply_markup=server_confirm_menu(action, token),
     )
     await cq.answer()
 
@@ -3293,6 +3329,8 @@ async def on_server_terminal(cq: CallbackQuery, state: FSMContext):
 @router.message(OwnerFilter(), Form.wait_server_command)
 async def on_server_terminal_command(message: Message, state: FSMContext):
     await state.clear()
+    if get_user_role(message.from_user.id) != Role.OWNER:
+        return
     command = (message.text or "").strip()
     if not command:
         await _replace_user_card(
@@ -3303,7 +3341,7 @@ async def on_server_terminal_command(message: Message, state: FSMContext):
     result = await asyncio.to_thread(server_ops.run_terminal, command)
     access_store.append_audit(
         "server_terminal", actor_id=message.from_user.id,
-        detail=f"command={command[:32]!r}; ok={result.ok}",
+        detail=f"allowed={result.code != 2}; ok={result.ok}",
     )
     await _replace_user_card(
         message,
@@ -3315,13 +3353,25 @@ async def on_server_terminal_command(message: Message, state: FSMContext):
 
 @router.callback_query(OwnerFilter(), F.data.startswith("server_confirm:"))
 async def on_server_confirm(cq: CallbackQuery):
-    action = cq.data.split(":", 1)[1]
+    action = server_ops.consume_confirmation(cq.data.split(":", 1)[1], cq.from_user.id, is_owner=get_user_role(cq.from_user.id) == Role.OWNER)
+    if action is None:
+        await cq.answer("Подтверждение недоступно, истекло или уже использовано.", show_alert=True)
+        return
+    if action == "approval":
+        value = bot_settings.toggle("require_device_approval")
+        access_store.append_audit("device_approval_policy", actor_id=cq.from_user.id, detail=str(value))
+        await _replace_callback_message(cq, server_overview_text(approval=bool(value), connected=transport.connected.is_set()), reply_markup=server_menu(cq.from_user.id))
+        await cq.answer(_lex("server_approval_on_answer" if value else "server_approval_off_answer"))
+        return
     operations = {"restart": server_ops.restart, "update": server_ops.update, "rollback": server_ops.rollback}
     operation = operations.get(action)
     if operation is None:
         await cq.answer(_lex("server_unknown_action"), show_alert=True)
         return
     await _replace_callback_message(cq, _lex("server_operation_pending"))
+    if get_user_role(cq.from_user.id) != Role.OWNER:
+        await cq.answer("Операция недоступна: права владельца отозваны.", show_alert=True)
+        return
     result = await asyncio.to_thread(operation)
     access_store.append_audit("server_operation", actor_id=cq.from_user.id, detail=f"action={action}; ok={result.ok}; code={result.code}")
     await _replace_callback_message(cq,
@@ -3331,6 +3381,16 @@ async def on_server_confirm(cq: CallbackQuery):
         reply_markup=server_menu(cq.from_user.id),
     )
     await cq.answer(_lex("server_done" if result.ok else "server_failed"), show_alert=not result.ok)
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("server_cancel:"))
+async def on_server_cancel(cq: CallbackQuery):
+    action = server_ops.consume_confirmation(cq.data.split(":", 1)[1], cq.from_user.id, is_owner=get_user_role(cq.from_user.id) == Role.OWNER, cancel=True)
+    if action is None:
+        await cq.answer("Подтверждение недоступно, истекло или уже использовано.", show_alert=True)
+        return
+    await _replace_callback_message(cq, "Серверная операция отменена.", reply_markup=server_menu(cq.from_user.id))
+    await cq.answer("Отменено")
 
 
 @router.callback_query(ReadOnlyFilter(), F.data == "menu:guest_devices")
