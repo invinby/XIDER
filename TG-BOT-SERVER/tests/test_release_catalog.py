@@ -144,7 +144,7 @@ def test_rollback_confirmation_revalidates_exact_signed_selection(monkeypatch, s
         monkeypatch.setattr(ledger.catalog, "list", delayed_refresh)
     asyncio.run(bot.on_versions_install_confirm(Callback("versions:install_confirm:v4.1.0")))
     if change == "none":
-        assert commands == [("agent_update", {"timeout": 110.0, "update": True, "release_tag": "v4.1.0"})]
+        assert commands == [("agent_update", {"timeout": 110.0, "update": True, "release_tag": "v4.1.0", "update_release": release})]
         assert info["version"] == "4.2.0"
     else:
         assert commands == []

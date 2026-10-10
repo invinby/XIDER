@@ -3530,6 +3530,25 @@ def test_selected_release_install_requires_confirmation_and_dispatches_exact_tag
     assert dispatched[0][1]["timeout"] == 110.0
 
 
+def test_canary_version_detail_selects_current_device_first_without_publish(monkeypatch, tmp_path, signed_catalog_release):
+    import release_catalog
+    Callback, rendered = _admin_fixture(monkeypatch, tmp_path)
+    monkeypatch.setattr(bot, 'get_user_role', lambda user: bot.Role.OWNER)
+    monkeypatch.setattr(bot, 'SESSION', {'target': 'mac2'})
+    monkeypatch.setattr(bot, '_PENDING_VERSION_INSTALLS', {})
+    monkeypatch.setattr(bot, '_DISPLAYED_VERSION_RELEASES', {})
+    info = {'name': 'Mac', 'os': 'macOS 27', 'version': '4.1.0', 'update_mode': 'source', 'release_update_ready': True, 'online': True, 'last_seen': time.time()}
+    _setup(monkeypatch, {'mac1': info, 'mac2': info, 'offline': {**info, 'online': False}, 'win': {**info, 'os': 'Windows 11'}})
+    release = signed_catalog_release(release_catalog.Release('v4.2.0', (4, 2, 0), 'release', 'date', 'notes', frozenset({'XGENT-MCS-macos-bundle.zip', 'XIDER-source.zip', 'release-manifest.json'})))
+    monkeypatch.setattr(bot.release_catalog.catalog, 'list', lambda **kwargs: [release])
+    monkeypatch.setattr(bot, 'publish', lambda *a, **kw: pytest.fail('selection published'))
+    asyncio.run(bot.on_versions_detail(Callback('versions:detail:agent:v4.2.0')))
+    assert 'versions:canary:v4.2.0' in _callback_data(rendered[-1][1])
+    asyncio.run(bot.on_versions_canary_select(Callback('versions:canary:v4.2.0')))
+    assert bot._PENDING_VERSION_INSTALLS[100]['update_devices'] == ['mac2', 'mac1']
+    assert 'mac2' in rendered[-1][0] and 'mac1' in rendered[-1][0]
+
+
 def test_agent_release_catalog_has_a_direct_install_action(monkeypatch, signed_catalog_release):
     import release_catalog
     from types import SimpleNamespace
@@ -4020,7 +4039,7 @@ def test_rendered_menu_callbacks_match_a_registered_route(monkeypatch):
 def _expected_callback_gate(callback):
     """Independent route contract: never inferred from the installed filter."""
     if callback in {"shell:ok", "menu:admin", "menu:target", "url:favorites", "versions:server"} or callback.startswith(
-        ("admin:", "devmg:", "install:", "server:", "server_confirm:", "url:fav:", "versions:bootstrap:", "cmd:shell-approve:", "cmd:shell-cancel:")
+        ("admin:", "devmg:", "install:", "server:", "server_confirm:", "url:fav:", "versions:bootstrap:", "versions:canary:", "versions:rollout:", "cmd:shell-approve:", "cmd:shell-cancel:")
     ):
         return "OwnerFilter"
     if callback in {"menu:main", "menu:about", "menu:server", "menu:guest_devices", "guest:readonly", "url:cancel"} or callback.startswith(("about:chapter:", "url:count:")):
@@ -4136,7 +4155,7 @@ on_ev_menu on_ev_quiet on_ev_digest on_ev_admins on_admin_users on_admin_user on
 on_admin_permissions on_admin_texts on_admin_style on_devmg_blocked on_manual_install on_versions_device
 on_versions_server on_versions_list on_versions_detail on_url_favorites on_history on_kill_confirm
 on_power_action on_server_dangerous_request on_devmg_delete on_devmg_uninstall on_devmg_block
-on_devmg_clear_all on_versions_install_select on_versions_install_cancel on_url_cancel
+on_devmg_clear_all on_versions_install_select on_versions_canary_select on_versions_install_cancel on_url_cancel
 """.split())
 
 
@@ -4180,6 +4199,11 @@ _DEPENDENT_ACTION_CONTRACTS["on_shell_approve"] = dict(
 _DEPENDENT_ACTION_CONTRACTS["on_shell_cancel"] = dict(
     category="terminal", os_support=("server host",), timeout=0.0,
     result_sensitivity="request metadata", risk="non-action",
+)
+_DEPENDENT_ACTION_CONTRACTS["on_versions_rollout"] = dict(
+    category="power", os_support=("Windows", "macOS"), timeout=6.0,
+    result_sensitivity="bounded update operation state", risk="executable replacement after canary health",
+    wire_action="agent_update",
 )
 
 

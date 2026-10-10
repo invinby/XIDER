@@ -82,6 +82,8 @@ from config import ADMIN_ID, BOT_TOKEN, ENCRYPT_PAYLOAD, MQTT_BROKER, MQTT_PORT,
 from roles import AdminFilter, AnyAccessFilter, OwnerFilter, ReadOnlyFilter, Role, get_user_role
 from crypto import verify_message_detailed
 from device_store import DeviceStore
+from update_store import UpdateStore
+from update_coordinator import Coordinator, TERMINAL as UPDATE_TERMINAL
 from transport import MQTTTransport
 from wol import send_wol
 from xgencrypto import decrypt_payload
@@ -2441,6 +2443,7 @@ async def _show_start_card_unlocked(message: Message, text: str, reply_markup) -
 # =====================================================================
 
 devices = DeviceStore()
+update_coordinator = Coordinator(UpdateStore())
 status_collector = ResponseCollector()
 screenshot_collector = ResponseCollector()
 sysinfo_collector = ResponseCollector()
@@ -2725,10 +2728,24 @@ def on_mqtt_message(topic: str, data: dict) -> None:
         payload = inner
     parts = topic.split("/")
     prefix_len = len(MQTT_PREFIX.split("/"))
-    if len(parts) != prefix_len + 2:
+    if len(parts) != prefix_len + 2 or parts[:prefix_len] != MQTT_PREFIX.split("/"):
         return
     device_id = parts[prefix_len]
     msg_type = parts[-1]
+    if msg_type in {"status", "update_progress"} and payload.get("device_id", device_id) != device_id:
+        return
+    if msg_type == "update_progress" and payload.get("type") == "agent_update_progress":
+        if bot_settings.is_blocked(device_id):
+            return
+        info = devices.get(device_id) or {}
+        component = release_catalog.component_for(str(info.get("os") or ""))
+        if payload.get("component", component) != component:
+            return
+        try:
+            update_coordinator.handle_event(device_id, {**payload, "component": component}, received_at=time.time())
+        except (OSError, ValueError):
+            log.warning("Update journal unavailable; progress remains unconfirmed")
+        return
 
     # Блок-лист: устройства в нём не принимаем и не показываем.
     if msg_type == "status" and bot_settings.is_blocked(device_id):
@@ -2766,6 +2783,22 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             info["last_seen"] = time.time()
         is_new = device_id not in devices.all()
         devices.upsert(device_id, info)
+        receipt = payload.get("agent_update")
+        if not online:
+            try:
+                update_coordinator.heartbeat_lost(device_id, now=time.time())
+            except (OSError, ValueError):
+                log.warning("Update journal unavailable; offline update remains unconfirmed")
+        if online and isinstance(receipt, dict):
+            component = release_catalog.component_for(info["os"])
+            if receipt.get("component", component) == component:
+                try:
+                    update_coordinator.reconcile(
+                        device_id, {**receipt, "component": component},
+                        received_at=time.time(), heartbeat_at=info["last_seen"],
+                    )
+                except (OSError, ValueError):
+                    log.warning("Update journal unavailable; health remains unconfirmed")
         status_collector.submit(device_id, info)
         multi_status.submit(device_id, info)
         audit("device_online" if online else "device_offline",
@@ -2883,6 +2916,14 @@ def on_mqtt_message(topic: str, data: dict) -> None:
         if payload.get("type") == "file_get":
             file_collector.submit(device_id, payload)
         else:
+            if payload.get("type") == "agent_update" and not bot_settings.is_blocked(device_id):
+                info = devices.get(device_id) or {}
+                component = release_catalog.component_for(str(info.get("os") or ""))
+                if payload.get("component", component) == component:
+                    try:
+                        update_coordinator.handle_event(device_id, {**payload, "component": component}, received_at=time.time())
+                    except (OSError, ValueError):
+                        log.warning("Update journal unavailable; result remains unconfirmed")
             fun_text_collector.submit(device_id, payload)
             _schedule_lifecycle_failure_notice(device_id, payload)
 
@@ -2892,6 +2933,10 @@ async def _device_offline_watchdog() -> None:
     while True:
         await asyncio.sleep(30)
         now = time.time()
+        try:
+            update_coordinator.expire(now=now)
+        except (OSError, ValueError):
+            log.warning("Update journal unavailable; pending updates remain unknown")
         for device_id, info in devices.all().items():
             if not info.get("online"):
                 continue
@@ -7128,7 +7173,99 @@ async def on_rotate_select(cq: CallbackQuery):
     )
 
 
+def _update_operation_text(operation) -> str:
+    return (
+        f"Обновление <code>{html.escape(operation.release_tag)}</code>\n"
+        f"Устройство: <code>{html.escape(operation.device_id)}</code>\n"
+        f"Этап: <b>{html.escape(operation.state)}</b>\n"
+        f"Последнее событие: <code>{operation.changed_at}</code>\n"
+        f"Операция: <code>{operation.operation_id}</code>"
+    )
+
+
+def _update_batch_keyboard(operation, user_id):
+    kb = InlineKeyboardBuilder()
+    if get_user_role(user_id) == Role.OWNER and len(update_coordinator.store.batch(operation.batch_id)) > 1:
+        kb.button(text=_lex("versions_install_button", tag=f"{operation.release_tag} · Rollout"), callback_data=f"versions:rollout:{operation.batch_id}")
+    kb.button(text=_lex("versions_back_device"), callback_data="back:device", style="primary")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+async def _wait_update_operation(operation_id, timeout, status_msg, user_id):
+    deadline = time.monotonic() + timeout
+    previous = None
+    while time.monotonic() < deadline:
+        operation = update_coordinator.observed(operation_id, now=time.time())
+        if operation is None:
+            return None
+        if not _simple_command_still_allowed(user_id, f"versions:install_confirm:{operation.release_tag}", operation.device_id):
+            return None
+        if operation.state != previous:
+            await _replace_message_card(status_msg, user_id, _update_operation_text(operation), reply_markup=back_to_device_kb())
+            previous = operation.state
+        if operation.state in UPDATE_TERMINAL or operation.state == "unknown":
+            return operation
+        await asyncio.sleep(1)
+    update_coordinator.timeout(operation_id, now=time.time())
+    return update_coordinator.observed(operation_id, now=time.time())
+
+
+async def _coordinated_agent_update(cq, label, timeout, release_tag, update_devices=None, update_release=None):
+    target = SESSION.get("target")
+    if not target:
+        await cq.answer(_lex("target_required"), show_alert=True)
+        return None
+    if not release_tag:
+        await cq.answer()
+        await _replace_callback_message(cq, "Выбери подписанный релиз для установки.", reply_markup=_version_root_menu())
+        return None
+    user_id = int(cq.from_user.id)
+    callback = str(cq.data or "")
+    await cq.answer(_lex_html("command_started", emoji="🔄", label=label))
+    if SESSION.get("target") != target or not _simple_command_still_allowed(user_id, callback, target):
+        await _replace_callback_message(cq, _lex("input_access_revoked"), reply_markup=back_to_device_kb())
+        return None
+    info = devices.get(target) or {}
+    component = release_catalog.component_for(str(info.get("os") or ""))
+    if not component or not info.get("online") or time.time() - float(info.get("last_seen") or 0) > 120:
+        await _replace_callback_message(cq, _lex("versions_install_offline"), reply_markup=back_to_device_kb())
+        return None
+    if update_release is not None and (
+        update_release.tag != release_tag
+        or _version_install_block_reason("agent", update_release, component, info)
+    ):
+        await _replace_callback_message(cq, _lex("versions_install_component_unsupported"), reply_markup=back_to_device_kb())
+        return None
+    try:
+        operation = update_coordinator.start_batch(update_devices or [target], release_tag, component, now=time.time())[0]
+        def send(op):
+            if not _simple_command_still_allowed(user_id, callback, op.device_id):
+                return False
+            if update_release is not None and _version_install_block_reason("agent", update_release, op.component, devices.get(op.device_id)):
+                return False
+            return publish("agent_update", _target=op.device_id, id=op.operation_id,
+                           update=True, release_tag=op.release_tag)
+        update_coordinator.dispatch_ready(operation.batch_id, send, now=time.time())
+    except (OSError, ValueError):
+        await _replace_callback_message(cq, "Состояние обновления неизвестно. Журнал недоступен или есть другая активная операция.", reply_markup=back_to_device_kb())
+        return None
+    observed = update_coordinator.observed(operation.operation_id, now=time.time())
+    status_msg = await _replace_callback_message(cq, _update_operation_text(observed or operation), reply_markup=back_to_device_kb())
+    result = await _wait_update_operation(operation.operation_id, timeout, status_msg, user_id)
+    if not _simple_command_still_allowed(user_id, callback, target):
+        await _replace_callback_message(cq, _lex("action_result_hidden_after_revoke"), reply_markup=back_to_device_kb())
+        return None
+    if result is None:
+        await _replace_message_card(status_msg, user_id, "Состояние обновления: unknown. Подтверждение устройства отсутствует.", reply_markup=back_to_device_kb())
+        return None
+    await _replace_message_card(status_msg, user_id, _update_operation_text(result), reply_markup=_update_batch_keyboard(result, user_id))
+    return {"ok": result.state == "succeeded", "operation_id": result.operation_id, "update_state": result.state}
+
+
 async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, label: str, timeout: float = 12.0, **publish_kwargs):
+    if action == "agent_update":
+        return await _coordinated_agent_update(cq, label, timeout, publish_kwargs.get("release_tag"), publish_kwargs.get("update_devices"), publish_kwargs.get("update_release"))
     target = SESSION.get("target")
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
@@ -7587,6 +7724,11 @@ def _version_root_menu(server: bool = False):
         keeper = str((info.get("guardian") or {}).get("version") or "?")
         kb.button(text=_limit_button_label(_lex("versions_agent_button", version=agent)), callback_data="versions:list:agent:0", style="primary")
         kb.button(text=_limit_button_label(_lex("versions_keeper_button", version=keeper)), callback_data="versions:list:keeper:0", style="primary")
+        for operation in reversed(update_coordinator.store.all()):
+            batch = update_coordinator.store.batch(operation.batch_id)
+            if len(batch) > 1 and batch[0].device_id == target:
+                kb.button(text=f"Canary / rollout {operation.release_tag}", callback_data=f"versions:rollout:{operation.batch_id}")
+                break
         kb.button(text=_lex("versions_back_device"), callback_data="back:device", style="primary")
     kb.adjust(1)
     return kb.as_markup()
@@ -7869,6 +8011,8 @@ async def on_versions_detail(cq: CallbackQuery):
             callback_data=f"versions:install:agent:{release.tag}",
             style="success",
         )
+        if get_user_role(cq.from_user.id) == Role.OWNER:
+            kb.button(text=_lex("versions_install_button", tag=f"{release.tag} · Canary"), callback_data=f"versions:canary:{release.tag}")
     elif (
         kind == "agent"
         and get_user_role(cq.from_user.id) == Role.OWNER
@@ -7950,12 +8094,12 @@ async def on_versions_bootstrap(cq: CallbackQuery):
 
 
 @router.callback_query(AdminFilter(), F.data.startswith("versions:install:agent:"))
-async def on_versions_install_select(cq: CallbackQuery):
+async def on_versions_install_select(cq: CallbackQuery, canary: bool = False):
     parts = cq.data.split(":")
-    if len(parts) != 4 or parts[2] != "agent":
+    if (canary and (len(parts) != 3 or get_user_role(cq.from_user.id) != Role.OWNER)) or (not canary and (len(parts) != 4 or parts[2] != "agent")):
         await cq.answer(_lex("versions_bad_request"), show_alert=True)
         return
-    tag = parts[3]
+    tag = parts[-1]
     target = SESSION.get("target")
     info = devices.get(target) if target else None
     context = _version_context("agent")
@@ -7992,12 +8136,69 @@ async def on_versions_install_select(cq: CallbackQuery):
         _PENDING_VERSION_INSTALLS[user_id] = {
             **selection, "created_at": time.time(),
         }
+        if canary:
+            candidates = [target] + sorted(
+                device for device, candidate in devices.all().items()
+                if device != target
+                and release_catalog.component_for(str(candidate.get("os") or "")) == component
+                and _version_install_block_reason("agent", release, component, candidate) is None
+                and _simple_command_still_allowed(user_id, cq.data, device)
+            )
+            _PENDING_VERSION_INSTALLS[user_id]["update_devices"] = candidates[:100]
     await cq.answer()
     await _replace_callback_message(
         cq,
-        _lex_html("versions_install_confirm_body", device=target_label(target), tag=release.tag),
+        _lex_html("versions_install_confirm_body", device=target_label(target), tag=release.tag)
+        + ("\nCanary первым: <code>" + html.escape(target) + "</code>\nОстальные после подтверждённого здоровья: "
+           + ", ".join(html.escape(device) for device in candidates[1:]) if canary else ""),
         reply_markup=_version_install_confirmation_kb(tag),
     )
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("versions:canary:"))
+async def on_versions_canary_select(cq: CallbackQuery):
+    await on_versions_install_select(cq, canary=True)
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("versions:rollout:"))
+async def on_versions_rollout(cq: CallbackQuery):
+    parts = str(cq.data or "").split(":")
+    if len(parts) != 3 or get_user_role(cq.from_user.id) != Role.OWNER:
+        await cq.answer(_lex("input_access_revoked"), show_alert=True)
+        return
+    batch = update_coordinator.store.batch(parts[2])
+    if not batch or SESSION.get("target") != batch[0].device_id:
+        await cq.answer("Группа неизвестна или выбрано другое устройство.", show_alert=True)
+        return
+    canary = batch[0]
+    user_id = int(cq.from_user.id)
+    try:
+        releases = await asyncio.to_thread(release_catalog.catalog.list, refresh=True)
+        release = next((item for item in releases if item.tag == canary.release_tag), None)
+        if not release or not release_catalog.verify_release_metadata(release, release.manifest):
+            await cq.answer(_lex("versions_catalog_unavailable"), show_alert=True)
+            return
+        await cq.answer()
+        def send(op):
+            if get_user_role(user_id) != Role.OWNER or SESSION.get("target") != canary.device_id:
+                return False
+            info = devices.get(op.device_id)
+            canary_info = devices.get(canary.device_id) or {}
+            if not canary_info.get("online") or time.time() - float(canary_info.get("last_seen") or 0) > 120:
+                return False
+            if not _simple_command_still_allowed(user_id, cq.data, op.device_id) or _version_install_block_reason("agent", release, op.component, info):
+                return False
+            return publish("agent_update", _target=op.device_id, id=op.operation_id,
+                           update=True, release_tag=op.release_tag)
+        sent = update_coordinator.dispatch_ready(canary.batch_id, send, now=time.time())
+        observed = update_coordinator.observed(canary.operation_id, now=time.time())
+        if observed is None:
+            raise ValueError("untrusted journal")
+        text = _update_operation_text(observed)
+        text += "\nПродолжение: " + (", ".join(html.escape(op.device_id) for op in sent) if sent else "заблокировано, уже отправлено или ждёт свежий canary health_check.")
+        await _replace_callback_message(cq, text, reply_markup=_update_batch_keyboard(canary, user_id))
+    except (OSError, ValueError):
+        await _replace_callback_message(cq, "Состояние rollout неизвестно. Журнал или каталог недоступен.", reply_markup=back_to_device_kb())
 
 
 @router.callback_query(AdminFilter(), F.data.startswith("versions:install_cancel:"))
@@ -8096,6 +8297,14 @@ async def on_versions_install_confirm(cq: CallbackQuery):
     if expired:
         await cq.answer(_lex("versions_install_expired"), show_alert=True)
         return
+    update_devices = pending.get("update_devices")
+    if update_devices and (get_user_role(user_id) != Role.OWNER or any(
+        not _simple_command_still_allowed(user_id, cq.data, device)
+        or _version_install_block_reason("agent", release, component, devices.get(device))
+        for device in update_devices
+    )):
+        await cq.answer(_lex("input_access_revoked"), show_alert=True)
+        return
     await simple_command(
         cq,
         "agent_update",
@@ -8104,6 +8313,8 @@ async def on_versions_install_confirm(cq: CallbackQuery):
         timeout=110.0,
         update=True,
         release_tag=tag,
+        update_release=release,
+        **({"update_devices": update_devices} if update_devices else {}),
     )
 
 

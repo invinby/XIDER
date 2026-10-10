@@ -48,6 +48,7 @@ class MQTTTransport:
             # Медиа и мониторинг
             # Статусы и LWT должны доставляться надёжно.
             client.subscribe(f"{MQTT_PREFIX}/+/status", qos=1)
+            client.subscribe(f"{MQTT_PREFIX}/+/update_progress", qos=1)
             client.subscribe(f"{MQTT_PREFIX}/+/screenshot", qos=0)
             client.subscribe(f"{MQTT_PREFIX}/+/webcam", qos=0)
             client.subscribe(f"{MQTT_PREFIX}/+/sysinfo", qos=0)

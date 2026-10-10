@@ -36,6 +36,8 @@ _secrets_embed.py
 *.log
 audit.log
 known_devices.json
+update_operations.json
+update_operations.json.*.tmp
 bot_settings.json
 access_control.json
 admin_audit.jsonl
