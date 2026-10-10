@@ -272,7 +272,7 @@ def test_version_screens_follow_six_voices_and_keep_release_callbacks(monkeypatc
 
     class FakeDevices:
         def get(self, device_id):
-            return {"os": "macOS", "version": "3.3.8", "guardian": {"version": "1.2.0"}}
+            return {"os": "macOS", "version": "3.3.8", "guardian": {"version": "1.2.0", "version_source": "guardian"}, "guardian_last_seen": bot.time.time()}
 
     monkeypatch.setattr(bot, "devices", FakeDevices())
     release = ledger.Release(

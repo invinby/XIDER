@@ -89,6 +89,7 @@ from wol import send_wol
 from xgencrypto import decrypt_payload
 from version import BUILD_CODE, BUILD_DATE, VERSION
 import server_ops
+import companion_status
 
 logging.basicConfig(
     level=logging.INFO,
@@ -853,15 +854,8 @@ def device_card(device_id: str) -> str:
     else:
         seen_str = "не в сети"
 
-    guardian = info.get("guardian") or {}
-    guardian_seen = float(info.get("guardian_last_seen", 0) or 0)
-    if guardian:
-        guardian_version = html.escape(str(guardian.get("version") or "?"))
-        guardian_fresh = bool(is_online and guardian_seen and time.time() - guardian_seen < _OFFLINE_TIMEOUT_SEC)
-        guardian_state = "🟢 ответил" if guardian_fresh else "⚪ нет свежего ответа"
-        guardian_str = f"{guardian_state}, v{guardian_version}"
-    else:
-        guardian_str = "не обнаружен"
+    keeper = companion_status.device_companions(info, now=time.time())[0]
+    guardian_str = html.escape(_companion_row(keeper).split(": ", 1)[1])
 
     os_low = os_str.lower()
     os_icon = "🍏" if ("mac" in os_low or "darwin" in os_low) else ("🪟" if "win" in os_low else "🐧")
@@ -1186,7 +1180,7 @@ def device_menu(device_id: str, user_id: int | None = None):
 
     info = devices.get(device_id) or {}
     agent_ver = str(info.get("version") or "?")
-    keeper_ver = str((info.get("guardian") or {}).get("version") or "?")
+    keeper_ver = companion_status.device_companions(info, now=time.time())[0]["version"] or "?"
     _action_button(
         kb,
         text=_limit_button_label(_lex("versions_button", agent=agent_ver, keeper=keeper_ver)),
@@ -2925,7 +2919,10 @@ def on_mqtt_message(topic: str, data: dict) -> None:
         # данных. Это позволяет показать его состояние в карточке устройства.
         devices.upsert(device_id, {
             "guardian": {
-                "version": str(payload.get("guardian") or payload.get("version") or "?"),
+                # Guardian's `version` field belongs to the worker release.
+                # Only `guardian` identifies the supervisor's own version.
+                "version": payload.get("guardian") if isinstance(payload.get("guardian"), str) else None,
+                "version_source": "guardian" if isinstance(payload.get("guardian"), str) else None,
                 "agent_running": bool(payload.get("agent_running")),
                 "launchd_loaded": bool(payload.get("launchd_loaded")),
                 "task_registered": bool(payload.get("guardian_task_registered", payload.get("launchd_loaded"))),
@@ -7777,6 +7774,17 @@ async def on_cmd_guardian_menu(cq: CallbackQuery):
     await cq.answer()
 
 
+def _companion_row(row: dict) -> str:
+    text = f"{row['name']}: {row['state']}"
+    if row["version"]:
+        text += f" · v{row['version']}"
+    if row["reason"]:
+        text += f" · {companion_status.REASONS[row['reason']]}"
+    if row["available_version"]:
+        text += f" · подписанный пакет {row['available_version']}"
+    return text
+
+
 def _version_context(kind: str) -> tuple[str, str, str] | None:
     """Return title, component key and current version for one version page."""
     if kind == "server":
@@ -7789,7 +7797,7 @@ def _version_context(kind: str) -> tuple[str, str, str] | None:
     if not component:
         return None
     if kind == "keeper":
-        current = str((info.get("guardian") or {}).get("version") or "?")
+        current = companion_status.device_companions(info, now=time.time())[0]["version"] or "?"
         return "Guard Keeper", component, current
     return "X-EDGE-W" if component == "windows_agent" else "X-EDGE-M", component, str(info.get("version") or "?")
 
@@ -7803,7 +7811,7 @@ def _version_root_menu(server: bool = False):
         target = SESSION.get("target") or ""
         info = devices.get(target) or {}
         agent = str(info.get("version") or "?")
-        keeper = str((info.get("guardian") or {}).get("version") or "?")
+        keeper = companion_status.device_companions(info, now=time.time())[0]["version"] or "?"
         kb.button(text=_limit_button_label(_lex("versions_agent_button", version=agent)), callback_data="versions:list:agent:0", style="primary")
         kb.button(text=_limit_button_label(_lex("versions_keeper_button", version=keeper)), callback_data="versions:list:keeper:0", style="primary")
         for operation in reversed(update_coordinator.store.all()):
@@ -7851,6 +7859,16 @@ def _version_install_block_reason(kind: str, release, component: str, info: dict
 
 def _version_state_text(current: str, release, component: str) -> str:
     state = release_catalog.version_state(current, release, component)
+    if component in {"windows_keeper", "mac_keeper"}:
+        info = devices.get(SESSION.get("target")) or {}
+        keeper = companion_status.device_companions(info, [release], now=time.time())[0]
+        return (
+            f"Доступная версия пакета: {html.escape(keeper['available_version'] or 'unknown')}\n"
+            f"ОС: {html.escape(state['os'])}\n"
+            f"Подпись: {state['signature']}\n"
+            f"Состояние установленной версии: {keeper['state']}\n"
+            f"Поддержка компонента: {'unsupported' if keeper['state'] == 'unsupported' else 'supported'}"
+        )
     return (
         f"Доступная версия: {html.escape(state['available'] or 'unknown')}\n"
         f"ОС: {html.escape(state['os'])}\n"
@@ -7906,13 +7924,19 @@ def _clear_pending_version_install(user_id: int) -> None:
 @router.callback_query(AdminFilter(), F.data == "versions:device")
 async def on_versions_device(cq: CallbackQuery):
     target = SESSION.get("target")
-    if not target or not devices.get(target):
+    info = devices.get(target) if target else None
+    if not info:
         await cq.answer(_lex("versions_missing_device"), show_alert=True)
         return
     await _replace_callback_message(
         cq,
         f"<b>{_lex_html('versions_device_title', device=target_label(target))}</b>\n"
-        f"{_lex('versions_device_intro')}",
+        f"{_lex('versions_device_intro')}\n\n"
+        f"Агент: {html.escape(str(info.get('version') or '?'))}\n"
+        + "\n".join(html.escape(_companion_row(row)) for row in companion_status.device_companions(info, release_catalog.catalog.cached(), now=time.time()))
+        + "\n\nОстановка через Guard Keeper останавливает рабочий агент; Guardian остаётся доступен. "
+        "Удаление автозапуска и локальных данных — отдельная подтверждаемая операция владельца. "
+        "Подготовка удаления или таймаут не подтверждают завершение; на macOS исходники и .env могут оставаться.",
         reply_markup=_version_root_menu(),
     )
     await cq.answer()

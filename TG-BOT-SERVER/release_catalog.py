@@ -65,10 +65,10 @@ class Release:
 
 def component_for(os_name: str, keeper: bool = False) -> str | None:
     low = str(os_name or "").lower()
-    if "win" in low:
-        return "windows_keeper" if keeper else "windows_agent"
     if "mac" in low or "darwin" in low:
         return "mac_keeper" if keeper else "mac_agent"
+    if "win" in low:
+        return "windows_keeper" if keeper else "windows_agent"
     return None
 
 

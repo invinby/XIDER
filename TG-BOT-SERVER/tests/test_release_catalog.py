@@ -16,6 +16,16 @@ import release_signature
 import release_catalog as ledger
 
 
+@pytest.mark.parametrize("os_name,agent,keeper", [
+    ("Darwin", "mac_agent", "mac_keeper"),
+    ("macOS 27", "mac_agent", "mac_keeper"),
+    ("Windows 11", "windows_agent", "windows_keeper"),
+])
+def test_os_mapping_keeps_agent_and_keeper_on_same_compatible_platform(os_name, agent, keeper):
+    assert ledger.component_for(os_name) == agent
+    assert ledger.component_for(os_name, keeper=True) == keeper
+
+
 @pytest.fixture
 def signed_release(monkeypatch):
     key = Ed25519PrivateKey.generate()
