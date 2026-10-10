@@ -3273,8 +3273,17 @@ def _diagnostic_timestamp(value):
             return datetime.datetime.fromtimestamp(value, datetime.timezone.utc).isoformat()
         except (ValueError, OverflowError, OSError):
             raise ValueError("Invalid diagnostic snapshot") from None
-    check_store._timestamp(value)
-    return value
+    # Capability ingestion accepts any aware ISO timestamp. Normalize its instant
+    # at the export boundary; the strict builder/check store can remain UTC-only.
+    try:
+        if type(value) is not str or len(value) > 40:
+            raise ValueError
+        stamp = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if stamp.utcoffset() is None:
+            raise ValueError
+        return stamp.astimezone(datetime.timezone.utc).isoformat()
+    except (ValueError, TypeError, OverflowError):
+        raise ValueError("Invalid diagnostic snapshot") from None
 
 
 def _diagnostic_snapshot_inputs():

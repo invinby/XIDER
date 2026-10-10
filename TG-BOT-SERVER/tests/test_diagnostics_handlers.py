@@ -115,3 +115,19 @@ def test_export_uses_seeded_metadata_not_private_results(export_ui, monkeypatch,
     assert doc["checks"][0]["device_id"] == doc["capabilities"][0]["device_id"]
     assert doc["correlation_ids"] == ["abc123"]
     assert list(tmp_path.iterdir()) == [store.path], "export must not persist bundle"
+
+
+def test_export_normalizes_existing_aware_capability_timestamp_to_utc(export_ui, monkeypatch):
+    cq, delivered, notices = export_ui
+    snapshot = bot._parse_capability_snapshot({"schema": 1, "platform": "macOS",
+        "checked_at": "2026-10-11T05:00:00+05:00",
+        "items": [{"id": "camera", "state": "granted", "detail": "Agent reported permission"}]})
+    assert snapshot["schema"] == 1
+    assert snapshot["checked_at"] == "2026-10-11T05:00:00+05:00"
+    monkeypatch.setattr(bot.devices, "all", lambda: {"device-a": {"version": "4.1.2", "online": True,
+        "capabilities": {"snapshot": snapshot}}})
+    asyncio.run(handler()(cq))
+    assert len(delivered) == 1, "valid ingested timezone-aware snapshot must export"
+    doc = json.loads(delivered[0].data)
+    assert doc["capabilities"][0]["checked_at"] == "2026-10-11T00:00:00+00:00"
+    assert snapshot["checked_at"] == "2026-10-11T05:00:00+05:00", "export must not rewrite ingestion data"
