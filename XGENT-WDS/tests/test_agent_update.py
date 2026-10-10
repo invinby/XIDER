@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 import shutil
+import zipfile
 
 import xgent_wds as wds
 
@@ -181,6 +182,9 @@ def test_source_update_stops_before_extraction_when_release_verification_fails(m
     client, sent = _update_client()
     monkeypatch.setattr(wds, "CONFIG_DIR", tmp_path)
     monkeypatch.setattr(wds.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(wds, "read_agent_update_result", lambda *_: {
+        "operation_id": "unrelated-old-operation", "update_state": "rolled_back",
+    })
     monkeypatch.setattr(
         wds,
         "download_verified_source_archive",
@@ -201,9 +205,76 @@ def test_source_update_stops_before_extraction_when_release_verification_fails(m
 
     assert sent[0][1]["ok"] is False
     assert sent[0][1]["state"] == "failed"
+    assert sent[0][1]["update_state"] == "failed"
     assert "signature rejected" in sent[0][1]["text"]
     assert "не подтверждено" in sent[0][1]["text"]
     assert not (tmp_path / "agent-backups").exists()
+
+
+@pytest.mark.parametrize("partial_restore", [False, True])
+def test_windows_install_failure_reports_actual_matching_rollback_receipt(monkeypatch, tmp_path, partial_restore):
+    import update_package as package
+    install = tmp_path / "install"
+    install.mkdir()
+    files = ("xgent_wds.py", "config.py", "crypto.py", "xgencrypto.py",
+             "release_signature.py", "update_package.py", "command_module_loader.py",
+             "command_signing.py", "command_replay.py", "shell_execution.py")
+    for name in files:
+        (install / name).write_text("# previous\n", encoding="utf-8")
+    (install / ".env").write_text("private fixture", encoding="utf-8")
+    def download(manifest, archive, *, release_tag=None):
+        Path(manifest).write_text("fixture", encoding="utf-8")
+        with zipfile.ZipFile(archive, "w") as bundle:
+            for name in files:
+                component = "XGENT-WDS" if name in files[:4] else "XGENT-MCS"
+                bundle.writestr(f"XIDER/{component}/{name}", "# replacement\n")
+        return "v4.2.0"
+    client, sent = _update_client()
+    monkeypatch.setattr(wds, "__file__", str(install / "xgent_wds.py"))
+    monkeypatch.setattr(wds, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(wds, "download_verified_source_archive", download)
+    original = package._atomic_copy
+    def fail_install_and_optional_restore(src, dst):
+        if Path(src).parent.name == "agent-stage" and Path(src).name == "config.py":
+            raise OSError("install rejected")
+        if partial_restore and package.UPDATE_BACKUP_DIR in Path(src).parts and Path(src).name == "config.py":
+            raise OSError("restore rejected")
+        return original(src, dst)
+    monkeypatch.setattr(package, "_atomic_copy", fail_install_and_optional_restore)
+    client._do_agent_update({"update": True, "release_tag": "v4.2.0", "id": "windows-install-failure"})
+    receipt = package.read_agent_update_result(tmp_path / package.UPDATE_STATE_NAME)
+    expected = "failed" if partial_restore else "rolled_back"
+    assert receipt["operation_id"] == "windows-install-failure"
+    assert receipt["update_state"] == expected
+    assert sent[-1][1]["update_state"] == receipt["update_state"]
+    assert sent[-1][1]["operation_id"] == receipt["operation_id"]
+    assert (install / ".env").read_text(encoding="utf-8") == "private fixture"
+
+
+@pytest.mark.parametrize("incoming", [None, "", 123, "x" * 129, "valid-incoming"])
+def test_frozen_rejection_always_has_bounded_operation_id(monkeypatch, incoming):
+    client, sent = _update_client()
+    monkeypatch.setattr(wds.sys, "frozen", True, raising=False)
+    client._do_agent_update({"update": True, "id": incoming})
+    result = sent[-1][1]
+    assert isinstance(result["operation_id"], str) and 1 <= len(result["operation_id"]) <= 128
+    assert result["state"] == "unsupported_package" and result["update_state"] == "failed"
+    if incoming == "valid-incoming":
+        assert result["operation_id"] == incoming
+
+
+@pytest.mark.parametrize("context_id", [None, "valid-context"])
+def test_frozen_rejection_without_id_does_not_use_source_updater(monkeypatch, context_id):
+    client, sent = _update_client()
+    client._command_context = threading.local()
+    client._command_context.cmd_id = context_id
+    monkeypatch.setattr(wds.sys, "frozen", True, raising=False)
+    monkeypatch.delattr(wds, "update_operation_id")
+    client._do_agent_update({"update": True})
+    result = sent[-1][1]
+    assert isinstance(result["operation_id"], str) and 1 <= len(result["operation_id"]) <= 128
+    if context_id:
+        assert result["operation_id"] == context_id
 
 
 def test_frozen_windows_update_fails_closed_before_download(monkeypatch, tmp_path):

@@ -505,12 +505,58 @@ def test_restart_thread_failure_restores_source_immediately(source_update, monke
             raise RuntimeError("cannot start restart thread")
 
     monkeypatch.setattr(mcs.threading, "Thread", FailingThread)
-    client._do_agent_update({"release_tag": "v4.2.0"})
+    client._do_agent_update({"release_tag": "v4.2.0", "id": "restart-thread-operation"})
 
     assert sent[-1][1]["state"] == "update_failed"
+    assert sent[-1][1]["update_state"] == "rolled_back"
+    assert sent[-1][1]["operation_id"] == "restart-thread-operation"
     assert (install / "xgent_mcs.py").read_bytes() == b"# previous source\n"
     assert not (state_root / package.UPDATE_STATE_NAME).exists()
     assert not client._update_lock.locked()
+
+
+@pytest.mark.parametrize("partial_restore", [False, True])
+def test_install_failure_reports_actual_matching_rollback_receipt(source_update, monkeypatch, partial_restore):
+    client, install, state_root, _, sent, _, _ = source_update
+    (install / ".env").write_text("private fixture", encoding="utf-8")
+    original = package._atomic_copy
+    def fail_install_and_optional_restore(src, dst):
+        if Path(src).parent.name == "agent-stage" and Path(src).name == "config.py":
+            raise OSError("install rejected")
+        if partial_restore and package.UPDATE_BACKUP_DIR in Path(src).parts and Path(src).name == "config.py":
+            raise OSError("restore rejected")
+        return original(src, dst)
+    monkeypatch.setattr(package, "_atomic_copy", fail_install_and_optional_restore)
+    client._do_agent_update({"release_tag": "v4.2.0", "id": "install-failure-operation"})
+    receipt = package.read_agent_update_result(state_root / package.UPDATE_STATE_NAME)
+    expected = "failed" if partial_restore else "rolled_back"
+    assert receipt["operation_id"] == "install-failure-operation"
+    assert receipt["update_state"] == expected
+    assert sent[-1][1]["operation_id"] == receipt["operation_id"]
+    assert sent[-1][1]["update_state"] == receipt["update_state"]
+    assert (install / ".env").read_text(encoding="utf-8") == "private fixture"
+
+
+def test_install_rejection_ignores_another_operations_old_receipt(source_update, monkeypatch):
+    client, _, _, _, sent, _, _ = source_update
+    monkeypatch.setattr(mcs, "read_agent_update_result", lambda *_: {
+        "operation_id": "unrelated-old-operation", "update_state": "rolled_back",
+    })
+    monkeypatch.setattr(mcs, "download_verified_source_archive", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad signature")))
+    client._do_agent_update({"release_tag": "v4.2.0", "id": "current-operation"})
+    assert sent[-1][1]["update_state"] == "failed"
+
+
+def test_delayed_restart_rejection_ignores_another_operations_old_receipt(source_update, monkeypatch):
+    client, _, _, _, sent, _, restarts = source_update
+    client._do_agent_update({"release_tag": "v4.2.0", "id": "current-restart"})
+    monkeypatch.setattr(mcs, "read_agent_update_result", lambda *_: {
+        "operation_id": "unrelated-old-operation", "update_state": "rolled_back",
+    })
+    monkeypatch.setattr(mcs.os, "execv", lambda *_: (_ for _ in ()).throw(OSError("restart rejected")))
+    restarts[0]()
+    assert sent[-1][1]["update_state"] == "failed"
+    assert sent[-1][1]["operation_id"] == "current-restart"
 
 
 def test_stop_intent_precedes_launchd_unload_and_process_exit(monkeypatch, tmp_path):

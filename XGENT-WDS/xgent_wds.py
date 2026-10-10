@@ -25,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import uuid
 import time
 import webbrowser
 from urllib.parse import urlsplit
@@ -3684,7 +3685,7 @@ setTimeout(()=>window.close(),15000);
                 "device_id": DEVICE_ID,
                 "ok": False,
                 "state": "unsupported_package",
-                "operation_id": payload.get("id", payload.get("operation_id")),
+                "operation_id": _frozen_update_operation_id(payload, getattr(getattr(self, "_command_context", None), "cmd_id", None)),
                 "update_state": "failed",
                 "text": (
                     "⚠️ Эта сборка Windows EXE пока не поддерживает транзакционное "
@@ -3799,6 +3800,9 @@ setTimeout(()=>window.close(),15000);
                         outcome = "rolled_back"
                     except Exception as rollback_error:
                         rollback_detail = f" Автоматический откат неполон: {rollback_error}"
+                receipt = read_agent_update_result(CONFIG_DIR / UPDATE_STATE_NAME)
+                if receipt and receipt.get("operation_id") == operation_id and receipt.get("update_state") in {"rolled_back", "failed"}:
+                    outcome = receipt["update_state"]
                 self._publish_response("output", {
                     "type": "agent_update",
                     "device_id": DEVICE_ID,
@@ -4089,6 +4093,14 @@ def _load_command_approval_component(module_name: str):
         source_root=_command_approval_source_root(),
         frozen=getattr(sys, "frozen", False),
     )
+
+
+def _frozen_update_operation_id(payload, context_id=None):
+    """Keep rejection correlation available without importing source updater modules."""
+    for candidate in (payload.get("id"), context_id, payload.get("operation_id")):
+        if isinstance(candidate, str) and 1 <= len(candidate) <= 128:
+            return candidate
+    return str(uuid.uuid4())
 
 
 def _command_approval_source_root():

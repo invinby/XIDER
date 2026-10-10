@@ -2706,16 +2706,22 @@ end tell'''
             return True
         except Exception as exc:
             log.exception("Agent self-update failed")
+            outcome = "failed"
             if installed:
                 try:
                     with self._lifecycle_lock:
-                        rollback_unhealthy_agent(CONFIG_DIR / UPDATE_STATE_NAME, script_dir)
+                        rollback = rollback_unhealthy_agent(CONFIG_DIR / UPDATE_STATE_NAME, script_dir)
+                        if rollback["restored"] or rollback["removed"]:
+                            outcome = "rolled_back"
                 except Exception:
                     log.exception("Не удалось завершить откат после ошибки подготовки перезапуска")
+            receipt = read_agent_update_result(CONFIG_DIR / UPDATE_STATE_NAME)
+            if receipt and receipt.get("operation_id") == operation_id and receipt.get("update_state") in {"rolled_back", "failed"}:
+                outcome = receipt["update_state"]
             self._publish_response("output", {
                 "type": "agent_update", "device_id": DEVICE_ID, "ok": False,
                 "state": "dependency_install_required" if isinstance(exc, DependencyUpdateRequired) else "update_failed",
-                "operation_id": operation_id, "update_state": "failed",
+                "operation_id": operation_id, "update_state": outcome,
                 "text": f"❌ Не удалось завершить обновление: {exc}. Проверьте состояние файлов и каталог резервной копии.",
             })
             return False
@@ -2749,12 +2755,17 @@ end tell'''
             except Exception as rollback_error:
                 rollback_detail = f" Автоматический откат неполон: {rollback_error}"
                 log.exception("Не удалось завершить откат после ошибки перезапуска")
+            receipt = read_agent_update_result(CONFIG_DIR / UPDATE_STATE_NAME)
+            outcome = (
+                receipt["update_state"] if receipt and receipt.get("operation_id") == operation_id
+                and receipt.get("update_state") in {"rolled_back", "failed"} else "failed"
+            )
             self._publish_response("output", {
                 "type": "agent_update", "device_id": DEVICE_ID, "ok": False,
                 "state": "restart_failed", "text": f"❌ Перезапуск не выполнен: {exc}.{rollback_detail}",
                 **({"id": cmd_id} if cmd_id is not None else {}),
                 "operation_id": operation_id,
-                "update_state": (read_agent_update_result(CONFIG_DIR / UPDATE_STATE_NAME) or {}).get("update_state", "failed"),
+                "update_state": outcome,
             })
         finally:
             self._update_lock.release()
