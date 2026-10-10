@@ -1988,7 +1988,14 @@ def server_menu(user_id: int | None = None):
     return kb.as_markup()
 
 
-def server_overview_text(*, approval: bool, connected: bool) -> str:
+def server_overview_text(*, approval: bool, connected: bool, user_id: int | None = None) -> str:
+    # Missing identity fails closed too: callers must explicitly opt into the
+    # owner card with a currently authorized actor, never a default admin ID.
+    if user_id is None or get_user_role(user_id) != Role.OWNER:
+        return (
+            f"<b>{html.escape(_lex('server_overview_title'))}</b>\n"
+            "Раздел доступен только для чтения. Администрирование сервера доступно владельцу."
+        )
     approval_state = "включено" if approval else "выключено"
     states = server_ops.health_states()
     broker_state = states["broker"]["state"] if connected else "disconnected"
@@ -3228,6 +3235,7 @@ async def on_menu_server(cq: CallbackQuery):
         server_overview_text(
             approval=bool(bot_settings.get("require_device_approval", True)),
             connected=transport.connected.is_set(),
+            user_id=cq.from_user.id,
         ),
         reply_markup=server_menu(cq.from_user.id),
     )
@@ -3360,7 +3368,7 @@ async def on_server_confirm(cq: CallbackQuery):
     if action == "approval":
         value = bot_settings.toggle("require_device_approval")
         access_store.append_audit("device_approval_policy", actor_id=cq.from_user.id, detail=str(value))
-        await _replace_callback_message(cq, server_overview_text(approval=bool(value), connected=transport.connected.is_set()), reply_markup=server_menu(cq.from_user.id))
+        await _replace_callback_message(cq, server_overview_text(approval=bool(value), connected=transport.connected.is_set(), user_id=cq.from_user.id), reply_markup=server_menu(cq.from_user.id))
         await cq.answer(_lex("server_approval_on_answer" if value else "server_approval_off_answer"))
         return
     operations = {"restart": server_ops.restart, "update": server_ops.update, "rollback": server_ops.rollback}

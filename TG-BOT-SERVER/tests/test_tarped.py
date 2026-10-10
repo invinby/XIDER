@@ -585,7 +585,7 @@ def test_server_cards_follow_all_six_voices_and_escape_runtime_values(monkeypatc
             bot.bot_settings, "get",
             lambda key, default=None, selected=style: selected if key == "ui_style" else default,
         )
-        overview = bot.server_overview_text(approval=True, connected=False)
+        overview = bot.server_overview_text(approval=True, connected=False, user_id=bot.ADMIN_ID)
         assert "&lt;fixture&amp;build&gt;" in overview
         assert "&lt;fixture&build&gt;" not in overview
         assert xlex.render("server_mqtt_line", style, state="disconnected") in overview

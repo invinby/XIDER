@@ -236,6 +236,47 @@ def test_mutation_callback_checks_owner_even_without_router(bot_callbacks):
     assert cards == []
 
 
+@pytest.mark.parametrize("role_name", ["GUEST", "USER", "COOWNER"])
+def test_readonly_server_handler_hides_seeded_owner_details(bot_callbacks, monkeypatch, role_name):
+    bot, callback, calls, cards = bot_callbacks
+    monkeypatch.setattr(bot, "get_user_role", lambda user: bot.Role.OWNER if user == 100 else getattr(bot.Role, role_name))
+    monkeypatch.setattr(bot, "XIDER_BUILD_CODE", "PRIVATE_SERVER_BUILD_FIXTURE")
+    monkeypatch.setattr(server_ops, "status", lambda: pytest.fail("read-only actor probed privileged server status"))
+    for component in server_ops.STATE_NAMES:
+        server_ops.observe(component, f"PRIVATE_STATE_{component}", checked_at=1234567890.25, value=73.125)
+    asyncio.run(bot.on_menu_server(callback("menu:server", 200)))
+    text, markup = cards[-1]
+    assert "только для чтения" in text.lower()
+    assert "PRIVATE_SERVER_BUILD_FIXTURE" not in text
+    assert "PRIVATE_STATE_" not in text and "1234567890.25" not in text and "checked_at" not in text
+    assert all(component not in text for component in server_ops.STATE_NAMES)
+    assert bot._lex("server_approval_line", state="включено") not in text
+    assert bot._lex("server_approval_line", state="выключено") not in text
+    assert [button.callback_data for row in markup.inline_keyboard for button in row] == ["menu:main"]
+    assert calls == []
+
+
+def test_server_overview_without_explicit_identity_fails_closed(bot_callbacks):
+    bot, _, _, _ = bot_callbacks
+    text = bot.server_overview_text(approval=True, connected=True)
+    assert "только для чтения" in text.lower()
+    assert "checked_at" not in text and "telegram_polling" not in text
+
+
+def test_owner_server_handler_retains_explicit_private_overview(bot_callbacks, monkeypatch):
+    bot, callback, _, cards = bot_callbacks
+    monkeypatch.setattr(bot, "XIDER_BUILD_CODE", "OWNER_BUILD_FIXTURE")
+    monkeypatch.setattr(server_ops, "status", lambda: server_ops.Result(True, "fixture"))
+    for component in server_ops.STATE_NAMES:
+        server_ops.observe(component, "private", checked_at=1234567890.25)
+    asyncio.run(bot.on_menu_server(callback("menu:server", 100)))
+    text, markup = cards[-1]
+    assert "OWNER_BUILD_FIXTURE" in text and "1234567890.25" in text
+    assert all(component in text for component in server_ops.STATE_NAMES)
+    assert bot._lex("server_approval_line", state="включено") in text
+    assert "server:restart" in [button.callback_data for row in markup.inline_keyboard for button in row]
+
+
 def test_explicit_confirmation_callback_is_replay_resistant(bot_callbacks):
     bot, callback, calls, cards = bot_callbacks
     asyncio.run(bot.on_server_dangerous_request(callback("server:restart")))
