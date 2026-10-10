@@ -4205,6 +4205,10 @@ _DEPENDENT_ACTION_CONTRACTS["on_versions_rollout"] = dict(
     result_sensitivity="bounded update operation state", risk="executable replacement after canary health",
     wire_action="agent_update",
 )
+_DEPENDENT_ACTION_CONTRACTS["on_server_diagnostics_export"] = dict(
+    category="server", os_support=("server host",), timeout=0.0,
+    result_sensitivity="sanitized diagnostic metadata document", risk="owner-only privacy read",
+)
 
 
 def _descriptive_callback_metadata(callback, route):
@@ -6006,9 +6010,10 @@ def test_server_menu_contains_metrics_chart_and_safe_terminal():
         ["versions:server", "server:status"],
         ["server:specs", "server:metrics"],
         ["server:chart", "server:logs"],
-        ["server:terminal", "server:approval"],
-        ["server:restart", "server:update"],
-        ["server:rollback", "menu:main"],
+        ["server:diagnostics", "server:terminal"],
+        ["server:approval", "server:restart"],
+        ["server:update", "server:rollback"],
+        ["menu:main"],
     ]
 
 

@@ -91,6 +91,7 @@ from version import BUILD_CODE, BUILD_DATE, VERSION
 import server_ops
 import companion_status
 import check_store
+import diagnostics
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1969,6 +1970,7 @@ def server_menu(user_id: int | None = None):
         kb.button(text=_lex("server_metrics"), callback_data="server:metrics", style="primary")
         kb.button(text=_lex("server_chart"), callback_data="server:chart", style="primary")
         kb.button(text=_lex("server_logs"), callback_data="server:logs", style="primary")
+        kb.button(text=_lex("server_status") + " · JSON", callback_data="server:diagnostics", style="primary")
         kb.button(text=_lex("server_terminal"), callback_data="server:terminal", style="primary")
         kb.button(
             text=_lex("server_approval", state='включено' if approval else 'выключено'),
@@ -3261,6 +3263,109 @@ async def on_menu_server(cq: CallbackQuery):
         reply_markup=server_menu(cq.from_user.id),
     )
     await cq.answer()
+
+
+def _diagnostic_timestamp(value):
+    if value is None:
+        return None
+    if type(value) in (int, float):
+        try:
+            return datetime.datetime.fromtimestamp(value, datetime.timezone.utc).isoformat()
+        except (ValueError, OverflowError, OSError):
+            raise ValueError("Invalid diagnostic snapshot") from None
+    check_store._timestamp(value)
+    return value
+
+
+def _diagnostic_snapshot_inputs():
+    """Copy existing in-process metadata only; never initialize a disk/probe API."""
+    import hashlib
+    from dataclasses import asdict
+    generated_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    versions = {"server": VERSION}
+    statuses = {name: {"state": row["state"], "source": "server_observation",
+                       "checked_at": _diagnostic_timestamp(row["checked_at"])}
+                for name, row in server_ops.health_states().items()}
+    statuses["log_tail"] = {"state": "unknown", "source": "unavailable", "checked_at": None}
+    capabilities, checks, correlation_ids = [], [], []
+    facts = devices.all()
+    if len(facts) > 32:
+        raise ValueError("Invalid diagnostic snapshot")
+    device_refs = {}
+    for device_id, info in facts.items():
+        if type(device_id) is not str or type(info) is not dict:
+            raise ValueError("Invalid diagnostic snapshot")
+        # Local device names/hostnames are not exported; references remain correlatable.
+        reference = "device_" + hashlib.sha256(device_id.encode("utf-8")).hexdigest()[:16]
+        device_refs[device_id] = reference
+        version = info.get("version")
+        versions[reference] = version if isinstance(version, str) and check_store._VERSION.fullmatch(version) else "unknown"
+        checked_at = _diagnostic_timestamp(info.get("last_seen"))
+        online = info.get("online")
+        state = "online" if online is True else "offline" if online is False else "unknown"
+        if checked_at is not None and not 0 <= time.time() - check_store._timestamp(checked_at).timestamp() <= 150:
+            state = "stale"
+        statuses[reference] = {"state": state, "source": "device_heartbeat", "checked_at": checked_at}
+        caps = info.get("capabilities")
+        if not isinstance(caps, dict):
+            continue
+        snapshot = caps.get("snapshot")
+        if isinstance(snapshot, dict) and snapshot.get("schema") == 1:
+            for row in snapshot.get("items", []):
+                capabilities.append({"device_id": reference, "id": row["id"], "state": row["state"],
+                    "source": "agent_capability_snapshot", "checked_at": _diagnostic_timestamp(snapshot.get("checked_at"))})
+        declarations = caps.get("feature_status", {})
+        if isinstance(declarations, dict):
+            for key, state in declarations.items():
+                capabilities.append({"device_id": reference, "id": key, "state": state,
+                    "source": "agent_capability_declaration", "checked_at": _diagnostic_timestamp(info.get("capabilities_seen"))})
+    store = check_store._default
+    if store is None:
+        statuses["checks"] = {"state": "unknown", "source": "unavailable", "checked_at": None}
+    else:
+        with store._lock:
+            rows = list(store._records.values())
+        for record in rows:
+            reference = device_refs.get(record.device_id)
+            if reference is None:
+                continue
+            checks.append({**asdict(record), "device_id": reference})
+            if record.correlation_id and record.correlation_id not in correlation_ids:
+                correlation_ids.append(record.correlation_id)
+    return dict(generated_at=generated_at, versions=versions, statuses=statuses,
+                capabilities=capabilities, checks=checks, log_tail=[], correlation_ids=correlation_ids)
+
+
+def _diagnostic_export_owner(cq, actor_id=None):
+    identity = getattr(getattr(cq, "from_user", None), "id", None)
+    chat_id = getattr(getattr(getattr(cq, "message", None), "chat", None), "id", None)
+    return (type(identity) is int and identity == ADMIN_ID
+            and type(chat_id) is int and chat_id == identity
+            and (actor_id is None or identity == actor_id) and get_user_role(identity) == Role.OWNER)
+
+
+@router.callback_query(OwnerFilter(), F.data == "server:diagnostics")
+async def on_server_diagnostics_export(cq: CallbackQuery):
+    if not _diagnostic_export_owner(cq):
+        await cq.answer("Экспорт недоступен.", show_alert=True)
+        return
+    actor_id = cq.from_user.id
+    await cq.answer("Готовлю доступный snapshot диагностики.")
+    if not _diagnostic_export_owner(cq, actor_id):
+        return
+    try:
+        bundle = diagnostics.build_diagnostic_snapshot(**_diagnostic_snapshot_inputs())
+    except Exception:
+        # Do not reflect raw snapshots, paths, builder exceptions or credentials.
+        await cq.answer("Диагностику безопасно собрать не удалось.", show_alert=True)
+        return
+    # No await between this check and initiating the single document delivery.
+    if not _diagnostic_export_owner(cq, actor_id):
+        return
+    try:
+        await cq.message.answer_document(BufferedInputFile(bundle, filename="xider-diagnostics.json"))
+    except Exception:
+        await cq.answer("Документ диагностики не доставлен.", show_alert=True)
 
 
 @router.callback_query(OwnerFilter(), F.data == "server:approval")
