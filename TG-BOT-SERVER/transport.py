@@ -191,11 +191,15 @@ class MQTTTransport:
         self._client.loop_stop()
         self._client.disconnect()
 
-    def publish_command(self, device_id: str, cmd_type: str, **kwargs: Any) -> bool:
+    def publish_command(self, device_id: str, cmd_type: str, **kwargs: Any) -> bool | None:
         """Отправить команду устройству или всем устройствам (device_id='all').
 
         Каждая команда получает короткий id (correlation) и публикуется с QoS 1,
-        результат publish проверяется по коду возврата rc.
+        True означает accepted, не доставку. False — доказанный отказ до
+        enqueue (валидация, disconnected precheck, очередь переполнена).
+        None — неопределённый результат после Paho publish: при QoS1 даже
+        MQTT_ERR_NO_CONN может оставить пакет для отправки после reconnect.
+        Исключения после начала publish тоже не доказывают отсутствие пакета.
         """
         if "type" in kwargs and kwargs["type"] != cmd_type:
             log.warning("Command publish refused: payload type override")
@@ -220,8 +224,11 @@ class MQTTTransport:
             body = payload
         message = sign_message(body)
         info = self._client.publish(topic, json.dumps(message, ensure_ascii=False), qos=1)
+        if info.rc == mqtt.MQTT_ERR_QUEUE_SIZE:
+            log.warning("Команда %s не поставлена в очередь %s (rc=%s)", cmd_type, topic, info.rc)
+            return False
         if info.rc != mqtt.MQTT_ERR_SUCCESS:
             log.warning("Команда %s не ушла в %s (rc=%s)", cmd_type, topic, info.rc)
-            return False
+            return None
         log.info("Команда %s (id=%s) -> %s", cmd_type, cmd_id, topic)
         return True

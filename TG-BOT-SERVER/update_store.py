@@ -126,6 +126,14 @@ class UpdateStore:
         with self._lock:
             return self.trusted and operation_id in self._published
 
+    def clear_unqueued_intent(self, operation_id):
+        """Release only a definitely-not-queued publish intent atomically."""
+        with self._lock:
+            op = self.get(operation_id)
+            if not op or op.state != 'queued' or operation_id not in self._published:
+                raise ValueError('cannot release update publish intent')
+            self._write(dict(self._operations), self._published - {operation_id})
+
     def started_at(self, operation_id):
         with self._lock:
             return self._started.get(operation_id)

@@ -179,10 +179,35 @@ def test_manifest_digest_is_immutable_and_exact_receipt_binding(tmp_path):
         c.start_batch(['mac1', 'mac2'], 'v4.2.0', 'macos', manifest_digest='b' * 64, now=1010)
 
 
-def test_actual_publish_failure_remains_ambiguous_and_never_retries(tmp_path):
+def test_actual_publish_unknown_remains_ambiguous_and_never_retries(tmp_path):
     c = setup(tmp_path)
     op = c.start_batch(['mac1'], 'v4.2.0', 'macos', manifest_digest='a' * 64, now=1000)[0]
-    assert c.dispatch_ready(op.batch_id, lambda op: False, eligible=lambda op: True, now=1000) == []
+    assert c.dispatch_ready(op.batch_id, lambda op: None, eligible=lambda op: True, now=1000) == []
+    assert c.store.is_published(op.operation_id)
+    assert c.store.get(op.operation_id).state == 'unknown'
+    assert c.dispatch_ready(op.batch_id, lambda op: pytest.fail('ambiguous retry'), now=1001) == []
+
+
+def test_definitely_unsent_false_can_retry_same_operation_after_restart(tmp_path):
+    c = setup(tmp_path)
+    op = c.start_batch(['mac1'], 'v4.2.0', 'macos', manifest_digest='a' * 64, now=1000)[0]
+    assert c.dispatch_ready(op.batch_id, lambda op: False, now=1000) == []
+    assert not c.store.is_published(op.operation_id)
+    assert c.store.get(op.operation_id).state == 'queued'
+    restarted = setup(tmp_path)
+    sent = []
+    assert restarted.dispatch_ready(op.batch_id, lambda current: sent.append(current.operation_id) or True, now=1001) == [op]
+    assert sent == [op.operation_id]
+    assert restarted.dispatch_ready(op.batch_id, lambda op: pytest.fail('duplicate'), now=1002) == []
+
+
+def test_publish_exception_is_ambiguous_and_no_retry(tmp_path):
+    c = setup(tmp_path)
+    op = c.start_batch(['mac1'], 'v4.2.0', 'macos', manifest_digest='a' * 64, now=1000)[0]
+    def uncertain(op):
+        raise RuntimeError('after publish began')
+    with pytest.raises(RuntimeError):
+        c.dispatch_ready(op.batch_id, uncertain, now=1000)
     assert c.store.is_published(op.operation_id)
     assert c.store.get(op.operation_id).state == 'unknown'
     assert c.dispatch_ready(op.batch_id, lambda op: pytest.fail('ambiguous retry'), now=1001) == []

@@ -32,6 +32,40 @@ def test_transport_subscribes_to_reliable_update_progress():
     assert (f'{bot.MQTT_PREFIX}/+/update_progress', 1) in subscriptions
 
 
+def test_real_paho_disconnect_after_precheck_is_queued_and_ambiguous():
+    transport = MQTTTransport(lambda topic, data: None)
+    # Real installed Paho client, no socket or network thread: simulate losing
+    # the socket after the transport's connected precheck.
+    transport.connected.set()
+    assert transport.publish_command('mac1', 'agent_update', id='race-op') is None
+    assert len(transport._client._out_messages) == 1
+    assert next(iter(transport._client._out_messages.values())).qos == 1
+
+
+def test_transport_disconnected_false_then_retry_same_operation(coordinator):
+    c, _ = coordinator
+    op = c.start_batch(['mac2'], 'v4.2.0', 'mac_agent', manifest_digest='a' * 64, now=1000)[0]
+    transport = MQTTTransport(lambda topic, data: None)
+    publish = lambda current: transport.publish_command(current.device_id, 'agent_update', id=current.operation_id)
+    assert c.dispatch_ready(op.batch_id, publish, now=1000) == []
+    assert not transport._client._out_messages
+    assert not c.store.is_published(op.operation_id)
+    transport.connected.set()
+    sent = []
+    transport._client = SimpleNamespace(publish=lambda topic, body, qos: sent.append(body) or SimpleNamespace(rc=0))
+    assert c.dispatch_ready(op.batch_id, publish, now=1001) == [op]
+    assert len(sent) == 1
+
+
+def test_real_paho_queue_full_is_definitely_not_enqueued():
+    transport = MQTTTransport(lambda topic, data: None)
+    transport.connected.set()
+    transport._client.max_queued_messages_set(1)
+    assert transport.publish_command('mac1', 'agent_update', id='first-op') is None
+    assert transport.publish_command('mac1', 'agent_update', id='refused-op') is False
+    assert len(transport._client._out_messages) == 1
+
+
 def test_authenticated_progress_routes_to_coordinator(coordinator):
     c, op = coordinator
     bot.on_mqtt_message(f'{bot.MQTT_PREFIX}/mac1/update_progress', {'type': 'agent_update_progress', 'device_id': 'mac1', 'operation_id': op.operation_id, 'update_state': 'downloading'})

@@ -36,6 +36,24 @@ def test_legacy_journal_without_manifest_digest_requires_explicit_recovery(tmp_p
     assert path.read_bytes() == original
 
 
+def test_failure_to_clear_unsent_intent_keeps_durable_no_retry_gate(tmp_path, monkeypatch):
+    from pathlib import Path
+    from update_coordinator import Coordinator
+    from update_store import UpdateStore
+    store = UpdateStore(tmp_path / 'updates.json')
+    c = Coordinator(store)
+    op = c.start_batch(['mac1'], 'v4.2.0', 'macos', now=1000, manifest_digest='a' * 64)[0]
+    store.mark_published(op.operation_id)
+    def full_disk(*args, **kwargs):
+        raise OSError('intent release failed')
+    monkeypatch.setattr(Path, 'replace', full_disk)
+    with pytest.raises(OSError):
+        store.clear_unqueued_intent(op.operation_id)
+    assert store.is_published(op.operation_id)
+    assert UpdateStore(store.path).is_published(op.operation_id)
+    assert c.dispatch_ready(op.batch_id, lambda op: pytest.fail('undurable retry'), now=1001) == []
+
+
 @pytest.mark.parametrize('content', [None, '{', '{}', '{"version":1,"operations":[{"state":"succeeded"}]}'])
 def test_missing_corrupt_store_blocks_old_batch(tmp_path, content):
     from update_store import UpdateStore

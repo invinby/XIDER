@@ -78,6 +78,12 @@ class Coordinator:
         return op
 
     def dispatch_ready(self, batch_id, publish, *, now, eligible=None):
+        """Publisher contract: True=accepted, False=definitely not queued.
+
+        None/other results and exceptions are ambiguous after side effects;
+        retain intent and never retry them. Only exact False permits atomically
+        releasing intent. A crash before that durable release is fail-closed.
+        """
         with self._lock:
             batch = self.store.batch(batch_id)
             if not self.store.trusted or not batch or self.batch_state(batch_id) == 'blocked':
@@ -100,7 +106,10 @@ class Coordinator:
                 except Exception:
                     self.store.save(transition(op, 'timeout', int(now)))
                     raise
-                if not ok:
+                if ok is False:
+                    self.store.clear_unqueued_intent(op.operation_id)
+                    break
+                if ok is not True:
                     self.store.save(transition(op, 'timeout', int(now)))
                     break
                 sent.append(op)

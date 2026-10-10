@@ -2096,7 +2096,7 @@ def target_label(device_id: str) -> str:
     info = devices.get(device_id)
     return info.get("name", device_id) if info else device_id
 
-def publish(command_name: str, *, _target: str | None = None, **kwargs) -> bool:
+def publish(command_name: str, *, _target: str | None = None, **kwargs) -> bool | None:
     """Send to the selected target, or to an explicit target for an in-flight form."""
     target = _target or SESSION.get("target")
     if not target:
@@ -2110,7 +2110,7 @@ def publish(command_name: str, *, _target: str | None = None, **kwargs) -> bool:
     return transport.publish_command(target, command_name, **kwargs)
 
 
-def publish_tracked(action: str, *, _target: str | None = None, **kwargs) -> tuple[bool, str]:
+def publish_tracked(action: str, *, _target: str | None = None, **kwargs) -> tuple[bool | None, str]:
     """Send with a correlation ID and optionally pin it to a captured target."""
     command_id = uuid.uuid4().hex[:12]
     ok = publish(action, _target=_target, id=command_id, **kwargs)
