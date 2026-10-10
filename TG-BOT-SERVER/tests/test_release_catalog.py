@@ -64,8 +64,17 @@ def test_prereleases_never_displace_stable_order():
 def test_unsigned_catalogue_cannot_offer_install():
     import bot
     release = ledger.Release("v4.1.0", (4, 1, 0), "", "", "", frozenset({"XGENT-WDS.exe", "XIDER-source.zip", "release-manifest.json"}))
-    info = {"os": "Windows", "version": "4.1.0", "update_mode": "source", "release_update_ready": True, "online": True, "last_seen": time.time()}
+    info = {"os": "Windows", "version": "4.1.0", "update_mode": "source", "release_update_ready": True, "update_manifest_binding_protocol": 1, "online": True, "last_seen": time.time()}
     assert bot._version_install_block_reason("agent", release, "windows_agent", info) is not None
+
+
+@pytest.mark.parametrize('capability', [None, 0, True, '1'])
+def test_old_agent_without_manifest_binding_fails_closed(signed_catalog_release, capability):
+    import bot
+    release = signed_catalog_release(ledger.Release('v4.2.0', (4, 2, 0), '', '', '', frozenset({'XGENT-WDS.exe', 'XIDER-source.zip', 'release-manifest.json'})))
+    info = {'os': 'Windows', 'version': '4.2.0', 'update_mode': 'source', 'release_update_ready': True,
+            'online': True, 'last_seen': time.time(), 'update_manifest_binding_protocol': capability}
+    assert bot._version_install_block_reason('agent', release, 'windows_agent', info) == 'versions_install_requires_agent'
 
 
 def test_explicit_version_state_keeps_component_versions_separate(signed_release):
@@ -96,7 +105,7 @@ def test_rollback_confirmation_revalidates_exact_signed_selection(monkeypatch, s
     session = bot.SessionRegistry()
     session["target"] = "pc"
     monkeypatch.setattr(bot, "SESSION", session)
-    info = {"os": "Windows", "version": "4.2.0", "update_mode": "source", "release_update_ready": True, "last_seen": time.time(), "online": True}
+    info = {"os": "Windows", "version": "4.2.0", "update_mode": "source", "release_update_ready": True, "update_manifest_binding_protocol": 1, "last_seen": time.time(), "online": True}
     monkeypatch.setattr(bot, "devices", SimpleNamespace(get=lambda target: info))
     release = dataclasses.replace(release, manifest=manifest)
     newer = dataclasses.replace(release, tag="v4.2.0", version=(4, 2, 0))
@@ -165,7 +174,7 @@ def test_release_detail_never_announces_unverified_package(monkeypatch, signed_r
     session = bot.SessionRegistry()
     session["target"] = "pc"
     monkeypatch.setattr(bot, "SESSION", session)
-    info = {"os": "Windows", "version": "4.2.0", "update_mode": "source", "release_update_ready": True, "last_seen": time.time(), "online": True}
+    info = {"os": "Windows", "version": "4.2.0", "update_mode": "source", "release_update_ready": True, "update_manifest_binding_protocol": 1, "last_seen": time.time(), "online": True}
     monkeypatch.setattr(bot, "devices", SimpleNamespace(get=lambda target: info))
     monkeypatch.setattr(ledger.catalog, "list", lambda: [release])
     cards = []

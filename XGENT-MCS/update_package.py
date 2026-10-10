@@ -22,7 +22,7 @@ import uuid
 from pathlib import Path, PurePosixPath
 from typing import Callable
 
-from release_signature import verify_manifest_signature
+from release_signature import verify_manifest_signature, manifest_signing_bytes
 
 
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
@@ -55,6 +55,7 @@ def _write_update_result(state_path: Path, state: dict, outcome: str) -> None:
         "schema": 1, "operation_id": state["operation_id"],
         "release_tag": state.get("release_tag"), "state": outcome,
         "update_state": outcome, "updated_at": int(time.time()),
+        **({"manifest_digest": state["manifest_digest"]} if "manifest_digest" in state else {}),
     })
 
 
@@ -76,7 +77,9 @@ def read_agent_update_result(state_path: Path) -> dict | None:
             return None
         if result["update_state"] == "succeeded" and Path(state_path).exists():
             result.update(state="health_check", update_state="health_check")
-        return {key: result[key] for key in ("operation_id", "release_tag", "state", "update_state", "updated_at")}
+        if "manifest_digest" in result and (not isinstance(result["manifest_digest"], str) or not _SHA256.fullmatch(result["manifest_digest"])):
+            return None
+        return {key: result[key] for key in ("operation_id", "release_tag", "state", "update_state", "updated_at", "manifest_digest") if key in result}
     except (OSError, ValueError, KeyError):
         return None
 
@@ -195,6 +198,8 @@ def _read_update_state(state_path: Path, expected_install_dir: Path) -> dict | N
         or not _RECOVERY_SLOT.fullmatch(state["recovery_slot"])
     ):
         raise ValueError("Некорректный слот recovery cache в журнале.")
+    if "manifest_digest" in state and (not isinstance(state["manifest_digest"], str) or not _SHA256.fullmatch(state["manifest_digest"])):
+        raise ValueError("Некорректный manifest digest в журнале.")
     if "recovery_previous_slot" in state:
         previous = state["recovery_previous_slot"]
         if previous is not None and (
@@ -474,6 +479,7 @@ def download_verified_source_archive(
     archive_path: Path,
     *,
     release_tag: str | None = None,
+    expected_manifest_digest: str | None = None,
 ) -> str:
     """Verify publisher signature and source ZIP inventory before extraction."""
     tag, _ = _fetch_release(release_tag)
@@ -489,6 +495,11 @@ def download_verified_source_archive(
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("Файл release-manifest.json повреждён.") from exc
     verify_manifest_signature(manifest)
+    if expected_manifest_digest is not None and (
+        not isinstance(expected_manifest_digest, str) or not _SHA256.fullmatch(expected_manifest_digest)
+        or not hmac.compare_digest(hashlib.sha256(manifest_signing_bytes(manifest)).hexdigest(), expected_manifest_digest)
+    ):
+        raise ValueError("Signed manifest digest does not match the issued update operation.")
     if (
         not isinstance(manifest, dict)
         or type(manifest.get("schema")) is not int
@@ -659,6 +670,7 @@ def install_agent_files(
     recovery_slot: str | None = None,
     operation_id: str | None = None,
     release_tag: str | None = None,
+    manifest_digest: str | None = None,
 ) -> Path:
     """Back up, replace allowlisted files, and leave a restart-health journal.
 
@@ -671,6 +683,8 @@ def install_agent_files(
     install_dir = Path(install_dir).resolve()
     backup_dir = Path(backup_dir).resolve()
     names = tuple(files)
+    if manifest_digest is not None and (not isinstance(manifest_digest, str) or not _SHA256.fullmatch(manifest_digest)):
+        raise ValueError("Некорректный manifest digest операции.")
     if operation_id is not None and (
         not isinstance(operation_id, str) or not 1 <= len(operation_id) <= 128
         or not isinstance(release_tag, str) or not _RELEASE_TAG.fullmatch(release_tag)
@@ -749,6 +763,8 @@ def install_agent_files(
         state["recovery_slot"] = recovery_slot
     if operation_id is not None:
         state.update(operation_id=operation_id, release_tag=release_tag)
+    if manifest_digest is not None:
+        state["manifest_digest"] = manifest_digest
     _atomic_write_json(transaction_path, state)
 
     try:

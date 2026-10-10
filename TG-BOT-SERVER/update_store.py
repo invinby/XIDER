@@ -71,6 +71,8 @@ class UpdateStore:
             raise ValueError('invalid release tag')
         if op.state not in STATES or type(op.changed_at) is not int or not 0 <= op.changed_at <= 2**63 - 1:
             raise ValueError('invalid update state')
+        if not isinstance(op.manifest_digest, str) or not re.fullmatch(r'[0-9a-f]{64}', op.manifest_digest):
+            raise ValueError('invalid manifest digest')
         # Details carry fixed state summaries only; agent output is never stored.
         return replace(op, detail='')
 
@@ -107,7 +109,7 @@ class UpdateStore:
             candidate = dict(self._operations)
             for op in operations:
                 old = candidate.get(op.operation_id)
-                if old and any(getattr(old, field) != getattr(op, field) for field in ('batch_id', 'device_id', 'release_tag', 'component')):
+                if old and any(getattr(old, field) != getattr(op, field) for field in ('batch_id', 'device_id', 'release_tag', 'component', 'manifest_digest')):
                     raise ValueError('update identity is immutable')
                 candidate[op.operation_id] = self._validated(op)
             if len(candidate) > 10000:

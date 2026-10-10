@@ -19,7 +19,7 @@ def coordinator(monkeypatch, tmp_path):
     state = {'mac1': {'os': 'macOS 27', 'online': True, 'last_seen': 1010}}
     monkeypatch.setattr(bot, 'devices', SimpleNamespace(get=lambda device: state.get(device), all=lambda: state,
                      upsert=lambda device, info: state.setdefault(device, {}).update(info)))
-    op = c.start_batch(['mac1'], 'v4.2.0', 'mac_agent', now=1000)[0]
+    op = c.start_batch(['mac1'], 'v4.2.0', 'mac_agent', manifest_digest='a' * 64, now=1000)[0]
     c.dispatch_ready(op.batch_id, lambda op: True, now=1000)
     return c, op
 
@@ -70,15 +70,17 @@ def test_matching_status_health_receipt_reconciles_update(coordinator, monkeypat
     monkeypatch.setattr(bot, 'audit', lambda *args, **kwargs: None)
     monkeypatch.setattr(bot.status_collector, 'submit', lambda *args: None)
     monkeypatch.setattr(bot.multi_status, 'submit', lambda *args: None)
-    bot.on_mqtt_message(f'{bot.MQTT_PREFIX}/mac1/status', {'type': 'status', 'os': 'macOS 27', 'status': 'online', 'agent_update': {'operation_id': op.operation_id, 'release_tag': 'v4.2.0', 'update_state': 'succeeded', 'updated_at': 1010}})
+    bot.on_mqtt_message(f'{bot.MQTT_PREFIX}/mac1/status', {'type': 'status', 'os': 'macOS 27', 'status': 'online', 'agent_update': {'operation_id': op.operation_id, 'release_tag': 'v4.2.0', 'manifest_digest': op.manifest_digest, 'update_state': 'succeeded', 'updated_at': 1010}})
     assert c.store.get(op.operation_id).state == 'succeeded'
 
 
-def test_enqueue_uses_persisted_id_and_reports_unknown_without_receipt(coordinator, monkeypatch):
+def test_enqueue_uses_persisted_id_and_reports_unknown_without_receipt(coordinator, monkeypatch, signed_catalog_release):
+    import release_catalog
+    release = signed_catalog_release(release_catalog.Release('v4.2.0', (4, 2, 0), 'release', 'date', 'notes', frozenset({'XGENT-MCS-macos-bundle.zip', 'XIDER-source.zip', 'release-manifest.json'})))
     c, old = coordinator
     # A different device makes this independent of the routing fixture's active operation.
     monkeypatch.setattr(bot, 'SESSION', {'target': 'mac2'})
-    monkeypatch.setattr(bot.devices, 'get', lambda device: {'os': 'macOS 27', 'online': True, 'last_seen': 1010})
+    monkeypatch.setattr(bot.devices, 'get', lambda device: {'os': 'macOS 27', 'online': True, 'last_seen': 1010, 'version': '4.2.0', 'update_mode': 'source', 'release_update_ready': True, 'update_manifest_binding_protocol': 1})
     monkeypatch.setattr(bot, '_simple_command_still_allowed', lambda *args: True)
     published = []
     def publish(action, **kwargs):
@@ -99,28 +101,33 @@ def test_enqueue_uses_persisted_id_and_reports_unknown_without_receipt(coordinat
     async def answer(*args, **kwargs):
         pass
     cq = SimpleNamespace(data='versions:install_confirm:v4.2.0', from_user=SimpleNamespace(id=1), answer=answer)
-    result = asyncio.run(bot._simple_command_unlocked(cq, 'agent_update', '🔄', 'update', timeout=0, update=True, release_tag='v4.2.0'))
+    result = asyncio.run(bot._simple_command_unlocked(cq, 'agent_update', '🔄', 'update', timeout=0, update=True, release_tag='v4.2.0', update_release=release))
     assert len(published) == 1
     assert result['update_state'] == 'queued'
     assert result['ok'] is False
     assert published[0][1]['release_tag'] == 'v4.2.0'
-    asyncio.run(bot._simple_command_unlocked(cq, 'agent_update', '🔄', 'update', timeout=0, update=True, release_tag='v4.2.0'))
+    asyncio.run(bot._simple_command_unlocked(cq, 'agent_update', '🔄', 'update', timeout=0, update=True, release_tag='v4.2.0', update_release=release))
     assert len(published) == 1
 
 
-@pytest.mark.parametrize('healthy', [False, True])
-def test_owner_rollout_requires_fresh_canary_and_revalidates_signed_release(coordinator, monkeypatch, signed_catalog_release, healthy):
+@pytest.mark.parametrize('healthy,changed_manifest,preflight', [(False, False, None), (True, False, None), (True, True, None), (True, False, 'offline'), (True, False, 'revoked')])
+def test_owner_rollout_requires_fresh_canary_and_revalidates_signed_release(coordinator, monkeypatch, signed_catalog_release, healthy, changed_manifest, preflight):
     import release_catalog
     c, old = coordinator
-    ops = c.start_batch(['mac2', 'mac3'], 'v4.2.0', 'mac_agent', now=1000)
+    release = signed_catalog_release(release_catalog.Release('v4.2.0', (4, 2, 0), 'release', 'date', 'notes', frozenset({'XGENT-MCS-macos-bundle.zip', 'XIDER-source.zip', 'release-manifest.json'})))
+    digest = bot.hashlib.sha256(release_catalog.manifest_signing_bytes(release.manifest)).hexdigest()
+    ops = c.start_batch(['mac2', 'mac3'], 'v4.2.0', 'mac_agent', manifest_digest=digest, now=1000)
+    if changed_manifest:
+        from dataclasses import replace
+        release = signed_catalog_release(replace(release, asset_names=release.asset_names | {'XGENT-WDS.exe'}))
+        assert bot.release_catalog.verify_release_metadata(release, release.manifest)
     c.dispatch_ready(ops[0].batch_id, lambda op: True, now=1000)
     if healthy:
-        assert c.reconcile('mac2', {'operation_id': ops[0].operation_id, 'release_tag': 'v4.2.0', 'component': 'mac_agent', 'update_state': 'succeeded', 'updated_at': 1010}, received_at=1010, heartbeat_at=1010)
-    info = {'os': 'macOS 27', 'version': '4.1.0', 'update_mode': 'source', 'release_update_ready': True, 'online': True, 'last_seen': 1010}
+        assert c.reconcile('mac2', {'operation_id': ops[0].operation_id, 'release_tag': 'v4.2.0', 'component': 'mac_agent', 'manifest_digest': ops[0].manifest_digest, 'update_state': 'succeeded', 'updated_at': 1010}, received_at=1010, heartbeat_at=1010)
+    info = {'os': 'macOS 27', 'version': '4.1.0', 'update_mode': 'source', 'release_update_ready': True, 'update_manifest_binding_protocol': 1, 'online': True, 'last_seen': 1010}
     monkeypatch.setattr(bot.devices, 'get', lambda device: info)
     monkeypatch.setattr(bot, 'get_user_role', lambda user: bot.Role.OWNER)
     monkeypatch.setattr(bot, '_simple_command_still_allowed', lambda *args: True)
-    release = signed_catalog_release(release_catalog.Release('v4.2.0', (4, 2, 0), 'release', 'date', 'notes', frozenset({'XGENT-MCS-macos-bundle.zip', 'XIDER-source.zip', 'release-manifest.json'})))
     monkeypatch.setattr(bot.release_catalog.catalog, 'list', lambda **kwargs: [release])
     monkeypatch.setattr(bot, 'SESSION', {'target': 'mac2'})
     sent = []
@@ -129,17 +136,28 @@ def test_owner_rollout_requires_fresh_canary_and_revalidates_signed_release(coor
         return None
     monkeypatch.setattr(bot, '_replace_callback_message', render)
     cq = SimpleNamespace(data=f'versions:rollout:{ops[0].batch_id}', from_user=SimpleNamespace(id=1), answer=render)
+    if preflight:
+        monkeypatch.setattr(bot.devices, 'get', lambda device: {**info, 'online': False} if device == 'mac3' and preflight == 'offline' else info)
+        monkeypatch.setattr(bot, '_simple_command_still_allowed', lambda user, callback, device: not (device == 'mac3' and preflight == 'revoked'))
+        asyncio.run(bot.on_versions_rollout(cq))
+        assert not sent
+        assert not c.store.is_published(ops[1].operation_id)
+        assert c.store.get(ops[1].operation_id).state == 'queued'
+        monkeypatch.setattr(bot.devices, 'get', lambda device: info)
+        monkeypatch.setattr(bot, '_simple_command_still_allowed', lambda *args: True)
     asyncio.run(bot.on_versions_rollout(cq))
-    assert [item['_target'] for item in sent] == (['mac3'] if healthy else [])
+    assert [item['_target'] for item in sent] == (['mac3'] if healthy and not changed_manifest else [])
     asyncio.run(bot.on_versions_rollout(cq))
-    assert len(sent) == (1 if healthy else 0)
+    assert len(sent) == (1 if healthy and not changed_manifest else 0)
+    if sent:
+        assert sent[0]['manifest_digest'] == digest
 
 
 def test_device_component_change_during_telegram_ack_prevents_update(coordinator, monkeypatch, signed_catalog_release):
     import release_catalog
     c, op = coordinator
     monkeypatch.setattr(bot, 'SESSION', {'target': 'mac2'})
-    info = {'os': 'macOS 27', 'version': '4.1.0', 'update_mode': 'source', 'release_update_ready': True, 'online': True, 'last_seen': 1010}
+    info = {'os': 'macOS 27', 'version': '4.1.0', 'update_mode': 'source', 'release_update_ready': True, 'update_manifest_binding_protocol': 1, 'online': True, 'last_seen': 1010}
     monkeypatch.setattr(bot.devices, 'get', lambda device: info)
     monkeypatch.setattr(bot, '_simple_command_still_allowed', lambda *args: True)
     release = signed_catalog_release(release_catalog.Release('v4.2.0', (4, 2, 0), 'release', 'date', 'notes', frozenset({'XGENT-MCS-macos-bundle.zip', 'XIDER-source.zip', 'release-manifest.json'})))

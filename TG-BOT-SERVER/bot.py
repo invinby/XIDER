@@ -2779,6 +2779,7 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             info["update_mode"] == "source"
             and payload.get("release_update_ready") is True
         )
+        info["update_manifest_binding_protocol"] = payload.get("update_manifest_binding_protocol") if type(payload.get("update_manifest_binding_protocol")) is int else 0
         if online:
             info["last_seen"] = time.time()
         is_new = device_id not in devices.all()
@@ -7231,22 +7232,25 @@ async def _coordinated_agent_update(cq, label, timeout, release_tag, update_devi
     if not component or not info.get("online") or time.time() - float(info.get("last_seen") or 0) > 120:
         await _replace_callback_message(cq, _lex("versions_install_offline"), reply_markup=back_to_device_kb())
         return None
-    if update_release is not None and (
+    if update_release is None or (
         update_release.tag != release_tag
         or _version_install_block_reason("agent", update_release, component, info)
     ):
         await _replace_callback_message(cq, _lex("versions_install_component_unsupported"), reply_markup=back_to_device_kb())
         return None
     try:
-        operation = update_coordinator.start_batch(update_devices or [target], release_tag, component, now=time.time())[0]
-        def send(op):
+        manifest_digest = hashlib.sha256(release_catalog.manifest_signing_bytes(update_release.manifest)).hexdigest()
+        operation = update_coordinator.start_batch(update_devices or [target], release_tag, component, now=time.time(), manifest_digest=manifest_digest)[0]
+        def eligible(op):
             if not _simple_command_still_allowed(user_id, callback, op.device_id):
                 return False
             if update_release is not None and _version_install_block_reason("agent", update_release, op.component, devices.get(op.device_id)):
                 return False
+            return True
+        def send(op):
             return publish("agent_update", _target=op.device_id, id=op.operation_id,
-                           update=True, release_tag=op.release_tag)
-        update_coordinator.dispatch_ready(operation.batch_id, send, now=time.time())
+                           update=True, release_tag=op.release_tag, manifest_digest=op.manifest_digest)
+        update_coordinator.dispatch_ready(operation.batch_id, send, now=time.time(), eligible=eligible)
     except (OSError, ValueError):
         await _replace_callback_message(cq, "Состояние обновления неизвестно. Журнал недоступен или есть другая активная операция.", reply_markup=back_to_device_kb())
         return None
@@ -7756,6 +7760,8 @@ def _version_install_block_reason(kind: str, release, component: str, info: dict
         return "versions_install_component_unsupported"
     if not release_catalog.supports_release_manifest_update(str(info.get("version") or "")):
         return "versions_install_requires_agent"
+    if type(info.get("update_manifest_binding_protocol")) is not int or info["update_manifest_binding_protocol"] < 1:
+        return "versions_install_requires_agent"
     if info.get("update_mode") != "source":
         return "versions_install_frozen"
     if info.get("release_update_ready") is not True:
@@ -8175,11 +8181,11 @@ async def on_versions_rollout(cq: CallbackQuery):
     try:
         releases = await asyncio.to_thread(release_catalog.catalog.list, refresh=True)
         release = next((item for item in releases if item.tag == canary.release_tag), None)
-        if not release or not release_catalog.verify_release_metadata(release, release.manifest):
+        if not release or not release_catalog.verify_release_metadata(release, release.manifest) or hashlib.sha256(release_catalog.manifest_signing_bytes(release.manifest)).hexdigest() != canary.manifest_digest:
             await cq.answer(_lex("versions_catalog_unavailable"), show_alert=True)
             return
         await cq.answer()
-        def send(op):
+        def eligible(op):
             if get_user_role(user_id) != Role.OWNER or SESSION.get("target") != canary.device_id:
                 return False
             info = devices.get(op.device_id)
@@ -8188,9 +8194,11 @@ async def on_versions_rollout(cq: CallbackQuery):
                 return False
             if not _simple_command_still_allowed(user_id, cq.data, op.device_id) or _version_install_block_reason("agent", release, op.component, info):
                 return False
+            return True
+        def send(op):
             return publish("agent_update", _target=op.device_id, id=op.operation_id,
-                           update=True, release_tag=op.release_tag)
-        sent = update_coordinator.dispatch_ready(canary.batch_id, send, now=time.time())
+                           update=True, release_tag=op.release_tag, manifest_digest=op.manifest_digest)
+        sent = update_coordinator.dispatch_ready(canary.batch_id, send, now=time.time(), eligible=eligible)
         observed = update_coordinator.observed(canary.operation_id, now=time.time())
         if observed is None:
             raise ValueError("untrusted journal")

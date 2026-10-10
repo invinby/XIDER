@@ -3478,7 +3478,7 @@ def test_selected_release_install_requires_confirmation_and_dispatches_exact_tag
     monkeypatch.setattr(bot, "_PENDING_VERSION_INSTALLS", {})
     _setup(monkeypatch, {"device-1": {
         "name": "My device", "os": os_name, "version": "4.0.1",
-        "update_mode": "source", "release_update_ready": True,
+        "update_mode": "source", "release_update_ready": True, "update_manifest_binding_protocol": 1,
         "online": True, "last_seen": time.time(),
     }})
     release = release_catalog.Release(
@@ -3537,7 +3537,7 @@ def test_canary_version_detail_selects_current_device_first_without_publish(monk
     monkeypatch.setattr(bot, 'SESSION', {'target': 'mac2'})
     monkeypatch.setattr(bot, '_PENDING_VERSION_INSTALLS', {})
     monkeypatch.setattr(bot, '_DISPLAYED_VERSION_RELEASES', {})
-    info = {'name': 'Mac', 'os': 'macOS 27', 'version': '4.1.0', 'update_mode': 'source', 'release_update_ready': True, 'online': True, 'last_seen': time.time()}
+    info = {'name': 'Mac', 'os': 'macOS 27', 'version': '4.1.0', 'update_mode': 'source', 'release_update_ready': True, 'update_manifest_binding_protocol': 1, 'online': True, 'last_seen': time.time()}
     _setup(monkeypatch, {'mac1': info, 'mac2': info, 'offline': {**info, 'online': False}, 'win': {**info, 'os': 'Windows 11'}})
     release = signed_catalog_release(release_catalog.Release('v4.2.0', (4, 2, 0), 'release', 'date', 'notes', frozenset({'XGENT-MCS-macos-bundle.zip', 'XIDER-source.zip', 'release-manifest.json'})))
     monkeypatch.setattr(bot.release_catalog.catalog, 'list', lambda **kwargs: [release])
@@ -3558,7 +3558,7 @@ def test_agent_release_catalog_has_a_direct_install_action(monkeypatch, signed_c
     monkeypatch.setattr(bot, "SESSION", session)
     _setup(monkeypatch, {"device-1": {
         "name": "My device", "os": "macOS 27", "version": "4.2.0",
-        "update_mode": "source", "release_update_ready": True,
+        "update_mode": "source", "release_update_ready": True, "update_manifest_binding_protocol": 1,
         "online": True, "last_seen": time.time(),
     }})
     release = release_catalog.Release(

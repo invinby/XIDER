@@ -22,6 +22,7 @@ class UpdateOperation:
     state: str
     changed_at: int
     detail: str
+    manifest_digest: str = ''
 
 
 def transition(operation: UpdateOperation, event: str, now: int) -> UpdateOperation:
@@ -41,20 +42,20 @@ class Coordinator:
         # Persisted success alone is never authority to unlock a rollout.
         self._health = {}
 
-    def start_batch(self, device_ids, release_tag, component, *, now):
+    def start_batch(self, device_ids, release_tag, component, *, now, manifest_digest):
         with self._lock:
             ids = list(dict.fromkeys(device_ids))
             if not ids or len(ids) > 100:
                 raise ValueError('invalid batch size')
             for op in self.store.all():
                 batch = self.store.batch(op.batch_id)
-                if ([item.device_id for item in batch] == ids and op.release_tag == release_tag and op.component == component
+                if ([item.device_id for item in batch] == ids and op.release_tag == release_tag and op.component == component and op.manifest_digest == manifest_digest
                         and (any(item.state in ACTIVE for item in batch) or now - self.store.started_at(batch[0].operation_id) < 180)):
                     return batch
             if any(op.device_id in ids and op.state in ACTIVE for op in self.store.all()):
                 raise ValueError('device update already active')
             batch_id = uuid.uuid4().hex
-            operations = [UpdateOperation(uuid.uuid4().hex, batch_id, device, release_tag, component, 'queued', int(now), '') for device in ids]
+            operations = [UpdateOperation(uuid.uuid4().hex, batch_id, device, release_tag, component, 'queued', int(now), '', manifest_digest) for device in ids]
             self.store.save_many(operations)
             return operations
 
@@ -76,7 +77,7 @@ class Coordinator:
                 return replace(op, state='unknown')
         return op
 
-    def dispatch_ready(self, batch_id, publish, *, now):
+    def dispatch_ready(self, batch_id, publish, *, now, eligible=None):
         with self._lock:
             batch = self.store.batch(batch_id)
             if not self.store.trusted or not batch or self.batch_state(batch_id) == 'blocked':
@@ -88,6 +89,9 @@ class Coordinator:
             sent = []
             for op in candidates:
                 if op.state != 'queued' or self.store.is_published(op.operation_id):
+                    continue
+                # Eligibility has no side effect; rejection must remain retryable.
+                if eligible is not None and not eligible(op):
                     continue
                 # Persist intent before side effect. Ambiguous send cannot retry.
                 self.store.mark_published(op.operation_id)
@@ -108,7 +112,7 @@ class Coordinator:
         op = self.store.get(payload.get('operation_id'))
         if not self.store.trusted or not op or not self.store.is_published(op.operation_id) or op.device_id != device_id:
             return None
-        for name, expected in (('device_id', device_id), ('release_tag', op.release_tag), ('component', op.component)):
+        for name, expected in (('device_id', device_id), ('release_tag', op.release_tag), ('component', op.component), ('manifest_digest', op.manifest_digest)):
             if name in payload and payload[name] != expected:
                 return None
         return op
@@ -131,14 +135,15 @@ class Coordinator:
     def reconcile(self, device_id, payload, *, received_at, heartbeat_at):
         with self._lock:
             op = self._bound(device_id, payload)
-            if not op or payload.get('release_tag') != op.release_tag or payload.get('component') != op.component:
+            if not op or payload.get('release_tag') != op.release_tag or payload.get('component') != op.component or payload.get('manifest_digest') != op.manifest_digest:
                 return False
             updated_at = payload.get('updated_at')
             if type(updated_at) not in {int, float} or type(heartbeat_at) not in {int, float}:
                 return False
-            if updated_at < self.store.started_at(op.operation_id):
-                return False
-            if not (0 <= received_at - updated_at <= FRESH_SECONDS and 0 <= received_at - heartbeat_at <= FRESH_SECONDS):
+            # Agent wall clocks are not comparable to server clocks. The exact
+            # issued ID + persisted publish intent binds the durable receipt;
+            # current authenticated heartbeat is the server-observed freshness.
+            if not 0 <= received_at - heartbeat_at <= FRESH_SECONDS:
                 return False
             event = payload.get('update_state')
             if event not in {'health_check', 'succeeded', 'failed', 'rolled_back', 'rolling_back', 'reconnecting'}:

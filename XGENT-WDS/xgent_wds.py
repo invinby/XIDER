@@ -1373,6 +1373,7 @@ class XgentClient:
             "version": VERSION,
             "update_mode": "frozen" if getattr(sys, "frozen", False) else "source",
             "release_update_ready": trusted_release_keys_ready() and not getattr(sys, "frozen", False),
+            "update_manifest_binding_protocol": 1,
             "status": status,
         }
         if _command_approval_protocol_enabled(self):
@@ -3696,6 +3697,11 @@ setTimeout(()=>window.close(),15000);
 
         if payload.get("update"):
             operation_id = update_operation_id(payload, getattr(getattr(self, "_command_context", None), "cmd_id", None))
+            if not isinstance(payload.get("manifest_digest"), str) or not re.fullmatch(r"[0-9a-f]{64}", payload["manifest_digest"]):
+                self._publish_response("output", {"type": "agent_update", "device_id": DEVICE_ID,
+                    "ok": False, "state": "manifest_pin_required", "update_state": "failed",
+                    "operation_id": operation_id, "text": "Обновление не начато: требуется точный manifest digest."})
+                return
             self._publish_update_progress(operation_id, "queued")
             script_dir = Path(__file__).resolve().parent
             files = (
@@ -3720,6 +3726,7 @@ setTimeout(()=>window.close(),15000);
                         manifest,
                         archive,
                         release_tag=payload.get("release_tag"),
+                        expected_manifest_digest=payload.get("manifest_digest"),
                     )
                     self._publish_update_progress(operation_id, "verifying")
                     source = extract_agent_files(
@@ -3739,6 +3746,7 @@ setTimeout(()=>window.close(),15000);
                         files,
                         transaction_path=CONFIG_DIR / UPDATE_STATE_NAME,
                         operation_id=operation_id, release_tag=release_tag,
+                        manifest_digest=payload.get("manifest_digest"),
                     )
                     installed = True
 

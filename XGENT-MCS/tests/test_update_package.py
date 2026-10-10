@@ -128,6 +128,19 @@ def test_source_update_uses_stable_release_and_checks_manifest_hash(tmp_path, mo
     assert all(timeout == package.DOWNLOAD_TIMEOUT_SECONDS for _, timeout in observed)
 
 
+def test_changed_signed_manifest_at_same_tag_rejected_before_zip(tmp_path, monkeypatch):
+    original = _release_routes()
+    manifest_url = package._release_asset_url('v4.0.1', package.MANIFEST_ASSET)
+    expected = hashlib.sha256(signature.manifest_signing_bytes(json.loads(original[manifest_url]))).hexdigest()
+    changed = _release_routes(archive=b'changed source zip')
+    observed = _use_routes(monkeypatch, changed)
+    with pytest.raises(ValueError, match='digest'):
+        package.download_verified_source_archive(tmp_path / 'manifest.json', tmp_path / 'source.zip',
+                                                 expected_manifest_digest=expected)
+    assert not (tmp_path / 'source.zip').exists()
+    assert all(not url.endswith(package.SOURCE_ASSET) for url, _ in observed)
+
+
 def test_source_update_accepts_additional_signed_bootstrap_assets(tmp_path, monkeypatch):
     tag = "v4.0.1"
     routes = _release_routes(tag)

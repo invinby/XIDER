@@ -10,7 +10,7 @@ def api():
 
 
 def operation(state='queued'):
-    return api().UpdateOperation('operation1', 'batch1', 'mac1', 'v4.2.0', 'macos', state, 1000, '')
+    return api().UpdateOperation('operation1', 'batch1', 'mac1', 'v4.2.0', 'macos', state, 1000, '', 'a' * 64)
 
 
 def test_full_lifecycle_and_duplicates():
@@ -36,12 +36,12 @@ def setup(tmp_path):
 
 def receipt(op, **changes):
     return {'operation_id': op.operation_id, 'release_tag': op.release_tag, 'component': op.component,
-            'update_state': 'succeeded', 'updated_at': 1010, **changes}
+            'manifest_digest': op.manifest_digest, 'update_state': 'succeeded', 'updated_at': 1010, **changes}
 
 
 def test_canary_is_only_publish_until_fresh_health_then_batch(tmp_path):
     c = setup(tmp_path)
-    ops = c.start_batch(['mac1', 'mac2'], 'v4.2.0', 'macos', now=1000)
+    ops = c.start_batch(['mac1', 'mac2'], 'v4.2.0', 'macos', manifest_digest='a' * 64, now=1000)
     sent = []
     publish = lambda op: sent.append(op.device_id) or True
     c.dispatch_ready(ops[0].batch_id, publish, now=1000)
@@ -57,10 +57,10 @@ def test_canary_is_only_publish_until_fresh_health_then_batch(tmp_path):
     assert sent == ['mac1', 'mac2']
 
 
-@pytest.mark.parametrize('change', [{'operation_id': 'other'}, {'release_tag': 'v4.1.0'}, {'component': 'windows'}, {'device_id': 'other'}, {'updated_at': 800}, {'updated_at': 1100}, {'update_state': 'queued'}])
+@pytest.mark.parametrize('change', [{'operation_id': 'other'}, {'release_tag': 'v4.1.0'}, {'component': 'windows'}, {'device_id': 'other'}, {'updated_at': None}, {'updated_at': True}, {'update_state': 'queued'}])
 def test_mismatched_or_stale_receipt_never_unlocks(tmp_path, change):
     c = setup(tmp_path)
-    op = c.start_batch(['mac1', 'mac2'], 'v4.2.0', 'macos', now=1000)[0]
+    op = c.start_batch(['mac1', 'mac2'], 'v4.2.0', 'macos', manifest_digest='a' * 64, now=1000)[0]
     c.dispatch_ready(op.batch_id, lambda op: True, now=1000)
     assert not c.reconcile('mac1', receipt(op, **change), received_at=1010, heartbeat_at=1010)
     assert c.dispatch_ready(op.batch_id, lambda op: pytest.fail('mass rollout'), now=1011) == []
@@ -68,7 +68,7 @@ def test_mismatched_or_stale_receipt_never_unlocks(tmp_path, change):
 
 def test_restart_requires_new_matching_receipt(tmp_path):
     c = setup(tmp_path)
-    ops = c.start_batch(['mac1', 'mac2'], 'v4.2.0', 'macos', now=1000)
+    ops = c.start_batch(['mac1', 'mac2'], 'v4.2.0', 'macos', manifest_digest='a' * 64, now=1000)
     c.dispatch_ready(ops[0].batch_id, lambda op: True, now=1000)
     c.reconcile('mac1', receipt(ops[0]), received_at=1010, heartbeat_at=1010)
     restarted = setup(tmp_path)
@@ -81,7 +81,7 @@ def test_restart_requires_new_matching_receipt(tmp_path):
 
 def test_unknown_reconciles_only_bound_fresh_receipt(tmp_path):
     c = setup(tmp_path)
-    op = c.start_batch(['mac1'], 'v4.2.0', 'macos', now=1000)[0]
+    op = c.start_batch(['mac1'], 'v4.2.0', 'macos', manifest_digest='a' * 64, now=1000)[0]
     c.dispatch_ready(op.batch_id, lambda op: True, now=1000)
     c.expire(now=1400)
     assert c.store.get(op.operation_id).state == 'unknown'
@@ -92,8 +92,8 @@ def test_unknown_reconciles_only_bound_fresh_receipt(tmp_path):
 
 def test_canary_failure_blocks_rest_and_repeat_start_reuses_operation(tmp_path):
     c = setup(tmp_path)
-    ops = c.start_batch(['mac1', 'mac2'], 'v4.2.0', 'macos', now=1000)
-    assert c.start_batch(['mac1', 'mac2'], 'v4.2.0', 'macos', now=1001) == ops
+    ops = c.start_batch(['mac1', 'mac2'], 'v4.2.0', 'macos', manifest_digest='a' * 64, now=1000)
+    assert c.start_batch(['mac1', 'mac2'], 'v4.2.0', 'macos', manifest_digest='a' * 64, now=1001) == ops
     c.dispatch_ready(ops[0].batch_id, lambda op: True, now=1000)
     assert c.handle_event('mac1', {'operation_id': ops[0].operation_id, 'update_state': 'failed'}, received_at=1001)
     assert c.dispatch_ready(ops[0].batch_id, lambda op: pytest.fail('failed canary rollout'), now=1002) == []
@@ -101,7 +101,7 @@ def test_canary_failure_blocks_rest_and_repeat_start_reuses_operation(tmp_path):
 
 def test_progress_binding_rejects_wrong_device_tag_and_component(tmp_path):
     c = setup(tmp_path)
-    op = c.start_batch(['mac1'], 'v4.2.0', 'macos', now=1000)[0]
+    op = c.start_batch(['mac1'], 'v4.2.0', 'macos', manifest_digest='a' * 64, now=1000)[0]
     c.dispatch_ready(op.batch_id, lambda op: True, now=1000)
     for changes in ({'device_id': 'other'}, {'release_tag': 'v4.1.0'}, {'component': 'windows'}):
         assert not c.handle_event('mac1', {'operation_id': op.operation_id, 'update_state': 'downloading', **changes}, received_at=1001)
@@ -111,9 +111,9 @@ def test_progress_binding_rejects_wrong_device_tag_and_component(tmp_path):
 
 def test_receipt_predating_dispatch_and_success_after_offline_cannot_unlock(tmp_path):
     c = setup(tmp_path)
-    op = c.start_batch(['mac1', 'mac2'], 'v4.2.0', 'macos', now=1000)[0]
-    c.dispatch_ready(op.batch_id, lambda op: True, now=1000)
+    op = c.start_batch(['mac1', 'mac2'], 'v4.2.0', 'macos', manifest_digest='a' * 64, now=1000)[0]
     assert not c.reconcile('mac1', receipt(op, updated_at=999), received_at=1010, heartbeat_at=1010)
+    c.dispatch_ready(op.batch_id, lambda op: True, now=1000)
     assert c.reconcile('mac1', receipt(op), received_at=1010, heartbeat_at=1010)
     c.heartbeat_lost('mac1', now=1011)
     assert c.dispatch_ready(op.batch_id, lambda op: pytest.fail('offline canary'), now=1012) == []
@@ -121,8 +121,8 @@ def test_receipt_predating_dispatch_and_success_after_offline_cannot_unlock(tmp_
 
 def test_single_timeout_does_not_expire_another_device(tmp_path):
     c = setup(tmp_path)
-    first = c.start_batch(['mac1'], 'v4.2.0', 'macos', now=1000)[0]
-    second = c.start_batch(['mac2'], 'v4.2.0', 'macos', now=1000)[0]
+    first = c.start_batch(['mac1'], 'v4.2.0', 'macos', manifest_digest='a' * 64, now=1000)[0]
+    second = c.start_batch(['mac2'], 'v4.2.0', 'macos', manifest_digest='a' * 64, now=1000)[0]
     c.dispatch_ready(first.batch_id, lambda op: True, now=1000)
     c.dispatch_ready(second.batch_id, lambda op: True, now=1000)
     c.timeout(first.operation_id, now=1010)
@@ -132,12 +132,57 @@ def test_single_timeout_does_not_expire_another_device(tmp_path):
 
 def test_restart_cannot_report_persisted_success_as_current_and_repeat_reuses_id(tmp_path):
     c = setup(tmp_path)
-    op = c.start_batch(['mac1'], 'v4.2.0', 'macos', now=1000)[0]
+    op = c.start_batch(['mac1'], 'v4.2.0', 'macos', manifest_digest='a' * 64, now=1000)[0]
     c.dispatch_ready(op.batch_id, lambda op: True, now=1000)
     c.reconcile('mac1', receipt(op), received_at=1010, heartbeat_at=1010)
-    assert c.start_batch(['mac1'], 'v4.2.0', 'macos', now=1011)[0].operation_id == op.operation_id
+    assert c.start_batch(['mac1'], 'v4.2.0', 'macos', manifest_digest='a' * 64, now=1011)[0].operation_id == op.operation_id
     restarted = setup(tmp_path)
     assert restarted.observed(op.operation_id, now=1011).state == 'unknown'
     assert restarted.batch_state(op.batch_id) == 'unknown'
     assert restarted.reconcile('mac1', receipt(op), received_at=1012, heartbeat_at=1012)
     assert restarted.observed(op.operation_id, now=1012).state == 'succeeded'
+
+
+def test_ineligible_rollout_is_unpublished_and_retryable(tmp_path):
+    c = setup(tmp_path)
+    first, second = c.start_batch(['mac1', 'mac2'], 'v4.2.0', 'macos', manifest_digest='a' * 64, now=1000)
+    c.dispatch_ready(first.batch_id, lambda op: True, now=1000)
+    assert c.reconcile('mac1', receipt(first), received_at=1010, heartbeat_at=1010)
+    assert c.dispatch_ready(first.batch_id, lambda op: pytest.fail('ineligible publish'),
+                            eligible=lambda op: False, now=1011) == []
+    assert not c.store.is_published(second.operation_id)
+    assert c.store.get(second.operation_id).state == 'queued'
+    assert c.dispatch_ready(first.batch_id, lambda op: True, eligible=lambda op: True, now=1012) == [second]
+
+
+@pytest.mark.parametrize('device_time', [1, 99999999])
+def test_durable_receipt_recovers_after_restart_and_clock_skew(tmp_path, device_time):
+    c = setup(tmp_path)
+    first, second = c.start_batch(['mac1', 'mac2'], 'v4.2.0', 'macos', manifest_digest='a' * 64, now=1000)
+    assert not c.reconcile('mac1', receipt(first, updated_at=device_time), received_at=1010, heartbeat_at=1010)
+    c.dispatch_ready(first.batch_id, lambda op: True, now=1000)
+    assert c.reconcile('mac1', receipt(first, updated_at=device_time), received_at=1010, heartbeat_at=1010)
+    restarted = setup(tmp_path)
+    assert not restarted.reconcile('mac1', receipt(first, updated_at=device_time), received_at=2000, heartbeat_at=1010)
+    assert restarted.reconcile('mac1', receipt(first, updated_at=device_time), received_at=2000, heartbeat_at=2000)
+    assert restarted.dispatch_ready(first.batch_id, lambda op: True, now=2001) == [second]
+
+
+def test_manifest_digest_is_immutable_and_exact_receipt_binding(tmp_path):
+    c = setup(tmp_path)
+    op = c.start_batch(['mac1', 'mac2'], 'v4.2.0', 'macos', manifest_digest='a' * 64, now=1000)[0]
+    c.dispatch_ready(op.batch_id, lambda op: True, now=1000)
+    assert not c.reconcile('mac1', receipt(op, manifest_digest='b' * 64), received_at=1010, heartbeat_at=1010)
+    with pytest.raises(ValueError):
+        c.store.save(replace(op, manifest_digest='b' * 64))
+    with pytest.raises(ValueError):
+        c.start_batch(['mac1', 'mac2'], 'v4.2.0', 'macos', manifest_digest='b' * 64, now=1010)
+
+
+def test_actual_publish_failure_remains_ambiguous_and_never_retries(tmp_path):
+    c = setup(tmp_path)
+    op = c.start_batch(['mac1'], 'v4.2.0', 'macos', manifest_digest='a' * 64, now=1000)[0]
+    assert c.dispatch_ready(op.batch_id, lambda op: False, eligible=lambda op: True, now=1000) == []
+    assert c.store.is_published(op.operation_id)
+    assert c.store.get(op.operation_id).state == 'unknown'
+    assert c.dispatch_ready(op.batch_id, lambda op: pytest.fail('ambiguous retry'), now=1001) == []

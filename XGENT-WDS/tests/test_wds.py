@@ -236,7 +236,7 @@ def test_windows_remote_update_does_not_claim_success_without_signed_release(cli
             ValueError("В релизе нет единственной пары source ZIP и release manifest.")
         ),
     )
-    client._do_agent_update({"update": True})
+    client._do_agent_update({"update": True, "manifest_digest": "a" * 64})
 
     responses = [
         payload

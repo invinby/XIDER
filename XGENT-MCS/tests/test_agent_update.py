@@ -51,6 +51,17 @@ def _make_client():
     return client
 
 
+def test_missing_manifest_pin_fails_before_download(monkeypatch):
+    client = _make_client()
+    sent = []
+    client._publish_response = lambda topic, payload: sent.append(payload)
+    monkeypatch.setattr(mcs.sys, 'frozen', False, raising=False)
+    monkeypatch.setattr(mcs, 'download_verified_source_archive', lambda *a, **kw: pytest.fail('unbound download'))
+    client._do_agent_update({'update': True, 'id': 'missing-pin'})
+    assert sent[-1]['ok'] is False
+    assert sent[-1]['state'] == 'manifest_pin_required'
+
+
 def test_open_url_opens_the_requested_number_of_web_tabs(monkeypatch):
     import webbrowser
 
@@ -133,7 +144,7 @@ def test_agent_update_passes_release_tag_to_verifier_and_fails_closed(monkeypatc
     monkeypatch.setenv("XIDER_UPDATE_BRANCH", "attacker-controlled-branch")
     observed = {}
 
-    def reject_unpublished_release(manifest_path, archive_path, *, release_tag=None):
+    def reject_unpublished_release(manifest_path, archive_path, *, release_tag=None, expected_manifest_digest=None):
         observed.update(
             manifest=Path(manifest_path).name,
             archive=Path(archive_path).name,
@@ -143,7 +154,7 @@ def test_agent_update_passes_release_tag_to_verifier_and_fails_closed(monkeypatc
 
     monkeypatch.setattr(mcs, "download_verified_source_archive", reject_unpublished_release)
 
-    client._do_agent_update({"update": True, "release_tag": "v4.2.0"})
+    client._do_agent_update({"manifest_digest": "a" * 64, "update": True, "release_tag": "v4.2.0"})
 
     assert observed == {
         "manifest": "release-manifest.json",
@@ -167,7 +178,7 @@ def test_agent_status_request_does_not_fetch_release(monkeypatch):
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("network must not be used")),
     )
 
-    client._do_agent_update({"update": False})
+    client._do_agent_update({"manifest_digest": "a" * 64, "update": False})
 
     assert sent[0][1]["ok"] is True
     assert "Статус: 🟢 онлайн" in sent[0][1]["text"]
@@ -214,7 +225,7 @@ def test_frozen_agent_update_fails_closed_without_mutating_bundle(monkeypatch, t
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must fail before download")),
     )
 
-    client._do_agent_update({"update": True})
+    client._do_agent_update({"manifest_digest": "a" * 64, "update": True})
 
     assert sent[0][1]["ok"] is False
     assert sent[0][1]["state"] == "unsupported_package"
@@ -297,7 +308,8 @@ def source_update(monkeypatch, tmp_path):
     client = _make_client()
     client._publish_response = lambda topic, payload: sent.append((topic, payload)) if topic == "output" else None
 
-    def download(manifest, archive, *, release_tag=None):
+    def download(manifest, archive, *, release_tag=None, expected_manifest_digest=None):
+        assert expected_manifest_digest == 'a' * 64
         Path(manifest).write_text("{}", encoding="utf-8")
         with zipfile.ZipFile(archive, "w") as bundle:
             for name, content in candidates.items():
@@ -330,8 +342,8 @@ def test_source_update_serializes_until_exec_and_does_not_spawn_guardian(source_
     monkeypatch.setattr(mcs.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("restart must use exec"))
     monkeypatch.setattr(mcs.sys, "argv", ["xgent_mcs.py", "--example"])
 
-    client._do_agent_update({"release_tag": "v4.2.0"})
-    client._do_agent_update({"release_tag": "v4.3.0"})
+    client._do_agent_update({"manifest_digest": "a" * 64, "release_tag": "v4.2.0"})
+    client._do_agent_update({"manifest_digest": "a" * 64, "release_tag": "v4.3.0"})
 
     assert sent[0][1]["state"] == "restarting"
     assert sent[1][1]["state"] == "update_busy"
@@ -349,7 +361,7 @@ def test_dependency_change_keeps_running_source_and_environment(source_update):
     client, install, state_root, candidates, sent, cache_calls, restarts = source_update
     candidates["requirements.txt"] += b"new-runtime-package>=3\n"
 
-    client._do_agent_update({"release_tag": "v4.2.0"})
+    client._do_agent_update({"manifest_digest": "a" * 64, "release_tag": "v4.2.0"})
 
     assert sent[-1][1]["state"] == "dependency_install_required"
     assert (install / "xgent_mcs.py").read_bytes() == b"# previous source\n"
@@ -364,7 +376,7 @@ def test_exec_failure_rolls_back_and_keeps_current_worker_running(source_update,
     client, install, state_root, _, sent, _, restarts = source_update
     monkeypatch.setattr(mcs.os, "execv", lambda *_args: (_ for _ in ()).throw(OSError("exec failed")))
 
-    client._do_agent_update({"release_tag": "v4.2.0"})
+    client._do_agent_update({"manifest_digest": "a" * 64, "release_tag": "v4.2.0"})
     restarts[0]()
 
     assert sent[-1][1]["state"] == "restart_failed"
@@ -379,7 +391,7 @@ def test_explicit_stop_rolls_back_and_cancels_scheduled_restart(source_update, m
     monkeypatch.setattr(mcs, "set_guardian_desired_running", saved.append)
     monkeypatch.setattr(mcs.os, "execv", lambda *_args: pytest.fail("explicit stop must cancel restart"))
 
-    client._do_agent_update({"release_tag": "v4.2.0"})
+    client._do_agent_update({"manifest_digest": "a" * 64, "release_tag": "v4.2.0"})
     client.request_stop()
     restarts[0]()
 
@@ -401,7 +413,7 @@ def test_stop_during_download_prevents_file_swap(source_update, monkeypatch):
         return result
 
     monkeypatch.setattr(mcs, "download_verified_source_archive", stop_during_download)
-    client._do_agent_update({"release_tag": "v4.2.0"})
+    client._do_agent_update({"manifest_digest": "a" * 64, "release_tag": "v4.2.0"})
 
     assert sent[-1][1]["ok"] is False
     assert (install / "xgent_mcs.py").read_bytes() == b"# previous source\n"
@@ -412,7 +424,7 @@ def test_stop_during_download_prevents_file_swap(source_update, monkeypatch):
 def test_old_worker_reconnect_cannot_commit_pending_update(source_update):
     client, _, state_root, _, _, _, _ = source_update
     client._publish_status = lambda: None
-    client._do_agent_update({"release_tag": "v4.2.0"})
+    client._do_agent_update({"manifest_digest": "a" * 64, "release_tag": "v4.2.0"})
 
     _ack_command_subscriptions(client)
 
@@ -424,7 +436,7 @@ def test_new_worker_health_activates_cache_before_committing(source_update, monk
     old, install, state_root, _, _, _, _ = source_update
     progress = []
     old._publish_response = lambda topic, payload: progress.append((topic, payload))
-    old._do_agent_update({"release_tag": "v4.2.0", "id": "bot-op-health"})
+    old._do_agent_update({"manifest_digest": "a" * 64, "release_tag": "v4.2.0", "id": "bot-op-health"})
     assert [item[1]["update_state"] for item in progress] == [
         "queued", "downloading", "verifying", "installing", "reconnecting",
     ]
@@ -432,6 +444,7 @@ def test_new_worker_health_activates_cache_before_committing(source_update, monk
     receipt = package.read_agent_update_result(state_root / package.UPDATE_STATE_NAME)
     assert receipt["update_state"] == "health_check"
     assert receipt["operation_id"] == "bot-op-health"
+    assert receipt["manifest_digest"] == 'a' * 64
     assert package.prepare_agent_update_start(state_root / package.UPDATE_STATE_NAME, install) == "pending"
     new = _make_client()
     new._publish_status = lambda: None
@@ -462,7 +475,7 @@ def test_health_timeout_does_not_restart_after_explicit_stop(monkeypatch, tmp_pa
 
 def test_health_timeout_rolls_back_and_execs_previous_source(source_update, monkeypatch):
     old, install, state_root, _, _, _, _ = source_update
-    old._do_agent_update({"release_tag": "v4.2.0"})
+    old._do_agent_update({"manifest_digest": "a" * 64, "release_tag": "v4.2.0"})
     package.prepare_agent_update_start(state_root / package.UPDATE_STATE_NAME, install)
     new = _make_client()
     execs = []
@@ -483,7 +496,7 @@ def test_uninstall_during_restart_delay_cannot_recreate_agent(source_update, mon
     monkeypatch.setattr(mcs.subprocess, "run", lambda *_args, **_kwargs: MagicMock(returncode=0))
     monkeypatch.setattr(mcs.os, "execv", lambda *_args: pytest.fail("uninstall must cancel update restart"))
 
-    client._do_agent_update({"release_tag": "v4.2.0"})
+    client._do_agent_update({"manifest_digest": "a" * 64, "release_tag": "v4.2.0"})
     client._do_uninstall_agent({})
     restarts[0]()
 
@@ -505,7 +518,7 @@ def test_restart_thread_failure_restores_source_immediately(source_update, monke
             raise RuntimeError("cannot start restart thread")
 
     monkeypatch.setattr(mcs.threading, "Thread", FailingThread)
-    client._do_agent_update({"release_tag": "v4.2.0", "id": "restart-thread-operation"})
+    client._do_agent_update({"manifest_digest": "a" * 64, "release_tag": "v4.2.0", "id": "restart-thread-operation"})
 
     assert sent[-1][1]["state"] == "update_failed"
     assert sent[-1][1]["update_state"] == "rolled_back"
@@ -527,7 +540,7 @@ def test_install_failure_reports_actual_matching_rollback_receipt(source_update,
             raise OSError("restore rejected")
         return original(src, dst)
     monkeypatch.setattr(package, "_atomic_copy", fail_install_and_optional_restore)
-    client._do_agent_update({"release_tag": "v4.2.0", "id": "install-failure-operation"})
+    client._do_agent_update({"manifest_digest": "a" * 64, "release_tag": "v4.2.0", "id": "install-failure-operation"})
     receipt = package.read_agent_update_result(state_root / package.UPDATE_STATE_NAME)
     expected = "failed" if partial_restore else "rolled_back"
     assert receipt["operation_id"] == "install-failure-operation"
@@ -543,13 +556,13 @@ def test_install_rejection_ignores_another_operations_old_receipt(source_update,
         "operation_id": "unrelated-old-operation", "update_state": "rolled_back",
     })
     monkeypatch.setattr(mcs, "download_verified_source_archive", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad signature")))
-    client._do_agent_update({"release_tag": "v4.2.0", "id": "current-operation"})
+    client._do_agent_update({"manifest_digest": "a" * 64, "release_tag": "v4.2.0", "id": "current-operation"})
     assert sent[-1][1]["update_state"] == "failed"
 
 
 def test_delayed_restart_rejection_ignores_another_operations_old_receipt(source_update, monkeypatch):
     client, _, _, _, sent, _, restarts = source_update
-    client._do_agent_update({"release_tag": "v4.2.0", "id": "current-restart"})
+    client._do_agent_update({"manifest_digest": "a" * 64, "release_tag": "v4.2.0", "id": "current-restart"})
     monkeypatch.setattr(mcs, "read_agent_update_result", lambda *_: {
         "operation_id": "unrelated-old-operation", "update_state": "rolled_back",
     })
@@ -653,7 +666,7 @@ def test_uninstall_does_not_report_success_when_config_remains(source_update, mo
 
 def test_cache_verification_failure_does_not_commit_new_agent(source_update, monkeypatch):
     old, install, state_root, _, _, _, _ = source_update
-    old._do_agent_update({"release_tag": "v4.2.0"})
+    old._do_agent_update({"manifest_digest": "a" * 64, "release_tag": "v4.2.0"})
     state_path = state_root / package.UPDATE_STATE_NAME
     package.prepare_agent_update_start(state_path, install)
     new = _make_client()
@@ -729,7 +742,7 @@ def test_delayed_restart_failure_preserves_original_command_id(source_update, mo
     client, _, _, _, sent, _, restarts = source_update
     client._command_context.cmd_id = "update-command-123"
     monkeypatch.setattr(mcs.os, "execv", lambda *_args: (_ for _ in ()).throw(OSError("exec failed")))
-    client._do_agent_update({"release_tag": "v4.2.0"})
+    client._do_agent_update({"manifest_digest": "a" * 64, "release_tag": "v4.2.0"})
     del client._command_context.cmd_id
 
     restarts[0]()
@@ -778,7 +791,7 @@ def test_failed_guardian_stop_intent_keeps_network_agent_reachable(monkeypatch):
 @pytest.mark.parametrize("rejection", [[128], [], [0, 0], [MagicMock(value=128)]])
 def test_rejected_suback_keeps_journal_until_old_source_is_restored(source_update, monkeypatch, rejection):
     old, install, state_root, _, _, _, _ = source_update
-    old._do_agent_update({"release_tag": "v4.2.0"})
+    old._do_agent_update({"manifest_digest": "a" * 64, "release_tag": "v4.2.0"})
     state_path = state_root / package.UPDATE_STATE_NAME
     package.prepare_agent_update_start(state_path, install)
     new = _make_client()
@@ -803,7 +816,7 @@ def test_rejected_suback_keeps_journal_until_old_source_is_restored(source_updat
 @pytest.mark.parametrize("failed_topic", [0, 1])
 def test_subscribe_send_failure_cannot_confirm_health(source_update, monkeypatch, failed_topic):
     old, install, state_root, _, _, _, _ = source_update
-    old._do_agent_update({"release_tag": "v4.2.0"})
+    old._do_agent_update({"manifest_digest": "a" * 64, "release_tag": "v4.2.0"})
     state_path = state_root / package.UPDATE_STATE_NAME
     package.prepare_agent_update_start(state_path, install)
     new = _make_client()
@@ -825,7 +838,7 @@ def test_subscribe_send_failure_cannot_confirm_health(source_update, monkeypatch
 
 def test_disconnect_discards_old_subacks_and_requires_new_confirmations(source_update, monkeypatch):
     old, install, state_root, _, _, _, _ = source_update
-    old._do_agent_update({"release_tag": "v4.2.0"})
+    old._do_agent_update({"manifest_digest": "a" * 64, "release_tag": "v4.2.0"})
     state_path = state_root / package.UPDATE_STATE_NAME
     package.prepare_agent_update_start(state_path, install)
     new = _make_client()
@@ -853,7 +866,7 @@ def test_disconnect_discards_old_subacks_and_requires_new_confirmations(source_u
 
 def test_explicit_stop_during_suback_wait_prevents_commit(source_update, monkeypatch):
     old, install, state_root, _, _, _, _ = source_update
-    old._do_agent_update({"release_tag": "v4.2.0"})
+    old._do_agent_update({"manifest_digest": "a" * 64, "release_tag": "v4.2.0"})
     state_path = state_root / package.UPDATE_STATE_NAME
     package.prepare_agent_update_start(state_path, install)
     new = _make_client()

@@ -18,6 +18,15 @@ def _update_client():
     return client, sent
 
 
+def test_missing_manifest_pin_fails_before_download(monkeypatch):
+    client, sent = _update_client()
+    monkeypatch.setattr(wds.sys, 'frozen', False, raising=False)
+    monkeypatch.setattr(wds, 'download_verified_source_archive', lambda *a, **kw: pytest.fail('unbound download'))
+    client._do_agent_update({'update': True, 'id': 'missing-pin'})
+    assert sent[-1][1]['ok'] is False
+    assert sent[-1][1]['state'] == 'manifest_pin_required'
+
+
 def test_updated_approval_helpers_are_loaded_from_transaction_and_rollback_restores_fallback(monkeypatch, tmp_path):
     import update_package as package
 
@@ -92,7 +101,8 @@ def test_source_update_validates_and_installs_only_windows_allowlist(monkeypatch
     rollbacks = []
     client._publish_response = lambda topic, payload: (sent if topic == "output" else progress).append((topic, payload))
 
-    def download(manifest, archive, *, release_tag=None):
+    def download(manifest, archive, *, release_tag=None, expected_manifest_digest=None):
+        assert expected_manifest_digest == 'a' * 64
         downloaded.update(
             manifest=Path(manifest).name,
             archive=Path(archive).name,
@@ -109,7 +119,8 @@ def test_source_update_validates_and_installs_only_windows_allowlist(monkeypatch
             (stage / name).write_text("VALUE = 1\n", encoding="utf-8")
         return stage
 
-    def install(source, install_dir, backup_dir, files, *, transaction_path, operation_id, release_tag):
+    def install(source, install_dir, backup_dir, files, *, transaction_path, operation_id, release_tag, manifest_digest):
+        assert manifest_digest == 'a' * 64
         installed.append({
             "source": Path(source),
             "install_dir": Path(install_dir),
@@ -135,7 +146,7 @@ def test_source_update_validates_and_installs_only_windows_allowlist(monkeypatch
     monkeypatch.setattr(wds.threading, "Thread", DeferredThread)
     monkeypatch.setattr(wds, "rollback_unhealthy_agent", lambda *args: rollbacks.append(args) or {"restored": ["xgent_wds.py"], "removed": []})
 
-    client._do_agent_update({"update": True, "release_tag": "v4.0.1", "id": "bot-op-windows"})
+    client._do_agent_update({"manifest_digest": "a" * 64, "update": True, "release_tag": "v4.0.1", "id": "bot-op-windows"})
 
     assert downloaded == {
         "manifest": "release-manifest.json",
@@ -201,7 +212,7 @@ def test_source_update_stops_before_extraction_when_release_verification_fails(m
         lambda *_args, **_kwargs: pytest.fail("must not modify files after signature failure"),
     )
 
-    client._do_agent_update({"update": True})
+    client._do_agent_update({"manifest_digest": "a" * 64, "update": True})
 
     assert sent[0][1]["ok"] is False
     assert sent[0][1]["state"] == "failed"
@@ -222,7 +233,7 @@ def test_windows_install_failure_reports_actual_matching_rollback_receipt(monkey
     for name in files:
         (install / name).write_text("# previous\n", encoding="utf-8")
     (install / ".env").write_text("private fixture", encoding="utf-8")
-    def download(manifest, archive, *, release_tag=None):
+    def download(manifest, archive, *, release_tag=None, expected_manifest_digest=None):
         Path(manifest).write_text("fixture", encoding="utf-8")
         with zipfile.ZipFile(archive, "w") as bundle:
             for name in files:
@@ -241,7 +252,7 @@ def test_windows_install_failure_reports_actual_matching_rollback_receipt(monkey
             raise OSError("restore rejected")
         return original(src, dst)
     monkeypatch.setattr(package, "_atomic_copy", fail_install_and_optional_restore)
-    client._do_agent_update({"update": True, "release_tag": "v4.2.0", "id": "windows-install-failure"})
+    client._do_agent_update({"manifest_digest": "a" * 64, "update": True, "release_tag": "v4.2.0", "id": "windows-install-failure"})
     receipt = package.read_agent_update_result(tmp_path / package.UPDATE_STATE_NAME)
     expected = "failed" if partial_restore else "rolled_back"
     assert receipt["operation_id"] == "windows-install-failure"
@@ -255,7 +266,7 @@ def test_windows_install_failure_reports_actual_matching_rollback_receipt(monkey
 def test_frozen_rejection_always_has_bounded_operation_id(monkeypatch, incoming):
     client, sent = _update_client()
     monkeypatch.setattr(wds.sys, "frozen", True, raising=False)
-    client._do_agent_update({"update": True, "id": incoming})
+    client._do_agent_update({"manifest_digest": "a" * 64, "update": True, "id": incoming})
     result = sent[-1][1]
     assert isinstance(result["operation_id"], str) and 1 <= len(result["operation_id"]) <= 128
     assert result["state"] == "unsupported_package" and result["update_state"] == "failed"
@@ -270,7 +281,7 @@ def test_frozen_rejection_without_id_does_not_use_source_updater(monkeypatch, co
     client._command_context.cmd_id = context_id
     monkeypatch.setattr(wds.sys, "frozen", True, raising=False)
     monkeypatch.delattr(wds, "update_operation_id")
-    client._do_agent_update({"update": True})
+    client._do_agent_update({"manifest_digest": "a" * 64, "update": True})
     result = sent[-1][1]
     assert isinstance(result["operation_id"], str) and 1 <= len(result["operation_id"]) <= 128
     if context_id:
@@ -287,7 +298,7 @@ def test_frozen_windows_update_fails_closed_before_download(monkeypatch, tmp_pat
         lambda *_args, **_kwargs: pytest.fail("frozen EXE must fail before download"),
     )
 
-    client._do_agent_update({"update": True})
+    client._do_agent_update({"manifest_digest": "a" * 64, "update": True})
 
     assert sent[0][1]["ok"] is False
     assert sent[0][1]["state"] == "unsupported_package"
@@ -305,7 +316,7 @@ def test_mqtt_connect_confirms_pending_windows_update(monkeypatch, tmp_path):
     state = tmp_path / package.UPDATE_STATE_NAME
     package.install_agent_files(source, install, tmp_path / package.UPDATE_BACKUP_DIR / "previous",
                                 ("xgent_wds.py",), transaction_path=state,
-                                operation_id="bot-op-windows-health", release_tag="v4.0.1")
+                                operation_id="bot-op-windows-health", release_tag="v4.0.1", manifest_digest='a' * 64)
     package.begin_agent_start(state, install)
     client = object.__new__(wds.XgentClient)
     client._update_health = threading.Event()
@@ -334,6 +345,7 @@ def test_mqtt_connect_confirms_pending_windows_update(monkeypatch, tmp_path):
     assert not state.exists()
     assert package.read_agent_update_result(state)["operation_id"] == "bot-op-windows-health"
     assert package.read_agent_update_result(state)["update_state"] == "succeeded"
+    assert package.read_agent_update_result(state)["manifest_digest"] == 'a' * 64
 
 
 @pytest.mark.parametrize("failure", ["rejected", "send_failed", "disconnected"])
