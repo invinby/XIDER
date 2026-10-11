@@ -30,7 +30,7 @@
 ---
 
 **Дата:** 2026-10-08  
-**Статус:** реализация одобрена; Task 1 принят ревью, готовится Task 2
+**Статус:** локальная реализация Tasks 1–4 принята; macOS frozen artifact и отдельно разрешаемый live smoke остаются открытыми гейтами
 **Спецификация:** раздел 10 и security-требования раздела 14 [TARPED redesign](../specs/2026-10-08-tarped-product-redesign-design.md)  
 **Зависимость:** план бота/RBAC; до его приёмки не подключать новый маршрут к кнопке.
 
@@ -66,21 +66,23 @@ Task 1 review accepted: fresh review of the model found no Critical/Important is
 
 **Interface:** `sign_approved_command(*, request_id: str, requester_id: int, approver_id: int, device_id: str, command: str, issued_at: int, expires_at: int, nonce: str, key_id: str) -> dict` signs canonical schema-1 fields `{key_id, request_id, requester_id, approver_id, device_id, command_hash, issued_at, expires_at, nonce}` with the server-only Ed25519 private key; command text is carried separately and is not part of the signature envelope. `verify_approved_command(envelope: dict, *, command: str, expected_device_id: str, now: int) -> dict | None` recomputes SHA-256 over the exact command UTF-8 bytes and verifies the signature, key id, target, nonce and `0 < expires_at - issued_at <= 120`. `key_id` is the first 16 lowercase hex characters of SHA-256 over the raw Ed25519 public key; `XIDER_COMMAND_VERIFY_KEYSET_B64` is base64url-without-padding of canonical UTF-8 JSON mapping key ids to base64url public keys. `deploy/provision_command_signing_key.py` creates the key only when absent, preserves it through ordinary installs, and atomically updates the public keyset in bot.env. The private key path is `/etc/xider/command-signing-private.pem`, owned `root:xider` mode `0640` to match `deploy/xider-bot.service` (`User=xider`); it never enters agent `.env`, installers, logs, GitHub, or release artifacts. Agents atomically persist consumed request IDs at `%LOCALAPPDATA%\XIDER\command-replay.json` (Windows) and `~/Library/Application Support/XIDER/command-replay.json` (macOS), retaining each until expiry so replay is rejected after process restart. Missing/unknown public key disables only arbitrary shell and fails closed; no legacy unsigned-shell fallback.
 
-- [ ] Add signer tests for canonical encoding, tampered command, target, expiry, unknown key id, key rotation overlap and missing private key.
-- [ ] Add both-agent tests for HMAC-only/unsigned payload, invalid signature, wrong device, command/hash mismatch, not-yet-valid/expired approval, replay, replay after agent restart, missing public key, and a valid approval.
-- [ ] Add bootstrap/deploy tests proving private-key file permissions, durable key preservation across update/rollback, public-key-only delivery to agents, and no private key in package/log/export.
-- [ ] Add package-inventory tests proving `command_signing.py` is present in the Windows shared-update allowlist and staged by the Windows updater, the macOS source-update/transaction/recovery lists, and both built PyInstaller archives. Windows must resolve the one shared helper from `XGENT-MCS` in source mode and from its bundled module in frozen mode.
-- [ ] Update both PyInstaller specs/build assertions to include `command_signing` and the Ed25519 verifier; update source/update/recovery lists and their exact expected fixtures together. Keep `XIDER_COMMAND_VERIFY_KEYSET_B64` public-only in agent configuration; never bundle the server signing key in a Windows/macOS binary or Guard Keeper recovery package.
-- [ ] Run `bash deploy/tests/test_command_signing_key_install.sh` in Linux CI or WSL; expected: first install creates one private/public pair, repeat install preserves its key id, and update/rollback never exports the private key.
-- [ ] Run `python -m pytest tests/test_command_signing.py -q` in `TG-BOT-SERVER`, then `python -m pytest tests/test_shell_approval.py -q` in each agent; expected: all invalid envelopes fail before `_do_shell` and the valid envelope reaches it exactly once.
-- [ ] Implement `deploy/provision_command_signing_key.py` using the existing `cryptography` dependency; create the private key only when absent, set `root:xider`/`0640`, atomically update bot.env with the derived public keyset, and fail closed on malformed or mismatched existing material.
-- [ ] Keep key rotation as a separate owner-approved migration with `key_id` and bounded old-public-key overlap; never rotate or replace the key during ordinary bot updates.
-- [ ] Add the device-side atomic replay ledger at the exact platform app-data path; reserve the request id before starting the subprocess and fail closed on corrupt/unwritable ledger.
-- [ ] Connect bootstrap so only `XIDER_COMMAND_VERIFY_KEYSET_B64` is supplied to newly installed/updated agents; reject shell from older agents until they report `command_approval_protocol >= 1`.
-- [ ] Include `command_approval_protocol: 1` in both agents' signed capability/status responses and test that the bot disables shell-request/approval for a missing or older protocol version.
-- [ ] Run both agent suites, signer/approval tests, and `ops/tests/test_mqtt_runtime_security.py`; expected: a shared-HMAC-authenticated MQTT publish without the separate server signature never reaches subprocess.
-- [ ] Run updater/recovery/package tests and inspect both generated PyInstaller archives; expected: the verifier survives build, update, rollback, and macOS Guard Keeper file restoration while the private key appears in none of those artifacts.
-- [ ] Commit the server signer, device verification, key provisioning and tests as one reviewed protocol migration.
+- [x] Add signer tests for canonical encoding, tampered command, target, expiry, unknown key id, key rotation overlap and missing private key.
+- [x] Add both-agent tests for HMAC-only/unsigned payload, invalid signature, wrong device, command/hash mismatch, not-yet-valid/expired approval, replay, replay after agent restart, missing public key, and a valid approval.
+- [x] Add bootstrap/deploy tests proving private-key file permissions, durable key preservation across update/rollback, public-key-only delivery to agents, and no private key in package/log/export.
+- [x] Add package-inventory tests and CI assertions for the trusted modules in source/update/recovery inventories and frozen archives. Windows resolves the canonical helper in source and frozen modes; Windows frozen executable was inspected and smoke-tested. macOS source/CI archive assertions exist; its built artifact acceptance is tracked separately below.
+- [x] Update both PyInstaller specs/build assertions to include `command_signing` and the Ed25519 verifier; update source/update/recovery lists and their exact expected fixtures together. Keep `XIDER_COMMAND_VERIFY_KEYSET_B64` public-only in agent configuration; never bundle the server signing key in a Windows/macOS binary or Guard Keeper recovery package.
+- [x] Run `bash deploy/tests/test_command_signing_key_install.sh` in a Linux/WSL-compatible temporary fixture; first install, idempotence, permissions and public-only material are covered.
+- [x] Run `python -m pytest tests/test_command_signing.py -q` in `TG-BOT-SERVER`, then approval-gate tests in both agents; invalid envelopes fail before subprocess and valid approvals are accepted once.
+- [x] Implement `deploy/provision_command_signing_key.py` using the existing `cryptography` dependency; key creation is absent-only, permissions are enforced, bot.env update is atomic, and unsafe/mismatched state fails closed.
+- [x] Keep key rotation as a separate owner-approved migration with `key_id` and bounded old-public-key overlap; ordinary bot updates do not replace the key.
+- [x] Add the device-side atomic replay ledger at the exact platform app-data path; reserve the request id before starting the subprocess and fail closed on corrupt/unwritable ledger.
+- [x] Connect bootstrap so only `XIDER_COMMAND_VERIFY_KEYSET_B64` is supplied to newly installed/updated agents; reject shell from older agents until they report `command_approval_protocol >= 1`.
+- [x] Include `command_approval_protocol: 1` in both agents' signed capability/status responses and test that the bot disables shell-request/approval for a missing or older protocol version.
+- [x] Add/run a test at the actual MQTT runtime dispatch seam proving an HMAC-authenticated unsigned or invalidly signed shell payload is rejected before subprocess. `ops/tests/test_mqtt_shell_callback.py` drives both agents' real `_on_message` callbacks; the existing `ops/tests/test_mqtt_runtime_security.py` remains the separate TLS/ACL config test.
+- [ ] Run/inspect macOS frozen `.app` archive and verify updater/recovery packaging there; Windows frozen artifact smoke passed, macOS CI artifact is not available locally.
+- [x] Commit the server signer, device verification, key provisioning and tests as one reviewed protocol migration (implemented as reviewed 2A–2D slices/commits).
+
+Task 2 local evidence audit (2026-10-11): code and slice reports show implementation/fixture acceptance for signer, both agent gates, replay ledgers, provisioning/bootstrap and Windows frozen bundle. The actual MQTT callback regression now passes for WDS and MCS; see `.superpowers/sdd/2026-10-08-tarped-plan-release-server/task-2-runtime-evidence-report.md`. Remaining gates are specifically (a) macOS frozen artifact build/smoke and (b) separately authorized live Telegram→MQTT→physical-device smoke; neither is claimed complete.
 
 #### Task 3: Bot preview and owner approval
 
@@ -88,14 +90,14 @@ Task 1 review accepted: fresh review of the model found no Critical/Important is
 
 **Interface:** the owner may create a request directly; a user may create one only with an explicit `shell_request` grant for the selected device. Both create a `PendingCommand` preview routed to the owner. The user grant never approves execution. Approval consumes the pending object once, creates the Task 2 signed envelope with the approving owner's id, and is the only call path that may publish it.
 
-- [ ] Add a failing test that an owner input and a granted-user input each produce an exact owner preview and call no publish function.
-- [ ] Run `python -m pytest tests/test_bot_ui.py -q` from `TG-BOT-SERVER`; expected: direct publish behavior fails the assertion.
-- [ ] Implement the preview card and `cmd:shell-approve:<request_id>` / `cmd:shell-cancel:<request_id>` callbacks; re-fetch the object from the server-side pending store, never trust target/hash/requester from callback text.
-- [ ] Test that an ungranted user, guest or blocked user cannot create a request; a granted user cannot approve it; only the current owner may approve or cancel; and a user grant is rechecked at approval time.
-- [ ] Test changed target, altered command/hash, expiry, stale owner/requester role, revoked grant, duplicate callback and simultaneous approvals; each invalid path produces zero publish.
-- [ ] After Task 2, call `sign_approved_command(...)` only after atomic `consume_pending(...)`; publish one request to one device and surface signer/config failure without fallback to legacy HMAC-only shell.
-- [ ] Run `python -m pytest tests/test_bot_ui.py tests/test_access_store.py tests/test_command_approval.py tests/test_command_signing.py -q`; expected: exactly one signed publish for an explicit current-owner confirmation.
-- [ ] Commit bot preview, approval and signed transport integration.
+- [x] Add a failing test that an owner input and a granted-user input each produce an exact owner preview and call no publish function.
+- [x] Run `python -m pytest tests/test_bot_ui.py -q` from `TG-BOT-SERVER`; expected: direct publish behavior fails the assertion.
+- [x] Implement the preview card and `cmd:shell-approve:<request_id>` / `cmd:shell-cancel:<request_id>` callbacks; re-fetch the object from the server-side pending store, never trust target/hash/requester from callback text.
+- [x] Test that an ungranted user, guest or blocked user cannot create a request; a granted user cannot approve it; only the current owner may approve or cancel; and a user grant is rechecked at approval time.
+- [x] Test changed target, altered command/hash, expiry, stale owner/requester role, revoked grant, duplicate callback and simultaneous approvals; each invalid path produces zero publish.
+- [x] After Task 2, call `sign_approved_command(...)` only after atomic `consume_pending(...)`; publish one request to one device and surface signer/config failure without fallback to legacy HMAC-only shell.
+- [x] Run `python -m pytest tests/test_bot_ui.py tests/test_access_store.py tests/test_command_approval.py tests/test_command_signing.py -q`; expected: exactly one signed publish for an explicit current-owner confirmation.
+- [x] Commit bot preview, approval and signed transport integration. Accepted locally 2026-10-09 after independent review plus one scoped fix/re-review round; see `.superpowers/sdd/2026-10-08-tarped-plan-command-approval/task-3-report.md`.
 
 #### Task 4: Limits, audit and redaction
 
@@ -103,11 +105,13 @@ Task 1 review accepted: fresh review of the model found no Critical/Important is
 
 **Interface:** default execution timeout 20 seconds unless current stricter cap applies; each stdout/stderr stream is capped at 8 KiB before transport; audit stores request id/hash/status/requester/approver/target/time/exit code, not command text or raw output.
 
-- [ ] Add tests for timeout, oversized output and token/password/private-key redaction.
-- [ ] Run targeted shell approval tests; expected: unbounded output test fails.
-- [ ] Implement process timeout and output truncation; redact before Telegram and audit writes.
-- [ ] Rerun all approval suites; expected: no secret fixtures remain in responses or audit rows.
-- [ ] Commit bounded execution and audit changes.
+- [x] Add tests for timeout, oversized output and token/password/private-key redaction.
+- [x] Run targeted shell approval tests; expected: unbounded output test fails.
+- [x] Implement process timeout and output truncation; redact before Telegram and audit writes.
+- [x] Rerun all approval suites; expected: no secret fixtures remain in responses or audit rows.
+- [x] Commit bounded execution and audit changes.
+
+Task 4 accepted locally 2026-10-09 after three scoped fix rounds; final review clean at `ea97cbe`. Aggregate, X-LEX golden and Windows frozen-bundle verification passed. Live Telegram/MQTT/device acceptance was not performed; WDS source-updater/canonical-helper path is tracked for release/server integration.
 
 ## Итоговая приёмка
 

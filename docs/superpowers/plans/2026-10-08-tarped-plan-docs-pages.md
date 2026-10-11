@@ -30,7 +30,7 @@
 ---
 
 **Дата:** 2026-10-08  
-**Статус:** ждёт одобрения реализации/публикации  
+**Статус:** Tasks 1–3 локально реализованы и проверены; GitHub metadata/Pages publication остаются отдельным gate до canonical URL и одобрения владельца
 **Спецификация:** раздел 13 и документальные критерии раздела 14 [TARPED redesign](../specs/2026-10-08-tarped-product-redesign-design.md)
 
 ## Цель
@@ -47,14 +47,14 @@
 
 **Interface:** `check_readme_pair(english: str, russian: str) -> list[str]` returns missing required sections, broken local links, unmatched fences or language-only status claims. `validate_mermaid.py` extracts every fenced diagram and sends each to the pinned Mermaid CLI parser, returning nonzero with file/block/line diagnostics for invalid syntax.
 
-- [ ] Add tests for a missing translation section, broken relative link, unclosed code fence, missing Mermaid block and malformed Mermaid syntax.
-- [ ] Run `python -m pytest tools/test_readme_parity.py -q` from repo root; expected: fixture cases fail before checker implementation.
-- [ ] Implement required section mapping for purpose, architecture, components, OS support, install/update/rollback, permissions/security, diagnostics, limitations, license and status; use the pinned Mermaid CLI (not a hand-written regex-only check) to parse every fenced diagram.
-- [ ] Compare the full Russian and English content semantically, not just headings; validate relative/HTTPS links, code fences and status claims without asserting unperformed device/live checks.
-- [ ] Cross-check root `CHANGELOG.md` and `SECURITY.md` against the same release/security facts and verify README links to them plus the GitHub release notes; keep the canonical release URL distinct from the repository homepage/Pages URL.
-- [ ] Align both READMEs and correct every Mermaid diagram; do not claim unperformed live/device acceptance.
-- [ ] Rerun; expected: both documents pass parity/format checks.
-- [ ] Commit checker and bilingual README.
+- [x] Add tests for a missing translation section, broken relative link, unclosed code fence, missing Mermaid block and malformed Mermaid syntax.
+- [x] Run `python -m pytest tools/test_readme_parity.py -q` from repo root; fixture coverage is included in the completed README validation suite.
+- [x] Implement required section mapping for purpose, architecture, components, OS support, install/update/rollback, permissions/security, diagnostics, limitations, license and status; use the pinned Mermaid CLI (not a hand-written regex-only check) to parse every fenced diagram.
+- [x] Compare the full Russian and English content semantically, not just headings; validate relative/HTTPS links, code fences and status claims without asserting unperformed device/live checks.
+- [x] Cross-check root `CHANGELOG.md` and `SECURITY.md` against the same release/security facts and verify README links to them plus the GitHub release notes; keep the canonical release URL distinct from the repository homepage/Pages URL.
+- [x] Align both READMEs and correct every Mermaid diagram; do not claim unperformed live/device acceptance.
+- [x] Rerun; both documents pass parity/format checks and Mermaid CLI validation.
+- [x] Commit checker and bilingual README.
 
 #### Task 2: Landing-page source and accessibility checks
 
@@ -62,12 +62,12 @@
 
 **Interface:** Static page works without JavaScript; RU/EN switch uses ordinary links; optional animation obeys `prefers-reduced-motion`.
 
-- [ ] Add checker tests for missing title/lang, broken internal link, reduced-motion rule and keyboard-visible focus.
-- [ ] Run `python -m pytest tools/test_site.py -q`; expected: failures for missing site/checker.
-- [ ] Build responsive semantic HTML/CSS with no remote fonts, analytics, trackers or secrets.
-- [ ] Run `python tools/check_site.py`; expected: exit 0 with no accessibility/link violations.
-- [ ] Inspect local desktop and narrow-viewport render and note actual results.
-- [ ] Commit page and checks.
+- [x] Add checker tests for missing title/lang, broken internal link, reduced-motion rule and keyboard-visible focus.
+- [x] Run `python -m pytest tools/test_site.py -q`; expected: failures for missing site/checker.
+- [x] Build responsive semantic HTML/CSS with no remote fonts, analytics, trackers or secrets.
+- [x] Run `python tools/check_site.py`; expected: exit 0 with no accessibility/link violations.
+- [x] Inspect local desktop and narrow-viewport render and note actual results.
+- [x] Commit page and checks.
 
 #### Task 3: Pages workflow and guarded publication
 
@@ -75,12 +75,12 @@
 
 **Interface:** PR jobs build/check only; deployment is limited to an approved branch/environment and a confirmed canonical URL.
 
-- [ ] Test that pull requests do not deploy and unapproved refs cannot publish.
-- [ ] Run `python -m pytest tools/test_pages_workflow.py -q`; expected: tests fail until guarded workflow exists.
-- [ ] Add least-privilege, pinned-action workflow consistent with existing CI policy.
-- [ ] Add `python -m compileall -q TG-BOT-SERVER XGENT-WDS XGENT-MCS ops tools deploy` to CI, alongside existing bash and Windows PowerShell syntax checks; exclude generated virtual environments and build outputs.
-- [ ] Rerun workflow and site checks; expected: PR validation passes without live publication.
-- [ ] Commit workflow. Do not deploy until separate owner confirmation.
+- [x] Test that pull requests do not deploy and unapproved refs cannot publish.
+- [x] Run `python -m pytest tools/test_pages_workflow.py -q`; expected: tests fail until guarded workflow exists.
+- [x] Add least-privilege, pinned-action workflow consistent with existing CI policy.
+- [x] Add `python -m compileall -q TG-BOT-SERVER XGENT-WDS XGENT-MCS ops tools deploy` to CI, alongside existing bash and Windows PowerShell syntax checks; exclude generated virtual environments and build outputs.
+- [x] Rerun workflow and site checks; expected: PR validation passes without live publication.
+- [x] Commit workflow. Do not deploy until separate owner confirmation.
 
 #### Task 4: GitHub metadata and live page acceptance
 

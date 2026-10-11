@@ -33,11 +33,13 @@
 ---
 
 **Дата:** 2026-10-08  
-**Статус:** подготовлен на базе одобренной спеки; ждёт отдельного одобрения владельца  
+**Статус:** реализация одобрена владельцем; локальные Tasks 0–4 и Docs/Pages Tasks 1–3 выполнены, внешние публикация/устройство/live-приёмка остаются открыты
 **Спецификация:** [TARPED product redesign](../specs/2026-10-08-tarped-product-redesign-design.md)  
-**База аудита:** `origin/main` `984204a8eba1fd42b52c9d344a9e0dbf469eb779`; bot/agent/ops/deploy source paths сверены с этой базой и не расходятся. Пять локальных коммитов поверх upstream — документация. В working tree есть локальная Mermaid-правка двух README и regression test; `TG-BOT-SERVER/audit.log.1` сохранён без изменений.  
+**База аудита:** `origin/main` `984204a8eba1fd42b52c9d344a9e0dbf469eb779`; рабочая ветка `codex/tarped-implementation-2026-10-08` на `8ab96c37bf1c5c35a972f13743d589844e18e56b`, 51 commit ahead / 0 behind. Bot/agent/ops/deploy source paths изначально сверены с этой базой. Текущий working tree содержит статусные правки плана и allowlist pinned Actions; два незатреканных `TG-BOT-SERVER/audit.log.*` сохранены без изменений; `tools/node_modules/` — локальная зависимость Mermaid parser, не включать в коммит.
 **Проверка upstream refs (2026-10-08):** `git ls-remote origin refs/heads/main` подтвердил `984204a8eba1fd42b52c9d344a9e0dbf469eb779`; удалённый tag `v4.2.1` указывает на commit `d7d77a698b763f169327ec99e350ff73f5e34f16`, то есть старше текущего `main`. Поэтому реализационная ветка создаётся от актуального `origin/main`; v4.2.1 остаётся точкой сравнения, а не основанием для отката main.  
 **Инвариант:** не менять X-LEX — ни данные, ни стиль-тексты, ни логику выбора стиля, ни связанные тесты.
+
+**Сверка выполнения (2026-10-11):** владелец одобрил выполнение implementation plan. Bot/RBAC Tasks 1–4, Agent Capabilities Tasks 1–4, Command Approval local Tasks 1–4 и Release/Server Tasks 1–7 реализованы локально и имеют свои тесты. Docs/Pages Tasks 1–3 локально реализованы; README/RU-EN проверки прошли (**23 passed, 2 subtests**), Mermaid CLI валиден для обоих README, сайт прошёл проверки, а Pages workflow/source tests зелёные. Полный `python tools/run_tests.py` завершился успешно: bot **821 passed, 1 skipped**; Windows agent **194 passed**; macOS agent **300 passed, 1 skipped**; operations **28 passed, 1 skipped**; release tools **105 passed, 2 subtests**; archive/server signatures **24 passed, 27 skipped**; Windows deployment preflight/rollback fixtures прошли. `compileall` завершился с кодом 0. X-LEX Git blob совпадает с `origin/main`; целевые golden-тесты — **15 passed**. Открытыми остаются Pages/repository metadata publication (нужны canonical URL и отдельное разрешение), macOS frozen artifact/live acceptance, физический Windows/macOS smoke, Telegram→MQTT→device smoke и VPS health/update/rollback acceptance. Никакая живая публикация, VPS-доставка или физическое устройство этим статусом не подтверждается.
 
 ## Цель и способ разбиения
 
@@ -161,14 +163,14 @@ python -m compileall -q TG-BOT-SERVER XGENT-WDS XGENT-MCS ops tools deploy
 - Самые рискованные изменения (RBAC и shell approval) идут до UI-полировки/публикации.
 - Версия на устройстве и версия бота/VPS не смешиваются.
 - Внешние изменения и реальные устройства вынесены в явный acceptance gate.
-- План ещё не разрешает менять исходники. Нужна отдельная явная команда владельца на выполнение плана и выбор способа реализации.
+- Владелец одобрил локальную реализацию плана; внешние действия по-прежнему требуют отдельного явного подтверждения. Статус реализации и критерии каждого слоя обновляются по фактическим отчётам, а не по старым ожиданиям этого документа.
 
 ## Выполнение по шагам
 
-- [ ] Task 0: зафиксировать текущую ревизию и baseline; сохранить X-LEX hash/golden output; сверить, что target diff не включает user files.
-- [ ] Task 1: выполнить bot/RBAC plan и пройти его тесты; только после review его callback matrix переходить к shell approval.
-- [ ] Task 2: выполнить agent-capabilities plan и обновить общий bot/protocol contract.
-- [ ] Task 3: выполнить command-approval plan поверх принятой RBAC-модели.
-- [ ] Task 4: выполнить release/server plan поверх принятого status/capability contract.
-- [ ] Task 5: выполнить docs/Pages plan; адреса публикации остаются неактивными до подтверждения.
-- [ ] Task 6: выполнить полный `python tools/run_tests.py`, затем отдельную физическую/Telegram/VPS/GitHub приёмку с журналом фактических результатов.
+- [x] Task 0: зафиксировать текущую ревизию и baseline; сохранить X-LEX hash/golden output; сверить, что target diff не включает user files.
+- [x] Task 1: выполнить bot/RBAC plan и пройти его тесты; только после review его callback matrix переходить к shell approval.
+- [x] Task 2: выполнить agent-capabilities plan и обновить общий bot/protocol contract.
+- [x] Task 3: выполнить command-approval plan поверх принятой RBAC-модели; локальная реализация и тесты закрыты, macOS artifact/live acceptance остаются в Task 6.
+- [x] Task 4: выполнить release/server plan поверх принятого status/capability contract; локальные Tasks 1–7 закрыты.
+- [ ] Task 5: локальные docs/Pages Tasks 1–3 завершены и проверены; Task 4 — подтвердить canonical URL и выполнить отдельную GitHub metadata/Pages публикацию только после одобрения владельца.
+- [ ] Task 6: полный `python tools/run_tests.py`, `compileall`, Mermaid/site checks и X-LEX invariant прошли локально; остаются физическая Windows/macOS, Telegram, VPS и GitHub publication acceptance с журналом фактических результатов.
