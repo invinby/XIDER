@@ -33,19 +33,67 @@ class Role:
     ALL = (OWNER, COOWNER, USER, GUEST, BLOCKED)
 
 
-OWNER_ONLY_CALLBACKS = frozenset({"cmd:shell", "menu:target", "cfm:stop_all"})
+OWNER_ONLY_CALLBACKS = frozenset({"menu:target", "cfm:stop_all"})
 OWNER_ONLY_CALLBACK_PREFIXES = (
     "admin:", "devmg:", "server:", "versions:", "ev:", "adm:", "all:",
+    "cmd:shell-approve:", "cmd:shell-cancel:",
 )
 USER_NAVIGATION_CALLBACKS = frozenset({"menu:main", "menu:about", "menu:devices", "back:device"})
+
+INPUT_ACTION_CALLBACKS = frozenset({
+    "cmd:clipboard", "cmd:clipset", "fun:type", "fun:hotkey",
+    "prank:swapmouse", "prank:crazycursor",
+})
 
 # A small set of categories is useful when a role gets only one or two
 # individual actions. Entering a category must never imply permission for the
 # other buttons inside it; the UI filters those buttons separately.
 CATEGORY_REQUIRED_GRANTS = {
-    "cat:media": frozenset({"cmd:screenshot"}),
-    "cat:system": frozenset({"cmd:status", "cmd:sysinfo", "cmd:battery"}),
-    "cat:power": frozenset({"cmd:lock"}),
+    "cat:media": frozenset({
+        "cmd:screenshot", "cmd:webcam", "mic:opts", "cmd:sound", "vol:opts", "cmd:volume",
+    }),
+    "cat:screen": frozenset({
+        "cmd:screenshot", "cmd:webcam", "mic:opts", "cmd:sound", "vol:opts", "cmd:volume",
+        "cmd:geo_location", "fun:screenoff", "fun:screensaver", "menu:wallpaper",
+        "cmd:brightness", "cmd:nightlight",
+        "cmd:rotate", "cmd:wallpaper_random_meme", "cmd:wallpaper_photo_guide", "fun:wallpaper",
+        "cmd:prank_restore_wallpaper", "rotate:0", "rotate:90", "rotate:180", "rotate:270",
+    }),
+    "cat:input": INPUT_ACTION_CALLBACKS,
+    "cat:system": frozenset({
+        "cmd:status", "cmd:sysinfo", "cmd:battery", "cmd:sys_uptime", "cmd:disks", "cmd:smart",
+        "cmd:sys_clean_temp", "cmd:apps", "cmd:capabilities",
+    }),
+    "cat:network": frozenset({
+        "fun:extip", "cmd:net_ping", "cmd:network", "cmd:wifi", "cmd:usb", "cmd:bluetooth",
+        "cmd:netstat", "cmd:apps", "cmd:url",
+    }),
+    "menu:wallpaper": frozenset({
+        "cmd:wallpaper_random_meme", "cmd:wallpaper_photo_guide", "fun:wallpaper",
+        "cmd:prank_restore_wallpaper",
+    }),
+    "cat:files": frozenset({"files:list", "files:find", "files:get", "files:put", "files:del", "files:open", "cmd:disks"}),
+    "cat:terminal": frozenset({
+        "shell_request",
+        "proc:0", "cmd:prockillname", "cfm:shell", "cmd:open_app", "cmd:startup", "cmd:services",
+        "cmd:cmdhistory", "hist:0", "rep:0",
+    }) | INPUT_ACTION_CALLBACKS,
+    "cat:power": frozenset({
+        "cmd:lock", "power:sleep", "power:reboot", "power:shutdown", "cmd:wol", "cmd:autorun_status",
+        "cmd:autorun_enable", "cmd:autorun_disable", "cmd:standby_sleep", "cmd:wake", "cmd:guardian_menu",
+        "cfm:stop", "guardianstop:ok", "stop:ok", "sleep:ok",
+    }),
+    "cat:device": frozenset({
+        "fav:menu", "hist:0", "cmd:autorun_status", "cmd:autorun_enable", "cmd:autorun_disable",
+        "cmd:capabilities",
+    }),
+}
+
+CATEGORY_REQUIRED_GRANT_PREFIXES = {
+    # Dynamic prank names are an existing wire namespace. Pagination is read-only
+    # navigation within that exact grant family, never an additional privilege.
+    "cat:pranks": ("prank:", "cmd:prank_"),
+    "prankpage:": ("prank:", "cmd:prank_"),
 }
 
 # `full_device` expands only into callbacks that operate on the currently
@@ -118,24 +166,47 @@ def _identity(user: Any) -> dict[str, str]:
     }
 
 
-def _redact(text: str) -> str:
-    """Keep useful audit context without copying credentials into the log."""
+def _redact_credentials(text: str) -> str:
+    """Redact before truncation, including a key cut off by the stream cap."""
     text = re.sub(
-        r"-----BEGIN (?:OPENSSH |RSA |EC |DSA )?PRIVATE KEY-----.*?"
-        r"-----END (?:OPENSSH |RSA |EC |DSA )?PRIVATE KEY-----",
+        r"-----BEGIN (?:OPENSSH |RSA |EC |DSA |ENCRYPTED )?PRIVATE KEY-----.*?"
+        r"(?:-----END (?:OPENSSH |RSA |EC |DSA |ENCRYPTED )?PRIVATE KEY-----|\Z)",
         "[PRIVATE KEY REDACTED]",
         text,
         flags=re.DOTALL,
     )
     text = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [REDACTED]", text)
-    text = re.sub(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b", "[TOKEN]", text)
+    text = re.sub(r"\b\d{6,}:[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])", "[TOKEN]", text)
+    # Raw redaction-marker text is not trusted; mask an unquoted line before
+    # quoted-value replacement introduces any markers of our own.
     text = re.sub(
         r"(?i)\b((?:bot[_-]?)?token|password|passwd|secret|shared[_-]?key|"
         r"mqtt[_-]?password|api[_-]?key|ssh[_-]?key|private[_-]?key|authorization)"
-        r"\s*[:=]\s*[^\s,;]+",
+        r'''[ \t]*[:=][ \t]*[^"'\s][^\r\n]*''',
         r"\1=[REDACTED]",
         text,
     )
+    return re.sub(
+        r'''(?i)["']?\b((?:bot[_-]?)?token|password|passwd|secret|shared[_-]?key|'''
+        r'''mqtt[_-]?password|api[_-]?key|ssh[_-]?key|private[_-]?key|authorization)["']?'''
+        r'''\s*[:=]\s*(["'])(?:\\(?:.|\Z)|(?!\2)[^\\])*(?:\2|\Z)''',
+        r"\1=[REDACTED]", text, flags=re.DOTALL,
+    )
+
+
+def redact_shell_output(text: str) -> str:
+    """Preserve useful multiline output; credential patterns never reach Telegram."""
+    return _redact_credentials(str(text))
+
+
+def _redact(text: str) -> str:
+    """Keep useful audit context without copying credentials into the log."""
+    text = _redact_credentials(text)
+    # An unquoted Windows path has no reliable delimiter: spaces, commas and
+    # semicolons can all be part of directory names. Mask its whole remainder.
+    text = re.sub(r"(?i)\b[A-Z]:[\\/][^\r\n]*|(?<!\w)/(?:[^\s,;]+)", "[PATH REDACTED]", text)
+    text = re.sub(r"\b[\w-]+\.[A-Za-z][A-Za-z0-9]{0,9}\b", "[FILE REDACTED]", text)
+    text = re.sub(r"-?\b\d{1,3}\.\d+\s*,\s*-?\d{1,3}\.\d+\b", "[LOCATION REDACTED]", text)
     text = " ".join(text.split())
     return text[:500]
 
@@ -147,6 +218,15 @@ def redact_text(text: str) -> str:
 
 def append_audit(kind: str, *, actor_id: int | None = None, target_id: int | None = None,
                  detail: str = "") -> None:
+    # Only known metadata events carry detail. New/raw payload kinds fail closed.
+    detail_kinds = {
+        "telegram_start", "telegram_callback", "role_set", "callback_permission",
+        "device_permission", "device_permissions_revoked", "device_approval_policy",
+        "server_status", "server_logs", "server_metrics", "server_specs", "server_chart",
+        "server_terminal", "server_operation", "bot_text_updated", "ui_style_set",
+    }
+    if kind not in detail_kinds:
+        detail = ""
     row = {
         "at": int(time.time()),
         "kind": str(kind)[:80],
@@ -154,6 +234,30 @@ def append_audit(kind: str, *, actor_id: int | None = None, target_id: int | Non
         "target_id": int(target_id) if target_id is not None else None,
         "detail": _redact(str(detail)),
     }
+    _write_audit_row(row)
+
+
+def append_command_audit(*, request_id: str, command_hash: str, status: str,
+                         requester_id: int, approver_id: int, device_id: str,
+                         exit_code: int | None) -> None:
+    """Typed execution metadata. This API cannot accept command text/output."""
+    statuses = {"attempting", "sent", "completed", "failed", "timeout", "error", "rejected",
+                "signing_unavailable", "publish_failed", "publish_unknown", "result_timeout"}
+    if (not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request_id)
+            or not isinstance(command_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", command_hash)
+            or status not in statuses
+            or type(requester_id) is not int or type(approver_id) is not int
+            or (exit_code is not None and type(exit_code) is not int)):
+        raise ValueError("Invalid command audit metadata")
+    _write_audit_row({
+        "kind": "command_execution", "at": int(time.time()),
+        "request_id": request_id, "command_hash": command_hash, "status": status,
+        "requester_id": requester_id, "approver_id": approver_id,
+        "device_id": _redact_credentials(str(device_id))[:256], "exit_code": exit_code,
+    })
+
+
+def _write_audit_row(row: dict) -> None:
     with _LOCK:
         AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
         with AUDIT_FILE.open("a", encoding="utf-8") as handle:
@@ -189,8 +293,9 @@ def register_start(user: Any) -> tuple[dict[str, Any], bool]:
         data = _load()
         users = data.setdefault("users", {})
         key = str(user_id)
-        first_start = key not in users
-        record = _safe_user(users.get(key)) if not first_start else _empty_user(user_id)
+        record = _safe_user(users.get(key)) if key in users else _empty_user(user_id)
+        first_start = "started_at" not in record
+        record["started_at"] = int(time.time())
         record["id"] = user_id
         record["last_seen"] = int(time.time())
         record.update(_identity(user))
@@ -240,6 +345,8 @@ def get_role(user_id: int, owner_id: int) -> str:
     if record.get("blocked") or record.get("role") == Role.BLOCKED:
         return Role.BLOCKED
     role = str(record.get("role") or Role.GUEST)
+    if role == Role.OWNER:
+        return Role.GUEST
     if role == Role.COOWNER:
         return Role.USER
     return role if role in Role.ALL else Role.GUEST
@@ -258,26 +365,37 @@ def _update(user_id: int, mutator) -> dict[str, Any]:
 
 
 def set_role(actor_id: int, target_id: int, role: str, owner_id: int) -> bool:
-    if int(target_id) == int(owner_id) or role not in (Role.USER, Role.GUEST):
+    if (int(actor_id) != int(owner_id) or int(target_id) == int(owner_id)
+            or not get_user(target_id) or role not in (Role.USER, Role.GUEST)):
         return False
-    _update(target_id, lambda record: record.update(role=role, blocked=False))
+    def change(record):
+        record.update(role=role, blocked=False)
+        record.pop("role_before_block", None)
+    _update(target_id, change)
     append_audit("role_set", actor_id=actor_id, target_id=target_id, detail=role)
     return True
 
 
 def set_blocked(actor_id: int, target_id: int, blocked: bool, owner_id: int) -> bool:
-    if int(target_id) == int(owner_id):
+    if int(actor_id) != int(owner_id) or int(target_id) == int(owner_id) or not get_user(target_id):
         return False
     def change(record: dict[str, Any]) -> None:
+        if blocked and not record.get("blocked") and record.get("role") != Role.BLOCKED:
+            prior = record.get("role")
+            record["role_before_block"] = Role.USER if prior in (Role.USER, Role.COOWNER) else Role.GUEST
         record["blocked"] = bool(blocked)
-        record["role"] = Role.BLOCKED if blocked else Role.GUEST
+        if blocked:
+            record["role"] = Role.BLOCKED
+        else:
+            prior = record.pop("role_before_block", Role.GUEST)
+            record["role"] = prior if prior in (Role.USER, Role.GUEST) else Role.GUEST
     _update(target_id, change)
     append_audit("user_blocked" if blocked else "user_unblocked", actor_id=actor_id, target_id=target_id)
     return True
 
 
 def toggle_callback(actor_id: int, target_id: int, callback: str, owner_id: int) -> bool | None:
-    if int(target_id) == int(owner_id):
+    if int(actor_id) != int(owner_id) or int(target_id) == int(owner_id) or not get_user(target_id):
         return None
     current = get_user(target_id) or _empty_user(target_id)
     enabled = callback not in set(current["permissions"]["callbacks"])
@@ -295,7 +413,7 @@ def toggle_callback(actor_id: int, target_id: int, callback: str, owner_id: int)
 
 
 def toggle_device(actor_id: int, target_id: int, device_id: str, owner_id: int) -> bool | None:
-    if int(target_id) == int(owner_id):
+    if int(actor_id) != int(owner_id) or int(target_id) == int(owner_id) or not get_user(target_id):
         return None
     current = get_user(target_id) or _empty_user(target_id)
     enabled = device_id not in set(current["permissions"]["devices"])
@@ -358,6 +476,9 @@ def can_use_callback(user_id: int, callback: str | None, owner_id: int,
     perms = record.get("permissions") or {}
     callbacks = set(perms.get("callbacks") or [])
     device_ids = set(perms.get("devices") or [])
+    if data == "cmd:shell":
+        return bool(selected_device and selected_device != "all"
+                    and selected_device in device_ids and "shell_request" in callbacks)
     if data in USER_NAVIGATION_CALLBACKS:
         return True
     if data.startswith("dev:"):
@@ -376,5 +497,23 @@ def can_use_callback(user_id: int, callback: str | None, owner_id: int,
         return False
     if "full_device" in callbacks or data in callbacks:
         return True
+    if data.startswith("kill:"):
+        pid = data.split(":", 1)[1]
+        if pid.isdigit() and f"killq:{pid}" in callbacks:
+            return True
+    if data.startswith("proc:"):
+        proc_action = data.split(":", 1)[1]
+        if (proc_action == "refresh" or proc_action.isdigit()) and "proc:0" in callbacks:
+            return True
     required_grants = CATEGORY_REQUIRED_GRANTS.get(data)
-    return bool(required_grants and callbacks.intersection(required_grants))
+    if required_grants and callbacks.intersection(required_grants):
+        return True
+    for category_or_prefix, required_prefixes in CATEGORY_REQUIRED_GRANT_PREFIXES.items():
+        if data == category_or_prefix or data.startswith(category_or_prefix):
+            if any(
+                grant.startswith(prefix)
+                for grant in callbacks
+                for prefix in required_prefixes
+            ):
+                return True
+    return False

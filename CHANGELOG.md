@@ -1,5 +1,35 @@
 # XIDER release history
 
+## X4.3.0-TARPED+20261012 — X-PANE: Mac-разрешения по команде владельца
+
+### English
+
+- Added X-PANE: the owner can request a capability check, then open the matching
+  macOS Privacy & Security pane on the selected Mac from Telegram.
+- The agent accepts only six fixed permission identifiers and launches a fixed
+  System Settings destination; it cannot grant a permission or open an arbitrary
+  URL. The owner grants access locally, then refreshes the report.
+- The settings buttons are shown only for unresolved or unverified permissions
+  when the selected Mac reports support for the command. Old agents remain
+  compatible and receive no unsupported command.
+- Aligned bot and Windows/macOS source versions at 4.3.0.
+
+### Русский
+
+- Добавлен X-PANE: владелец может проверить возможности и открыть нужный раздел
+  «Конфиденциальность и безопасность» macOS на выбранном Mac прямо из Telegram.
+- Агент принимает только шесть фиксированных ID разрешений и открывает только
+  заранее заданный раздел настроек. Он не выдаёт права и не открывает произвольные
+  ссылки: доступ вручную подтверждает владелец на Mac, после чего проверку можно
+  обновить.
+- Кнопки появляются только для невыданных или непроверенных разрешений и только
+  если выбранный Mac объявил поддержку команды. Старые агенты не получают
+  неподдерживаемую команду.
+- Версии исходников бота, Windows- и macOS-агентов синхронизированы на 4.3.0.
+
+Офлайн-тесты не заменяют проверку на физическом Mac и публикацию подписанного
+релиза.
+
 ## X4.2.1-TARPED+20261007 — X-LATCH: безопасное переключение агента
 
 ### English
@@ -16,6 +46,8 @@
   Activation and rollback use same-volume directory renames instead of
   recursive folder moves; the old checkout remains as a backup.
 - Aligned bot, Windows, and macOS source/build metadata at 4.2.1.
+- Documentation now distinguishes source version and release notes from
+  publication, live services, and physical-device acceptance.
 
 ### Русский
 
@@ -31,6 +63,8 @@
   Переключение и откат используют переименование папок на том же диске вместо
   рекурсивного переноса; прежняя версия сохраняется резервной копией.
 - Версии исходников бота, Windows- и macOS-агентов согласованы на 4.2.1.
+- Документация разделяет версию исходников и страницу релизов с публикацией,
+  действующими сервисами и приёмкой на физических устройствах.
 
 Офлайн-проверки не заменяют проверку на физическом устройстве или Telegram.
 

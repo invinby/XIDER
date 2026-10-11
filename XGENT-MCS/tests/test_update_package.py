@@ -2,7 +2,7 @@ import hashlib
 import json
 from pathlib import Path
 import sys
-from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo, BadZipFile
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -128,6 +128,19 @@ def test_source_update_uses_stable_release_and_checks_manifest_hash(tmp_path, mo
     assert all(timeout == package.DOWNLOAD_TIMEOUT_SECONDS for _, timeout in observed)
 
 
+def test_changed_signed_manifest_at_same_tag_rejected_before_zip(tmp_path, monkeypatch):
+    original = _release_routes()
+    manifest_url = package._release_asset_url('v4.0.1', package.MANIFEST_ASSET)
+    expected = hashlib.sha256(signature.manifest_signing_bytes(json.loads(original[manifest_url]))).hexdigest()
+    changed = _release_routes(archive=b'changed source zip')
+    observed = _use_routes(monkeypatch, changed)
+    with pytest.raises(ValueError, match='digest'):
+        package.download_verified_source_archive(tmp_path / 'manifest.json', tmp_path / 'source.zip',
+                                                 expected_manifest_digest=expected)
+    assert not (tmp_path / 'source.zip').exists()
+    assert all(not url.endswith(package.SOURCE_ASSET) for url, _ in observed)
+
+
 def test_source_update_accepts_additional_signed_bootstrap_assets(tmp_path, monkeypatch):
     tag = "v4.0.1"
     routes = _release_routes(tag)
@@ -166,8 +179,8 @@ def test_source_update_does_not_delete_a_preexisting_archive_destination(tmp_pat
     assert archive_path.read_bytes() == b"owner data"
 
 
-def test_source_update_can_pin_a_semver_release_tag(tmp_path, monkeypatch):
-    tag = "v4.2.0"
+@pytest.mark.parametrize("tag", ["v4.2.0", "v3.9.9"])
+def test_source_update_can_pin_a_semver_release_tag(tmp_path, monkeypatch, tag):
     routes = _release_routes(tag)
     api_doc = json.loads(routes.pop(f"{package.RELEASE_API}/latest"))
     routes[f"{package.RELEASE_API}/tags/{tag}"] = json.dumps(api_doc).encode()
@@ -393,11 +406,16 @@ def test_extracts_only_allowlisted_windows_component_files(tmp_path):
 def test_windows_update_stages_shared_verifier_and_updater_from_mcs(tmp_path):
     archive = tmp_path / "windows-shared-release.zip"
     stage = tmp_path / "windows-shared-stage"
-    expected = ("xgent_wds.py", "release_signature.py", "update_package.py")
+    expected = ("xgent_wds.py", "release_signature.py", "update_package.py",
+                "command_module_loader.py", "command_signing.py", "command_replay.py", "shell_execution.py")
     _zip(archive, [
         ("XIDER-source/XGENT-WDS/xgent_wds.py", b"print('windows')", None),
         ("XIDER-source/XGENT-MCS/release_signature.py", b"VALUE = 'verifier'", None),
         ("XIDER-source/XGENT-MCS/update_package.py", b"VALUE = 'updater'", None),
+        ("XIDER-source/XGENT-MCS/command_module_loader.py", b"# loader", None),
+        ("XIDER-source/XGENT-MCS/command_signing.py", b"# signing", None),
+        ("XIDER-source/XGENT-MCS/command_replay.py", b"# replay", None),
+        ("XIDER-source/XGENT-MCS/shell_execution.py", b"# shell_execution", None),
     ])
 
     result = package.extract_agent_files(
@@ -410,6 +428,8 @@ def test_windows_update_stages_shared_verifier_and_updater_from_mcs(tmp_path):
     assert (result / "xgent_wds.py").read_bytes() == b"print('windows')"
     assert (result / "release_signature.py").read_bytes() == b"VALUE = 'verifier'"
     assert (result / "update_package.py").read_bytes() == b"VALUE = 'updater'"
+    for name in expected[3:]:
+        assert (result / name).read_bytes() == ("# " + name.removeprefix("command_").removesuffix(".py").replace("module_loader", "loader")).encode()
 
 
 def test_windows_update_rejects_duplicate_shared_helpers(tmp_path):
@@ -498,6 +518,88 @@ def test_extract_enforces_uncompressed_size_and_empty_stage(tmp_path):
     with pytest.raises(ValueError, match="пустым"):
         package.extract_agent_files(archive, existing, ("xgent_mcs.py", "config.py"))
     assert (existing / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.parametrize("outcome", ["healthy", "rollback", "rollback_failure", "commit_interruption"])
+def test_transaction_receipt_preserves_operation_and_user_configuration(tmp_path, monkeypatch, outcome):
+    source, install = tmp_path / "stage", tmp_path / "install"
+    source.mkdir()
+    install.mkdir()
+    (source / "xgent_mcs.py").write_text("new", encoding="utf-8")
+    (install / "xgent_mcs.py").write_text("old", encoding="utf-8")
+    (install / ".env").write_text("private fixture", encoding="utf-8")
+    (install / "preferences.json").write_text("user fixture", encoding="utf-8")
+    state = tmp_path / package.UPDATE_STATE_NAME
+    package.install_agent_files(source, install, tmp_path / package.UPDATE_BACKUP_DIR / "previous",
+                                ("xgent_mcs.py",), transaction_path=state,
+                                operation_id="op-fixture", release_tag="v4.0.1")
+    assert package.read_agent_update_result(state)["state"] == "health_check"
+    assert package.read_agent_update_result(state)["operation_id"] == "op-fixture"
+    package.begin_agent_start(state, install)
+    if outcome == "healthy":
+        package.mark_agent_update_healthy(state, install)
+        expected = "succeeded"
+    elif outcome == "commit_interruption":
+        original_unlink = Path.unlink
+        def fail_journal_unlink(path, *args, **kwargs):
+            if path == state:
+                raise OSError("journal removal denied")
+            return original_unlink(path, *args, **kwargs)
+        monkeypatch.setattr(Path, "unlink", fail_journal_unlink)
+        with pytest.raises(OSError, match="journal removal denied"):
+            package.mark_agent_update_healthy(state, install)
+        expected = "health_check"
+        assert state.exists()
+    elif outcome == "rollback":
+        package.rollback_unhealthy_agent(state, install)
+        expected = "rolled_back"
+        assert (install / "xgent_mcs.py").read_text(encoding="utf-8") == "old"
+    else:
+        monkeypatch.setattr(package, "_atomic_copy", lambda *_: (_ for _ in ()).throw(OSError("restore denied")))
+        with pytest.raises(RuntimeError, match="restore denied"):
+            package.rollback_unhealthy_agent(state, install)
+        expected = "failed"
+        assert state.exists()
+    result = package.read_agent_update_result(state)
+    assert result["state"] == expected
+    assert result["operation_id"] == "op-fixture"
+    assert result["release_tag"] == "v4.0.1"
+    assert (install / ".env").read_text(encoding="utf-8") == "private fixture"
+    assert (install / "preferences.json").read_text(encoding="utf-8") == "user fixture"
+    assert not list(install.glob("*.tmp"))
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_failed_backup_removes_partial_backup_without_touching_installed_config(tmp_path, monkeypatch):
+    source, install = tmp_path / "stage", tmp_path / "install"
+    source.mkdir()
+    install.mkdir()
+    for root in (source, install):
+        for name in ("xgent_mcs.py", "config.py"):
+            (root / name).write_text(root.name, encoding="utf-8")
+    (install / ".env").write_text("private", encoding="utf-8")
+    original = package._atomic_copy
+    def fail_second_backup(src, dst):
+        if Path(dst).name == "config.py":
+            raise OSError("backup disk error")
+        original(src, dst)
+    monkeypatch.setattr(package, "_atomic_copy", fail_second_backup)
+    backup = tmp_path / package.UPDATE_BACKUP_DIR / "partial"
+    with pytest.raises(OSError, match="backup disk error"):
+        package.install_agent_files(source, install, backup, ("xgent_mcs.py", "config.py"))
+    assert not backup.exists()
+    assert not (tmp_path / package.UPDATE_STATE_NAME).exists()
+    assert (install / "xgent_mcs.py").read_text(encoding="utf-8") == "install"
+    assert (install / ".env").read_text(encoding="utf-8") == "private"
+
+
+def test_corrupt_signed_archive_cannot_create_stage(tmp_path):
+    archive = tmp_path / "source.zip"
+    archive.write_bytes(b"not a zip")
+    stage = tmp_path / "stage"
+    with pytest.raises(BadZipFile):
+        package.extract_agent_files(archive, stage, ("xgent_mcs.py",))
+    assert not stage.exists() or not list(stage.iterdir())
 
 
 def test_install_agent_files_backs_up_existing_files_and_adds_new_ones(tmp_path, monkeypatch):

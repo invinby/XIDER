@@ -43,6 +43,10 @@ printf 'MQTT_TLS=%s\n' "${XIDER_TEST_MQTT_TLS:-true}"
 if [[ "${XIDER_TEST_EMPTY_MQTT_USERNAME:-0}" == 1 ]]; then printf 'MQTT_USERNAME=\n'; else printf 'MQTT_USERNAME=test-user\n'; fi
 if [[ "${XIDER_TEST_EMPTY_MQTT_PASSWORD:-0}" == 1 ]]; then printf 'MQTT_PASSWORD=\n'; else printf 'MQTT_PASSWORD=test-password-not-real\n'; fi
 printf 'ENCRYPT_PAYLOAD=%s\n' "${XIDER_TEST_ENCRYPT_PAYLOAD:-true}"
+if [[ "${XIDER_TEST_NO_PUBLIC_KEYSET:-0}" != 1 ]]; then
+  printf 'XIDER_COMMAND_VERIFY_KEYSET_B64=eyIzMDk3ZTJkZWUyY2I0YTM0IjoiSVZMNDBadDVIU1JGTWtMaFh5NnJiTGZQLW50cVh0TUFsNVlPQnBpQjJ4SSJ9\n'
+fi
+printf 'SERVER_PRIVATE_SENTINEL=must-not-transfer\n'
 if [[ "${XIDER_TEST_DUPLICATE_MQTT_TLS:-0}" == 1 ]]; then printf 'MQTT_TLS=true\nMQTT_TLS=false\n'; fi
 if [[ "${XIDER_TEST_BLANK_PREFIX:-0}" == 1 ]]; then
   printf 'MQTT_PREFIX=\n'
@@ -135,6 +139,7 @@ OLD_AGENT
   printf '#!/usr/bin/env bash\nexit 0\n' > "$install_root/git-ver/XGENT-MCS/start_guardian.sh"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$install_root/git-ver/XGENT-MCS/stop_agent.sh"
   printf 'SHARED_KEY=old-local-secret\nMQTT_BROKER=broker.example.invalid\nMQTT_PORT=8883\nMQTT_PREFIX=xgent/v1\nMQTT_TLS=true\nMQTT_USERNAME=test-user\nMQTT_PASSWORD=test-password-not-real\nENCRYPT_PAYLOAD=true\nXIDER_UPDATE_BRANCH=main\n' > "$install_root/git-ver/XGENT-MCS/.env"
+  printf 'DEVICE_ID=local-device\nUNRELATED=preserve-setting\n' >> "$install_root/git-ver/XGENT-MCS/.env"
   chmod +x "$install_root/git-ver/XGENT-MCS/start_agent.sh" \
     "$install_root/git-ver/XGENT-MCS/start_guardian.sh" \
     "$install_root/git-ver/XGENT-MCS/stop_agent.sh"
@@ -247,6 +252,14 @@ run_bootstrap "$SUCCESS_ROOT" 0 > "$FIXTURE/success.log" 2>&1
 grep -qx 'SHARED_KEY=old-local-secret' "$SUCCESS_ROOT/git-ver/XGENT-MCS/.env" || {
   echo 'The current macOS configuration was not carried forward.' >&2; exit 1;
 }
+grep -qx 'XIDER_COMMAND_VERIFY_KEYSET_B64=eyIzMDk3ZTJkZWUyY2I0YTM0IjoiSVZMNDBadDVIU1JGTWtMaFh5NnJiTGZQLW50cVh0TUFsNVlPQnBpQjJ4SSJ9' "$SUCCESS_ROOT/git-ver/XGENT-MCS/.env" || {
+  echo 'Existing macOS install did not refresh only its public keyset.' >&2; exit 1;
+}
+grep -qx 'DEVICE_ID=local-device' "$SUCCESS_ROOT/git-ver/XGENT-MCS/.env" &&
+grep -qx 'UNRELATED=preserve-setting' "$SUCCESS_ROOT/git-ver/XGENT-MCS/.env" &&
+grep -qx 'MQTT_PASSWORD=test-password-not-real' "$SUCCESS_ROOT/git-ver/XGENT-MCS/.env" || {
+  echo 'Public keyset refresh changed existing device secrets/settings.' >&2; exit 1;
+}
 if grep -q '^XIDER_UPDATE_BRANCH=' "$SUCCESS_ROOT/git-ver/XGENT-MCS/.env"; then
   echo 'The obsolete mutable update-branch setting was recorded in the active configuration.' >&2; exit 1;
 fi
@@ -314,6 +327,19 @@ mkdir -p "$FIXTURE/home/.ssh"
 printf 'not-a-real-private-key\n' > "$FIXTURE/home/.ssh/xider"
 XIDER_TEST_SSH_KEY="$FIXTURE/home/.ssh/xider" run_bootstrap "$REMOTE_ROOT" 0 "$FIXTURE/no-local-env" > "$FIXTURE/remote-config.log" 2>&1
 remote_env="$REMOTE_ROOT/git-ver/XGENT-MCS/.env"
+grep -qx 'XIDER_COMMAND_VERIFY_KEYSET_B64=eyIzMDk3ZTJkZWUyY2I0YTM0IjoiSVZMNDBadDVIU1JGTWtMaFh5NnJiTGZQLW50cVh0TUFsNVlPQnBpQjJ4SSJ9' "$remote_env" || {
+  echo 'Public command keyset did not reach the macOS agent.' >&2; exit 1;
+}
+if grep -q 'SERVER_PRIVATE_SENTINEL\|PRIVATE KEY' "$remote_env" ||
+   grep -q 'command-signing-private' "$FIXTURE/ssh-args.log"; then
+  echo 'Server private material was requested or transferred.' >&2; exit 1;
+fi
+NO_KEY_ROOT="$FIXTURE/no-public-keyset-install"
+XIDER_TEST_NO_PUBLIC_KEYSET=1 run_bootstrap "$NO_KEY_ROOT" 0 "$FIXTURE/no-local-env" > "$FIXTURE/no-public.log" 2>&1
+[[ -f "$NO_KEY_ROOT/git-ver/XGENT-MCS/new-version.marker" ]] &&
+! grep -q '^XIDER_COMMAND_VERIFY_KEYSET_B64=' "$NO_KEY_ROOT/git-ver/XGENT-MCS/.env" || {
+  echo 'Missing public keyset broke ordinary install or enabled shell.' >&2; exit 1;
+}
 grep -qx 'MQTT_PREFIX=xgent/v1' "$remote_env" || {
   echo 'Missing server prefix was not normalized to the shared default.' >&2
   cat "$FIXTURE/remote-config.log" >&2

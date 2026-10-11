@@ -47,6 +47,48 @@ def test_guardian_fails_closed_when_worker_or_env_is_missing(
     assert list(tmp_path.iterdir()) == []
 
 
+def test_bundle_worker_identity_is_persisted_with_real_guardian_state(guardian_module, monkeypatch, tmp_path):
+    module = guardian_module
+    monkeypatch.setattr(module, "SCRIPT_DIR", tmp_path)
+    executable = tmp_path / "XIDER.app/Contents/MacOS/XGENT-MCS"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"fixture")
+    guardian = object.__new__(module.Guardian)
+    guardian.state = {"desired_running": True}
+    assert guardian._worker_command() == [str(executable)]
+    saved = json.loads(module.STATE_FILE.read_text(encoding="utf-8"))
+    assert saved["worker_runtime"] == "bundle"
+
+
+def test_adopted_running_bundle_removal_forbids_source_recovery(guardian_module, monkeypatch, tmp_path):
+    import subprocess
+    module = guardian_module
+    monkeypatch.setattr(module, "SCRIPT_DIR", tmp_path)
+    executable = tmp_path / "XIDER.app/Contents/MacOS/XGENT-MCS"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"fixture")
+    guardian = object.__new__(module.Guardian)
+    guardian.state = {"desired_running": True}
+    pid = module.os.getpid() + 1000
+    live = [True]
+    def discover(args, **kwargs):
+        assert args == ["pgrep", "-f", str(executable)]
+        return subprocess.CompletedProcess(args, 0 if live[0] else 1, str(pid) if live[0] else "", "")
+    monkeypatch.setattr(module.subprocess, "run", discover)
+    assert guardian.start_agent() == pid
+    assert guardian.state.get("worker_runtime") == "bundle"
+    saved = json.loads(module.STATE_FILE.read_text(encoding="utf-8"))
+    assert saved["worker_runtime"] == "bundle"
+    executable.unlink()
+    live[0] = False
+    def forbidden(*args, **kwargs):
+        pytest.fail("Removed adopted bundle must not launch or recover source worker")
+    monkeypatch.setattr(guardian, "_restore_missing_agent_files", forbidden)
+    monkeypatch.setattr(module.subprocess, "Popen", forbidden)
+    with pytest.raises(RuntimeError, match="Owner removed XIDER.app"):
+        guardian.start_agent()
+
+
 def test_guardian_uses_inherited_config_without_recreating_missing_env(
     guardian_module, monkeypatch, tmp_path
 ):
@@ -416,6 +458,8 @@ def signed_recovery(guardian_module, monkeypatch, tmp_path):
     })
     archive = tmp_path / "source.zip"
     payloads = {name: f"# signed recovery source: {name}\n".encode() for name in recovery.RECOVERY_FILES}
+    for name in ("command_module_loader.py", "command_signing.py", "command_replay.py", "shell_execution.py"):
+        assert name in payloads
     with zipfile.ZipFile(archive, "w") as output:
         for name, payload in payloads.items():
             output.writestr(f"XIDER-fixture/XGENT-MCS/{name}", payload)
@@ -449,6 +493,20 @@ def test_signed_package_recovers_missing_worker_without_overwriting_present_file
     assert {name: (install / name).read_bytes() for name in payloads} == payloads
     assert not (install / ".env").exists()
     assert json.loads((recovery_root / "current.json").read_text())["slot"] == slot
+
+
+def test_signed_recovery_restores_location_adapter_absent_in_old_install(signed_recovery, tmp_path):
+    recovery, manifest, archive, recovery_root, payloads = signed_recovery
+    assert "location_adapter.py" in payloads
+    recovery.stage_recovery_package(manifest, archive, recovery_root)
+    install = tmp_path / "old-agent"
+    install.mkdir()
+    for name, payload in payloads.items():
+        if name != "location_adapter.py":
+            (install / name).write_bytes(payload)
+    restored = recovery.restore_missing_agent_files(install, recovery_root)
+    assert restored == ["location_adapter.py"]
+    assert (install / "location_adapter.py").read_bytes() == payloads["location_adapter.py"]
 
 
 @pytest.mark.parametrize("tamper", ["archive", "manifest", "unknown-key"])

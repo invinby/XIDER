@@ -16,6 +16,7 @@ import paho.mqtt.client as mqtt
 from config import ENCRYPT_PAYLOAD, MQTT_BROKER, MQTT_PASSWORD, MQTT_PORT, MQTT_PREFIX, MQTT_TLS, MQTT_USERNAME
 from crypto import sign_message
 from xgencrypto import encrypt_payload
+from command_signing import verify_approved_command
 
 log = logging.getLogger("xgent.transport")
 
@@ -47,6 +48,7 @@ class MQTTTransport:
             # Медиа и мониторинг
             # Статусы и LWT должны доставляться надёжно.
             client.subscribe(f"{MQTT_PREFIX}/+/status", qos=1)
+            client.subscribe(f"{MQTT_PREFIX}/+/update_progress", qos=1)
             client.subscribe(f"{MQTT_PREFIX}/+/screenshot", qos=0)
             client.subscribe(f"{MQTT_PREFIX}/+/webcam", qos=0)
             client.subscribe(f"{MQTT_PREFIX}/+/sysinfo", qos=0)
@@ -189,26 +191,44 @@ class MQTTTransport:
         self._client.loop_stop()
         self._client.disconnect()
 
-    def publish_command(self, device_id: str, cmd_type: str, **kwargs: Any) -> bool:
+    def publish_command(self, device_id: str, cmd_type: str, **kwargs: Any) -> bool | None:
         """Отправить команду устройству или всем устройствам (device_id='all').
 
         Каждая команда получает короткий id (correlation) и публикуется с QoS 1,
-        результат publish проверяется по коду возврата rc.
+        True означает accepted, не доставку. False — доказанный отказ до
+        enqueue (валидация, disconnected precheck, очередь переполнена).
+        None — неопределённый результат после Paho publish: при QoS1 даже
+        MQTT_ERR_NO_CONN может оставить пакет для отправки после reconnect.
+        Исключения после начала publish тоже не доказывают отсутствие пакета.
         """
+        if "type" in kwargs and kwargs["type"] != cmd_type:
+            log.warning("Command publish refused: payload type override")
+            return False
+        cmd_id = kwargs.pop("id", uuid.uuid4().hex[:8])
+        # Reserved routing fields win over caller kwargs. Validate the actual
+        # serialized type so a non-shell entry cannot smuggle a shell payload.
+        payload = {**kwargs, "type": cmd_type, "id": cmd_id}
+        if payload["type"] == "shell" and verify_approved_command(
+            payload.get("approval"), command=payload.get("command"),
+            expected_device_id=device_id, now=int(time.time()),
+        ) is None:
+            log.warning("Shell publish refused: approval is missing or invalid")
+            return False
         if not self.connected.is_set():
             log.warning("Команда %s не отправлена: нет соединения с брокером", cmd_type)
             return False
         topic = f"{MQTT_PREFIX}/all/cmd" if device_id == "all" else f"{MQTT_PREFIX}/{device_id}/cmd"
-        cmd_id = kwargs.pop("id", uuid.uuid4().hex[:8])
-        payload = {"type": cmd_type, "id": cmd_id, **kwargs}
         if ENCRYPT_PAYLOAD:
             body = encrypt_payload(payload)
         else:
             body = payload
         message = sign_message(body)
         info = self._client.publish(topic, json.dumps(message, ensure_ascii=False), qos=1)
+        if info.rc == mqtt.MQTT_ERR_QUEUE_SIZE:
+            log.warning("Команда %s не поставлена в очередь %s (rc=%s)", cmd_type, topic, info.rc)
+            return False
         if info.rc != mqtt.MQTT_ERR_SUCCESS:
             log.warning("Команда %s не ушла в %s (rc=%s)", cmd_type, topic, info.rc)
-            return False
+            return None
         log.info("Команда %s (id=%s) -> %s", cmd_type, cmd_id, topic)
         return True

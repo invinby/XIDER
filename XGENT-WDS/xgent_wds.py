@@ -9,6 +9,7 @@ import base64
 import binascii
 import ctypes
 import html
+import importlib.machinery
 import importlib.util
 import io
 import json
@@ -24,15 +25,76 @@ import subprocess
 import sys
 import tempfile
 import threading
+import uuid
 import time
 import webbrowser
 from urllib.parse import urlsplit
 import winreg
 import winsound
 from logging.handlers import RotatingFileHandler
+from concurrent.futures import Future
 
 MAX_FILE_PUT_BYTES = 30 * 1024 * 1024
 MAX_FILE_PUT_B64_CHARS = 4 * ((MAX_FILE_PUT_BYTES + 2) // 3)
+MAX_SCREENSHOT_BYTES = 30 * 1024 * 1024
+SCREENSHOT_TIMEOUT = 10.0
+_SCREENSHOT_CAPTURE_LOCK = threading.Lock()
+_OPEN_URL_OPERATION_TTL_SEC = 600.0
+_OPEN_URL_OPERATION_LIMIT = 256
+
+
+def _bounded_screen_grab():
+    """At most one native call; a late image is closed after the caller deadline."""
+    from PIL import ImageGrab
+    if not _SCREENSHOT_CAPTURE_LOCK.acquire(blocking=False):
+        raise TimeoutError("Previous native screen capture is still running")
+    result = Future()
+
+    def capture():
+        try:
+            result.set_result(ImageGrab.grab(all_screens=True))
+        except BaseException as exc:
+            result.set_exception(exc)
+        finally:
+            _SCREENSHOT_CAPTURE_LOCK.release()
+
+    def discard_late_image(completed):
+        if completed.exception() is None:
+            image = completed.result()
+            if image is not None:
+                try:
+                    image.close()
+                except Exception:
+                    log.warning("Could not close late screenshot")
+
+    try:
+        threading.Thread(target=capture, name="xider-screen-capture", daemon=True).start()
+    except BaseException:
+        _SCREENSHOT_CAPTURE_LOCK.release()
+        raise
+    try:
+        return result.result(timeout=SCREENSHOT_TIMEOUT)
+    except TimeoutError:
+        result.add_done_callback(discard_late_image)
+        raise
+
+
+def _screenshot_session_available() -> bool:
+    """Read-only desktop access check; never opens consent or changes sessions."""
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.OpenInputDesktop.argtypes = [ctypes.c_uint, ctypes.c_bool, ctypes.c_uint]
+        user32.OpenInputDesktop.restype = ctypes.c_void_p
+        user32.CloseDesktop.argtypes = [ctypes.c_void_p]
+        desktop = user32.OpenInputDesktop(0, False, 1)
+        if not desktop:
+            return False
+        try:
+            return True
+        finally:
+            user32.CloseDesktop(desktop)
+    except (OSError, AttributeError):
+        return False
 
 
 def _validated_open_url(payload: dict) -> tuple[str, int]:
@@ -55,8 +117,8 @@ def _validated_open_url(payload: dict) -> tuple[str, int]:
     if port is not None and not 1 <= port <= 65535:
         raise ValueError("URL port is invalid")
     count = payload.get("count", 1)
-    if type(count) is not int or not 1 <= count <= 5:
-        raise ValueError("Open count must be an integer from 1 to 5")
+    if type(count) is not int or count not in {1, 2, 3, 5}:
+        raise ValueError("Open count must be one of 1, 2, 3, or 5")
     return url, count
 
 
@@ -153,6 +215,8 @@ if not getattr(sys, "frozen", False):
         mark_agent_update_healthy,
         prepare_agent_update_start,
         rollback_unhealthy_agent,
+        read_agent_update_result,
+        update_operation_id,
     )
 
     if __name__ == "__main__":
@@ -291,6 +355,7 @@ SUPPORTED_COMMANDS = (
     "mic",
     "open_app",
     "capabilities",
+    "permission_settings",
     "lock",
     "volume_toggle",
     "power",
@@ -873,6 +938,9 @@ class XgentClient:
         self._running = threading.Event()
         self._running.set()
         self._update_health = threading.Event()
+        self._subscription_lock = threading.RLock()
+        self._pending_command_subacks = set()
+        self._command_subscriptions_failed = False
         self._client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
             client_id=f"xgent-wds-{DEVICE_ID}",
@@ -883,12 +951,15 @@ class XgentClient:
         self._client.on_connect = self._on_connect
         self._client.on_connect_fail = self._on_connect_fail
         self._client.on_disconnect = self._on_disconnect
+        self._client.on_subscribe = self._on_subscribe
         self._client.on_message = self._on_message
         self._heartbeat = threading.Thread(
             target=self._heartbeat_loop, name="xgent-heartbeat", daemon=True
         )
         self._standby = False
         self._command_context = threading.local()
+        self._open_url_operations: dict[str, dict] = {}
+        self._open_url_operations_lock = threading.Lock()
         self._handlers = {
             "open_url": self._do_open_url,
             "notify": self._do_notify,
@@ -911,6 +982,7 @@ class XgentClient:
             "mic": self._do_mic,
             "open_app": self._do_open_app,
             "capabilities": self._do_capabilities,
+            "permission_settings": self._do_permission_settings,
             "lock": self._do_lock_screen,
             "volume_toggle": self._do_volume_toggle,
             "power": self._do_power,
@@ -1065,32 +1137,50 @@ class XgentClient:
     # ---------- колбэки paho-mqtt ----------
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
+        with self._subscription_lock:
+            self._pending_command_subacks.clear()
+            self._command_subscriptions_failed = reason_code != 0
         if reason_code == 0:
-            client.subscribe(f"{MQTT_PREFIX}/{DEVICE_ID}/cmd", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/all/cmd", qos=0)
+            with self._subscription_lock:
+                for topic in (f"{MQTT_PREFIX}/{DEVICE_ID}/cmd", f"{MQTT_PREFIX}/all/cmd"):
+                    try:
+                        result, mid = client.subscribe(topic, qos=0)
+                        if result != mqtt.MQTT_ERR_SUCCESS or type(mid) is not int or mid <= 0 or mid in self._pending_command_subacks:
+                            raise RuntimeError(f"subscribe rejected: rc={result}, mid={mid}")
+                        self._pending_command_subacks.add(mid)
+                    except Exception:
+                        self._command_subscriptions_failed = True
+                        log.exception("Не удалось запросить командную MQTT-подписку %s", topic)
             log.info("Подключено к %s:%s", MQTT_BROKER, MQTT_PORT)
-            try:
-                write_runtime_health("agent", True)
-            except Exception:
-                log.exception("Не удалось записать локальное подтверждение MQTT агента")
             # Подписки восстанавливаются при каждом переподключении.
             self._publish_status()
-            if not getattr(sys, "frozen", False):
-                try:
-                    if mark_agent_update_healthy(
-                        CONFIG_DIR / UPDATE_STATE_NAME,
-                        Path(__file__).resolve().parent,
-                    ):
-                        self._update_health.set()
-                        log.info("Обновлённый Windows-агент прошёл проверку: MQTT доступен.")
-                except Exception:
-                    log.exception("Не удалось подтвердить здоровье обновлённого Windows-агента")
         else:
             log.warning("Не удалось подключиться к брокеру: %s", reason_code)
             try:
                 write_runtime_health("agent", False)
             except Exception:
                 log.exception("Не удалось обновить локальное состояние MQTT агента")
+
+    def _on_subscribe(self, client, userdata, mid, reason_codes, properties=None):
+        with self._subscription_lock:
+            if mid not in self._pending_command_subacks:
+                return
+            self._pending_command_subacks.remove(mid)
+            grants = [getattr(reason, "value", reason) for reason in (reason_codes or ())]
+            if len(grants) != 1 or any(type(grant) is not int or grant not in (0, 1, 2) for grant in grants):
+                self._command_subscriptions_failed = True
+                return
+            if self._pending_command_subacks or self._command_subscriptions_failed or not self._running.is_set():
+                return
+            try:
+                write_runtime_health("agent", True)
+                if not getattr(sys, "frozen", False) and mark_agent_update_healthy(
+                    CONFIG_DIR / UPDATE_STATE_NAME, Path(__file__).resolve().parent,
+                ):
+                    self._update_health.set()
+                    self._publish_status()
+            except Exception:
+                log.exception("Не удалось подтвердить здоровье обновлённого Windows-агента")
 
     def _on_connect_fail(self, client, userdata, reason_code=None):
         log.warning(
@@ -1099,6 +1189,9 @@ class XgentClient:
         )
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
+        with self._subscription_lock:
+            self._pending_command_subacks.clear()
+            self._command_subscriptions_failed = True
         try:
             write_runtime_health("agent", False)
         except Exception:
@@ -1150,10 +1243,105 @@ class XgentClient:
             log.warning("Неизвестная команда: %s", action)
             self._publish_ack(action or "?", "error", detail="unknown_command", cmd_id=cmd_id)
             return
+        if action == "open_url":
+            operation_state, cached_result = self._claim_open_url_operation(payload)
+            if operation_state == "pending":
+                self._publish_ack(action, "received", cmd_id=cmd_id)
+                return
+            if operation_state == "complete":
+                self._publish_response("output", cached_result)
+                self._publish_ack(
+                    action,
+                    "ok" if cached_result.get("ok") is True else "error",
+                    cmd_id=cmd_id,
+                )
+                return
+            if operation_state == "conflict":
+                self._publish_response("output", {
+                    "type": "open_url", "device_id": DEVICE_ID, "id": cmd_id,
+                    "ok": False, "requested_count": payload.get("count"),
+                    "accepted_count": 0,
+                    "detail": "Request id was reused with different URL parameters",
+                })
+                self._publish_ack(action, "error", detail="operation_id_conflict", cmd_id=cmd_id)
+                return
+            if operation_state == "full":
+                self._publish_response("output", {
+                    "type": "open_url", "device_id": DEVICE_ID, "id": cmd_id,
+                    "ok": False, "requested_count": payload.get("count", 1),
+                    "accepted_count": 0,
+                    "detail": "operation_cache_full",
+                })
+                self._publish_ack(action, "error", detail="operation_cache_full", cmd_id=cmd_id)
+                return
         log.info("Выполняю команду: %s", action)
         # Подтверждение получения — часть протокола acknowledgement.
         self._publish_ack(action, "received", cmd_id=cmd_id)
         self._run_threaded(action, cmd_id, handler, payload)
+
+    def _open_url_signature(self, payload: dict) -> str:
+        try:
+            return json.dumps(
+                [payload.get("url"), payload.get("count", 1)],
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        except (TypeError, ValueError):
+            return repr((payload.get("url"), payload.get("count", 1)))
+
+    def _claim_open_url_operation(self, payload: dict) -> tuple[str, dict | None]:
+        """Reserve one MQTT command id for an identical open_url request."""
+        cmd_id = payload.get("id")
+        if not isinstance(cmd_id, str) or not cmd_id or len(cmd_id) > 128:
+            return "new", None
+        signature = self._open_url_signature(payload)
+        now = time.monotonic()
+        with self._open_url_operations_lock:
+            for old_id, entry in list(self._open_url_operations.items()):
+                if (
+                    entry.get("result") is not None
+                    and now - entry["updated_at"] >= _OPEN_URL_OPERATION_TTL_SEC
+                ):
+                    self._open_url_operations.pop(old_id, None)
+            entry = self._open_url_operations.get(cmd_id)
+            if entry is not None:
+                if entry["signature"] != signature:
+                    return "conflict", None
+                entry["updated_at"] = now
+                result = entry.get("result")
+                return ("complete", dict(result)) if result is not None else ("pending", None)
+            if len(self._open_url_operations) >= _OPEN_URL_OPERATION_LIMIT:
+                completed_ids = [
+                    old_id for old_id, old_entry in self._open_url_operations.items()
+                    if old_entry.get("result") is not None
+                ]
+                if not completed_ids:
+                    return "full", None
+                oldest_id = min(
+                    completed_ids,
+                    key=lambda key: self._open_url_operations[key]["updated_at"],
+                )
+                self._open_url_operations.pop(oldest_id, None)
+            self._open_url_operations[cmd_id] = {
+                "signature": signature,
+                "updated_at": now,
+                "result": None,
+            }
+        return "new", None
+
+    def _remember_open_url_result(self, payload: dict, result: dict) -> None:
+        cmd_id = payload.get("id")
+        if not isinstance(cmd_id, str) or not cmd_id:
+            cmd_id = getattr(self._command_context, "cmd_id", None)
+        if not isinstance(cmd_id, str) or not cmd_id:
+            return
+        signature = self._open_url_signature(payload)
+        with self._open_url_operations_lock:
+            entry = self._open_url_operations.get(cmd_id)
+            if entry is not None and entry["signature"] == signature:
+                entry["result"] = dict(result)
+                entry["updated_at"] = time.monotonic()
 
     def _run_threaded(self, action, cmd_id, func, payload) -> None:
         """Запускает обработчик в потоке, отправляет ack ok/error + логирует."""
@@ -1187,8 +1375,15 @@ class XgentClient:
             "version": VERSION,
             "update_mode": "frozen" if getattr(sys, "frozen", False) else "source",
             "release_update_ready": trusted_release_keys_ready() and not getattr(sys, "frozen", False),
+            "update_manifest_binding_protocol": 1,
             "status": status,
         }
+        if _command_approval_protocol_enabled(self):
+            payload["command_approval_protocol"] = 1
+        if not getattr(sys, "frozen", False):
+            receipt = read_agent_update_result(CONFIG_DIR / UPDATE_STATE_NAME)
+            if receipt:
+                payload["agent_update"] = receipt
         body = encrypt_payload(payload) if ENCRYPT_PAYLOAD else payload
         envelope = sign_message(body)
         self._client.publish(
@@ -1197,7 +1392,7 @@ class XgentClient:
             qos=1,
         )
 
-    def _publish_response(self, topic_suffix: str, payload: dict) -> None:
+    def _publish_response(self, topic_suffix: str, payload: dict) -> bool:
         """Отправить подписанный ответ в топик {prefix}/{device_id}/{suffix}."""
         cmd_id = getattr(self._command_context, "cmd_id", None)
         if cmd_id is not None and "id" not in payload:
@@ -1211,11 +1406,14 @@ class XgentClient:
         )
         if info.rc != mqtt.MQTT_ERR_SUCCESS:
             log.warning("Не удалось опубликовать ответ %s (rc=%s)", topic_suffix, info.rc)
+            return False
         else:
             try:
                 info.wait_for_publish(timeout=3.0)
             except Exception:
                 log.exception("Не дождались доставки ответа %s", topic_suffix)
+                return False
+        return info.is_published() if callable(getattr(info, "is_published", None)) else True
 
     def _publish_ack(self, action, status, detail=None, cmd_id=None) -> None:
         """Подтверждение выполнения команды (received/ok/error)."""
@@ -1239,12 +1437,51 @@ class XgentClient:
 
     # ---------- действия ----------
 
-    def _do_open_url(self, payload: dict) -> None:
-        url, count = _validated_open_url(payload)
+    def _do_open_url(self, payload: dict) -> dict:
+        cmd_id = payload.get("id") or getattr(self._command_context, "cmd_id", None)
+        try:
+            url, count = _validated_open_url(payload)
+        except ValueError as exc:
+            result = {
+                "type": "open_url", "device_id": DEVICE_ID, "ok": False,
+                "requested_count": payload.get("count", 1), "accepted_count": 0,
+                "detail": str(exc)[:200],
+            }
+            if isinstance(cmd_id, str) and cmd_id:
+                result["id"] = cmd_id
+            self._remember_open_url_result(payload, result)
+            self._publish_response("output", result)
+            raise
+
+        accepted_count = 0
+        failure_detail = None
         for _ in range(count):
-            if webbrowser.open_new_tab(url) is False:
-                raise RuntimeError("Default browser refused the URL")
-        self._notify_text(f"Открыто запросов: {count} · {url}")
+            try:
+                accepted = webbrowser.open_new_tab(url)
+            except Exception:
+                failure_detail = "Default browser failed to accept a launch request"
+                break
+            if accepted is not True:
+                failure_detail = "Default browser did not confirm accepting a launch request"
+                break
+            accepted_count += 1
+        result = {
+            "type": "open_url", "device_id": DEVICE_ID,
+            "ok": accepted_count == count,
+            "url": url,
+            "requested_count": count,
+            "accepted_count": accepted_count,
+        }
+        if isinstance(cmd_id, str) and cmd_id:
+            result["id"] = cmd_id
+        if failure_detail:
+            result["detail"] = failure_detail
+        self._remember_open_url_result(payload, result)
+        self._publish_response("output", result)
+        if failure_detail:
+            raise RuntimeError(failure_detail)
+        self._notify_text(f"Принято браузером к запуску: {accepted_count} из {count} · {url}")
+        return result
 
     def _do_notify(self, payload: dict) -> None:
         self._notify_text(payload.get("text", ""))
@@ -1282,81 +1519,73 @@ class XgentClient:
         self._publish_status()
 
     def _do_screenshot(self, payload: dict) -> None:
-        """Сделать скриншот и отправить base64 JPEG в MQTT."""
+        """One screenshot attempt with conservative, distinguishable diagnostics."""
+        result = {"type": "screenshot", "device_id": DEVICE_ID, "platform": "Windows",
+                  "state": "command_failed", "detail": "Capture failed", "image": None}
+        img = None
         try:
-            from PIL import ImageGrab
-
-            try:
-                img = ImageGrab.grab(all_screens=True)
-            except Exception:
-                img = ImageGrab.grab()
-            img.thumbnail((1600, 1200))
-            buf = io.BytesIO()
-            img.convert("RGB").save(buf, format="JPEG", quality=80, optimize=True)
-            b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-            self._publish_response("screenshot", {
-                "type": "screenshot",
-                "device_id": DEVICE_ID,
-                "image": b64,
-            })
-            log.info("Скриншот отправлен (%d байт)", len(buf.getvalue()))
+            if not _screenshot_session_available():
+                result.update(state="session_unavailable", detail="No accessible interactive input desktop")
+            else:
+                img = _bounded_screen_grab()
+                result.update(state="file_unreadable", detail="Capture did not return a readable image")
+                if img is not None:
+                    width, height = img.size
+                    if width <= 0 or height <= 0:
+                        result.update(state="file_empty", detail="Capture has empty dimensions")
+                    elif width * height > 40_000_000:
+                        result.update(state="file_oversized", detail="Raw capture exceeds 40 megapixels")
+                    else:
+                        img.thumbnail((1600, 1200))
+                        with io.BytesIO() as buf:
+                            with img.convert("RGB") as rgb:
+                                rgb.save(buf, format="JPEG", quality=80, optimize=True)
+                            data = buf.getvalue()
+                        if not data:
+                            result.update(state="file_empty", detail="Encoded image is empty")
+                        elif len(data) > MAX_SCREENSHOT_BYTES:
+                            result.update(state="file_oversized", detail="Encoded image exceeds 30 MiB")
+                        else:
+                            result.update(state="success", detail="One capture produced a valid image; no persistent permission claim",
+                                          image=base64.b64encode(data).decode("ascii"))
+        except ImportError:
+            result.update(state="tool_missing", detail="Pillow ImageGrab is unavailable")
+        except PermissionError:
+            result.update(state="permission_denied", detail="Screen capture reported access denied; no UAC auto-consent")
+        except (TimeoutError, subprocess.TimeoutExpired):
+            result.update(state="timeout", detail="Screen capture timed out")
         except Exception as exc:
-            log.warning("Ошибка создания скриншота: %s", exc)
-            self._publish_response("screenshot", {
-                "type": "screenshot",
-                "device_id": DEVICE_ID,
-                "image": None,
-                "error": str(exc),
-            })
+            result.update(detail=f"{type(exc).__name__}: {str(exc)[:500]}")
+        finally:
+            if img is not None:
+                img.close()
+        try:
+            delivered = self._publish_response("screenshot", result)
+        except Exception:
+            delivered = False
+        if delivered is False:
+            failure = {**result, "state": "transport_failed", "detail": "MQTT result delivery failed", "image": None}
+            try:
+                self._publish_response("screenshot", failure)
+            except Exception:
+                log.warning("Screenshot transport diagnostic could not be delivered")
 
     def _do_geo_location(self, payload: dict) -> None:
-        """Approximate public-IP location; never claim GPS precision."""
-        import urllib.request
-        data = None
-        provider = ""
-        errors = []
-        deadline = time.monotonic() + 7.0
-        for name, url in (
-            ("ipapi.co", "https://ipapi.co/json/"),
-            ("ipinfo.io", "https://ipinfo.io/json"),
-        ):
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                errors.append("общий тайм-аут геолокации")
-                break
+        """One explicit request; IP estimation requires the exact boolean opt-in."""
+        from location_adapter import read_system_location, read_ip_estimate, location_text
+        value = read_system_location()
+        if value["state"] == "needs_live_test":
             try:
-                request = urllib.request.Request(url, headers={"User-Agent": "XIDER-Agent/3"})
-                with urllib.request.urlopen(request, timeout=min(4.0, remaining)) as response:
-                    candidate = json.loads(response.read(16_385).decode("utf-8", "replace"))
-                if not isinstance(candidate, dict) or candidate.get("error") or not (candidate.get("ip") or candidate.get("city")):
-                    raise ValueError("нет пригодного ответа")
-                data, provider = candidate, name
-                break
-            except (OSError, ValueError) as exc:
-                errors.append(f"{name}: {exc}")
-        if data is None:
-            ok = False
-            info = "Локация по IP недоступна: " + "; ".join(errors)[:300]
-        else:
-            def safe(value):
-                return str(value if value not in (None, "") else "?")[:120]
-
-            coordinates = data.get("loc") or f"{data.get('latitude') or '?'}, {data.get('longitude') or '?'}"
-            info = (
-                "Приблизительная локация по публичному IP, не GPS:\n"
-                f"🌍 Страна: {safe(data.get('country_name') or data.get('country'))}\n"
-                f"🏙 Город: {safe(data.get('city'))}\n"
-                f"📡 Провайдер: {safe(data.get('org'))}\n"
-                f"🗺 Координаты: {safe(coordinates)}\n"
-                f"💻 IP: {safe(data.get('ip'))}\n"
-                f"🔎 Источник: {safe(provider)}"
-            )
-            ok = True
+                os.startfile("ms-settings:privacy-location")
+            except OSError:
+                pass  # Guidance remains visible in the owner response.
+        if value["state"] != "granted" and payload.get("ip_fallback") is True:
+            system_state = value["state"]
+            value = read_ip_estimate()
+            value["system_state"] = system_state
         self._publish_response("geo_location", {
-            "type": "geo_location",
-            "device_id": DEVICE_ID,
-            "ok": ok,
-            "text": info,
+            "type": "geo_location", "device_id": DEVICE_ID,
+            "ok": value["state"] == "granted", **value, "text": location_text(value),
         })
     def _do_webcam(self, payload: dict) -> None:
         """Сделать фото с веб-камеры и отправить base64 JPEG в MQTT."""
@@ -1480,7 +1709,8 @@ class XgentClient:
 
         НЕ содержит секретов (SHARED_KEY намеренно исключён).
         """
-        self._publish_response("capabilities", {
+        feature_status = _detect_feature_status()
+        response = {
             "type": "capabilities",
             "device_id": DEVICE_ID,
             "platform": PLATFORM,
@@ -1488,9 +1718,50 @@ class XgentClient:
             "hostname": socket.gethostname(),
             "commands": sorted(SUPPORTED_COMMANDS),
             "features": _detect_features(),
-            "feature_status": _detect_feature_status(),
-        })
+            "feature_status": feature_status,
+            **_capability_snapshot(feature_status),
+        }
+        if _command_approval_protocol_enabled(self):
+            response["command_approval_protocol"] = 1
+        self._publish_response("capabilities", response)
         log.info("Отчёт о возможностях отправлен")
+
+    def _do_permission_settings(self, payload: dict) -> dict:
+        """Open one fixed Windows privacy page; this never changes a grant."""
+        settings = {
+            "camera": "ms-settings:privacy-webcam",
+            "microphone": "ms-settings:privacy-microphone",
+            "location": "ms-settings:privacy-location",
+        }
+        permission = payload.get("permission")
+        uri = settings.get(permission) if isinstance(permission, str) else None
+        result = {
+            "type": "permission_settings",
+            "device_id": DEVICE_ID,
+            "permission": permission if uri else "unknown",
+            "ok": False,
+        }
+        command_id = payload.get("id")
+        if isinstance(command_id, str) and command_id:
+            result["id"] = command_id
+        opener = getattr(os, "startfile", None)
+        if uri and callable(opener):
+            try:
+                opener(uri)
+                result["ok"] = True
+                result["text"] = (
+                    "Переход к Параметрам конфиденциальности запущен. Разреши доступ вручную; "
+                    "для камеры и микрофона проверь доступ классических приложений. "
+                    "Агент сам разрешения не меняет."
+                )
+            except OSError:
+                result["text"] = "Не удалось открыть Параметры Windows; открой нужный раздел вручную."
+        elif uri:
+            result["text"] = "Открытие Параметров Windows доступно только в Windows-сеансе; ничего не изменено."
+        else:
+            result["text"] = "Неизвестный или неподдерживаемый раздел настроек; команда отклонена."
+        self._publish_response("permission_settings", result)
+        return result
 
     def _do_clipboard(self, payload: dict) -> None:
         """Чтение буфера обмена (без записи)."""
@@ -1723,26 +1994,25 @@ class XgentClient:
 
     def _do_shell(self, payload: dict) -> None:
         """Выполнить shell-команду и вернуть вывод (лимит 20 сек)."""
-        cmd = (payload.get("command") or "").strip()
-        if not cmd:
+        if not _reserve_shell_approval(self, payload):
+            self._publish_response("shell", {
+                "type": "shell", "device_id": DEVICE_ID, "ok": False,
+                "error": "approval_invalid_or_replayed", "returncode": -1, "status": "rejected",
+            })
+            log.warning("Shell request rejected by approval or replay guard")
+            return
+        cmd = payload["command"]
+        if not cmd.strip():
             return
         try:
-            result = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True, timeout=20
-            )
-            output = (result.stdout or "") + (result.stderr or "")
-            code = result.returncode
-        except subprocess.TimeoutExpired:
-            output = "TIMEOUT: команда выполнялась дольше 20 сек"
-            code = -1
-        except Exception as exc:
-            output = f"ERROR: {exc}"
-            code = -2
-        self._publish_response("shell", {
-            "type": "shell", "device_id": DEVICE_ID,
-            "command": cmd, "output": output[:6000], "returncode": code,
-        })
-        log.info("Shell выполнен (rc=%s): %s", code, cmd[:80])
+            execution = _load_command_approval_component("shell_execution")
+        except ImportError:
+            result = {"status": "error", "returncode": -2,
+                      "output": "Execution component unavailable"}
+        else:
+            result = execution.execute_shell(cmd, payload.get("timeout"))
+        self._publish_response("shell", {"type": "shell", "device_id": DEVICE_ID, **result})
+        log.info("Shell executed (rc=%s)", result["returncode"])
 
     def _do_hotkey(self, payload: dict) -> None:
         spec = (payload.get("keys") or "").strip()
@@ -3455,6 +3725,8 @@ setTimeout(()=>window.close(),15000);
                 "device_id": DEVICE_ID,
                 "ok": False,
                 "state": "unsupported_package",
+                "operation_id": _frozen_update_operation_id(payload, getattr(getattr(self, "_command_context", None), "cmd_id", None)),
+                "update_state": "failed",
                 "text": (
                     "⚠️ Эта сборка Windows EXE пока не поддерживает транзакционное "
                     "обновление. Ничего не менял; файлы пакета не тронуты."
@@ -3463,6 +3735,13 @@ setTimeout(()=>window.close(),15000);
             return
 
         if payload.get("update"):
+            operation_id = update_operation_id(payload, getattr(getattr(self, "_command_context", None), "cmd_id", None))
+            if not isinstance(payload.get("manifest_digest"), str) or not re.fullmatch(r"[0-9a-f]{64}", payload["manifest_digest"]):
+                self._publish_response("output", {"type": "agent_update", "device_id": DEVICE_ID,
+                    "ok": False, "state": "manifest_pin_required", "update_state": "failed",
+                    "operation_id": operation_id, "text": "Обновление не начато: требуется точный manifest digest."})
+                return
+            self._publish_update_progress(operation_id, "queued")
             script_dir = Path(__file__).resolve().parent
             files = (
                 "xgent_wds.py",
@@ -3471,19 +3750,24 @@ setTimeout(()=>window.close(),15000);
                 "xgencrypto.py",
                 "release_signature.py",
                 "update_package.py",
+                "command_module_loader.py", "command_signing.py", "command_replay.py", "shell_execution.py", "location_adapter.py",
             )
             backup_dir = CONFIG_DIR / "agent-backups" / (
                 f"{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns()}"
             )
+            installed = False
             try:
                 with tempfile.TemporaryDirectory(prefix="xgent-wds-update-") as tmp:
                     archive = Path(tmp) / "XIDER-source.zip"
                     manifest = Path(tmp) / "release-manifest.json"
+                    self._publish_update_progress(operation_id, "downloading")
                     release_tag = download_verified_source_archive(
                         manifest,
                         archive,
                         release_tag=payload.get("release_tag"),
+                        expected_manifest_digest=payload.get("manifest_digest"),
                     )
+                    self._publish_update_progress(operation_id, "verifying")
                     source = extract_agent_files(
                         archive,
                         Path(tmp) / "agent-stage",
@@ -3493,13 +3777,17 @@ setTimeout(()=>window.close(),15000);
                     for name in files:
                         candidate = source / name
                         compile(candidate.read_text(encoding="utf-8"), str(candidate), "exec")
+                    self._publish_update_progress(operation_id, "installing")
                     backup_dir = install_agent_files(
                         source,
                         script_dir,
                         backup_dir,
                         files,
                         transaction_path=CONFIG_DIR / UPDATE_STATE_NAME,
+                        operation_id=operation_id, release_tag=release_tag,
+                        manifest_digest=payload.get("manifest_digest"),
                     )
+                    installed = True
 
                 self._publish_response("output", {
                     "type": "agent_update",
@@ -3508,6 +3796,7 @@ setTimeout(()=>window.close(),15000);
                     "state": "restarting",
                     "release_tag": release_tag,
                     "health_check": "pending",
+                    "operation_id": operation_id, "update_state": "reconnecting",
                     "text": (
                         f"📦 Подписанный релиз {release_tag} проверен; исходники Windows-агента "
                         f"установлены. Копия прежних файлов: {backup_dir.name}. Перезапускаюсь; "
@@ -3524,31 +3813,51 @@ setTimeout(()=>window.close(),15000);
                         )
                     except Exception as restart_error:
                         log.exception("Не удалось перезапустить Windows-агент после обновления")
+                        rollback_state = "rolled_back"
+                        rollback_detail = ""
+                        self._publish_update_progress(operation_id, "rolling_back")
                         try:
                             rollback_unhealthy_agent(
                                 CONFIG_DIR / UPDATE_STATE_NAME,
                                 script_dir,
                             )
-                        except Exception:
+                        except Exception as rollback_error:
+                            rollback_state = "failed"
+                            rollback_detail = f" Откат неполон: {rollback_error}"
                             log.exception("Не удалось вернуть прежние файлы после ошибки перезапуска")
                         self._publish_response("output", {
                             "type": "agent_update",
                             "device_id": DEVICE_ID,
                             "ok": False,
-                            "state": "rolled_back",
-                            "text": f"❌ Перезапуск не удался; выполнен откат. Причина: {restart_error}",
+                            "state": rollback_state, "update_state": rollback_state,
+                            "operation_id": operation_id,
+                            **({"id": payload["id"]} if payload.get("id") else {}),
+                            "text": f"❌ Перезапуск не удался: {restart_error}.{rollback_detail}",
                         })
 
                 threading.Thread(target=_reboot_agent, name="xgent-wds-update-restart", daemon=True).start()
             except Exception as exc:
                 log.exception("Windows agent self-update failed")
+                outcome = "failed"
+                rollback_detail = ""
+                if installed:
+                    self._publish_update_progress(operation_id, "rolling_back")
+                    try:
+                        rollback_unhealthy_agent(CONFIG_DIR / UPDATE_STATE_NAME, script_dir)
+                        outcome = "rolled_back"
+                    except Exception as rollback_error:
+                        rollback_detail = f" Автоматический откат неполон: {rollback_error}"
+                receipt = read_agent_update_result(CONFIG_DIR / UPDATE_STATE_NAME)
+                if receipt and receipt.get("operation_id") == operation_id and receipt.get("update_state") in {"rolled_back", "failed"}:
+                    outcome = receipt["update_state"]
                 self._publish_response("output", {
                     "type": "agent_update",
                     "device_id": DEVICE_ID,
                     "ok": False,
                     "state": "failed",
+                    "operation_id": operation_id, "update_state": outcome,
                     "text": (
-                        f"❌ Обновление не подтверждено: {exc}. "
+                        f"❌ Обновление не подтверждено: {exc}.{rollback_detail} "
                         "Перед новой попыткой проверь журнал агента и резервную копию."
                     ),
                 })
@@ -3574,6 +3883,12 @@ setTimeout(()=>window.close(),15000);
                 os._exit(0)
             threading.Thread(target=_reboot_agent, daemon=True).start()
         self._publish_response("output", {"type": "agent_update", "device_id": DEVICE_ID, "ok": True, "text": text})
+
+    def _publish_update_progress(self, operation_id: str, state: str) -> None:
+        self._publish_response("update_progress", {
+            "type": "agent_update_progress", "device_id": DEVICE_ID,
+            "operation_id": operation_id, "update_state": state,
+        })
 
     def _do_uninstall_agent(self, payload: dict) -> None:
         """Полное удаление агента с ПК: автозапуск, конфиги, логи и завершение процесса."""
@@ -3738,6 +4053,201 @@ def _detect_feature_status() -> dict[str, str]:
     }
 
 
+_COMMAND_MODULE_LOADER = None
+
+
+def _same_absolute_path(left, right) -> bool:
+    return os.path.normcase(os.path.abspath(os.fspath(left))) == os.path.normcase(os.path.abspath(os.fspath(right)))
+
+
+def _load_trusted_command_module_loader():
+    """Bootstrap the one shared loader without importing it by a shadowable name."""
+    global _COMMAND_MODULE_LOADER
+    if _COMMAND_MODULE_LOADER is not None:
+        return _COMMAND_MODULE_LOADER
+    module_name = "command_module_loader"
+    try:
+        if getattr(sys, "frozen", False):
+            runtime = sys.modules.get("pyimod02_importers")
+            finder_type = getattr(runtime, "PyiFrozenFinder", None)
+            loader_type = getattr(runtime, "PyiFrozenLoader", None)
+            archive = getattr(runtime, "pyz_archive", None)
+            meipass = getattr(sys, "_MEIPASS", None)
+            if (
+                not isinstance(finder_type, type)
+                or finder_type.__name__ != "PyiFrozenFinder"
+                or finder_type.__module__ != "pyimod02_importers"
+                or not isinstance(loader_type, type)
+                or loader_type.__name__ != "PyiFrozenLoader"
+                or loader_type.__module__ != "pyimod02_importers"
+                or archive is None
+                or not isinstance(getattr(archive, "toc", None), dict)
+                or not isinstance(meipass, (str, os.PathLike))
+                or not os.fspath(meipass)
+            ):
+                raise ImportError("Trusted PyInstaller loader is unavailable")
+            finder = finder_type(os.fspath(meipass))
+            spec = finder.find_spec(module_name)
+            loader = getattr(spec, "loader", None)
+            expected_origin = Path(meipass) / f"{module_name}.py"
+            if (
+                type(finder) is not finder_type
+                or getattr(finder, "_pyz_archive", None) is not archive
+                or not _same_absolute_path(getattr(finder, "_path", ""), meipass)
+                or getattr(spec, "name", None) != module_name
+                or type(loader) is not loader_type
+                or getattr(loader, "name", None) != module_name
+                or getattr(loader, "_pyz_archive", None) is not archive
+                or getattr(loader, "_pyz_entry_name", None) != module_name
+                or getattr(loader, "_is_package", None) is not False
+                or module_name not in archive.toc
+                or not getattr(loader, "path", None)
+                or not getattr(spec, "origin", None)
+                or not _same_absolute_path(loader.path, expected_origin)
+                or not _same_absolute_path(spec.origin, expected_origin)
+                or getattr(spec, "submodule_search_locations", None) is not None
+            ):
+                raise ImportError("Shared command loader is not bundled in the active PYZ")
+        else:
+            root = _command_approval_source_root().resolve(strict=True)
+            expected = root / f"{module_name}.py"
+            if expected.is_symlink() or not expected.is_file() or not _same_absolute_path(expected.resolve(strict=True), expected):
+                raise ImportError("Shared command loader is missing or outside XGENT-MCS")
+            spec = importlib.util.spec_from_file_location(module_name, expected)
+            if (
+                spec is None
+                or spec.name != module_name
+                or type(spec.loader) is not importlib.machinery.SourceFileLoader
+                or not spec.origin
+                or not _same_absolute_path(spec.origin, expected)
+                or not _same_absolute_path(spec.loader.get_filename(module_name), expected)
+            ):
+                raise ImportError("Shared command loader has an unexpected source spec")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _COMMAND_MODULE_LOADER = module
+        return module
+    except ImportError:
+        raise
+    except Exception as exc:
+        raise ImportError("Shared command loader could not be trusted") from exc
+
+
+def _load_command_approval_component(module_name: str):
+    """Load only the canonical MCS verifier/replay helpers; no crypto copy here."""
+    return _load_trusted_command_module_loader().load_component(
+        module_name,
+        source_root=_command_approval_source_root(),
+        frozen=getattr(sys, "frozen", False),
+    )
+
+
+def _frozen_update_operation_id(payload, context_id=None):
+    """Keep rejection correlation available without importing source updater modules."""
+    for candidate in (payload.get("id"), context_id, payload.get("operation_id")):
+        if isinstance(candidate, str) and 1 <= len(candidate) <= 128:
+            return candidate
+    return str(uuid.uuid4())
+
+
+def _command_approval_source_root():
+    """Use the transaction-owned helper set, or the initial checkout's shared set."""
+    windows = Path(__file__).resolve().parent
+    candidate = windows / "command_module_loader.py"
+    if candidate.exists() or candidate.is_symlink():
+        return windows
+    return windows.parent / "XGENT-MCS"
+
+
+def _shell_approval_runtime(client):
+    """Load the canonical MCS verifier/replay helper lazily; no crypto copy here."""
+    try:
+        signing = _load_command_approval_component("command_signing")
+        replay = _load_command_approval_component("command_replay")
+        _load_command_approval_component("shell_execution")
+        ledger = getattr(client, "_command_replay_ledger", None)
+        if ledger is None:
+            ledger = replay.CommandReplayLedger()
+            client._command_replay_ledger = ledger
+        return signing, ledger
+    except Exception:
+        return None, None
+
+
+def _command_approval_protocol_enabled(client) -> bool:
+    """Advertise schema 1 only when its public keyset and replay store are usable."""
+    signing, ledger = _shell_approval_runtime(client)
+    if signing is None or ledger is None:
+        return False
+    try:
+        return signing.trusted_command_keys_ready() and ledger.ensure_available(now=int(time.time()))
+    except Exception:
+        return False
+
+
+def _reserve_shell_approval(client, payload: dict) -> bool:
+    """Verify exact command bytes and persist the signed request ID before execution."""
+    if type(payload) is not dict:
+        return False
+    command = payload.get("command")
+    envelope = payload.get("approval")
+    if not isinstance(command, str) or type(envelope) is not dict:
+        return False
+    signing, ledger = _shell_approval_runtime(client)
+    if signing is None or ledger is None:
+        return False
+    try:
+        now = int(time.time())
+        verified = signing.verify_approved_command(
+            envelope,
+            command=command,
+            expected_device_id=DEVICE_ID,
+            now=now,
+        )
+        if verified is None:
+            return False
+        return ledger.reserve(verified["request_id"], verified["expires_at"], now=now)
+    except Exception:
+        return False
+
+
+def _capability_snapshot(feature_status: dict[str, str]) -> dict:
+    """Passive diagnostics only: prerequisites are never an OS permission grant."""
+    items = []
+    for capability_id, legacy_id, settings_uri in (
+        ("screen_recording", "screenshot", None),
+        ("camera", "webcam", "ms-settings:privacy-webcam"),
+        ("microphone", "microphone", "ms-settings:privacy-microphone"),
+        ("location", "geolocation", "ms-settings:privacy-location"),
+        ("accessibility", None, None),
+        ("file_access", None, None),
+    ):
+        prerequisite = feature_status.get(legacy_id) if legacy_id else None
+        state = "needs_live_test"
+        detail = "Permission cannot be queried directly; only an owner-authorized trial action confirms access."
+        if prerequisite in {"dependency_missing", "unavailable"}:
+            state = "unavailable"
+            detail = "Required local tool or library is unavailable; OS permission was not queried."
+        elif legacy_id and prerequisite not in {"permission_unverified", "device_unverified", "approximate"}:
+            state = "unknown"
+            detail = "Diagnostic prerequisites could not be determined; no permission grant inferred."
+        if capability_id == "location":
+            from location_adapter import location_capability
+            state, detail = location_capability()
+        elif capability_id == "accessibility":
+            detail = ("A macOS-style TCC Accessibility permission is unsupported on Windows; "
+                      "interactive session, integrity level and UAC may limit UI control. No UAC auto-consent.")
+        elif capability_id == "file_access":
+            detail = ("A blanket TCC file permission is unsupported on Windows; access is path-specific "
+                      "and depends on ACL/UAC. Only an authorized trial confirms access.")
+        elif capability_id == "screen_recording" and state == "needs_live_test":
+            detail = ("A TCC screen recording grant is unsupported on Windows; capture depends on "
+                      "the interactive session and a permitted trial action.")
+        items.append({"id": capability_id, "state": state, "detail": detail, "settings_uri": settings_uri})
+    return {"schema": 1, "platform": PLATFORM,
+            "checked_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()), "items": items}
+
+
 def ctypes_windll_user32_message_box(text: str) -> None:
     """Обертка над MessageBoxW для тестируемости."""
     ctypes.windll.user32.MessageBoxW(None, text, "XGENT", 0x40)
@@ -3773,17 +4283,20 @@ def main() -> None:
         def _rollback_if_unhealthy() -> None:
             if client._update_health.wait(120):
                 return
-            state_path = CONFIG_DIR / UPDATE_STATE_NAME
-            if not state_path.exists():
-                log.error("Нет журнала обновления и нет MQTT health подтверждения; откат невозможен")
-                return
-            try:
-                rollback_unhealthy_agent(state_path, Path(__file__).resolve().parent)
-            except Exception:
-                log.exception("Критическая ошибка: откат обновления Windows-агента не завершён")
-                return
-            log.error("Новая версия не подключилась к MQTT за 120 секунд; возвращаю предыдущие файлы")
-            os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]])
+            with client._subscription_lock:
+                if client._update_health.is_set() or not client._running.is_set():
+                    return
+                state_path = CONFIG_DIR / UPDATE_STATE_NAME
+                if not state_path.exists():
+                    log.error("Нет журнала обновления и нет MQTT health подтверждения; откат невозможен")
+                    return
+                try:
+                    rollback_unhealthy_agent(state_path, Path(__file__).resolve().parent)
+                except Exception:
+                    log.exception("Критическая ошибка: откат обновления Windows-агента не завершён")
+                    return
+                log.error("Новая версия не подключилась к MQTT за 120 секунд; возвращаю предыдущие файлы")
+                os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]])
 
         threading.Thread(
             target=_rollback_if_unhealthy,

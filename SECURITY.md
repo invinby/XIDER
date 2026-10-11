@@ -1,81 +1,54 @@
-# 🛡️ XIDER Security Architecture & Threat Model
+# XIDER security notes
 
-Данный документ описывает модель безопасности, криптографические протоколы и архитектурные решения системы XIDER.
+This document describes controls visible in the repository source. It is not a
+claim that a particular deployment, device, or release has passed live
+security acceptance.
 
----
+## Transport and message protection
 
-## 🏛 1. Архитектурный обзор (Zero-Trust)
+The bot and agents support TLS-protected MQTT. Both agent configurations stop
+startup when `MQTT_TLS` is disabled. Messages are signed with HMAC-SHA256 using
+the shared `SHARED_KEY`; receivers validate signatures and apply timestamp and
+nonce replay checks. Keep the shared secret private and consistent across the
+server and authorized agents.
 
-Архитектура XIDER строится по принципу **Zero-Trust**: брокер сообщений считается потенциально недоверенным транспортом. Даже в случае полной компрометации брокера MQTT или подмены TLS-сертификатов атакующий **не может подделать или прочитать команды**.
+Payload encryption uses AES-256-GCM with a key derived from `SHARED_KEY` using
+HKDF-SHA256. It is conditional on `ENCRYPT_PAYLOAD=true` in the participating
+components; it is not guaranteed by every source-run configuration. The
+Windows installer requires TLS and encrypted payload configuration before
+changing the scheduled task. Configure each deployment deliberately and verify
+its actual settings.
 
-```
-[ Telegram Client ]
-       │  (Telegram Bot API, HTTPS)
-       ▼
-[ TG-BOT-SERVER ]
-       │  1. Подготовка команды
-       │  2. Шифрование payload (AES-256-GCM)
-       │  3. Генерация nonce + timestamp
-       │  4. Подпись HMAC-SHA256 (SHARED_KEY)
-       ▼
-[ MQTT Broker (TLS 1.3 / mTLS) ]  <--- Потенциально скомпрометированный узел
-       ▼
-[ XGENT Agent (Windows / macOS) ]
-       │  1. Проверка срока жизни timestamp (< 120 сек)
-       │  2. Проверка дубликатов (Anti-Replay Nonce Cache)
-       │  3. Валидация подписи HMAC-SHA256 (constant-time compare)
-       │  4. Расшифровка AES-256-GCM
-       ▼
-[ Исполнение в безопасном контуре ]
-```
+## Accounts and permissions
 
----
+The protected owner is determined by server configuration. Other accounts can
+have user, guest, or blocked state. User permissions are scoped to devices and
+actions, and the bot checks those grants when handling device controls. Some
+actions also require confirmation. Operating-system permissions remain under
+local user control; bot authorization does not grant macOS or Windows system
+permissions.
 
-## 🔐 2. Криптографические протоколы
+## Updates and audit
 
-### 2.1. Подпись сообщений (HMAC-SHA256)
-Каждое управляющее сообщение сопровождается цифровой подписью HMAC-SHA256, вычисляемой от канонического представления данных.
-* **Ключ:** `SHARED_KEY` (генерируется при установке).
-* **Сравнение:** используется `hmac.compare_digest` (защита от timing attacks).
+The agent update path selects a release tag, requires owner confirmation, and
+checks the pinned publisher key and signed package before activation. The
+transactional updater retains the prior version for rollback when activation
+fails. The bot writes security-relevant events to its local audit log. Treat
+logs and deployment credentials as sensitive operational data.
 
-### 2.2. Защита от повтора (Anti-Replay Attack Protection)
-Атакующий, перехвативший валидный пакет, не может отправить его повторно:
-1. **Timestamp Check:** если сообщение старше 120 секунд, оно немедленно отбрасывается.
-2. **Nonce Deduplication:** агент хранит кольцевой буфер последних 2048 уникальных `nonce`. Повторный `nonce` приводит к мгновенному отказу.
+## Windows Defender alerts
 
-### 2.3. Сквозное шифрование (AES-256-GCM)
-При включенном параметре `ENCRYPT_PAYLOAD=true`:
-* Ключ шифрования выводится через **HKDF-SHA256** от `SHARED_KEY`.
-* Используется **AES-256-GCM** (Galois/Counter Mode) со случайным 96-битным вектором инициализации (IV) и 128-битным тегом аутентичности.
-* Ни брокер, ни сетевые снифферы не имеют доступа к передаваемым файлам, скриншотам, звуковым дорожкам или вводимым командам.
+Do not add Defender exclusions or disable protection to make XIDER run. Before
+installing a package, verify its origin, release tag, publisher signature, and
+signed manifest against the project’s published release information. If
+Defender reports a detection, stop the install, preserve the alert details and
+file hash, and investigate the exact artifact. Do not assume that a detection
+is a false positive solely because the project uses PyInstaller; use
+Microsoft’s reporting process or your organization’s security team when the
+evidence is inconclusive.
 
----
+## Reporting
 
-## 🛑 3. Защита от RCE и разграничение прав
-
-1. **Role-Based Access Control (RBAC):**
-   * `ADMIN` — полный доступ к управлению и настройкам.
-   * `TRUSTED` — доступ к мультимедиа и телеметрии.
-   * `VIEWER` — только просмотр статуса без прав на выполнение команд.
-2. **Аудит безопасности:**
-   * Все критические действия (вызов командной строки, выключение питания, передача файлов) фиксируются в структурированном журнале `audit.log` с указанием Telegram User ID и временной метки.
-
----
-
-## 🦠 4. Разбор детектов Windows Defender (False Positives)
-
-### Почему PyInstaller вызывает срабатывание эвристик:
-1. **Unpacker Stub:** Бинарник PyInstaller распаковывает Python-рантайм во временную директорию `%TEMP%/_MEIxxxxxx`. Этот паттерн поведения идентичен поведению классических дропперов вредоносного ПО.
-2. **Специфические модули:** Наличие импортов `ctypes`, `pynput`, `pycaw` и WinAPI-хуков ввода автоматически повышает эвристический балл угрозы в эвристических движках (Heuristic / ML-based detection).
-3. **Отсутствие цифровой подписи (Code Signing):** Неподписанный исполняемый файл без установленной репутации в Microsoft SmartScreen автоматически помечается как подозрительный.
-
-### Решение для продакшена:
-1. **Добавление ресурсов версии (`version_info.txt`):** указание CompanyName, FileVersion, LegalCopyright и ProductVersion снижает подозрительность у многих AV-вендоров.
-2. **Подпись сертификатом Code Signing:**
-   ```powershell
-   signtool sign /tr http://timestamp.digicert.com /td sha256 /fd sha256 /a dist\XGENT-WDS.exe
-   ```
-3. **Белый список для локальной разработки:**
-   ```powershell
-   Add-MpPreference -ExclusionPath "C:\Path\To\XIDER"
-   ```
+For a suspected vulnerability, include the affected commit or release, the
+relevant component, reproducible steps, and impact. Remove credentials,
+personal data, message payloads, and private keys from any report or log sample.

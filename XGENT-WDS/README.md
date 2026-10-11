@@ -22,8 +22,8 @@ python xgent_wds.py
 1. Соберите однофайловое приложение (в venv должен быть установлен PyInstaller):
 
 ```powershell
-pip install pyinstaller
-pyinstaller --onefile --windowed --name XGENT xgent_wds.py
+pip install pyinstaller==6.22.3
+pyinstaller --clean XGENT-WDS.spec
 ```
 
 Бинарь появится в `dist\XGENT.exe`.

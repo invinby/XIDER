@@ -3,6 +3,183 @@ from types import SimpleNamespace
 
 import access_store as store
 import roles
+import pytest
+
+
+def test_command_audit_is_typed_metadata_only(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    store.append_command_audit(request_id="request_123", command_hash="a" * 64,
+        status="completed", requester_id=200, approver_id=100,
+        device_id="MacBook-Air.local", exit_code=0)
+    row = store.recent_audit()[0]
+    assert row["request_id"] == "request_123"
+    assert row["command_hash"] == "a" * 64
+    assert row["status"] == "completed"
+    assert row["requester_id"] == 200 and row["approver_id"] == 100
+    assert row["device_id"] == "MacBook-Air.local" and row["exit_code"] == 0
+    assert type(row["at"]) is int
+    assert set(row) == {"kind", "at", "request_id", "command_hash", "status",
+                        "requester_id", "approver_id", "device_id", "exit_code"}
+    with pytest.raises(TypeError):
+        store.append_command_audit(request_id="request_123", command_hash="a" * 64,
+            status="completed", requester_id=200, approver_id=100,
+            device_id="a", exit_code=0, output="secret output")
+
+
+@pytest.mark.parametrize("raw,secret", [
+    ('password=[REDACTED]synthetic-second', 'synthetic-second'),
+    ('password=[REDACTED] first synthetic-second', 'synthetic-second'),
+    ('Authorization: Basic c3ludGhldGljLXBhc3N3b3Jk', 'c3ludGhldGljLXBhc3N3b3Jk'),
+    ('password=first synthetic-second', 'synthetic-second'),
+    ('password="synthetic password"', "synthetic password"),
+    ('token=synthetic-token', "synthetic-token"),
+    ('123456:abcdefghijklmnopqrstuvwxyz', "123456:abcdefghijklmnopqrstuvwxyz"),
+    ('-----BEGIN PRIVATE KEY-----\nprivate-fixture\n-----END PRIVATE KEY-----', "private-fixture"),
+    ('-----BEGIN OPENSSH PRIVATE KEY-----\ntruncated-fixture', "truncated-fixture"),
+    ('password="truncated quoted password', "quoted password"),
+    ('password="first synthetic-second' + chr(92), "synthetic-second"),
+    ('-----BEGIN ENCRYPTED PRIVATE KEY-----\nencrypted-fixture', "encrypted-fixture"),
+])
+def test_shell_output_redacts_credentials_without_losing_nonsecret_lines(raw, secret):
+    safe = store.redact_shell_output("first line\n" + raw)
+    assert secret not in safe
+    assert safe.startswith("first line\n")
+
+
+@pytest.mark.parametrize("operation", [
+    lambda actor, target: store.set_role(actor, target, store.Role.USER, 100),
+    lambda actor, target: store.set_blocked(actor, target, True, 100),
+    lambda actor, target: store.toggle_device(actor, target, "a", 100),
+    lambda actor, target: store.toggle_callback(actor, target, "cmd:status", 100),
+])
+def test_mutation_store_denies_nonowner_and_unknown_targets(monkeypatch, tmp_path, operation):
+    _isolate(monkeypatch, tmp_path)
+    store.register_start(_user(200))
+    before = store.get_user(200)
+    assert not operation(200, 200)
+    assert store.get_user(200) == before
+    assert not operation(100, 999)
+    assert store.get_user(999) is None
+    assert not operation(100, 100)
+
+
+def test_unblock_restores_prior_role_and_exact_grants_without_elevation(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    store.register_start(_user(200))
+    store.set_role(100, 200, store.Role.USER, 100)
+    store.toggle_device(100, 200, "a", 100)
+    store.toggle_callback(100, 200, "cmd:status", 100)
+    store.set_blocked(100, 200, True, 100)
+    store.set_blocked(100, 200, True, 100)
+    assert not store.can_use_callback(200, "cmd:status", 100, "a")
+    store.set_blocked(100, 200, False, 100)
+    assert store.get_role(200, 100) == store.Role.USER
+    assert store.can_use_callback(200, "cmd:status", 100, "a")
+    assert not store.can_use_callback(200, "cmd:screenshot", 100, "a")
+    store.set_role(100, 200, store.Role.GUEST, 100)
+    store.set_blocked(100, 200, True, 100)
+    store.set_blocked(100, 200, False, 100)
+    assert store.get_role(200, 100) == store.Role.GUEST
+    store.set_role(100, 200, store.Role.USER, 100)
+    assert store.get_user(200)["permissions"] == {"devices": ["a"], "callbacks": ["cmd:status"]}
+
+
+def test_audit_discards_raw_message_shell_file_location_payloads(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    for kind in ("telegram_message", "admin_message_sent", "shell", "stdout", "geo_location", "file_contents"):
+        store.append_audit(kind, actor_id=200, detail="41.123,69.456 secret-file-bytes rm -rf / raw stdout")
+    assert all(not row["detail"] for row in store.recent_audit())
+
+
+def test_first_start_is_distinct_from_prior_callback_activity(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    store.touch_user(_user(200), "telegram_callback", "admin:users")
+    assert store.register_start(_user(200))[1] is True
+    assert store.register_start(_user(200))[1] is False
+
+
+def test_persisted_owner_marker_cannot_create_a_second_owner(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    store.register_start(_user(200))
+    store._update(200, lambda record: record.update(role=store.Role.OWNER))
+    assert store.get_role(200, 100) == store.Role.GUEST
+    assert not store.can_use_callback(200, "admin:audit", 100)
+    assert store.get_role(100, 100) == store.Role.OWNER
+
+
+def test_audit_drops_unknown_payload_and_redacts_paths_and_coordinates(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    store.append_audit("unclassified_payload", detail="raw stdout whoami private.txt")
+    assert store.recent_audit()[0]["detail"] == ""
+    store.append_audit("telegram_callback", detail=r"token=secret C:\Users\rog\secret.txt /home/user/private.txt 41.123, 69.456")
+    detail = store.recent_audit()[0]["detail"]
+    for private in ("secret.txt", "private.txt", "Users", "41.123", "69.456", "token=secret"):
+        assert private not in detail
+
+
+def test_redaction_handles_quoted_credentials_with_spaces():
+    safe = store.redact_text('"password": "very secret value", MQTT_PASSWORD=\'another private value\'')
+    assert "very secret value" not in safe
+    assert "another private value" not in safe
+    assert safe.count("[REDACTED]") == 2
+
+
+@pytest.mark.parametrize("raw", [
+    r'{"password": "prefix\" TOPSECRET suffix ,; end"}',
+    r'MQTT_PASSWORD="prefix\" TOPSECRET suffix ,; end"',
+    r"MQTT_PASSWORD='prefix\' TOPSECRET suffix ,; end'",
+])
+def test_redaction_masks_entire_escaped_quoted_credentials(raw):
+    safe = store.redact_text(raw)
+    assert "TOPSECRET" not in safe
+    assert "suffix" not in safe
+    assert "prefix" not in safe
+    assert "[REDACTED]" in safe
+
+
+@pytest.mark.parametrize("raw", [
+    r'C:\Users\John Smith\Documents\private.txt',
+    r'file="C:\Users\John Smith\Documents\private.txt"',
+    r"file='C:\Users\John Smith\Documents\private.txt'",
+])
+def test_redaction_masks_entire_windows_path_with_spaces(raw):
+    safe = store.redact_text(raw)
+    for fragment in ("John", "Smith", "Documents", "private.txt"):
+        assert fragment not in safe
+    assert "[PATH REDACTED]" in safe
+
+
+@pytest.mark.parametrize("callback,full_device_allowed", [
+    ("cmd:screenshot", True), ("cmd:status", True), ("files:get", True),
+    ("fun:type", True), ("power_confirm:shutdown", True), ("kill:123", True),
+    ("volq:50", True), ("micdur:10", True), ("rotate:90", True),
+    ("fav:toggle:screenshot", True), ("rep:0", True), ("sleep:ok", True),
+    ("cmd:shell", False), ("shell:ok", False), ("cfm:stop_all", False),
+    ("stopall:ok", False), ("all:status", False), ("devmg:allow:device-1", False),
+    ("admin:users", False), ("server:logs", False), ("server_confirm:restart", False),
+    ("versions:install_confirm:v4.1.0", False), ("install:windows", False),
+    ("ev:menu", False), ("quiet:22:8", False), ("digest:60", False),
+    ("adm:rm:200", False), ("unknown:action", False),
+])
+def test_inventory_permission_matrix_is_device_bound_and_role_scoped(
+    monkeypatch, tmp_path, callback, full_device_allowed,
+):
+    # Expectations are hand-classified fixtures, not recomputed from store's
+    # prefix tables. A missing owner-only gate or widened family fails here.
+    _isolate(monkeypatch, tmp_path)
+    owner, user = 100, 200
+    store.register_start(_user(user))
+    assert store.can_use_callback(owner, callback, owner, "device-1") is True
+    assert store.can_use_callback(user, callback, owner, "device-1") is False
+    store.set_role(owner, user, store.Role.USER, owner)
+    store.toggle_device(owner, user, "device-1", owner)
+    assert store.can_use_callback(user, callback, owner, "device-1") is False
+    store.toggle_callback(owner, user, "full_device", owner)
+    assert store.can_use_callback(user, callback, owner, "device-1") is full_device_allowed
+    assert store.can_use_callback(user, callback, owner, "other-device") is False
+    assert store.can_use_callback(user, callback, owner, None) is False
+    store.set_blocked(owner, user, True, owner)
+    assert store.can_use_callback(user, callback, owner, "device-1") is False
 
 
 def _user(user_id: int, username: str = "tester"):
@@ -57,6 +234,53 @@ def test_category_access_comes_only_from_granted_action_in_same_device(monkeypat
     assert store.can_use_callback(200, "power:shutdown", 100, "laptop-a") is False
 
 
+def test_process_pagination_uses_the_process_list_grant_without_granting_kill(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    store.register_start(_user(200))
+    store.set_role(100, 200, store.Role.USER, 100)
+    store.toggle_device(100, 200, "laptop-a", 100)
+    store.toggle_callback(100, 200, "proc:0", 100)
+
+    assert store.can_use_callback(200, "proc:1", 100, "laptop-a") is True
+    assert store.can_use_callback(200, "proc:refresh", 100, "laptop-a") is True
+    assert store.can_use_callback(200, "proc:invalid", 100, "laptop-a") is False
+    assert store.can_use_callback(200, "killq:123", 100, "laptop-a") is False
+    assert store.can_use_callback(200, "proc:1", 100, "laptop-b") is False
+
+    store.set_blocked(100, 200, True, 100)
+    assert store.can_use_callback(200, "proc:1", 100, "laptop-a") is False
+
+
+def test_specific_kill_grant_allows_only_its_matching_process_confirmation(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    store.register_start(_user(200))
+    store.set_role(100, 200, store.Role.USER, 100)
+    store.toggle_device(100, 200, "laptop-a", 100)
+    store.toggle_callback(100, 200, "proc:0", 100)
+    store.toggle_callback(100, 200, "killq:42", 100)
+
+    assert store.can_use_callback(200, "killq:42", 100, "laptop-a") is True
+    assert store.can_use_callback(200, "kill:42", 100, "laptop-a") is True
+    assert store.can_use_callback(200, "killq:43", 100, "laptop-a") is False
+    assert store.can_use_callback(200, "kill:43", 100, "laptop-a") is False
+
+
+def test_screen_category_and_wallpaper_entry_follow_their_action_grants(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    store.register_start(_user(200))
+    store.set_role(100, 200, store.Role.USER, 100)
+    store.toggle_device(100, 200, "laptop-a", 100)
+
+    store.toggle_callback(100, 200, "cmd:geo_location", 100)
+    assert store.can_use_callback(200, "cat:screen", 100, "laptop-a") is True
+    assert store.can_use_callback(200, "cmd:geo_location", 100, "laptop-a") is True
+    store.toggle_callback(100, 200, "cmd:apps", 100)
+    assert store.can_use_callback(200, "cat:network", 100, "laptop-a") is True
+
+    store.toggle_callback(100, 200, "cmd:wallpaper_random_meme", 100)
+    assert store.can_use_callback(200, "menu:wallpaper", 100, "laptop-a") is True
+
+
 def test_legacy_coowner_is_downgraded_and_cannot_be_granted(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     store.register_start(_user(200))
@@ -97,6 +321,19 @@ def test_shell_remains_owner_only_even_if_a_user_callback_is_granted(monkeypatch
     assert store.can_use_callback(200, "cmd:status", 100, "other-device") is False
 
 
+def test_shell_request_grant_cannot_approve_shell_execution(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    store.register_start(_user(200))
+    store.set_role(100, 200, store.Role.USER, 100)
+    store.toggle_device(100, 200, "laptop-a", 100)
+    store.toggle_callback(100, 200, "cfm:shell", 100)
+    assert store.can_use_callback(200, "cfm:shell", 100, "laptop-a") is True
+    assert store.can_use_callback(200, "shell:ok", 100, "laptop-a") is False
+    assert store.can_use_callback(200, "cmd:shell", 100, "laptop-a") is False
+    store.toggle_callback(100, 200, "full_device", 100)
+    assert store.can_use_callback(200, "shell:ok", 100, "laptop-a") is False
+
+
 def test_legacy_global_callback_grants_are_ignored(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     store.register_start(_user(200))
@@ -126,7 +363,7 @@ def test_block_replaces_access_and_audit_redacts_tokens(monkeypatch, tmp_path):
     assert store.get_role(200, 100) == store.Role.BLOCKED
     assert store.can_use_callback(200, "cmd:status", 100) is False
 
-    store.append_audit("message", actor_id=200, detail="token=123456:abcdefghijklmnopqrstuvwxyz")
+    store.append_audit("callback_permission", actor_id=200, detail="token=123456:abcdefghijklmnopqrstuvwxyz")
     rows = store.recent_audit()
     assert "[REDACTED]" in rows[0]["detail"] or "[TOKEN]" in rows[0]["detail"]
 

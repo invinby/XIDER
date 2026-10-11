@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="description" content="XIDER is source code for owner-authorized Windows and macOS device management through Telegram.">
+    <title>XIDER · TARPED — owner-authorized device control</title>
+    <link rel="icon" href="assets/xider-mark.png" type="image/png">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="masthead">
+      <a class="brand" href="index.html" aria-label="XIDER home">
+        <span class="brand-mark"><img src="assets/xider-mark.png" alt=""></span>
+        <span class="brand-name">XIDER <span>/</span> TARPED</span>
+      </a>
+      <nav class="primary-nav" aria-label="Main navigation">
+        <a href="#system">System</a>
+        <a href="#boundaries">Boundaries</a>
+        <a href="#status">Status</a>
+        <a href="https://github.com/invinby/XIDER">GitHub <span aria-hidden="true">↗</span></a>
+      </nav>
+      <div class="language-switch" aria-label="Language">
+        <span aria-current="page">EN</span>
+        <a href="ru.html" lang="ru" hreflang="ru">RU</a>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="signal-dot" aria-hidden="true"></span> OWNER-AUTHORIZED · WINDOWS + macOS</p>
+          <h1 id="hero-title">One command path.<br><span>Owner stays in control.</span></h1>
+          <p class="hero-lede">XIDER is source code for managing devices you own or are explicitly authorized to manage. A Telegram bot checks access, routes a signed MQTT command, and the selected endpoint agent returns its result.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://github.com/invinby/XIDER">Explore the source <span aria-hidden="true">↗</span></a>
+            <a class="text-link" href="https://github.com/invinby/XIDER/blob/main/README.md">Read the project guide <span aria-hidden="true">→</span></a>
+          </div>
+          <p class="hero-note">Source version <strong>4.3.0</strong> · a source number is not proof of an installed or published package.</p>
+        </div>
+
+        <figure class="route-figure" aria-labelledby="route-caption">
+          <figcaption id="route-caption"><span>01 / COMMAND ROUTE</span><span>DOCUMENTED FLOW</span></figcaption>
+          <ol class="route-list" aria-label="Command path from owner to device agent">
+            <li><span class="route-index">01</span><span class="route-copy"><strong>Owner</strong><small>Telegram account · access checked</small></span><span class="route-tag">YOU</span></li>
+            <li><span class="route-index">02</span><span class="route-copy"><strong>TG-BOT-SERVER</strong><small>Roles, grants, command routing</small></span><span class="route-tag">BOT</span></li>
+            <li><span class="route-index">03</span><span class="route-copy"><strong>MQTT broker</strong><small>TLS transport · signed messages</small></span><span class="route-tag">TLS</span></li>
+            <li class="route-endpoints"><span class="route-index">04</span><span class="route-copy"><strong>Endpoint agent</strong><small>Selected device performs the command</small></span><span class="endpoint-tags"><span>WINDOWS</span><span>macOS</span></span></li>
+          </ol>
+          <p class="route-foot"><span class="route-line" aria-hidden="true"></span>Submission is not proof of completion. The agent must return a result.</p>
+        </figure>
+      </section>
+
+      <div class="fact-ribbon" aria-label="Project facts">
+        <span><b>02</b> endpoint paths</span><span><b>06</b> interface voices</span><span><b>01</b> owner-defined access boundary</span>
+      </div>
+
+      <section class="section-block" id="system" aria-labelledby="system-title">
+        <div class="section-heading">
+          <p class="eyebrow">THE SYSTEM, IN PARTS</p>
+          <h2 id="system-title">A small control plane.<br><span>Clear jobs for each piece.</span></h2>
+          <p>Each component has a named responsibility; interface wording does not change access rights or command behavior.</p>
+        </div>
+        <ol class="component-list">
+          <li><span class="component-number">01</span><div><h3>TG-BOT-SERVER</h3><p>Telegram interface, role checks, device controls, and release catalog.</p></div><span class="component-kind">CONTROL</span></li>
+          <li><span class="component-number">02</span><div><h3>XGENT-WDS <span>+</span> XGENT-MCS</h3><p>Windows and macOS agents that receive an authorized command and report a result.</p></div><span class="component-kind">ENDPOINTS</span></li>
+          <li><span class="component-number">03</span><div><h3>Guard Keeper</h3><p>Reports supervisor state and can recover its agent according to local configuration. It cannot wake an offline or powered-off computer.</p></div><span class="component-kind">SUPERVISOR</span></li>
+          <li><span class="component-number">04</span><div><h3>X-DOCK <span>·</span> X-LEDGER</h3><p>Signed agent-update flow and a catalog of GitHub releases. Selected versions require owner confirmation and signature checks.</p></div><span class="component-kind">RELEASES</span></li>
+          <li><span class="component-number">05</span><div><h3>X-LEX</h3><p>Six interface voices: X-TECH, X-PERSON, X-PIKMI, X-TARPED, X-CORE, and X-ADAM. Wording only; permissions stay the same.</p></div><span class="component-kind">INTERFACE</span></li>
+        </ol>
+      </section>
+
+      <section class="boundary-section" id="boundaries" aria-labelledby="boundaries-title">
+        <div class="boundary-intro">
+          <p class="eyebrow">TRUST IS A DESIGN CONSTRAINT</p>
+          <h2 id="boundaries-title">Useful control.<br><span>Honest limits.</span></h2>
+          <p>Designed for the owner’s devices or devices they are explicitly authorized to manage. Not a way around operating-system consent.</p>
+        </div>
+        <div class="boundary-columns">
+          <article>
+            <span class="boundary-index">A / ACCESS</span>
+            <h3>Rights are explicit</h3>
+            <p>The protected owner is defined by configuration. Other accounts can be users, guests, or blocked; user access is scoped by device and action grants.</p>
+            <p>MQTT uses TLS and HMAC-signed messages. Payload encryption depends on <code>ENCRYPT_PAYLOAD</code> and is not assumed active in every local setup.</p>
+          </article>
+          <article>
+            <span class="boundary-index">B / REALITY</span>
+            <h3>Status is not certainty</h3>
+            <p>An online indicator means a recent heartbeat, not guaranteed availability. IP-based location is approximate, not GPS.</p>
+            <p>Camera, microphone, screen capture, and other protected capabilities need an authorized command and applicable OS permission. Sending a command alone proves nothing about physical completion.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="status-section" id="status" aria-labelledby="status-title">
+        <div class="status-topline"><span class="status-label"><span class="status-square" aria-hidden="true"></span> SOURCE SNAPSHOT</span><span class="status-version">4.3.0</span></div>
+        <div class="status-content">
+          <h2 id="status-title">What has—and has not—been verified.</h2>
+          <div class="status-grid">
+            <div><span class="status-key">IN THIS REPOSITORY</span><p>Source code, release history, and offline test fixtures.</p></div>
+            <div><span class="status-key">NOT CLAIMED HERE</span><p>Live Telegram, MQTT, production VPS, or physical Mac/Windows acceptance.</p></div>
+            <div><span class="status-key">NEXT EVIDENCE</span><p>Check the release notes and acceptance checklist for version-specific results.</p></div>
+          </div>
+          <a class="text-link" href="https://github.com/invinby/XIDER/releases">Browse release evidence <span aria-hidden="true">↗</span></a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <a class="footer-brand" href="index.html">XIDER <span>/</span> TARPED</a>
+      <p>MIT licensed · use only on devices you own or are authorized to manage.</p>
+      <nav aria-label="Project links"><a href="https://github.com/invinby/XIDER/blob/main/SECURITY.md">Security</a><a href="https://github.com/invinby/XIDER/blob/main/CHANGELOG.md">Changelog</a><a href="https://github.com/invinby/XIDER/blob/main/LICENSE">License</a></nav>
+      <a class="back-top" href="#main">Back to top ↑</a>
+    </footer>
+  </body>
+</html>

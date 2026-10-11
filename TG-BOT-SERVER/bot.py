@@ -11,9 +11,12 @@ if __name__ == "__main__":
 import asyncio
 import base64
 import contextvars
+from contextlib import asynccontextmanager
 import datetime
 import html
+import hashlib
 import io
+import json
 import logging
 import os
 import re
@@ -22,8 +25,10 @@ import sys
 import threading
 import time
 import uuid
+import zipfile
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from types import SimpleNamespace
 
 if sys.platform == "win32":
     try:
@@ -60,11 +65,13 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BufferedInputFile, CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import bot_settings
 import access_store
+import command_approval
+import command_signing
 import text_store
 import xlex
 import release_catalog
@@ -75,11 +82,16 @@ from config import ADMIN_ID, BOT_TOKEN, ENCRYPT_PAYLOAD, MQTT_BROKER, MQTT_PORT,
 from roles import AdminFilter, AnyAccessFilter, OwnerFilter, ReadOnlyFilter, Role, get_user_role
 from crypto import verify_message_detailed
 from device_store import DeviceStore
+from update_store import UpdateStore
+from update_coordinator import Coordinator, TERMINAL as UPDATE_TERMINAL
 from transport import MQTTTransport
 from wol import send_wol
 from xgencrypto import decrypt_payload
 from version import BUILD_CODE, BUILD_DATE, VERSION
 import server_ops
+import companion_status
+import check_store
+import diagnostics
 
 logging.basicConfig(
     level=logging.INFO,
@@ -109,10 +121,12 @@ def audit(event: str, **fields) -> None:
     BLOCK = ("token", "password", "secret", "key", "bot_token", "admin_id")
     clean = {}
     for k, v in fields.items():
+        if k.lower() in {"latitude", "longitude", "coordinates", "location", "stdout", "stderr", "shell", "command", "file_bytes", "file_contents"}:
+            continue
         if k.lower() in BLOCK:
             clean[k] = "[REDACTED]"
         else:
-            clean[k] = v
+            clean[k] = access_store.redact_text(str(v))
     audit_log.info("%s | %s", event, " | ".join(f"{k}={v}" for k, v in clean.items()))
 
 
@@ -211,6 +225,7 @@ class SessionRegistry(dict):
 
 @dp.update.outer_middleware()
 async def _live_log_middleware(handler, event, data):
+    server_ops.observe("telegram_polling", "update_received")
     user = None
     kind = "update"
     detail = ""
@@ -218,12 +233,15 @@ async def _live_log_middleware(handler, event, data):
         m = event.message
         user = m.from_user
         kind = "telegram_message"
-        detail = m.text or f"<{m.content_type}>"
+        # Bodies may contain shell commands, coordinates or file contents.
+        detail = f"<{m.content_type}>"
     elif event.callback_query:
         cq = event.callback_query
         user = cq.from_user
         kind = "telegram_callback"
-        detail = cq.data or ""
+        # Keep the route family, never attacker-supplied callback parameters.
+        parts = str(cq.data or "").split(":")[:2]
+        detail = ":".join(part for part in parts if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", part))
     detail = access_store.redact_text(detail)
     token = CURRENT_TG_USER.set(int(user.id) if user else ADMIN_ID)
     try:
@@ -261,21 +279,21 @@ async def on_cmd_clipboard(cq: CallbackQuery):
     if result is None:
         await _replace_callback_message(cq,
             _lex("device_timeout", seconds="10"),
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
         return
     text = result.get("text")
     if not text:
         await _replace_callback_message(cq,
             "⚠️ Буфер обмена пуст или недоступен.",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
     else:
         # Экранируем текст для безопасного вывода
         safe_text = html.escape(text)
         await _replace_callback_message(cq,
             f"📋 <b>Буфер обмена:</b>\n<pre>{safe_text}</pre>",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
 
 
@@ -304,20 +322,20 @@ async def on_cmd_processes(cq: CallbackQuery):
     if result is None:
         await _replace_callback_message(cq,
             _lex("device_timeout", seconds="15"),
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
         return
     lines = result.get("lines", [])
     if not lines:
         await _replace_callback_message(cq,
             "⚠️ Не удалось получить список процессов.",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
     else:
         text = "\n".join(html.escape(line) for line in lines)
         await _replace_callback_message(cq,
             f"⚙️ <b>Топ-5 процессов по памяти:</b>\n<pre>{text}</pre>",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
 
 
@@ -346,34 +364,41 @@ async def on_cmd_mic(cq: CallbackQuery):
     if result is None:
         await _replace_callback_message(cq,
             "⏳ Звук не получен за 20 сек — устройство офлайн или нет микрофона.",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
         return
     audio_b64 = result.get("audio")
     if not audio_b64:
         await _replace_callback_message(cq,
             "⚠️ Устройство ответило ошибкой или микрофон недоступен.",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
         return
     try:
         audio_bytes = base64.b64decode(audio_b64)
         audio_file = BufferedInputFile(audio_bytes, filename="mic.ogg")
-        await bot.send_voice(
-            cq.from_user.id,
+        await _replace_callback_with_media(
+            cq, bot.send_voice,
             voice=audio_file,
-            caption=f"🎙 <b>{target_label(target)}</b>",
-            reply_markup=back_to_device_kb(),
+            caption=f"🎙 <b>{html.escape(target_label(target))}</b>",
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
     except Exception:
         log.exception("Ошибка декодирования аудио")
         await _replace_callback_message(cq,
             "⚠️ Ошибка обработки звука.",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
 
 
-@router.callback_query(OwnerFilter(), F.data == "cmd:shell")
+def _shell_request_allowed(user_id: int, target: str) -> bool:
+    info = devices.get(target) if target and target != "all" else None
+    protocol = (info.get("command_approval_protocol", (info.get("capabilities") or {}).get("command_approval_protocol"))) if info else None
+    return (type(protocol) is int and protocol >= 1
+            and access_store.can_use_callback(user_id, "cmd:shell", ADMIN_ID, target))
+
+
+@router.callback_query(AdminFilter(), F.data == "cmd:shell")
 async def on_cmd_shell(cq: CallbackQuery, state: FSMContext):
     target = SESSION.get("target")
     if not target:
@@ -382,8 +407,10 @@ async def on_cmd_shell(cq: CallbackQuery, state: FSMContext):
     if target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
-    await state.set_state(Form.wait_shell)
-    await state.update_data(command_target=target)
+    if not _shell_request_allowed(cq.from_user.id, target):
+        await cq.answer("Запрос терминала недоступен: проверьте права и версию агента.", show_alert=True)
+        return
+    await _start_authorized_input(state, Form.wait_shell, "cmd:shell", target, command_target=target)
     await _replace_callback_message(
         cq,
         _lex("shell_prompt"),
@@ -392,12 +419,12 @@ async def on_cmd_shell(cq: CallbackQuery, state: FSMContext):
     await cq.answer()
 
 
-@router.message(OwnerFilter(), Form.wait_shell)
+@router.message(AdminFilter(), Form.wait_shell)
 async def on_shell_input(message: Message, state: FSMContext):
     form_data = await state.get_data()
     await state.clear()
-    cmd = (message.text or "").strip()
-    if not cmd:
+    cmd = message.text or ""
+    if not cmd.strip():
         await _replace_user_card(
             message, _lex("generic_empty_command"), reply_markup=back_to_device_kb()
         )
@@ -413,46 +440,144 @@ async def on_shell_input(message: Message, state: FSMContext):
             message, _lex("single_device_only"), reply_markup=back_to_device_kb()
         )
         return
-    sent, command_id = publish_tracked("shell", _target=target, command=cmd)
-    if not sent:
-        await _replace_user_card(
-            message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb()
-        )
+    if SESSION.get("target") != target or not _shell_request_allowed(message.from_user.id, target):
+        await _replace_user_card(message, "Запрос терминала недоступен: права или версия агента изменились.", reply_markup=back_to_device_kb())
         return
+    # Telegram cards have a 4096-character limit. Reject oversized previews,
+    # never truncate an executable command into a misleading approval card.
+    if len(cmd.encode("utf-8")) > 3000:
+        await _replace_user_card(message, "Команда слишком длинная для точного предпросмотра (3000 байт).", reply_markup=back_to_device_kb())
+        return
+    try:
+        pending = command_approval.create_pending(message.from_user.id, ADMIN_ID, target, cmd, int(time.time()))
+    except (ValueError, command_approval.PendingStoreFull):
+        await _replace_user_card(message, "Не удалось создать запрос подтверждения.", reply_markup=back_to_device_kb())
+        return
+    preview_delivered = False
+    try:
+        kb = InlineKeyboardBuilder()
+        approve_callback = f"cmd:shell-approve:{pending.request_id}"
+        cancel_callback = f"cmd:shell-cancel:{pending.request_id}"
+        kb.button(text=_lex("confirm_yes_button"), callback_data=approve_callback)
+        kb.button(text=_lex("versions_install_cancel_button"), callback_data=cancel_callback)
+        kb.adjust(2)
+        await _replace_user_card(
+            message, "Запрос передан владельцу на подтверждение.", reply_markup=back_to_device_kb(),
+        )
+        delivered = await _notify_owner(
+            f"<b>Подтверждение команды</b>\nУстройство: {html.escape(target)}\n"
+            f"Запросил: {pending.requester_id}\nСоздан: {pending.created_at}\n"
+            f"Действует до: {pending.expires_at}\nЛимит выполнения: 20 секунд\n"
+            f"SHA-256: <code>{pending.command_hash}</code>\n<pre>{html.escape(cmd)}</pre>",
+            reply_markup=kb.as_markup(),
+            strict_delivery=True,
+        )
+        preview_delivered = delivered is True
+    finally:
+        # Synchronous cleanup also runs on CancelledError before delivery.
+        # The original cancellation/exception propagates after invalidation.
+        if not preview_delivered:
+            command_approval.cancel_pending(pending.request_id, pending.owner_id)
+    if not preview_delivered:
+        await _replace_user_card(message, "Предпросмотр не доставлен владельцу. Запрос отменён.", reply_markup=back_to_device_kb())
 
-    await _replace_user_card(
-        message,
-        _lex_html("command_waiting", emoji="💻", label="Shell", device=target_label(target)),
-        reply_markup=back_to_device_kb(),
-    )
-    result = await shell_collector.wait_for(target, "shell", 20.0, command_id)
+
+@router.callback_query(OwnerFilter(), F.data.startswith("cmd:shell-approve:"))
+async def on_shell_approve(cq: CallbackQuery):
+    actor = cq.from_user.id if cq.from_user else None
+    if actor != ADMIN_ID:
+        await cq.answer("Подтверждение доступно только владельцу.", show_alert=True)
+        return
+    pending = command_approval.get_pending(str(cq.data or "").removeprefix("cmd:shell-approve:"))
+    if (pending is None or pending.owner_id != ADMIN_ID
+            or hashlib.sha256(pending.command_text.encode("utf-8")).hexdigest() != pending.command_hash
+            or not _shell_request_allowed(pending.requester_id, pending.device_id)):
+        await cq.answer("Запрос недействителен или права изменились.", show_alert=True)
+        return
+    # No await between the current authorization check and atomic consumption.
+    approved = command_approval.consume_pending(pending.request_id, actor, pending.device_id, pending.command_hash, int(time.time()))
+    if approved is None:
+        await cq.answer("Запрос истёк или уже обработан.", show_alert=True)
+        return
+    try:
+        envelope = command_signing.sign_approved_command(
+            request_id=approved.request_id, requester_id=approved.requester_id,
+            approver_id=actor, device_id=approved.device_id, command=approved.command_text,
+            issued_at=approved.created_at, expires_at=approved.expires_at,
+            nonce=approved.nonce, key_id=command_signing.signing_key_id(),
+        )
+        if command_signing.verify_approved_command(
+            envelope, command=approved.command_text,
+            expected_device_id=approved.device_id, now=int(time.time()),
+        ) is None:
+            raise command_signing.CommandSigningUnavailable("command signing configuration is invalid")
+        try:
+            _audit_shell_result(approved, actor, "attempting", None)
+        except OSError:
+            await cq.answer("Журнал выполнения недоступен. Команда не отправлена.", show_alert=True)
+            return
+        sent = transport.publish_command(approved.device_id, "shell", id=approved.request_id,
+                                         command=approved.command_text, approval=envelope)
+    except (ValueError, command_signing.CommandSigningUnavailable):
+        _audit_shell_result(approved, actor, "signing_unavailable", None)
+        await cq.answer("Подпись команды недоступна. Создайте новый запрос после настройки сервера.", show_alert=True)
+        return
+    _audit_shell_result(approved, actor, "sent" if sent is True else "publish_unknown" if sent is None else "publish_failed", None)
+    await cq.answer()
+    dispatch_text = ("Команда отправлена." if sent is True else
+                     "Доставка команды пока не подтверждена. Ожидаю ответ на тот же запрос; повторная отправка не выполняется."
+                     if sent is None else _lex("mqtt_disconnected"))
+    await _replace_callback_message(cq, dispatch_text, reply_markup=back_to_device_kb())
+    if sent is False:
+        return
+    result = await shell_collector.wait_for(approved.device_id, "shell", 20.0, approved.request_id)
+    code = (result or {}).get("returncode")
+    code = code if type(code) is int else None
+    status = (result or {}).get("status")
     if result is None:
-        await _replace_user_card(
-            message,
-            _lex("device_timeout", seconds="20"),
-            reply_markup=back_to_device_kb(),
-        )
+        status = "result_timeout"
+    elif not isinstance(status, str) or status not in {"completed", "failed", "timeout", "error", "rejected"}:
+        status = "completed" if code == 0 else "failed" if code is not None else "error"
+    _audit_shell_result(approved, actor, status, code)
+    if actor != ADMIN_ID:
         return
+    if result is not None and ("stdout" in result or "stderr" in result):
+        # Redact the entire capped stream before limiting the Telegram card.
+        raw_output = str(result.get("stdout") or "")
+        stderr = str(result.get("stderr") or "")
+        if stderr:
+            raw_output += "\n[STDERR]\n" + stderr
+    else:
+        raw_output = str((result or {}).get("output") or "")
+    safe_output = access_store.redact_shell_output(raw_output)
+    suffix = f"\n[{status}; exit={code}]"
+    for stream in ("stdout", "stderr"):
+        if (result or {}).get(f"{stream}_truncated") is True:
+            suffix += f"\n[{stream.upper()}: вывод ограничен 8192 байт]"
+    output = html.escape(safe_output[:2800] + suffix)
+    text = (_lex("command_result", emoji="💻", label="Shell", device=html.escape(target_label(approved.device_id)), text=output)
+            if result is not None else "Результат команды неизвестен: ответ за 20 секунд не получен. Команда могла выполниться; повторно она не отправлялась.")
+    await _replace_callback_message(cq, text, reply_markup=back_to_device_kb())
 
-    output = str(result.get("output", ""))
-    safe_out = html.escape(output)
-    if len(safe_out) > 3800:
-        safe_out = safe_out[:3800]
-        if safe_out.rfind("&") > safe_out.rfind(";"):
-            safe_out = safe_out[:safe_out.rfind("&")]
-        safe_out += "\n...[ОБРЕЗАНО]"
 
-    await _replace_user_card(
-        message,
-        _lex(
-            "command_result",
-            emoji="💻",
-            label="Shell",
-            device=html.escape(target_label(target)),
-            text=safe_out,
-        ),
-        reply_markup=back_to_device_kb(),
+def _audit_shell_result(approved, actor: int, status: str, exit_code: int | None) -> None:
+    access_store.append_command_audit(
+        request_id=approved.request_id, command_hash=approved.command_hash,
+        status=status, requester_id=approved.requester_id, approver_id=actor,
+        device_id=approved.device_id, exit_code=exit_code,
     )
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("cmd:shell-cancel:"))
+async def on_shell_cancel(cq: CallbackQuery):
+    actor = cq.from_user.id if cq.from_user else None
+    pending = command_approval.get_pending(str(cq.data or "").removeprefix("cmd:shell-cancel:"))
+    if actor != ADMIN_ID or pending is None or pending.owner_id != ADMIN_ID:
+        await cq.answer("Отмена недоступна.", show_alert=True)
+        return
+    command_approval.cancel_pending(pending.request_id, actor)
+    await cq.answer()
+    await _replace_callback_message(cq, "Запрос отменён.", reply_markup=back_to_device_kb())
 
 
 @router.callback_query(AdminFilter(), F.data == "cmd:open_app")
@@ -734,15 +859,8 @@ def device_card(device_id: str) -> str:
     else:
         seen_str = "не в сети"
 
-    guardian = info.get("guardian") or {}
-    guardian_seen = float(info.get("guardian_last_seen", 0) or 0)
-    if guardian:
-        guardian_version = html.escape(str(guardian.get("version") or "?"))
-        guardian_fresh = bool(is_online and guardian_seen and time.time() - guardian_seen < _OFFLINE_TIMEOUT_SEC)
-        guardian_state = "🟢 ответил" if guardian_fresh else "⚪ нет свежего ответа"
-        guardian_str = f"{guardian_state}, v{guardian_version}"
-    else:
-        guardian_str = "не обнаружен"
+    keeper = companion_status.device_companions(info, now=time.time())[0]
+    guardian_str = html.escape(_companion_row(keeper).split(": ", 1)[1])
 
     os_low = os_str.lower()
     os_icon = "🍏" if ("mac" in os_low or "darwin" in os_low) else ("🪟" if "win" in os_low else "🐧")
@@ -844,21 +962,20 @@ def main_menu(user_id: int | None = None):
     user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
     role = get_user_role(user_id)
     kb = InlineKeyboardBuilder()
+    if role == Role.BLOCKED:
+        return kb.as_markup()
     if role == Role.OWNER:
         kb.button(text=_lex("devices_button"), callback_data="menu:devices", style="primary")
-        kb.button(text=_nav("all_devices"), callback_data="dev:all", style="primary")
         kb.button(text=_lex("server_button"), callback_data="menu:server", style="primary")
-        kb.button(text=_nav("events"), callback_data="ev:menu", style="primary")
     elif role == Role.USER:
         kb.button(text=_lex("my_devices_button"), callback_data="menu:devices", style="primary")
         kb.button(text=_lex("server_overview_button"), callback_data="menu:server", style="primary")
     else:
         kb.button(text=_lex("guest_devices_button"), callback_data="menu:guest_devices", style="primary")
         kb.button(text=_lex("server_overview_button"), callback_data="menu:server", style="primary")
-    kb.button(text=_lex("about_button"), callback_data="menu:about", style="primary")
     if role == Role.OWNER:
         kb.button(text=_nav("admin"), callback_data="menu:admin", style="danger")
-    # Compact dashboard rows group devices, operations, then information/admin.
+    kb.button(text=_lex("about_button"), callback_data="menu:about", style="primary")
     kb.adjust(2)
     return kb.as_markup()
 
@@ -866,23 +983,38 @@ def main_menu(user_id: int | None = None):
 def _visible_device_items(user_id: int | None = None) -> dict[str, dict]:
     user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
     all_devices = devices.all()
-    role = get_user_role(user_id)
-    if role == Role.OWNER:
-        return all_devices
-    if role != Role.USER:
-        return {}
-    record = access_store.get_user(user_id) or {}
-    permitted = set((record.get("permissions") or {}).get("devices") or [])
-    return {device_id: info for device_id, info in all_devices.items() if device_id in permitted}
+    return {
+        device_id: info
+        for device_id, info in all_devices.items()
+        if access_store.can_use_callback(
+            user_id, f"dev:{device_id}", ADMIN_ID, device_id
+        )
+    }
+
+
+_UNSUPPORTED_ACTION_CALLBACKS_BY_OS = {
+    # macOS deliberately reports this action as unavailable: its agent has no
+    # stable public CLI for Night Shift/night-light control.
+    "cmd:nightlight": {"macos", "darwin"},
+}
+
+
+def _device_supports_callback(callback: str, target: str | None) -> bool:
+    if not target or target == "all":
+        return True
+    info = devices.get(target) or {}
+    os_name = str(info.get("os") or "").strip().lower()
+    unsupported_markers = _UNSUPPORTED_ACTION_CALLBACKS_BY_OS.get(callback, set())
+    return not any(marker in os_name for marker in unsupported_markers)
 
 
 def _callback_visible_to_user(callback: str, user_id: int | None = None) -> bool:
     """Render a device action only when the same server-side gate will allow it."""
     user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
-    if get_user_role(user_id) == Role.OWNER:
-        return True
-    return access_store.can_use_callback(
-        user_id, callback, ADMIN_ID, SESSION.get("target")
+    target = SESSION.get("target")
+    return (
+        access_store.can_use_callback(user_id, callback, ADMIN_ID, target)
+        and _device_supports_callback(callback, target)
     )
 
 
@@ -890,6 +1022,53 @@ def _action_button(kb: InlineKeyboardBuilder, *, text: str, callback: str,
                    style: str = "primary", user_id: int | None = None) -> None:
     if _callback_visible_to_user(callback, user_id):
         kb.button(text=text, callback_data=callback, style=style)
+
+
+def _filter_device_keyboard(
+    markup: InlineKeyboardMarkup, user_id: int | None = None
+) -> InlineKeyboardMarkup:
+    """Fail-closed rendering for every action in a device-scoped keyboard.
+
+    Device submenu builders have legacy direct ``button`` calls; filtering the
+    completed markup ensures each action uses the same callback/device grant as
+    its AdminFilter handler. Public ``url:cancel`` remains a ReadOnlyFilter
+    escape from an input form.
+    """
+    user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
+    role = get_user_role(user_id)
+    rows = []
+    for row in markup.inline_keyboard:
+        visible = []
+        for button in row:
+            callback = button.callback_data
+            action_target = (
+                callback.split(":", 1)[1]
+                if callback and callback.startswith("dev:")
+                else SESSION.get("target")
+            )
+            if not callback:
+                visible.append(button)
+            elif callback == "url:cancel":
+                if role != Role.BLOCKED:
+                    visible.append(button)
+            elif callback.startswith("url:count:"):
+                target = SESSION.get("target")
+                if role == Role.OWNER or (
+                    target
+                    and target != "all"
+                    and access_store.can_use_callback(
+                        user_id, "cmd:url", ADMIN_ID, target
+                    )
+                ):
+                    visible.append(button)
+            elif access_store.can_use_callback(user_id, callback, ADMIN_ID, action_target) and (
+                not callback.startswith("cmd:")
+                or _device_supports_callback(callback, action_target)
+            ):
+                visible.append(button)
+        if visible:
+            rows.append(visible)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def devices_menu(user_id: int | None = None):
@@ -916,6 +1095,8 @@ def devices_menu(user_id: int | None = None):
             style="success" if is_online else "danger",
         )
     if is_owner:
+        kb.button(text=_nav("all_devices"), callback_data="dev:all", style="primary")
+    if is_owner:
         kb.button(text=_lex("devices_add_button"), callback_data="devmg:manualadd", style="primary")
         kb.button(text=_lex("manual_install_button"), callback_data="install:manual", style="success")
         kb.button(text=_lex("devices_blocked_button"), callback_data="devmg:blocked", style="danger")
@@ -923,9 +1104,9 @@ def devices_menu(user_id: int | None = None):
     kb.button(text=_nav("refresh"), callback_data="menu:devices", style="success")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     dev_count = len(devs)
-    adjust_pattern = [1] * dev_count + ([2, 2, 2] if is_owner else [1, 1])
+    adjust_pattern = [1] * (dev_count + (1 if is_owner else 0)) + ([2, 2, 2] if is_owner else [1, 1])
     kb.adjust(*adjust_pattern)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
 def manual_install_os_keyboard(*, selected_os: str | None = None):
@@ -978,18 +1159,18 @@ def device_menu(device_id: str, user_id: int | None = None):
     is_owner = get_user_role(user_id) == Role.OWNER
     kb = InlineKeyboardBuilder()
 
-    # Exact-action grants reveal only the categories that contain a granted
-    # action. `full_device` keeps the complete owner-style device menu.
-    _action_button(kb, text=_nav("media"), callback="cat:media", style="success", user_id=user_id)
-    _action_button(kb, text=_nav("screen"), callback="cat:screen", user_id=user_id)
-    _action_button(kb, text=_nav("input"), callback="cat:input", user_id=user_id)
-    _action_button(kb, text=_nav("system"), callback="cat:system", user_id=user_id)
-    _action_button(kb, text=_nav("network"), callback="cat:network", user_id=user_id)
-    _action_button(kb, text=_nav("files"), callback="cat:files", user_id=user_id)
-    _action_button(kb, text=_nav("terminal"), callback="cat:terminal", user_id=user_id)
-    _action_button(kb, text=_nav("power"), callback="cat:power", style="danger", user_id=user_id)
-    _action_button(kb, text=_nav("pranks"), callback="cat:pranks", style="success", user_id=user_id)
-    _action_button(kb, text=_nav("device_settings"), callback="cat:device", user_id=user_id)
+    # The nine user-facing sections are an information architecture only;
+    # existing action callbacks remain unchanged for saved keyboards/clients.
+    category_buttons = (
+        (_nav("system"), "cat:system", "primary"),
+        (_nav("screen"), "cat:screen", "success"),
+        (_nav("files"), "cat:files", "primary"),
+        (_nav("network"), "cat:network", "primary"),
+        (_nav("terminal"), "cat:terminal", "primary"),
+        (_nav("power"), "cat:power", "danger"),
+    )
+    for text, callback, style in category_buttons:
+        _action_button(kb, text=text, callback=callback, style=style, user_id=user_id)
 
     # Favorite actions (if configured)
     favs = devices.get_favorites(device_id)[:4]
@@ -1003,13 +1184,15 @@ def device_menu(device_id: str, user_id: int | None = None):
         )
 
     info = devices.get(device_id) or {}
-    if is_owner:
-        agent_ver = str(info.get("version") or "?")
-        keeper_ver = str((info.get("guardian") or {}).get("version") or "?")
-        kb.button(
-            text=_limit_button_label(_lex("versions_button", agent=agent_ver, keeper=keeper_ver)),
-            callback_data="versions:device", style="success",
-        )
+    agent_ver = str(info.get("version") or "?")
+    keeper_ver = companion_status.device_companions(info, now=time.time())[0]["version"] or "?"
+    _action_button(
+        kb,
+        text=_limit_button_label(_lex("versions_button", agent=agent_ver, keeper=keeper_ver)),
+        callback="versions:device", style="success", user_id=user_id,
+    )
+    _action_button(kb, text=_nav("device_settings"), callback="cat:device", user_id=user_id)
+    _action_button(kb, text=_nav("pranks"), callback="cat:pranks", style="success", user_id=user_id)
     _action_button(
         kb, text=_lex("device_stop_agent_button"), callback="cfm:stop",
         style="danger", user_id=user_id,
@@ -1021,9 +1204,10 @@ def device_menu(device_id: str, user_id: int | None = None):
         callback_data="menu:target" if is_owner else "menu:devices",
         style="danger",
     )
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
 
     kb.adjust(2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
 def all_menu():
@@ -1037,7 +1221,7 @@ def all_menu():
     kb.button(text=_lex("devices_back_list_button"), callback_data="menu:target", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup())
 
 
 def back_to_device_kb():
@@ -1055,8 +1239,9 @@ def power_menu():
     kb.button(text=_lex("power_reboot_button"), callback_data="power:reboot", style="danger")
     kb.button(text=_lex("power_shutdown_button"), callback_data="power:shutdown", style="danger")
     kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 1)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup())
 
 
 def confirm_power_menu(action: str):
@@ -1070,8 +1255,9 @@ def confirm_power_menu(action: str):
     kb = InlineKeyboardBuilder()
     kb.button(text=_lex("power_confirm_button", action=label), callback_data=f"power_confirm:{action}", style="danger")
     kb.button(text=_nav("cancel"), callback_data="back:device", style="primary")
-    kb.adjust(1, 1)
-    return kb.as_markup()
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
+    kb.adjust(1, 2)
+    return _filter_device_keyboard(kb.as_markup())
 
 
 def rotate_menu():
@@ -1083,10 +1269,17 @@ def rotate_menu():
     kb.button(text=_lex("rotate_screen_button"), callback_data="cat:screen", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup())
 
 
 def media_menu(user_id: int | None = None):
+    # Backward-compatible entry point; display and media share one screen.
+    return screen_menu(user_id=user_id)
+
+
+def screen_menu(target: str | None = None, user_id: int | None = None):
+    target = target or SESSION.get("target") or ""
+    is_nl = bool(SESSION.get(f"nightlight_{target}", False))
     kb = InlineKeyboardBuilder()
     _action_button(kb, text=_lex("media_screenshot_button"), callback="cmd:screenshot", style="success", user_id=user_id)
     _action_button(kb, text=_limit_button_label("⚠️ " + _lex("geo_beta")), callback="cmd:geo_location", user_id=user_id)
@@ -1095,32 +1288,23 @@ def media_menu(user_id: int | None = None):
     _action_button(kb, text=_lex("media_speak_button"), callback="cmd:sound", user_id=user_id)
     _action_button(kb, text=_lex("media_volume_button"), callback="vol:opts", user_id=user_id)
     _action_button(kb, text=_lex("media_mute_button"), callback="cmd:volume", user_id=user_id)
+    _action_button(kb, text=_lex("screen_off_button"), callback="fun:screenoff", style="danger", user_id=user_id)
+    _action_button(kb, text=_lex("screen_saver_button"), callback="fun:screensaver", user_id=user_id)
+    _action_button(kb, text=_lex("screen_wallpaper_button"), callback="menu:wallpaper", style="success", user_id=user_id)
+    _action_button(kb, text=_lex("screen_brightness_button"), callback="cmd:brightness", style="success", user_id=user_id)
+    if _device_supports_callback("cmd:nightlight", target):
+        if is_nl:
+            _action_button(kb, text=_lex("screen_nightlight_enabled_button"), callback="cmd:nightlight", style="danger", user_id=user_id)
+        else:
+            _action_button(kb, text=_lex("screen_nightlight_disabled_button"), callback="cmd:nightlight", user_id=user_id)
+    _action_button(kb, text=_lex("screen_rotate_button"), callback="cmd:rotate", user_id=user_id)
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 2, 2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
-def screen_menu(target: str | None = None):
-    target = target or SESSION.get("target") or ""
-    is_nl = bool(SESSION.get(f"nightlight_{target}", False))
-    kb = InlineKeyboardBuilder()
-    kb.button(text=_lex("screen_off_button"), callback_data="fun:screenoff", style="danger")
-    kb.button(text=_lex("screen_saver_button"), callback_data="fun:screensaver", style="primary")
-    kb.button(text=_lex("screen_wallpaper_button"), callback_data="menu:wallpaper", style="success")
-    kb.button(text=_lex("screen_brightness_button"), callback_data="cmd:brightness", style="success")
-    if is_nl:
-        kb.button(text=_lex("screen_nightlight_enabled_button"), callback_data="cmd:nightlight", style="danger")
-    else:
-        kb.button(text=_lex("screen_nightlight_disabled_button"), callback_data="cmd:nightlight", style="primary")
-    kb.button(text=_lex("screen_rotate_button"), callback_data="cmd:rotate", style="primary")
-    kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
-    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
-    kb.adjust(2, 2, 2, 2)
-    return kb.as_markup()
-
-
-def wallpaper_menu():
+def wallpaper_menu(user_id: int | None = None):
     kb = InlineKeyboardBuilder()
     kb.button(text=_lex("wallpaper_random_meme_button"), callback_data="cmd:wallpaper_random_meme", style="success")
     kb.button(text=_lex("wallpaper_photo_button"), callback_data="cmd:wallpaper_photo_guide", style="primary")
@@ -1129,10 +1313,10 @@ def wallpaper_menu():
     kb.button(text=_lex("wallpaper_back_screen_button"), callback_data="cat:screen", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
-def input_menu():
+def input_menu(user_id: int | None = None):
     kb = InlineKeyboardBuilder()
     kb.button(text=_lex("input_clipboard_read_button"), callback_data="cmd:clipboard", style="success")
     kb.button(text=_lex("input_clipboard_paste_button"), callback_data="cmd:clipset", style="primary")
@@ -1143,7 +1327,7 @@ def input_menu():
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 2, 2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
 def system_menu(user_id: int | None = None):
@@ -1158,45 +1342,58 @@ def system_menu(user_id: int | None = None):
     _action_button(kb, text=_lex("system_capabilities_button"), callback="cmd:capabilities", user_id=user_id)
     _action_button(kb, text=_lex("system_refresh_status_button"), callback="cmd:status", style="success", user_id=user_id)
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
-def network_menu():
+def network_menu(user_id: int | None = None):
     kb = InlineKeyboardBuilder()
-    kb.button(text=_lex("network_external_ip_button"), callback_data="fun:extip", style="success")
-    kb.button(text=_lex("network_ping_button"), callback_data="cmd:net_ping", style="success")
-    kb.button(text=_lex("network_adapters_button"), callback_data="cmd:network", style="primary")
-    kb.button(text=_lex("network_wifi_button"), callback_data="cmd:wifi", style="primary")
-    kb.button(text=_lex("network_usb_button"), callback_data="cmd:usb", style="primary")
-    kb.button(text=_lex("network_bluetooth_button"), callback_data="cmd:bluetooth", style="primary")
-    kb.button(text=_lex("network_netstat_button"), callback_data="cmd:netstat", style="primary")
-    _action_button(kb, text=_lex("network_open_url_button"), callback="cmd:url", style="success")
-    if get_user_role(CURRENT_TG_USER.get()) == Role.OWNER:
+    _action_button(kb, text=_lex("network_external_ip_button"), callback="fun:extip", style="success", user_id=user_id)
+    _action_button(kb, text=_lex("network_ping_button"), callback="cmd:net_ping", style="success", user_id=user_id)
+    _action_button(kb, text=_lex("network_adapters_button"), callback="cmd:network", user_id=user_id)
+    _action_button(kb, text=_lex("network_wifi_button"), callback="cmd:wifi", user_id=user_id)
+    _action_button(kb, text=_lex("network_usb_button"), callback="cmd:usb", user_id=user_id)
+    _action_button(kb, text=_lex("network_bluetooth_button"), callback="cmd:bluetooth", user_id=user_id)
+    _action_button(kb, text=_lex("network_netstat_button"), callback="cmd:netstat", user_id=user_id)
+    _action_button(kb, text=_lex("system_apps_button"), callback="cmd:apps", user_id=user_id)
+    _action_button(kb, text=_lex("network_open_url_button"), callback="cmd:url", style="success", user_id=user_id)
+    if get_user_role(user_id if user_id is not None else CURRENT_TG_USER.get()) == Role.OWNER:
         kb.button(text=_lex("url_favorites_button"), callback_data="url:favorites", style="primary")
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
-def url_count_keyboard(*, is_owner: bool = False):
+def url_count_keyboard(
+    *, is_owner: bool = False, user_id: int | None = None, target: str | None = None
+):
     kb = InlineKeyboardBuilder()
-    for count in (1, 2, 3, 5):
-        kb.button(
-            text=_lex("url_count_button", count=str(count)),
-            callback_data=f"url:count:{count}",
-            style="success" if count == 1 else "primary",
-        )
-    if is_owner:
+    user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
+    target = str(target or SESSION.get("target") or "")
+    owner = get_user_role(user_id) == Role.OWNER
+    url_granted = owner or (
+        target != "all"
+        and access_store.can_use_callback(user_id, "cmd:url", ADMIN_ID, target)
+    )
+    if url_granted:
+        for count in (1, 2, 3, 5):
+            kb.button(
+                text=_lex("url_count_button", count=str(count)),
+                callback_data=f"url:count:{count}",
+                style="success" if count == 1 else "primary",
+            )
+    if owner and is_owner:
         kb.button(
             text=_lex("url_favorite_save_button"),
             callback_data="url:fav:save",
             style="primary",
         )
     kb.button(text=_lex("url_cancel_button"), callback_data="url:cancel", style="danger")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
 def url_favorites_keyboard(*, is_owner: bool = False):
@@ -1231,21 +1428,23 @@ def files_menu():
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 2, 2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup())
 
 
-def terminal_menu():
+def terminal_menu(user_id: int | None = None):
     kb = InlineKeyboardBuilder()
     kb.button(text=_lex("terminal_processes_button"), callback_data="proc:0", style="primary")
     kb.button(text=_lex("terminal_kill_process_button"), callback_data="cmd:prockillname", style="danger")
-    kb.button(text=_lex("terminal_shell_button"), callback_data="cfm:shell", style="danger")
+    kb.button(text=_lex("terminal_shell_button"), callback_data="cmd:shell", style="danger")
     kb.button(text=_lex("terminal_open_app_button"), callback_data="cmd:open_app", style="primary")
+    kb.button(text=_nav("input"), callback_data="cat:input", style="primary")
     kb.button(text=_lex("terminal_startup_button"), callback_data="cmd:startup", style="primary")
     kb.button(text=_lex("terminal_services_button"), callback_data="cmd:services", style="primary")
     kb.button(text=_lex("terminal_history_button"), callback_data="cmd:cmdhistory", style="primary")
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
 # Псевдонимы обратной совместимости
@@ -1275,7 +1474,7 @@ def power_menu_new(user_id: int | None = None):
     kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
 def guardian_menu():
@@ -1288,7 +1487,7 @@ def guardian_menu():
     kb.button(text=_lex("guardian_auto_disable_button"), callback_data="cmd:guardian_auto_off", style="danger")
     kb.button(text=_lex("guardian_back_power_button"), callback_data="cat:power", style="primary")
     kb.adjust(2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup())
 
 
 def pranks_menu(page: int = 1, target: str | None = None):
@@ -1380,7 +1579,7 @@ def pranks_menu(page: int = 1, target: str | None = None):
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
 
     kb.adjust(1, 2, 2, 2, 2, 2, 5, 2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup())
 
 
 def device_settings_menu(user_id: int | None = None):
@@ -1404,7 +1603,7 @@ def device_settings_menu(user_id: int | None = None):
     kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
 def mic_options_menu():
@@ -1418,7 +1617,7 @@ def mic_options_menu():
     kb.button(text=_nav("media"), callback_data="cat:media", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2, 2, 2)
-    return kb.as_markup()
+    return _filter_device_keyboard(kb.as_markup())
 
 
 def vol_options_menu():
@@ -1430,11 +1629,17 @@ def vol_options_menu():
             style="primary",
         )
     kb.button(text=_nav("media"), callback_data="cat:media", style="danger")
-    kb.adjust(3, 2, 1)
-    return kb.as_markup()
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
+    kb.adjust(3, 2, 2)
+    return _filter_device_keyboard(kb.as_markup())
 
 
-def confirm_kb(yes_cb: str, yes_text: str | None = None, no_cb: str = "back:device"):
+def confirm_kb(
+    yes_cb: str,
+    yes_text: str | None = None,
+    no_cb: str = "back:device",
+    user_id: int | None = None,
+):
     kb = InlineKeyboardBuilder()
     kb.button(
         text=_limit_button_label(yes_text or _lex("confirm_execute_button")),
@@ -1442,8 +1647,9 @@ def confirm_kb(yes_cb: str, yes_text: str | None = None, no_cb: str = "back:devi
         style="danger",
     )
     kb.button(text=_nav("cancel"), callback_data=no_cb, style="primary")
-    kb.adjust(1, 1)
-    return kb.as_markup()
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
+    kb.adjust(1, 2)
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
 def events_menu():
@@ -1556,6 +1762,7 @@ ROLE_XLEX_KEYS = {
 }
 
 USER_PERMISSION_CHOICES = {
+    "shell_request": "terminal",
     "cmd:status": "perm_status",
     "cmd:sysinfo": "perm_sysinfo",
     "cmd:battery": "perm_battery",
@@ -1609,6 +1816,7 @@ def admin_menu():
         callback_data="admin:style",
         style="success",
     )
+    kb.button(text=_nav("events"), callback_data="ev:menu", style="primary")
     kb.button(text=_nav("admin_server"), callback_data="menu:server", style="primary")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(2)
@@ -1765,6 +1973,7 @@ def server_menu(user_id: int | None = None):
         kb.button(text=_lex("server_metrics"), callback_data="server:metrics", style="primary")
         kb.button(text=_lex("server_chart"), callback_data="server:chart", style="primary")
         kb.button(text=_lex("server_logs"), callback_data="server:logs", style="primary")
+        kb.button(text=_lex("server_status") + " · JSON", callback_data="server:diagnostics", style="primary")
         kb.button(text=_lex("server_terminal"), callback_data="server:terminal", style="primary")
         kb.button(
             text=_lex("server_approval", state='включено' if approval else 'выключено'),
@@ -1779,19 +1988,34 @@ def server_menu(user_id: int | None = None):
     return kb.as_markup()
 
 
-def server_overview_text(*, approval: bool, connected: bool) -> str:
+def server_overview_text(*, approval: bool, connected: bool, user_id: int | None = None) -> str:
+    # Missing identity fails closed too: callers must explicitly opt into the
+    # owner card with a currently authorized actor, never a default admin ID.
+    if user_id is None or get_user_role(user_id) != Role.OWNER:
+        return (
+            f"<b>{html.escape(_lex('server_overview_title'))}</b>\n"
+            "Раздел доступен только для чтения. Администрирование сервера доступно владельцу."
+        )
     approval_state = "включено" if approval else "выключено"
-    broker_state = "подключён" if connected else "ожидает подключения"
+    states = server_ops.health_states()
+    broker_state = states["broker"]["state"] if connected else "disconnected"
+    observations = "\n".join(
+        f"{name}: {item['state']} · checked_at={item['checked_at']}"
+        for name, item in states.items()
+    )
     return (
         f"<b>{html.escape(_lex('server_overview_title'))}</b>\n"
         f"{html.escape(_lex('server_build_line', build=XIDER_BUILD_CODE))}\n"
         f"{html.escape(_lex('server_mqtt_line', state=broker_state))}\n"
         f"{html.escape(_lex('server_approval_line', state=approval_state))}\n"
+        f"<pre>{html.escape(observations)}</pre>\n"
         f"{html.escape(_lex('server_secret_notice'))}"
     )
 
 
 def server_confirmation_text(action: str) -> str:
+    if action == "approval":
+        return "<b>Подтвердить изменение политики допуска устройств?</b>\nПодтверждение действует 120 секунд."
     action_keys = {
         "restart": "server_action_restart",
         "update": "server_action_update",
@@ -1807,27 +2031,39 @@ def server_confirmation_text(action: str) -> str:
     )
 
 
-def server_confirm_menu(action: str):
+def server_confirm_menu(action: str, token: str | None = None):
     label_keys = {
         "restart": "server_action_short_restart",
         "update": "server_action_short_update",
         "rollback": "server_action_short_rollback",
     }
     kb = InlineKeyboardBuilder()
-    if action in label_keys:
-        label = _lex("server_confirm_button", action=_lex(label_keys[action]))
-        kb.button(text=_limit_button_label(label), callback_data=f"server_confirm:{action}", style="danger")
-    kb.button(text=_nav("cancel"), callback_data="menu:server", style="primary")
+    if token and (action in label_keys or action == "approval"):
+        label = "Подтвердить изменение" if action == "approval" else _lex("server_confirm_button", action=_lex(label_keys[action]))
+        kb.button(text=_limit_button_label(label), callback_data=f"server_confirm:{token}", style="danger")
+        kb.button(text=_nav("cancel"), callback_data=f"server_cancel:{token}", style="primary")
+    else:
+        kb.button(text=_nav("cancel"), callback_data="menu:server", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
 
 def server_metrics_text(snapshot: dict) -> str:
+    def display(key, component):
+        item = snapshot.get("states", {}).get(component, {})
+        value = snapshot.get(key)
+        stamp = item.get("checked_at", snapshot.get("checked_at"))
+        if stamp is not None and (time.time() - stamp > server_ops.FRESHNESS_SECONDS or stamp > time.time()):
+            return f"stale (checked_at={stamp})"
+        if value is None or item.get("state") in {"unavailable", "stale", "unknown"} or stamp is None:
+            return f"{item.get('state', 'unknown')} (checked_at={stamp})"
+        return f"{float(value):.1f}% (checked_at={stamp})"
     return (
         f"<b>{html.escape(_lex('server_metrics_title'))}</b>\n"
-        f"{html.escape(_lex('server_cpu'))}: <b>{float(snapshot['load']):.1f}%</b>\n"
-        f"{html.escape(_lex('server_ram'))}: <b>{float(snapshot['memory']):.1f}%</b>\n"
-        f"{html.escape(_lex('server_disk'))}: <b>{float(snapshot['disk']):.1f}%</b>\n\n"
+        f"{html.escape(_lex('server_cpu'))}: <b>{html.escape(display('load', 'cpu'))}</b>\n"
+        f"{html.escape(_lex('server_ram'))}: <b>{html.escape(display('memory', 'ram'))}</b>\n"
+        f"{html.escape(_lex('server_disk'))}: <b>{html.escape(display('disk', 'disk'))}</b>\n\n"
+        "CPU: оценка по load average, не измерение занятости процессора.\n"
         f"{html.escape(_lex('server_metrics_hint'))}"
     )
 
@@ -1860,7 +2096,7 @@ def blocked_menu():
     return kb.as_markup()
 
 
-def _favorites_kb(device_id: str, favs: list):
+def _favorites_kb(device_id: str, favs: list, user_id: int | None = None):
     kb = InlineKeyboardBuilder()
     for action in FAVORITABLE:
         is_fav = action in favs
@@ -1873,8 +2109,9 @@ def _favorites_kb(device_id: str, favs: list):
             style="success" if is_fav else "primary",
         )
     kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
-    kb.adjust(1)
-    return kb.as_markup()
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
+    kb.adjust(1, 2)
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
 # =====================================================================
@@ -1887,7 +2124,7 @@ def target_label(device_id: str) -> str:
     info = devices.get(device_id)
     return info.get("name", device_id) if info else device_id
 
-def publish(command_name: str, *, _target: str | None = None, **kwargs) -> bool:
+def publish(command_name: str, *, _target: str | None = None, **kwargs) -> bool | None:
     """Send to the selected target, or to an explicit target for an in-flight form."""
     target = _target or SESSION.get("target")
     if not target:
@@ -1901,7 +2138,7 @@ def publish(command_name: str, *, _target: str | None = None, **kwargs) -> bool:
     return transport.publish_command(target, command_name, **kwargs)
 
 
-def publish_tracked(action: str, *, _target: str | None = None, **kwargs) -> tuple[bool, str]:
+def publish_tracked(action: str, *, _target: str | None = None, **kwargs) -> tuple[bool | None, str]:
     """Send with a correlation ID and optionally pin it to a captured target."""
     command_id = uuid.uuid4().hex[:12]
     ok = publish(action, _target=_target, id=command_id, **kwargs)
@@ -1909,6 +2146,26 @@ def publish_tracked(action: str, *, _target: str | None = None, **kwargs) -> tup
 
 def _no_target_text() -> str:
     return _lex("target_required")
+
+
+_CARD_UPDATES: dict[tuple[int, int], tuple[asyncio.Lock, int]] = {}
+
+
+@asynccontextmanager
+async def _card_update(chat_id: int, user_id: int):
+    """Serialize replacements so concurrent stale callbacks share the new card ID."""
+    key = (int(chat_id), int(user_id))
+    lock, users = _CARD_UPDATES.get(key, (asyncio.Lock(), 0))
+    _CARD_UPDATES[key] = (lock, users + 1)
+    try:
+        async with lock:
+            yield
+    finally:
+        _, users = _CARD_UPDATES[key]
+        if users == 1:
+            _CARD_UPDATES.pop(key)
+        else:
+            _CARD_UPDATES[key] = (lock, users - 1)
 
 
 async def _stale_card_allows_replacement(chat_id: int, message_id: int, exc: Exception) -> bool:
@@ -1933,7 +2190,16 @@ async def _stale_card_allows_replacement(chat_id: int, message_id: int, exc: Exc
         return False
 
 
-async def _edit_card_with_retry(message: Message, text: str, reply_markup=None):
+def _delivery_allowed(delivery_guard) -> bool:
+    if delivery_guard is None:
+        return True
+    try:
+        return bool(delivery_guard())
+    except Exception:
+        return False
+
+
+async def _edit_card_with_retry(message: Message, text: str, reply_markup=None, *, delivery_guard=None):
     """Retry one transient Telegram edit failure; return a terminal error otherwise."""
     stale_markers = (
         "message to edit not found",
@@ -1942,6 +2208,8 @@ async def _edit_card_with_retry(message: Message, text: str, reply_markup=None):
         "message identifier is not specified",
     )
     for attempt in range(2):
+        if not _delivery_allowed(delivery_guard):
+            return None
         try:
             await message.edit_text(text, reply_markup=reply_markup)
             return None
@@ -1976,10 +2244,17 @@ async def _replace_media_card_with_text(
     reply_markup=None,
     *,
     old_message_id: int | None = None,
+    delivery_guard=None,
 ):
     """Replace a media card with a text card, then remove the old media card."""
     media_message_id = old_message_id or message.message_id
-    sent = await message.answer(text, reply_markup=reply_markup)
+    if not _delivery_allowed(delivery_guard):
+        return message
+    try:
+        sent = await message.answer(text, reply_markup=reply_markup)
+    except Exception:
+        log.warning("Не удалось отправить текстовую замену карточки %s", media_message_id, exc_info=True)
+        return _card_message(message, media_message_id)
     try:
         await bot.delete_message(message.chat.id, media_message_id)
     except Exception:
@@ -2004,24 +2279,39 @@ async def _replace_media_card_with_text(
 
 
 async def _replace_callback_with_media(
+    cq: CallbackQuery, sender, *, chat_id: int | None = None, delivery_guard=None, **media_kwargs
+):
+    async with _card_update(cq.message.chat.id, cq.from_user.id):
+        if not _delivery_allowed(delivery_guard):
+            return await _replace_message_card_unlocked(cq.message, cq.from_user.id,
+                _lex("action_result_hidden_after_revoke"), back_to_device_kb())
+        return await _replace_callback_with_media_unlocked(cq, sender, chat_id=chat_id, **media_kwargs)
+
+
+async def _replace_callback_with_media_unlocked(
     cq: CallbackQuery, sender, *, chat_id: int | None = None, **media_kwargs
 ):
     """Make returned media the current card and remove/neutralize the prior card."""
     media_kwargs.setdefault("reply_markup", back_to_device_kb())
-    sent = await sender(chat_id if chat_id is not None else cq.from_user.id, **media_kwargs)
+    old_id = ui_cards.get(cq.message.chat.id, cq.from_user.id) or cq.message.message_id
     try:
-        await bot.delete_message(cq.message.chat.id, cq.message.message_id)
+        sent = await sender(chat_id if chat_id is not None else cq.message.chat.id, **media_kwargs)
+    except Exception:
+        log.warning("Не удалось отправить media-карточку", exc_info=True)
+        return _card_message(cq.message, old_id)
+    try:
+        await bot.delete_message(cq.message.chat.id, old_id)
     except Exception:
         try:
             await bot.edit_message_reply_markup(
                 chat_id=cq.message.chat.id,
-                message_id=cq.message.message_id,
+                message_id=old_id,
                 reply_markup=None,
             )
         except Exception:
             log.warning(
                 "Не удалось удалить или отключить предыдущую карточку %s после media",
-                cq.message.message_id,
+                old_id,
                 exc_info=True,
             )
     try:
@@ -2031,49 +2321,68 @@ async def _replace_callback_with_media(
     return sent
 
 
-async def _replace_callback_message(cq: CallbackQuery, text: str, reply_markup=None):
+async def _replace_callback_message(cq: CallbackQuery, text: str, reply_markup=None, *, delivery_guard=None):
     """Edit the current card; avoid duplicates on transient Telegram failures."""
-    if _message_has_media(cq.message):
-        return await _replace_media_card_with_text(
-            cq.message, cq.from_user.id, text, reply_markup
+    options = {"delivery_guard": delivery_guard} if delivery_guard is not None else {}
+    return await _replace_message_card(cq.message, cq.from_user.id, text, reply_markup, **options)
+
+
+def _card_message(message: Message, message_id: int):
+    """Address the indexed bot card even when a callback carries an obsolete message."""
+    if getattr(message, "message_id", None) == message_id:
+        return message
+    async def edit_text(text, reply_markup=None):
+        return await bot.edit_message_text(
+            text, chat_id=message.chat.id, message_id=message_id, reply_markup=reply_markup
         )
-    exc = await _edit_card_with_retry(cq.message, text, reply_markup)
-    if exc is None:
-        try:
-            ui_cards.set_card(cq.message.chat.id, cq.from_user.id, cq.message.message_id)
-        except OSError:
-            log.exception("Не удалось сохранить ID карточки")
-        return cq.message
-    if not await _stale_card_allows_replacement(
-        cq.message.chat.id, cq.message.message_id, exc
-    ):
-        log.warning("Не удалось обновить карточку %s: %s", cq.message.message_id, exc)
-        return cq.message
-    sent = await cq.message.answer(text, reply_markup=reply_markup)
-    try:
-        ui_cards.set_card(sent.chat.id, cq.from_user.id, sent.message_id)
-    except OSError:
-        log.exception("Не удалось сохранить ID новой карточки")
-    return sent
+    return SimpleNamespace(
+        chat=message.chat, message_id=message_id, edit_text=edit_text, answer=message.answer
+    )
 
 
-async def _replace_message_card(message: Message, user_id: int, text: str, reply_markup=None):
+async def _replace_message_card(message: Message, user_id: int, text: str, reply_markup=None, *, delivery_guard=None):
+    async with _card_update(message.chat.id, user_id):
+        if not _delivery_allowed(delivery_guard):
+            return await _replace_message_card_unlocked(message, user_id,
+                _lex("action_result_hidden_after_revoke"), back_to_device_kb())
+        options = {"delivery_guard": delivery_guard} if delivery_guard is not None else {}
+        return await _replace_message_card_unlocked(message, user_id, text, reply_markup, **options)
+
+
+async def _replace_message_card_unlocked(message: Message, user_id: int, text: str, reply_markup=None, *, delivery_guard=None):
     """Replace one known operation card, creating a new one only if old is proven stale."""
+    if not _delivery_allowed(delivery_guard):
+        return message
+    options = {"delivery_guard": delivery_guard} if delivery_guard is not None else {}
+    current_id = ui_cards.get(message.chat.id, user_id)
+    if current_id:
+        message = _card_message(message, current_id)
     if _message_has_media(message):
-        return await _replace_media_card_with_text(message, user_id, text, reply_markup)
-    exc = await _edit_card_with_retry(message, text, reply_markup)
+        return await _replace_media_card_with_text(message, user_id, text, reply_markup, **options)
+    exc = await _edit_card_with_retry(message, text, reply_markup, **options)
+    if not _delivery_allowed(delivery_guard):
+        return await _replace_message_card_unlocked(message, user_id,
+            _lex("action_result_hidden_after_revoke"), back_to_device_kb())
     if exc is None:
         try:
             ui_cards.set_card(message.chat.id, user_id, message.message_id)
         except OSError:
             log.exception("Не удалось сохранить ID карточки")
         return message
+    if _is_media_text_edit_error(exc):
+        return await _replace_media_card_with_text(message, user_id, text, reply_markup, **options)
     if not await _stale_card_allows_replacement(
         message.chat.id, message.message_id, exc
     ):
         log.warning("Не удалось обновить карточку %s: %s", message.message_id, exc)
         return message
-    sent = await message.answer(text, reply_markup=reply_markup)
+    if not _delivery_allowed(delivery_guard):
+        return message
+    try:
+        sent = await message.answer(text, reply_markup=reply_markup)
+    except Exception:
+        log.warning("Не удалось отправить замену карточки %s", message.message_id, exc_info=True)
+        return message
     try:
         ui_cards.set_card(sent.chat.id, user_id, sent.message_id)
     except OSError:
@@ -2081,11 +2390,21 @@ async def _replace_message_card(message: Message, user_id: int, text: str, reply
     return sent
 
 
-async def _replace_user_card(message: Message, text: str, reply_markup=None) -> int:
+async def _replace_user_card(message: Message, text: str, reply_markup=None, *, delivery_guard=None) -> int | None:
+    async with _card_update(message.chat.id, message.from_user.id):
+        if not _delivery_allowed(delivery_guard):
+            text, reply_markup, delivery_guard = _lex("action_result_hidden_after_revoke"), back_to_device_kb(), None
+        options = {"delivery_guard": delivery_guard} if delivery_guard is not None else {}
+        return await _replace_user_card_unlocked(message, text, reply_markup, **options)
+
+
+async def _replace_user_card_unlocked(message: Message, text: str, reply_markup=None, *, delivery_guard=None) -> int | None:
     """Edit this user's registered bot card; create a replacement only if stale."""
     chat_id = message.chat.id
     user_id = message.from_user.id
     card_id = ui_cards.get(chat_id, user_id)
+    if not _delivery_allowed(delivery_guard):
+        return card_id
     if card_id:
         try:
             await bot.edit_message_text(
@@ -2101,14 +2420,20 @@ async def _replace_user_card(message: Message, text: str, reply_markup=None) -> 
                 return card_id
             if _is_media_text_edit_error(exc):
                 sent = await _replace_media_card_with_text(
-                    message, user_id, text, reply_markup, old_message_id=card_id
+                    message, user_id, text, reply_markup, old_message_id=card_id, delivery_guard=delivery_guard
                 )
                 return sent.message_id
             if not await _stale_card_allows_replacement(chat_id, card_id, exc):
                 log.warning("Не удалось обновить карточку %s: %s", card_id, exc)
                 return card_id
 
-    sent = await message.answer(text, reply_markup=reply_markup)
+    if not _delivery_allowed(delivery_guard):
+        return await _replace_user_card_unlocked(message, _lex("action_result_hidden_after_revoke"), back_to_device_kb())
+    try:
+        sent = await message.answer(text, reply_markup=reply_markup)
+    except Exception:
+        log.warning("Не удалось отправить пользовательскую карточку", exc_info=True)
+        return card_id
     try:
         ui_cards.set_card(chat_id, user_id, sent.message_id)
     except OSError:
@@ -2117,22 +2442,38 @@ async def _replace_user_card(message: Message, text: str, reply_markup=None) -> 
 
 
 async def _replace_user_card_with_document(
+    message: Message, document: BufferedInputFile, caption: str, reply_markup=None, *, delivery_guard=None
+) -> int | None:
+    async with _card_update(message.chat.id, message.from_user.id):
+        if not _delivery_allowed(delivery_guard):
+            return await _replace_user_card_unlocked(message, _lex("action_result_hidden_after_revoke"), back_to_device_kb())
+        return await _replace_user_card_with_document_unlocked(message, document, caption, reply_markup)
+
+
+async def _replace_user_card_with_document_unlocked(
     message: Message, document: BufferedInputFile, caption: str, reply_markup=None
-) -> int:
+) -> int | None:
     """Make a delivered document the new main card and remove the old text card."""
     chat_id = message.chat.id
     user_id = message.from_user.id
     old_card_id = ui_cards.get(chat_id, user_id)
-    sent = await message.answer_document(
-        document,
-        caption=caption,
-        reply_markup=reply_markup,
-    )
+    try:
+        sent = await message.answer_document(
+            document, caption=caption, reply_markup=reply_markup,
+        )
+    except Exception:
+        log.warning("Не удалось отправить карточку с файлом", exc_info=True)
+        return old_card_id
     if old_card_id and old_card_id != sent.message_id:
         try:
             await bot.delete_message(chat_id, old_card_id)
         except Exception:
-            log.debug("Старая карточка не удалена при отправке файла", exc_info=True)
+            try:
+                await bot.edit_message_reply_markup(
+                    chat_id=chat_id, message_id=old_card_id, reply_markup=None
+                )
+            except Exception:
+                log.warning("Не удалось отключить старую карточку с файлом", exc_info=True)
     try:
         ui_cards.set_card(chat_id, user_id, sent.message_id)
     except OSError:
@@ -2141,6 +2482,11 @@ async def _replace_user_card_with_document(
 
 
 async def _show_start_card(message: Message, text: str, reply_markup) -> int:
+    async with _card_update(message.chat.id, message.from_user.id):
+        return await _show_start_card_unlocked(message, text, reply_markup)
+
+
+async def _show_start_card_unlocked(message: Message, text: str, reply_markup) -> int:
     """Always send a visible /start card, even after the user clears chat history."""
     chat_id = message.chat.id
     user_id = message.from_user.id
@@ -2164,6 +2510,7 @@ async def _show_start_card(message: Message, text: str, reply_markup) -> int:
 # =====================================================================
 
 devices = DeviceStore()
+update_coordinator = Coordinator(UpdateStore())
 status_collector = ResponseCollector()
 screenshot_collector = ResponseCollector()
 sysinfo_collector = ResponseCollector()
@@ -2193,7 +2540,7 @@ FUN_RESPONSE_TYPES = {
     # Файлы и папки
     "dir_list", "find_file", "path_open", "file_put", "file_del",
     # Сеть и система
-    "ext_ip", "wifi_info", "usb_devices", "netstat", "startup_list",
+    "open_url", "ext_ip", "wifi_info", "usb_devices", "netstat", "startup_list",
     "env_get", "net_wifi_passwords", "net_bluetooth_list",
     "storage_smart", "sys_installed_apps", "sys_history_cmd",
     # Управление вводом и дисплей
@@ -2201,7 +2548,7 @@ FUN_RESPONSE_TYPES = {
     "screen_off", "screensaver_on", "wallpaper_set",
     "display_brightness", "display_night_light", "display_rotate",
     # Загрузка и прочее
-    "download_url", "proc_kill_name",
+    "download_url", "proc_kill_name", "permission_settings",
     # Режим ожидания (Watchdog) и автозапуск
     "standby_sleep", "wake", "autorun_status", "autorun_enable", "autorun_disable",
     # Системные утилиты и диагностика
@@ -2271,12 +2618,17 @@ def _notification_recipients() -> list[int]:
     return ids
 
 
-async def _notify_admins(text: str, reply_markup=None) -> None:
+async def _notify_admins(text: str, reply_markup=None) -> bool:
+    """Deliver notifications and report whether the protected owner received it."""
+    owner_delivered = False
     for user_id in _notification_recipients():
         try:
             await bot.send_message(user_id, text, reply_markup=reply_markup)
+            if user_id == int(ADMIN_ID):
+                owner_delivered = True
         except Exception:
             log.exception("Не удалось отправить уведомление администратору %s", user_id)
+    return owner_delivered
 
 
 def _schedule_admin_notice(text: str, reply_markup=None) -> None:
@@ -2290,17 +2642,30 @@ def _schedule_admin_notice(text: str, reply_markup=None) -> None:
     )
 
 
-async def _notify_owner(text: str) -> None:
+async def _notify_owner(text: str, reply_markup=None, *, strict_delivery: bool = False) -> bool:
     try:
-        await bot.send_message(int(ADMIN_ID), text)
+        owner = int(ADMIN_ID)
+        if strict_delivery:
+            # Approval previews are owner security alerts. A separate message
+            # provides a real delivery result, rather than a stale-card fallback.
+            await bot.send_message(owner, text, reply_markup=reply_markup)
+            return True
+        async def answer(value, **kwargs):
+            return await bot.send_message(owner, value, **kwargs)
+        await _replace_user_card(
+            SimpleNamespace(chat=SimpleNamespace(id=owner), from_user=SimpleNamespace(id=owner), answer=answer),
+            text, reply_markup=reply_markup if reply_markup is not None else main_menu(owner),
+        )
+        return True
     except Exception:
         log.exception("Не удалось отправить владельцу результат операции жизненного цикла")
+        return False
 
 
-def _schedule_owner_notice(text: str) -> bool:
+def _schedule_owner_notice(text: str, reply_markup=None) -> bool:
     if LOOP is None or LOOP.is_closed():
         return False
-    future = asyncio.run_coroutine_threadsafe(_notify_owner(text), LOOP)
+    future = asyncio.run_coroutine_threadsafe(_notify_owner(text, reply_markup), LOOP)
     future.add_done_callback(
         lambda done: done.exception() if not done.cancelled() else None
     )
@@ -2406,13 +2771,14 @@ def _maybe_battery_alert(device_id: str, payload: dict) -> None:
     name = target_label(device_id)
     if LOOP is None:
         return
-    _schedule_admin_notice(
+    _schedule_owner_notice(
         f"🔋 <b>{html.escape(name)}</b>: низкий заряд батареи — {percent:.0f}%",
     )
 
 
 def on_mqtt_message(topic: str, data: dict) -> None:
     """Вызывается из потока MQTT при получении сообщения от клиента."""
+    server_ops.observe("broker", "message_received")
     payload, verification_reason = verify_message_detailed(data)
     if payload is None:
         log.warning(
@@ -2430,10 +2796,24 @@ def on_mqtt_message(topic: str, data: dict) -> None:
         payload = inner
     parts = topic.split("/")
     prefix_len = len(MQTT_PREFIX.split("/"))
-    if len(parts) != prefix_len + 2:
+    if len(parts) != prefix_len + 2 or parts[:prefix_len] != MQTT_PREFIX.split("/"):
         return
     device_id = parts[prefix_len]
     msg_type = parts[-1]
+    if msg_type in {"status", "update_progress"} and payload.get("device_id", device_id) != device_id:
+        return
+    if msg_type == "update_progress" and payload.get("type") == "agent_update_progress":
+        if bot_settings.is_blocked(device_id):
+            return
+        info = devices.get(device_id) or {}
+        component = release_catalog.component_for(str(info.get("os") or ""))
+        if payload.get("component", component) != component:
+            return
+        try:
+            update_coordinator.handle_event(device_id, {**payload, "component": component}, received_at=time.time())
+        except (OSError, ValueError):
+            log.warning("Update journal unavailable; progress remains unconfirmed")
+        return
 
     # Блок-лист: устройства в нём не принимаем и не показываем.
     if msg_type == "status" and bot_settings.is_blocked(device_id):
@@ -2455,6 +2835,7 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             "version": str(payload.get("version") or "?"),
             "online": online,
             "standby": is_standby,
+            "command_approval_protocol": payload.get("command_approval_protocol") if type(payload.get("command_approval_protocol")) is int else 0,
         }
         update_mode = payload.get("update_mode")
         info["update_mode"] = (
@@ -2466,10 +2847,27 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             info["update_mode"] == "source"
             and payload.get("release_update_ready") is True
         )
+        info["update_manifest_binding_protocol"] = payload.get("update_manifest_binding_protocol") if type(payload.get("update_manifest_binding_protocol")) is int else 0
         if online:
             info["last_seen"] = time.time()
         is_new = device_id not in devices.all()
         devices.upsert(device_id, info)
+        receipt = payload.get("agent_update")
+        if not online:
+            try:
+                update_coordinator.heartbeat_lost(device_id, now=time.time())
+            except (OSError, ValueError):
+                log.warning("Update journal unavailable; offline update remains unconfirmed")
+        if online and isinstance(receipt, dict):
+            component = release_catalog.component_for(info["os"])
+            if receipt.get("component", component) == component:
+                try:
+                    update_coordinator.reconcile(
+                        device_id, {**receipt, "component": component},
+                        received_at=time.time(), heartbeat_at=info["last_seen"],
+                    )
+                except (OSError, ValueError):
+                    log.warning("Update journal unavailable; health remains unconfirmed")
         status_collector.submit(device_id, info)
         multi_status.submit(device_id, info)
         audit("device_online" if online else "device_offline",
@@ -2485,7 +2883,7 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             kb.button(text=_lex("device_approve_button"), callback_data=f"devmg:allow:{device_id}", style="success")
             kb.button(text=_lex("device_block_button"), callback_data=f"devmg:block:{device_id}", style="danger")
             kb.adjust(1)
-            _schedule_admin_notice(
+            _schedule_owner_notice(
                 f"🆕 Новое устройство: <b>{html.escape(info['name'])}</b> "
                 f"(<code>{device_id}</code>)\nПодтверди, чтобы работать с ним:",
                 reply_markup=kb.as_markup(),
@@ -2527,43 +2925,49 @@ def on_mqtt_message(topic: str, data: dict) -> None:
         # or credentials. A declaration is not proof that hardware works.
         commands = payload.get("commands")
         features = payload.get("features")
-        if isinstance(commands, list):
-            clean_commands = sorted({
-                str(command) for command in commands[:256]
-                if isinstance(command, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", command)
-            })
-            clean_features = {
-                str(key): value for key, value in (features or {}).items()
-                if isinstance(key, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key)
-                and isinstance(value, bool)
-            } if isinstance(features, dict) else {}
-            allowed_states = {
-                "supported", "dependency_missing", "permission_unverified",
-                "device_unverified", "unavailable", "approximate", "unknown",
-            }
-            raw_status = payload.get("feature_status")
-            clean_status = {
-                key: state for key, state in raw_status.items()
-                if isinstance(key, str)
-                and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key)
-                and isinstance(state, str)
-                and state in allowed_states
-            } if isinstance(raw_status, dict) else {}
-            devices.upsert(device_id, {
-                "capabilities": {
-                    "commands": clean_commands,
-                    "features": clean_features,
-                    "feature_status": clean_status,
-                },
-                "capabilities_seen": time.time(),
-            })
+        clean_commands = sorted({
+            command for command in commands[:256]
+            if isinstance(command, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", command)
+        }) if isinstance(commands, list) else []
+        clean_features = {
+            key: value for key, value in features.items()
+            if isinstance(key, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key)
+            and isinstance(value, bool)
+        } if isinstance(features, dict) else {}
+        allowed_states = {
+            "supported", "dependency_missing", "permission_unverified",
+            "device_unverified", "unavailable", "approximate", "unknown",
+        }
+        raw_status = payload.get("feature_status")
+        clean_status = {
+            key: state for key, state in raw_status.items()
+            if isinstance(key, str)
+            and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key)
+            and isinstance(state, str)
+            and state in allowed_states
+        } if isinstance(raw_status, dict) else {}
+        # Every new report replaces the diagnostic snapshot, including malformed
+        # reports without commands; a previous declaration must not remain fresh.
+        devices.upsert(device_id, {
+            "capabilities": {
+                "command_approval_protocol": payload.get("command_approval_protocol") if type(payload.get("command_approval_protocol")) is int else 0,
+                "commands": clean_commands,
+                "features": clean_features,
+                "feature_status": clean_status,
+                "snapshot": _parse_capability_snapshot(payload),
+            },
+            "capabilities_seen": time.time(),
+        })
         capabilities_collector.submit(device_id, payload)
     elif msg_type == "guardian" and payload.get("type") == "guardian":
         # Храним только последний подписанный ответ Guardian без лишних
         # данных. Это позволяет показать его состояние в карточке устройства.
         devices.upsert(device_id, {
             "guardian": {
-                "version": str(payload.get("guardian") or payload.get("version") or "?"),
+                # Guardian's `version` field belongs to the worker release.
+                # Only `guardian` identifies the supervisor's own version.
+                "version": payload.get("guardian") if isinstance(payload.get("guardian"), str) else None,
+                "version_source": "guardian" if isinstance(payload.get("guardian"), str) else None,
                 "agent_running": bool(payload.get("agent_running")),
                 "launchd_loaded": bool(payload.get("launchd_loaded")),
                 "task_registered": bool(payload.get("guardian_task_registered", payload.get("launchd_loaded"))),
@@ -2584,6 +2988,14 @@ def on_mqtt_message(topic: str, data: dict) -> None:
         if payload.get("type") == "file_get":
             file_collector.submit(device_id, payload)
         else:
+            if payload.get("type") == "agent_update" and not bot_settings.is_blocked(device_id):
+                info = devices.get(device_id) or {}
+                component = release_catalog.component_for(str(info.get("os") or ""))
+                if payload.get("component", component) == component:
+                    try:
+                        update_coordinator.handle_event(device_id, {**payload, "component": component}, received_at=time.time())
+                    except (OSError, ValueError):
+                        log.warning("Update journal unavailable; result remains unconfirmed")
             fun_text_collector.submit(device_id, payload)
             _schedule_lifecycle_failure_notice(device_id, payload)
 
@@ -2593,6 +3005,10 @@ async def _device_offline_watchdog() -> None:
     while True:
         await asyncio.sleep(30)
         now = time.time()
+        try:
+            update_coordinator.expire(now=now)
+        except (OSError, ValueError):
+            log.warning("Update journal unavailable; pending updates remain unknown")
         for device_id, info in devices.all().items():
             if not info.get("online"):
                 continue
@@ -2612,6 +3028,20 @@ async def _device_offline_watchdog() -> None:
             audit("device_offline_watchdog", device_id=device_id, name=info.get("name", device_id))
 
 transport = MQTTTransport(on_mqtt_message)
+
+
+def _server_mqtt_health_callback(callback):
+    """Timestamp transport events independently of Telegram and host metrics."""
+    def observed(*args, **kwargs):
+        result = callback(*args, **kwargs)
+        connected = callback.__self__.connected.is_set()
+        server_ops.observe("broker", "connected" if connected else "disconnected")
+        return result
+    return observed
+
+
+transport._client.on_connect = _server_mqtt_health_callback(transport._client.on_connect)
+transport._client.on_disconnect = _server_mqtt_health_callback(transport._client.on_disconnect)
 
 # =====================================================================
 #  Хендлеры: текстовые сообщения
@@ -2636,18 +3066,21 @@ async def cmd_start(message: Message, state: FSMContext):
         and (first_start or now - last_notice >= 600)
     )
     if should_notify_start:
+        _START_NOTIFY_LAST[message.from_user.id] = now
         try:
             kb = InlineKeyboardBuilder()
             kb.button(text=_lex("admin_open_user_button"), callback_data=f"admin:user:{message.from_user.id}", style="primary")
             kb.adjust(1)
-            await _notify_admins(
+            owner_delivered = await _notify_admins(
                 "Новый запуск бота: "
                 f"<b>{html.escape(_user_label(record))}</b> "
                 f"(<code>{message.from_user.id}</code>). Роль по умолчанию: гость.",
                 reply_markup=kb.as_markup(),
             )
-            _START_NOTIFY_LAST[message.from_user.id] = now
+            if not owner_delivered:
+                _START_NOTIFY_LAST.pop(message.from_user.id, None)
         except Exception:
+            _START_NOTIFY_LAST.pop(message.from_user.id, None)
             log.exception("Не удалось уведомить владельца о новом пользователе")
     if role == Role.BLOCKED:
         await _show_start_card(
@@ -2759,7 +3192,9 @@ async def on_url_input(message: Message, state: FSMContext):
     await _replace_user_card(
         message,
         _lex_html("url_count_prompt", device=target_label(target)),
-        reply_markup=url_count_keyboard(is_owner=is_owner),
+        reply_markup=url_count_keyboard(
+            is_owner=is_owner, user_id=message.from_user.id, target=target,
+        ),
     )
 
 @router.message(AdminFilter(), Form.wait_text)
@@ -2836,33 +3271,146 @@ async def on_sound_input(message: Message, state: FSMContext):
 
 @router.callback_query(ReadOnlyFilter(), F.data == "menu:server")
 async def on_menu_server(cq: CallbackQuery):
+    if get_user_role(cq.from_user.id) == Role.OWNER:
+        await asyncio.to_thread(server_ops.status)
     await _replace_callback_message(cq,
         server_overview_text(
             approval=bool(bot_settings.get("require_device_approval", True)),
             connected=transport.connected.is_set(),
+            user_id=cq.from_user.id,
         ),
         reply_markup=server_menu(cq.from_user.id),
     )
     await cq.answer()
 
 
+def _diagnostic_timestamp(value):
+    if value is None:
+        return None
+    if type(value) in (int, float):
+        try:
+            return datetime.datetime.fromtimestamp(value, datetime.timezone.utc).isoformat()
+        except (ValueError, OverflowError, OSError):
+            raise ValueError("Invalid diagnostic snapshot") from None
+    # Capability ingestion accepts any aware ISO timestamp. Normalize its instant
+    # at the export boundary; the strict builder/check store can remain UTC-only.
+    try:
+        if type(value) is not str or len(value) > 40:
+            raise ValueError
+        stamp = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if stamp.utcoffset() is None:
+            raise ValueError
+        return stamp.astimezone(datetime.timezone.utc).isoformat()
+    except (ValueError, TypeError, OverflowError):
+        raise ValueError("Invalid diagnostic snapshot") from None
+
+
+def _diagnostic_snapshot_inputs():
+    """Copy existing in-process metadata only; never initialize a disk/probe API."""
+    import hashlib
+    from dataclasses import asdict
+    generated_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    versions = {"server": VERSION}
+    statuses = {name: {"state": row["state"], "source": "server_observation",
+                       "checked_at": _diagnostic_timestamp(row["checked_at"])}
+                for name, row in server_ops.health_states().items()}
+    statuses["log_tail"] = {"state": "unknown", "source": "unavailable", "checked_at": None}
+    capabilities, checks, correlation_ids = [], [], []
+    facts = devices.all()
+    if len(facts) > 32:
+        raise ValueError("Invalid diagnostic snapshot")
+    device_refs = {}
+    for device_id, info in facts.items():
+        if type(device_id) is not str or type(info) is not dict:
+            raise ValueError("Invalid diagnostic snapshot")
+        # Local device names/hostnames are not exported; references remain correlatable.
+        reference = "device_" + hashlib.sha256(device_id.encode("utf-8")).hexdigest()[:16]
+        device_refs[device_id] = reference
+        version = info.get("version")
+        versions[reference] = version if isinstance(version, str) and check_store._VERSION.fullmatch(version) else "unknown"
+        checked_at = _diagnostic_timestamp(info.get("last_seen"))
+        online = info.get("online")
+        state = "online" if online is True else "offline" if online is False else "unknown"
+        if checked_at is not None and not 0 <= time.time() - check_store._timestamp(checked_at).timestamp() <= 150:
+            state = "stale"
+        statuses[reference] = {"state": state, "source": "device_heartbeat", "checked_at": checked_at}
+        caps = info.get("capabilities")
+        if not isinstance(caps, dict):
+            continue
+        snapshot = caps.get("snapshot")
+        if isinstance(snapshot, dict) and snapshot.get("schema") == 1:
+            for row in snapshot.get("items", []):
+                capabilities.append({"device_id": reference, "id": row["id"], "state": row["state"],
+                    "source": "agent_capability_snapshot", "checked_at": _diagnostic_timestamp(snapshot.get("checked_at"))})
+        declarations = caps.get("feature_status", {})
+        if isinstance(declarations, dict):
+            for key, state in declarations.items():
+                capabilities.append({"device_id": reference, "id": key, "state": state,
+                    "source": "agent_capability_declaration", "checked_at": _diagnostic_timestamp(info.get("capabilities_seen"))})
+    store = check_store._default
+    if store is None:
+        statuses["checks"] = {"state": "unknown", "source": "unavailable", "checked_at": None}
+    else:
+        with store._lock:
+            rows = list(store._records.values())
+        for record in rows:
+            reference = device_refs.get(record.device_id)
+            if reference is None:
+                continue
+            checks.append({**asdict(record), "device_id": reference})
+            if record.correlation_id and record.correlation_id not in correlation_ids:
+                correlation_ids.append(record.correlation_id)
+    return dict(generated_at=generated_at, versions=versions, statuses=statuses,
+                capabilities=capabilities, checks=checks, log_tail=[], correlation_ids=correlation_ids)
+
+
+def _diagnostic_export_owner(cq, actor_id=None):
+    identity = getattr(getattr(cq, "from_user", None), "id", None)
+    chat_id = getattr(getattr(getattr(cq, "message", None), "chat", None), "id", None)
+    return (type(identity) is int and identity == ADMIN_ID
+            and type(chat_id) is int and chat_id == identity
+            and (actor_id is None or identity == actor_id) and get_user_role(identity) == Role.OWNER)
+
+
+@router.callback_query(OwnerFilter(), F.data == "server:diagnostics")
+async def on_server_diagnostics_export(cq: CallbackQuery):
+    if not _diagnostic_export_owner(cq):
+        await cq.answer("Экспорт недоступен.", show_alert=True)
+        return
+    actor_id = cq.from_user.id
+    await cq.answer("Готовлю доступный snapshot диагностики.")
+    if not _diagnostic_export_owner(cq, actor_id):
+        return
+    try:
+        bundle = diagnostics.build_diagnostic_snapshot(**_diagnostic_snapshot_inputs())
+    except Exception:
+        # Do not reflect raw snapshots, paths, builder exceptions or credentials.
+        await cq.answer("Диагностику безопасно собрать не удалось.", show_alert=True)
+        return
+    # No await between this check and initiating the single document delivery.
+    if not _diagnostic_export_owner(cq, actor_id):
+        return
+    try:
+        await cq.message.answer_document(BufferedInputFile(bundle, filename="xider-diagnostics.json"))
+    except Exception:
+        await cq.answer("Документ диагностики не доставлен.", show_alert=True)
+
+
 @router.callback_query(OwnerFilter(), F.data == "server:approval")
 async def on_server_approval(cq: CallbackQuery):
-    value = bot_settings.toggle("require_device_approval")
-    access_store.append_audit("device_approval_policy", actor_id=cq.from_user.id, detail=str(value))
-    await _replace_callback_message(cq,
-        server_overview_text(approval=bool(value), connected=transport.connected.is_set()),
-        reply_markup=server_menu(cq.from_user.id),
-    )
-    await cq.answer(_lex("server_approval_on_answer" if value else "server_approval_off_answer"))
+    await on_server_dangerous_request(cq)
 
 
 @router.callback_query(OwnerFilter(), F.data.in_({"server:restart", "server:update", "server:rollback"}))
 async def on_server_dangerous_request(cq: CallbackQuery):
     action = cq.data.split(":", 1)[1]
+    token = server_ops.request_confirmation(action, cq.from_user.id, is_owner=get_user_role(cq.from_user.id) == Role.OWNER)
+    if token is None:
+        await cq.answer("Операция недоступна.", show_alert=True)
+        return
     await _replace_callback_message(cq,
         server_confirmation_text(action),
-        reply_markup=server_confirm_menu(action),
+        reply_markup=server_confirm_menu(action, token),
     )
     await cq.answer()
 
@@ -2943,6 +3491,8 @@ async def on_server_terminal(cq: CallbackQuery, state: FSMContext):
 @router.message(OwnerFilter(), Form.wait_server_command)
 async def on_server_terminal_command(message: Message, state: FSMContext):
     await state.clear()
+    if get_user_role(message.from_user.id) != Role.OWNER:
+        return
     command = (message.text or "").strip()
     if not command:
         await _replace_user_card(
@@ -2953,7 +3503,7 @@ async def on_server_terminal_command(message: Message, state: FSMContext):
     result = await asyncio.to_thread(server_ops.run_terminal, command)
     access_store.append_audit(
         "server_terminal", actor_id=message.from_user.id,
-        detail=f"command={command[:32]!r}; ok={result.ok}",
+        detail=f"allowed={result.code != 2}; ok={result.ok}",
     )
     await _replace_user_card(
         message,
@@ -2965,13 +3515,25 @@ async def on_server_terminal_command(message: Message, state: FSMContext):
 
 @router.callback_query(OwnerFilter(), F.data.startswith("server_confirm:"))
 async def on_server_confirm(cq: CallbackQuery):
-    action = cq.data.split(":", 1)[1]
+    action = server_ops.consume_confirmation(cq.data.split(":", 1)[1], cq.from_user.id, is_owner=get_user_role(cq.from_user.id) == Role.OWNER)
+    if action is None:
+        await cq.answer("Подтверждение недоступно, истекло или уже использовано.", show_alert=True)
+        return
+    if action == "approval":
+        value = bot_settings.toggle("require_device_approval")
+        access_store.append_audit("device_approval_policy", actor_id=cq.from_user.id, detail=str(value))
+        await _replace_callback_message(cq, server_overview_text(approval=bool(value), connected=transport.connected.is_set(), user_id=cq.from_user.id), reply_markup=server_menu(cq.from_user.id))
+        await cq.answer(_lex("server_approval_on_answer" if value else "server_approval_off_answer"))
+        return
     operations = {"restart": server_ops.restart, "update": server_ops.update, "rollback": server_ops.rollback}
     operation = operations.get(action)
     if operation is None:
         await cq.answer(_lex("server_unknown_action"), show_alert=True)
         return
     await _replace_callback_message(cq, _lex("server_operation_pending"))
+    if get_user_role(cq.from_user.id) != Role.OWNER:
+        await cq.answer("Операция недоступна: права владельца отозваны.", show_alert=True)
+        return
     result = await asyncio.to_thread(operation)
     access_store.append_audit("server_operation", actor_id=cq.from_user.id, detail=f"action={action}; ok={result.ok}; code={result.code}")
     await _replace_callback_message(cq,
@@ -2981,6 +3543,16 @@ async def on_server_confirm(cq: CallbackQuery):
         reply_markup=server_menu(cq.from_user.id),
     )
     await cq.answer(_lex("server_done" if result.ok else "server_failed"), show_alert=not result.ok)
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("server_cancel:"))
+async def on_server_cancel(cq: CallbackQuery):
+    action = server_ops.consume_confirmation(cq.data.split(":", 1)[1], cq.from_user.id, is_owner=get_user_role(cq.from_user.id) == Role.OWNER, cancel=True)
+    if action is None:
+        await cq.answer("Подтверждение недоступно, истекло или уже использовано.", show_alert=True)
+        return
+    await _replace_callback_message(cq, "Серверная операция отменена.", reply_markup=server_menu(cq.from_user.id))
+    await cq.answer("Отменено")
 
 
 @router.callback_query(ReadOnlyFilter(), F.data == "menu:guest_devices")
@@ -3009,12 +3581,154 @@ async def on_menu_admin(cq: CallbackQuery):
     await cq.answer()
 
 
+_ADMIN_PENDING: dict[str, dict] = {}
+
+
+async def _admin_owner(obj) -> bool:
+    if (obj.from_user and obj.from_user.id == ADMIN_ID
+            and access_store.get_role(obj.from_user.id, ADMIN_ID) == Role.OWNER):
+        return True
+    if not isinstance(obj, Message):
+        await obj.answer(_lex("owner_immutable"), show_alert=True)
+    return False
+
+
+def _admin_snapshot(user_id: int):
+    record = access_store.get_user(user_id)
+    if record is None:
+        return None
+    return {key: record.get(key) for key in ("role", "blocked", "permissions", "role_before_block")}
+
+
+async def _admin_stage(obj, action: str, user_id: int = 0, value=None) -> None:
+    """One-use owner decision; access_store remains the permission authority."""
+    now = time.monotonic()
+    for token, pending in list(_ADMIN_PENDING.items()):
+        if pending["actor"] == obj.from_user.id or now >= pending["expires"]:
+            _ADMIN_PENDING.pop(token, None)
+    token = uuid.uuid4().hex
+    _ADMIN_PENDING[token] = {
+        "actor": obj.from_user.id, "expires": now + 120,
+        "action": action, "target": user_id, "value": value,
+        "snapshot": _admin_snapshot(user_id) if user_id else text_store.get(value[0]),
+    }
+    kb = InlineKeyboardBuilder()
+    kb.button(text=_lex("confirm_yes_button"), callback_data=f"admin:confirm:{token}", style="danger")
+    kb.button(text=_nav("back"), callback_data=f"admin:cancel:{token}", style="primary")
+    kb.adjust(1)
+    labels = {
+        "role": "Изменение роли", "block": "Блокировка / разблокировка",
+        "device": "Изменение доступа к устройству", "permission": "Изменение доступа к действию",
+        "text": "Изменение текста бота", "message": "Отправка сообщения",
+    }
+    preview = f"<b>Подтвердить изменение</b>\n{html.escape(labels[action])}"
+    if user_id:
+        preview += f" · <code>{user_id}</code>"
+    description = str(value)
+    snapshot = _ADMIN_PENDING[token]["snapshot"]
+    if action == "role":
+        description = _role_label(value)
+    elif action == "block":
+        description = _nav("block_user" if value else "unblock_user")
+    elif action in {"device", "permission"}:
+        field = "devices" if action == "device" else "callbacks"
+        enabled = value not in snapshot["permissions"][field]
+        description = f"{'Выдать' if enabled else 'Отозвать'}: {value}"
+    elif action == "text":
+        description = f"{TEXT_LABELS[value[0]]}: {value[1]}"
+    preview += f"\n{html.escape(access_store.redact_text(description))}\nПодтверждение действует 2 минуты."
+    if isinstance(obj, Message):
+        await _replace_user_card(obj, preview, reply_markup=kb.as_markup())
+    else:
+        await _replace_callback_message(obj, preview, reply_markup=kb.as_markup())
+        await obj.answer()
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("admin:cancel:"))
+async def on_admin_cancel(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
+    token = cq.data.rsplit(":", 1)[-1]
+    pending = _ADMIN_PENDING.get(token)
+    if pending and pending["actor"] == cq.from_user.id:
+        _ADMIN_PENDING.pop(token, None)
+    await _replace_callback_message(cq, _lex("text_edit_expired"), reply_markup=admin_menu())
+    await cq.answer()
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("admin:confirm:"))
+async def on_admin_confirm(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
+    token = cq.data.rsplit(":", 1)[-1]
+    pending = _ADMIN_PENDING.get(token)
+    if not pending or pending["actor"] != cq.from_user.id:
+        await cq.answer(_lex("text_edit_expired"), show_alert=True)
+        return
+    _ADMIN_PENDING.pop(token, None)  # consume before any await/side effect
+    action, target, value = pending["action"], pending["target"], pending["value"]
+    current = _admin_snapshot(target) if target else text_store.get(value[0])
+    if time.monotonic() >= pending["expires"] or current != pending["snapshot"]:
+        await cq.answer(_lex("text_edit_expired"), show_alert=True)
+        return
+    if target and (target == ADMIN_ID or current is None):
+        await cq.answer(_lex("owner_immutable"), show_alert=True)
+        return
+    if action == "role":
+        access_store.set_role(cq.from_user.id, target, value, ADMIN_ID)
+    elif action == "block":
+        access_store.set_blocked(cq.from_user.id, target, value, ADMIN_ID)
+    elif action == "device":
+        if value not in devices.all():
+            await cq.answer(_lex("device_unavailable"), show_alert=True)
+            return
+        access_store.toggle_device(cq.from_user.id, target, value, ADMIN_ID)
+    elif action == "permission":
+        access_store.toggle_callback(cq.from_user.id, target, value, ADMIN_ID)
+    elif action == "text":
+        try:
+            text_store.set_text(value[0], value[1])
+        except (KeyError, ValueError):
+            await cq.answer(_lex("text_save_failed"), show_alert=True)
+            return
+        access_store.append_audit("bot_text_updated", actor_id=cq.from_user.id, detail=value[0])
+    elif action == "message":
+        try:
+            await bot.send_message(target, html.escape(value))
+        except Exception:
+            log.warning("Admin message delivery failed for target %s", target)
+            await cq.answer(_lex("admin_message_failed"), show_alert=True)
+            return
+        access_store.append_audit("admin_message_sent", actor_id=cq.from_user.id, target_id=target)
+    else:
+        await cq.answer(_lex("admin_invalid_data"), show_alert=True)
+        return
+    await _replace_callback_message(cq, _lex("text_saved"), reply_markup=admin_menu())
+    await cq.answer()
+
+
 @router.callback_query(OwnerFilter(), F.data == "admin:users")
 async def on_admin_users(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     users = access_store.list_users()
+    summaries = []
+    for record in users[:30]:
+        uid = int(record.get("id") or 0)
+        perms = record.get("permissions") or {}
+        last_seen = datetime.datetime.fromtimestamp(int(record.get("last_seen") or 0)).strftime("%d.%m %H:%M")
+        summary = (
+            f"\n\n{html.escape(_user_label(record))} · {html.escape(_role_label(access_store.get_role(uid, ADMIN_ID)))}"
+            f"\nПоследнее посещение: {last_seen}"
+            f"\nУстройства: {html.escape(', '.join(perms.get('devices') or []) or '—')}"
+            f"\nДействия: {html.escape(', '.join(perms.get('callbacks') or []) or '—')}"
+        )
+        if sum(len(item) for item in summaries) + len(summary) > 3000:
+            break
+        summaries.append(summary)
     await _replace_callback_message(cq,
         f"<b>{html.escape(_nav('admin_users'))}</b>\n"
-        f"{html.escape(_lex('users_intro', total=str(len(users))))}",
+        f"{html.escape(_lex('users_intro', total=str(len(users))))}" + "".join(summaries),
         reply_markup=admin_users_menu(),
     )
     await cq.answer()
@@ -3022,6 +3736,8 @@ async def on_admin_users(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data == "admin:texts")
 async def on_admin_texts(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     mode = xlex.normalize_style(bot_settings.get("ui_style", "technical"))
     await _replace_callback_message(cq,
         f"<b>X-LEX · {html.escape(xlex.STYLE_NAMES[mode])}</b>\n"
@@ -3033,6 +3749,8 @@ async def on_admin_texts(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data.startswith("admin:text:"))
 async def on_admin_text_edit(cq: CallbackQuery, state: FSMContext):
+    if not await _admin_owner(cq):
+        return
     key = cq.data.split(":", 2)[2]
     if key not in TEXT_LABELS:
         await cq.answer(_lex("admin_invalid_data"), show_alert=True)
@@ -3053,23 +3771,21 @@ async def on_admin_text_edit(cq: CallbackQuery, state: FSMContext):
 
 @router.message(OwnerFilter(), Form.wait_bot_text)
 async def on_admin_text_value(message: Message, state: FSMContext):
+    if not await _admin_owner(message):
+        await state.clear()
+        return
     data = await state.get_data()
     key = str(data.get("bot_text_key") or "")
     await state.clear()
     if key not in TEXT_LABELS:
         await _replace_user_card(message, _lex("text_edit_expired"), reply_markup=admin_menu())
         return
-    try:
-        text_store.set_text(key, message.text or "")
-    except (KeyError, ValueError) as exc:
-        log.warning("Не удалось сохранить пользовательский текст %r: %s", key, exc)
-        await _replace_user_card(message, _lex("text_save_failed"), reply_markup=admin_texts_menu())
-        return
-    access_store.append_audit("bot_text_updated", actor_id=message.from_user.id, detail=key)
-    await _replace_user_card(message, _lex("text_saved"), reply_markup=admin_texts_menu())
+    await _admin_stage(message, "text", value=(key, message.text or ""))
 
 
 async def _render_admin_user_card(cq: CallbackQuery, user_id: int) -> bool:
+    if not await _admin_owner(cq):
+        return False
     record = access_store.get_user(user_id)
     if not record:
         return False
@@ -3086,7 +3802,10 @@ async def _render_admin_user_card(cq: CallbackQuery, user_id: int) -> bool:
             role=_role_label(role),
             devices=device_count,
             buttons=button_count,
-        ),
+        ) + "\nПоследнее посещение: " + html.escape(datetime.datetime.fromtimestamp(
+            int(record.get("last_seen") or 0)).strftime("%d.%m.%Y %H:%M"))
+        + "\nУстройства: " + html.escape(", ".join(perms.get("devices") or []) or "—")
+        + "\nДействия: " + html.escape(", ".join(perms.get("callbacks") or []) or "—"),
         reply_markup=admin_user_menu(user_id),
     )
     return True
@@ -3094,6 +3813,8 @@ async def _render_admin_user_card(cq: CallbackQuery, user_id: int) -> bool:
 
 @router.callback_query(OwnerFilter(), F.data.startswith("admin:user:"))
 async def on_admin_user(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     raw = cq.data.rsplit(":", 1)[-1]
     if not raw.isdigit():
         await cq.answer(_lex("admin_invalid_user"), show_alert=True)
@@ -3107,39 +3828,47 @@ async def on_admin_user(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data.startswith("admin:role:"))
 async def on_admin_role(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     parts = cq.data.split(":")
     if len(parts) != 4 or not parts[2].isdigit():
         await cq.answer(_lex("admin_invalid_data"), show_alert=True)
         return
     user_id, role = int(parts[2]), parts[3]
-    if not access_store.set_role(cq.from_user.id, user_id, role, ADMIN_ID):
+    if user_id == ADMIN_ID or role not in (Role.USER, Role.GUEST):
         await cq.answer(_lex("owner_immutable"), show_alert=True)
         return
-    await cq.answer(_lex("admin_role_changed", role=_role_label(role)))
-    if not await _render_admin_user_card(cq, user_id):
-        await _replace_callback_message(cq, _lex("admin_user_not_found"), reply_markup=admin_menu())
+    if not access_store.get_user(user_id):
+        await cq.answer(_lex("admin_user_not_found"), show_alert=True)
+        return
+    await _admin_stage(cq, "role", user_id, role)
 
 
 @router.callback_query(OwnerFilter(), F.data.startswith("admin:block:"))
 async def on_admin_block(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     raw = cq.data.rsplit(":", 1)[-1]
     if not raw.isdigit():
         await cq.answer(_lex("admin_invalid_user"), show_alert=True)
         return
     user_id = int(raw)
-    blocked = access_store.get_role(user_id, ADMIN_ID) != Role.BLOCKED
-    if not access_store.set_blocked(cq.from_user.id, user_id, blocked, ADMIN_ID):
+    if user_id == ADMIN_ID:
         await cq.answer(_lex("owner_immutable"), show_alert=True)
         return
-    await cq.answer(_lex("admin_user_blocked" if blocked else "admin_user_unblocked"))
-    if not await _render_admin_user_card(cq, user_id):
-        await _replace_callback_message(cq, _lex("admin_user_not_found"), reply_markup=admin_menu())
+    if not access_store.get_user(user_id):
+        await cq.answer(_lex("admin_user_not_found"), show_alert=True)
+        return
+    blocked = access_store.get_role(user_id, ADMIN_ID) != Role.BLOCKED
+    await _admin_stage(cq, "block", user_id, blocked)
 
 
 @router.callback_query(OwnerFilter(), F.data.startswith("admin:devices:"))
 async def on_admin_devices(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     raw = cq.data.rsplit(":", 1)[-1]
-    if not raw.isdigit():
+    if not raw.isdigit() or not access_store.get_user(int(raw)):
         await cq.answer(_lex("admin_invalid_user"), show_alert=True)
         return
     await _replace_callback_message(cq,
@@ -3151,6 +3880,8 @@ async def on_admin_devices(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data.startswith("admin:device:"))
 async def on_admin_device_toggle(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     parts = cq.data.split(":", 3)
     if len(parts) != 4 or not parts[2].isdigit():
         await cq.answer(_lex("admin_invalid_data"), show_alert=True)
@@ -3159,22 +3890,18 @@ async def on_admin_device_toggle(cq: CallbackQuery):
     if device_id not in devices.all():
         await cq.answer(_lex("device_unavailable"), show_alert=True)
         return
-    enabled = access_store.toggle_device(cq.from_user.id, user_id, device_id, ADMIN_ID)
-    await cq.answer(_lex(
-        "admin_device_access_changed",
-        device=target_label(device_id),
-        action="выдан" if enabled else "отозван",
-    ))
-    await _replace_callback_message(cq,
-        _lex("admin_device_access_intro"),
-        reply_markup=admin_devices_menu(user_id),
-    )
+    if user_id == ADMIN_ID or not access_store.get_user(user_id):
+        await cq.answer(_lex("admin_invalid_user"), show_alert=True)
+        return
+    await _admin_stage(cq, "device", user_id, device_id)
 
 
 @router.callback_query(OwnerFilter(), F.data.startswith("admin:perms:"))
 async def on_admin_permissions(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     raw = cq.data.rsplit(":", 1)[-1]
-    if not raw.isdigit():
+    if not raw.isdigit() or not access_store.get_user(int(raw)):
         await cq.answer(_lex("admin_invalid_user"), show_alert=True)
         return
     await _replace_callback_message(cq,
@@ -3186,6 +3913,8 @@ async def on_admin_permissions(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data.startswith("admin:perm:"))
 async def on_admin_permission_toggle(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     parts = cq.data.split(":", 3)
     if len(parts) != 4 or not parts[2].isdigit():
         await cq.answer(_lex("admin_invalid_data"), show_alert=True)
@@ -3195,20 +3924,16 @@ async def on_admin_permission_toggle(cq: CallbackQuery):
     if not callback:
         await cq.answer(_lex("admin_invalid_data"), show_alert=True)
         return
-    enabled = access_store.toggle_callback(cq.from_user.id, user_id, callback, ADMIN_ID)
-    await cq.answer(_lex(
-        "admin_permission_changed",
-        permission=callback,
-        action="выдано" if enabled else "отозвано",
-    ))
-    await _replace_callback_message(cq,
-        _lex("admin_permissions_intro"),
-        reply_markup=admin_permissions_menu(user_id),
-    )
+    if user_id == ADMIN_ID or not access_store.get_user(user_id):
+        await cq.answer(_lex("admin_invalid_user"), show_alert=True)
+        return
+    await _admin_stage(cq, "permission", user_id, callback)
 
 
 @router.callback_query(OwnerFilter(), F.data.startswith("admin:message:"))
 async def on_admin_message(cq: CallbackQuery, state: FSMContext):
+    if not await _admin_owner(cq):
+        return
     raw = cq.data.rsplit(":", 1)[-1]
     if not raw.isdigit() or not access_store.get_user(int(raw)):
         await cq.answer(_lex("admin_user_not_found"), show_alert=True)
@@ -3221,25 +3946,23 @@ async def on_admin_message(cq: CallbackQuery, state: FSMContext):
 
 @router.message(OwnerFilter(), Form.wait_admin_message)
 async def on_admin_message_text(message: Message, state: FSMContext):
+    if not await _admin_owner(message):
+        await state.clear()
+        return
     data = await state.get_data()
     await state.clear()
     target_id = int(data.get("admin_message_user") or 0)
     text = (message.text or "").strip()
-    if not target_id or not text:
+    if not target_id or not text or target_id == ADMIN_ID or not access_store.get_user(target_id):
         await _replace_user_card(message, _lex("admin_message_empty"), reply_markup=admin_menu())
         return
-    try:
-        await bot.send_message(target_id, html.escape(text))
-    except Exception:
-        log.exception("Не удалось отправить администраторское сообщение")
-        await _replace_user_card(message, _lex("admin_message_failed"), reply_markup=admin_menu())
-        return
-    access_store.append_audit("admin_message_sent", actor_id=message.from_user.id, target_id=target_id, detail=text)
-    await _replace_user_card(message, _lex("admin_message_sent"), reply_markup=admin_menu())
+    await _admin_stage(message, "message", target_id, text)
 
 
 @router.callback_query(OwnerFilter(), F.data == "admin:audit")
 async def on_admin_audit(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     rows = access_store.recent_audit(12)
     if not rows:
         text = "<b>Журнал действий</b>\nЗаписей пока нет."
@@ -3257,6 +3980,8 @@ async def on_admin_audit(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data == "admin:style")
 async def on_admin_style(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     kb = InlineKeyboardBuilder()
     current = xlex.normalize_style(bot_settings.get("ui_style", "technical"))
     for style in xlex.STYLES:
@@ -3273,6 +3998,8 @@ async def on_admin_style(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data.startswith("admin:style:set:"))
 async def on_admin_style_set(cq: CallbackQuery):
+    if not await _admin_owner(cq):
+        return
     style = cq.data.rsplit(":", 1)[-1]
     if style not in xlex.STYLES:
         await cq.answer("Неизвестный стиль", show_alert=True)
@@ -3705,8 +4432,57 @@ def _url_count_state_matches(current_state) -> bool:
     return current_state == Form.wait_url_count.state or current_state is Form.wait_url_count
 
 
+def _open_url_result_text(result: dict | None, *, command_id: str, target: str, url: str, count: int) -> str:
+    """Separate MQTT publish acceptance from browser launch-request acceptance."""
+    prefix = (
+        f"✅ MQTT принял команду для <b>{html.escape(target_label(target))}</b> "
+        f"· ID <code>{html.escape(command_id)}</code>"
+    )
+    if not isinstance(result, dict) or result.get("type") != "open_url" or result.get("id") != command_id:
+        return (
+            f"{prefix}\nФактический результат браузера не получен; число принятых "
+            f"запросов неизвестно. Ссылка: <code>{html.escape(url)}</code>"
+        )
+    accepted_count = result.get("accepted_count")
+    requested_count = result.get("requested_count")
+    if (
+        type(accepted_count) is not int
+        or not 0 <= accepted_count <= count
+        or requested_count != count
+    ):
+        return (
+            f"{prefix}\nАгент прислал некорректный результат; число принятых браузером "
+            f"запросов неизвестно. Ссылка: <code>{html.escape(url)}</code>"
+        )
+    text = (
+        f"{prefix}\nБраузер принял к запуску {accepted_count} из {count} запросов. "
+        f"Ссылка: <code>{html.escape(url)}</code>"
+    )
+    detail = str(result.get("detail") or "").strip()[:200]
+    return text + (f"\n<pre>{html.escape(detail)}</pre>" if detail else "")
+
+
 @router.callback_query(ReadOnlyFilter(), F.data.startswith("url:count:"))
 async def on_url_count_select(cq: CallbackQuery, state: FSMContext):
+    message = getattr(cq, "message", None)
+    if message is None:
+        return await _url_count_select_unlocked(cq, state)
+    key = (
+        int(cq.from_user.id) if cq.from_user else 0,
+        int(message.chat.id),
+        int(message.message_id),
+    )
+    if key in _ACTIVE_UI_COMMANDS:
+        await cq.answer(_lex("command_already_running"), show_alert=True)
+        return None
+    _ACTIVE_UI_COMMANDS.add(key)
+    try:
+        return await _url_count_select_unlocked(cq, state)
+    finally:
+        _ACTIVE_UI_COMMANDS.discard(key)
+
+
+async def _url_count_select_unlocked(cq: CallbackQuery, state: FSMContext):
     count_text = str(cq.data or "").rsplit(":", 1)[-1]
     if count_text not in {"1", "2", "3", "5"}:
         await cq.answer(_lex("url_invalid"), show_alert=True)
@@ -3726,27 +4502,36 @@ async def on_url_count_select(cq: CallbackQuery, state: FSMContext):
         await _replace_callback_message(cq, _lex("url_invalid"), reply_markup=back_to_device_kb())
         await cq.answer()
         return
+    count = int(count_text)
     if callback != "cmd:url" or not _device_action_still_allowed(user_id, callback, target):
         await state.clear()
         await _replace_callback_message(cq, _lex("input_access_revoked"), reply_markup=back_to_device_kb())
         await cq.answer()
         return
 
-    count = int(count_text)
-    if not publish("open_url", _target=target, url=url, count=count):
+    sent, command_id = publish_tracked("open_url", _target=target, url=url, count=count)
+    if not sent:
         await state.clear()
         await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
         await cq.answer()
         return
 
     await state.clear()
-    audit("url.open", user_id=user_id, target=target, count=count)
+    audit("url.open", user_id=user_id, target=target, count=count, command_id=command_id)
+    await cq.answer("Команда принята MQTT; жду ответ агента.")
+    result = await fun_text_collector.wait_for(target, "open_url", 15.0, command_id)
+    if not _device_action_still_allowed(user_id, callback, target):
+        await _replace_callback_message(
+            cq, _lex("action_result_hidden_after_revoke"), reply_markup=back_to_device_kb()
+        )
+        return
     await _replace_callback_message(
         cq,
-        _lex_html("url_multiple_request_sent", device=target_label(target), url=url, count=str(count)),
+        _open_url_result_text(
+            result, command_id=command_id, target=target, url=url, count=count,
+        ),
         reply_markup=back_to_device_kb(),
     )
-    await cq.answer()
 
 
 @router.callback_query(ReadOnlyFilter(), F.data == "url:cancel")
@@ -3802,7 +4587,9 @@ async def on_url_favorite_open(cq: CallbackQuery, state: FSMContext):
     await _replace_callback_message(
         cq,
         _lex_html("url_count_prompt", device=target_label(target)),
-        reply_markup=url_count_keyboard(is_owner=True),
+        reply_markup=url_count_keyboard(
+            is_owner=True, user_id=cq.from_user.id, target=target,
+        ),
     )
     await cq.answer()
 
@@ -3911,6 +4698,55 @@ async def on_cmd_sound(cq: CallbackQuery, state: FSMContext):
     )
     await cq.answer()
 
+def _decode_screenshot_image(result: dict) -> bytes:
+    """Bound transport bytes and modern image dimensions before full pixel decode."""
+    encoded = result.get("image")
+    limit = 30 * 1024 * 1024
+    if not isinstance(encoded, str) or len(encoded) > 4 * ((limit + 2) // 3):
+        raise ValueError("Screenshot payload exceeds limit")
+    data = base64.b64decode(encoded, validate=True)
+    if not data or len(data) > limit:
+        raise ValueError("Screenshot payload is empty or exceeds limit")
+    if result.get("state") == "success":
+        from PIL import Image
+        try:
+            with Image.open(io.BytesIO(data), formats=["JPEG", "PNG"]) as image:
+                width, height = image.size
+                if width <= 0 or height <= 0 or width * height > 40_000_000:
+                    raise ValueError("Screenshot dimensions exceed limit")
+                # Header verification alone accepts truncated JPEGs. Decode all pixels
+                # only after the format/dimension gates have bounded the allocation.
+                image.load()
+        except Image.DecompressionBombError as exc:
+            raise ValueError("Screenshot dimensions exceed limit") from exc
+    return data
+
+
+def _screenshot_failure_help(result: dict) -> str:
+    """Canonical screenshot states; unknown/legacy responses remain unverified."""
+    instructions = {
+        "permission_denied": "Отказ в доступе к экрану. Проверь разрешение на самом устройстве.",
+        "session_unavailable": "GUI-сеанс недоступен. Войди в сеанс владельца и проверь работу агента после блокировки, сна и смены пользователя.",
+        "tool_missing": "Отсутствует компонент захвата. Проверь установку screencapture/Pillow на устройстве.",
+        "command_failed": "Не выполнена команда захвата. Проверь диагностику агента; это не подтверждает отказ TCC.",
+        "file_empty": "Получен пустой снимок. Проверь сеанс и повтори разрешённое действие; разрешение неизвестно.",
+        "file_oversized": "Превышен допустимый размер снимка. Уменьши разрешение/число экранов и повтори.",
+        "file_unreadable": "Не удалось прочитать снимок или очистить временный файл. Проверь диск и доступ агента к временной папке.",
+        "timeout": "Истекло время захвата. Проверь GUI-сеанс и повтори действие.",
+        "transport_failed": "Не подтверждена доставка результата. Проверь MQTT/Telegram и повтори запрос.",
+    }
+    state = result.get("state")
+    text = "⚠️ " + instructions.get(state, "Состояние захвата неизвестно. Проверь диагностику агента и повтори запрос.")
+    if state == "permission_denied" and result.get("platform") == "macOS":
+        text += ("\nНа самом устройстве: Системные настройки → Конфиденциальность и безопасность → Запись экрана (Screen Recording)."
+                 " Названия разделов могут отличаться в разных версиях macOS. Разрешение выдаёт владелец через ОС; агент не выдаёт его."
+                 " Проверь активный GUI-сеанс LaunchAgent после блокировки, сна/пробуждения и смены пользователя.")
+    elif state == "permission_denied" and result.get("platform") == "Windows":
+        text += "\nПроверь интерактивный рабочий стол и ограничения UAC локально; агент не подтверждает запрос UAC."
+    detail = str(result.get("detail") or result.get("error") or "")[:500]
+    return text + (f"\n<pre>{html.escape(detail)}</pre>" if detail else "")
+
+
 @router.callback_query(AdminFilter(), F.data == "cmd:screenshot")
 async def on_cmd_screenshot(cq: CallbackQuery):
     target = SESSION.get("target")
@@ -3937,35 +4773,41 @@ async def on_cmd_screenshot(cq: CallbackQuery):
     if result is None:
         await _replace_callback_message(
             cq,
-            "⏳ Скриншот не получен за 15 сек — устройство офлайн.",
-            reply_markup=back_to_device_kb(),
+            "⏳ Ответ не получен за 15 сек. Проверь MQTT и доставку команды; состояние устройства и разрешения неизвестны.",
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
         return
     img_b64 = result.get("image")
-    if not img_b64:
-        agent_error = str(result.get("error") or "").strip()
-        detail = f"\n<pre>{html.escape(agent_error[:500])}</pre>" if agent_error else ""
+    if not img_b64 or result.get("state") not in (None, "success"):
         await _replace_callback_message(
             cq,
-            "⚠️ Устройство ответило, но скриншот не получен." + detail,
-            reply_markup=back_to_device_kb(),
+            _screenshot_failure_help(result),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
         return
     try:
-        img_bytes = base64.b64decode(img_b64)
+        img_bytes = _decode_screenshot_image(result)
         photo = BufferedInputFile(img_bytes, filename="screenshot.png")
+    except Exception:
+        log.exception("Ошибка декодирования скриншота")
+        await _replace_callback_message(
+            cq, _screenshot_failure_help({"state": "file_unreadable"}),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
+        )
+        return
+    try:
         await _replace_callback_with_media(
             cq,
-            bot.send_photo,
+            bot.send_photo, delivery_guard=_callback_delivery_guard(cq, target),
             photo=photo,
             caption=f"📸 <b>{target_label(target)}</b>",
         )
     except Exception:
-        log.exception("Ошибка декодирования скриншота")
+        log.exception("Ошибка доставки скриншота")
         await _replace_callback_message(
             cq,
-            "⚠️ Ошибка обработки скриншота.",
-            reply_markup=back_to_device_kb(),
+            _screenshot_failure_help({"state": "transport_failed", "detail": "Telegram result delivery failed"}),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
 
 
@@ -3996,7 +4838,7 @@ async def on_cmd_webcam(cq: CallbackQuery):
         await _replace_callback_message(
             cq,
             "⏳ Снимок не получен за 20 сек — устройство офлайн или нет вебки.",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
         return
     img_b64 = result.get("image")
@@ -4004,7 +4846,7 @@ async def on_cmd_webcam(cq: CallbackQuery):
         await _replace_callback_message(
             cq,
             "⚠️ Устройство ответило ошибкой или камера недоступна.",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
         return
     try:
@@ -4012,7 +4854,7 @@ async def on_cmd_webcam(cq: CallbackQuery):
         photo = BufferedInputFile(img_bytes, filename="webcam.jpg")
         await _replace_callback_with_media(
             cq,
-            bot.send_photo,
+            bot.send_photo, delivery_guard=_callback_delivery_guard(cq, target),
             photo=photo,
             caption=f"📷 <b>{target_label(target)}</b>",
         )
@@ -4021,7 +4863,7 @@ async def on_cmd_webcam(cq: CallbackQuery):
         await _replace_callback_message(
             cq,
             "⚠️ Ошибка обработки снимка вебки.",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
 
 
@@ -4045,15 +4887,15 @@ async def on_cmd_battery(cq: CallbackQuery):
     if not await _callback_result_access_or_report(cq, target, published=True):
         return
     if not res:
-        await _replace_callback_message(cq, _lex("device_no_response"), reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, _lex("device_no_response"), delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb())
         return
     if not res.get("available"):
-        await _replace_callback_message(cq, "🔋 Батарея отсутствует на устройстве.", reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, "🔋 Батарея отсутствует на устройстве.", delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb())
         return
     pct = res.get("percent", "?")
     state = res.get("state", "?")
     tl = res.get("time_left") or "Неизвестно"
-    await _replace_callback_message(cq, f"🔋 <b>Батарея:</b> {pct}%\nСтатус: {state}\nОсталось: {tl}", reply_markup=back_to_device_kb())
+    await _replace_callback_message(cq, f"🔋 <b>Батарея:</b> {pct}%\nСтатус: {state}\nОсталось: {tl}", delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb())
 
 @router.callback_query(AdminFilter(), F.data == "cmd:network")
 async def on_cmd_network(cq: CallbackQuery):
@@ -4075,14 +4917,14 @@ async def on_cmd_network(cq: CallbackQuery):
     if not await _callback_result_access_or_report(cq, target, published=True):
         return
     if not res:
-        await _replace_callback_message(cq, _lex("device_no_response"), reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, _lex("device_no_response"), delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb())
         return
     lines = []
     for i in res.get("interfaces", []):
         if i.get("up"):
             ip = i.get("ipv4") or i.get("ipv6") or "No IP"
             lines.append(f"• <b>{i['name']}</b>: {ip}")
-    await _replace_callback_message(cq, "🌐 <b>Сеть:</b>\n" + ("\n".join(lines) if lines else "Нет активных интерфейсов"), reply_markup=back_to_device_kb())
+    await _replace_callback_message(cq, "🌐 <b>Сеть:</b>\n" + ("\n".join(lines) if lines else "Нет активных интерфейсов"), delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb())
 
 @router.callback_query(AdminFilter(), F.data == "cmd:services")
 async def on_cmd_services(cq: CallbackQuery):
@@ -4104,11 +4946,11 @@ async def on_cmd_services(cq: CallbackQuery):
     if not await _callback_result_access_or_report(cq, target, published=True):
         return
     if not res:
-        await _replace_callback_message(cq, _lex("device_no_response"), reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, _lex("device_no_response"), delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb())
         return
     tot = res.get("total", "?")
     run = res.get("running", "?")
-    await _replace_callback_message(cq, f"🛠 <b>Службы:</b>\nВсего: {tot}\nЗапущено: {run}", reply_markup=back_to_device_kb())
+    await _replace_callback_message(cq, f"🛠 <b>Службы:</b>\nВсего: {tot}\nЗапущено: {run}", delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb())
 
 @router.callback_query(AdminFilter(), F.data == "cmd:capabilities")
 async def on_cmd_capabilities(cq: CallbackQuery):
@@ -4130,9 +4972,122 @@ async def on_cmd_capabilities(cq: CallbackQuery):
     if not await _callback_result_access_or_report(cq, target, published=True):
         return
     if not res:
-        await _replace_callback_message(cq, _lex("device_no_response"), reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, _lex("device_no_response"), delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb())
         return
-    await _replace_callback_message(cq, _format_capabilities(res), reply_markup=back_to_device_kb())
+    user_id = int(cq.from_user.id) if cq.from_user else 0
+    await _replace_callback_message(
+        cq,
+        _format_capabilities(res),
+        delivery_guard=_callback_delivery_guard(cq, target),
+        reply_markup=_capabilities_keyboard(res, user_id=user_id),
+    )
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("permsettings:"))
+async def on_permission_settings(cq: CallbackQuery):
+    """Open a fixed platform privacy pane only after the owner taps its button."""
+    target = _require_target(cq)
+    permission = str(cq.data or "").partition(":")[2]
+    if not target:
+        await cq.answer(_lex("target_required"), show_alert=True)
+        return
+    info = devices.get(target) or {}
+    os_name = str(info.get("os") or "").lower()
+    platform = (
+        "macOS" if os_name.startswith(("mac", "darwin"))
+        else "Windows" if os_name.startswith("windows")
+        else None
+    )
+    if not platform or permission not in _CAPABILITY_SETTINGS[platform]:
+        await cq.answer("Неизвестный раздел настроек; ничего не отправлено.", show_alert=True)
+        return
+    commands = (info.get("capabilities") or {}).get("commands", [])
+    if not isinstance(commands, list) or "permission_settings" not in commands:
+        await cq.answer()
+        await _replace_callback_message(
+            cq,
+            "Агент пока не умеет удалённо открывать панель разрешений. Сначала обнови его, затем снова запусти проверку возможностей.",
+            reply_markup=back_to_device_kb(),
+        )
+        return
+    callback = f"permsettings:{permission}"
+    if not _device_action_still_allowed(int(cq.from_user.id), callback, target):
+        await cq.answer(_lex("input_access_revoked"), show_alert=True)
+        return
+    await simple_command(
+        cq,
+        "permission_settings",
+        "⚙️",
+        _SNAPSHOT_LABELS[permission],
+        timeout=15.0,
+        permission=permission,
+    )
+
+
+def format_location_result(result: dict) -> str:
+    """Pure bounded presentation; ignore old free-form/provider coordinate text."""
+    import math
+    import datetime
+    source, state = result.get("source"), result.get("state")
+    checked = result.get("checked_at")
+    try:
+        stamp = datetime.datetime.fromisoformat(checked)
+        valid_stamp = stamp.utcoffset() == datetime.timedelta(0)
+    except (TypeError, ValueError):
+        valid_stamp = False
+    if (not isinstance(source, str) or not isinstance(state, str)
+            or source not in {"system", "ip_estimate"} or state not in _SNAPSHOT_STATES or not valid_stamp):
+        return "Локация: неизвестно; нужен новый запрос к обновлённому агенту."
+    safe = lambda value, limit: html.escape(str(value)[:limit])
+    label = safe(result.get("label", ""), 500)
+    when = safe(checked, 50)
+    if source == "ip_estimate":
+        return ("Приблизительная оценка города/региона по IP, не GPS; точность неизвестна.\n"
+                + label + "\nСостояние: " + _SNAPSHOT_STATES[state] + "\nПроверено: " + when)
+    if state == "granted":
+        lat, lon, accuracy = (result.get(key) for key in ("latitude", "longitude", "accuracy_m"))
+        if (not all(type(value) in (int, float) and math.isfinite(value) for value in (lat, lon, accuracy))
+                or not (-90 <= lat <= 90 and -180 <= lon <= 180 and accuracy >= 0)):
+            return "Системная локация: неизвестно; некорректный результат."
+        return (f"Системная геолокация (источник ОС, не обязательно GPS): {lat}, {lon}\n"
+                f"Погрешность: {accuracy} м\nПроверено: " + when)
+    return ("Системная локация: " + _SNAPSHOT_STATES[state] + "\n"
+            + label + "\nПроверено: " + when)
+
+
+def _capabilities_keyboard(result: dict | None = None, user_id: int | None = None):
+    kb = InlineKeyboardBuilder()
+    snapshot = _parse_capability_snapshot(result or {})
+    user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
+    commands = result.get("commands") if isinstance(result, dict) else None
+    commands = set(commands) if isinstance(commands, list) else set()
+    platform = next((name for name in _CAPABILITY_SETTINGS
+                     if isinstance(snapshot["platform"], str) and snapshot["platform"].startswith(name)), None)
+    if (get_user_role(user_id) == Role.OWNER
+            and platform
+            and "permission_settings" in commands):
+        for item in snapshot["items"]:
+            if (item["state"] in {"granted", "unavailable"}
+                    or not _CAPABILITY_SETTINGS[platform].get(item["id"])):
+                continue
+            kb.button(
+                text=f"⚙️ Показать настройки: {_SNAPSHOT_LABELS[item['id']]}",
+                callback_data=f"permsettings:{item['id']}",
+                style="primary",
+            )
+    kb.button(text=_nav("refresh"), callback_data="cmd:capabilities")
+    kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def _location_result_keyboard(result: dict, user_id: int):
+    kb = InlineKeyboardBuilder()
+    if result.get("state") != "granted" and get_user_role(user_id) == Role.OWNER:
+        kb.button(text=_lex("geo_beta"), callback_data="location:ip")
+    kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
+    kb.adjust(1)
+    return kb.as_markup()
 
 
 _CAPABILITY_LABELS = {
@@ -4155,22 +5110,135 @@ _CAPABILITY_STATES = {
     "unknown": "агент не смог определить состояние",
 }
 
+_SNAPSHOT_LABELS = {
+    "screen_recording": "Снимок экрана", "camera": "Камера", "microphone": "Микрофон",
+    "location": "Локация", "accessibility": "Управление интерфейсом", "file_access": "Доступ к файлам",
+}
+_SNAPSHOT_STATES = {
+    "granted": "разрешено (сообщено агентом; не выдаёт доступ к действиям)",
+    "denied": "отказано", "not_determined": "решение ещё не принято",
+    "unavailable": "недоступно", "needs_live_test": "нужна проверка действием",
+    "unknown": "неизвестно",
+}
+_CAPABILITY_SETTINGS = {
+    "macOS": {
+        key: "x-apple.systempreferences:com.apple.preference.security?Privacy_" + target
+        for key, target in {"screen_recording": "ScreenCapture", "camera": "Camera",
+                            "microphone": "Microphone", "location": "LocationServices",
+                            "accessibility": "Accessibility", "file_access": "FilesAndFolders"}.items()
+    },
+    "Windows": {"camera": "ms-settings:privacy-webcam", "microphone": "ms-settings:privacy-microphone",
+                "location": "ms-settings:privacy-location"},
+}
+
+
+def _parse_capability_snapshot(result: dict) -> dict:
+    """Normalize untrusted data; old or malformed envelopes cannot imply grants."""
+    empty = {"schema": None, "platform": None, "checked_at": None,
+             "items": [{"id": key, "state": "unknown", "detail": "", "settings_uri": None}
+                       for key in _SNAPSHOT_LABELS]}
+    if not isinstance(result, dict) or type(result.get("schema")) is not int or result["schema"] != 1:
+        return empty
+    raw_platform = result.get("platform")
+    if not isinstance(raw_platform, str):
+        return empty
+    match = re.fullmatch(r"(macOS|Windows)(?: [0-9.]+)?", raw_platform.strip())
+    if not match:
+        return empty
+    platform = match.group(1)
+    checked_at = result.get("checked_at")
+    try:
+        if not isinstance(checked_at, str) or len(checked_at) > 40:
+            return empty
+        stamp = datetime.datetime.fromisoformat(checked_at)
+        if stamp.utcoffset() is None:
+            return empty
+    except (ValueError, TypeError, OverflowError):
+        return empty
+    raw_items = result.get("items")
+    if not isinstance(raw_items, list) or len(raw_items) > 64:
+        return empty
+    seen = {}
+    duplicates = set()
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        key = item.get("id")
+        if not isinstance(key, str) or key not in _SNAPSHOT_LABELS:
+            continue
+        if key in seen:
+            duplicates.add(key)
+        seen[key] = item
+    items = []
+    for key in _SNAPSHOT_LABELS:
+        item = seen.get(key, {})
+        state = item.get("state")
+        detail = item.get("detail")
+        valid = (key not in duplicates and isinstance(state, str) and state in _SNAPSHOT_STATES
+                 and isinstance(detail, str) and bool(detail.strip()))
+        items.append({"id": key, "state": state if valid else "unknown",
+                      "detail": detail[:200] if valid else "",
+                      # Route selection belongs to this bot, never to the agent.
+                      "settings_uri": _CAPABILITY_SETTINGS[platform].get(key) if valid else None})
+    return {"schema": 1, "platform": raw_platform, "checked_at": checked_at, "items": items}
+
 
 def _format_capabilities(result: dict) -> str:
     """Render bounded capability data without treating declarations as health checks."""
     def safe(value, limit=100):
-        return html.escape(str(value or "?")[:limit], quote=False)
+        chunks = []
+        length = 0
+        for char in str(value or "?")[:limit]:
+            chunk = html.escape(char, quote=False)
+            if length + len(chunk) > limit:
+                break
+            chunks.append(chunk)
+            length += len(chunk)
+        return "".join(chunks)
+
+    if not isinstance(result, dict):
+        result = {}
+    snapshot = _parse_capability_snapshot(result)
 
     lines = ["📊 <b>Проверка возможностей</b>"]
     lines.append(f"Устройство: <b>{safe(result.get('hostname'))}</b>")
     lines.append(f"ОС: {safe(result.get('platform'))} · агент: {safe(result.get('version'), 40)}")
+    lines.append(f"Проверено: {safe(snapshot['checked_at'], 40)}")
+    lines.append("\n<b>Разрешения</b> <i>(это не тест реального действия)</i>")
+    for item in snapshot["items"]:
+        lines.append(f"• {_SNAPSHOT_LABELS[item['id']]}: {_SNAPSHOT_STATES[item['state']]}")
+        if item["detail"]:
+            lines.append(safe(item["detail"], 200 if item["id"] == "location" else 100))
+        if item["settings_uri"]:
+            lines.append("Настройки: <code>" + safe(item["settings_uri"], 120) + "</code>")
+    if any(item["state"] == "needs_live_test" for item in snapshot["items"]):
+        lines.append("Прямой запрос разрешения недоступен: только разрешённое пробное действие подтверждает доступ.")
+    lines.append("Снимок не выдаёт разрешения. Владелец меняет их на самом устройстве.")
+    if snapshot["schema"] == 1:
+        if snapshot["platform"].startswith("macOS"):
+            lines.append("macOS: Системные настройки → Конфиденциальность и безопасность → нужный раздел. "
+                         "Разреши фактическое приложение XIDER; при запросе ОС перезапусти его.")
+            commands = result.get("commands") if isinstance(result.get("commands"), list) else []
+            if "permission_settings" in commands:
+                lines.append("Для открытия раздела на Mac нажми соответствующую кнопку ниже; затем подтверди доступ вручную и обнови проверку.")
+            else:
+                lines.append("Удалённое открытие раздела появится после обновления агента до версии с поддержкой этой команды.")
+        else:
+            lines.append("Windows: Параметры → Конфиденциальность и безопасность → Камера / Микрофон / Расположение. "
+                         "Для камеры и микрофона проверь «Разрешить классическим приложениям».")
+            commands = result.get("commands") if isinstance(result.get("commands"), list) else []
+            if "permission_settings" in commands:
+                lines.append("Для камеры, микрофона или расположения нажми кнопку нужного раздела ниже и подтверди доступ вручную.")
+            else:
+                lines.append("Кнопки перехода появятся после обновления агента; пока открой раздел вручную.")
+            lines.append("Для файлового доступа отдельного разрешения нет: проверь ACL. UAC подтверждает владелец.")
 
     raw_statuses = result.get("feature_status")
     raw_features = result.get("features")
     statuses = raw_statuses if isinstance(raw_statuses, dict) else {}
     legacy = raw_features if isinstance(raw_features, dict) else {}
-    lines.append("\n<b>Функции</b> <i>(это не тест реального действия)</i>")
-    for key, label in _CAPABILITY_LABELS.items():
+    # Legacy declarations stay explicitly unverified, never become schema v1 grants.
+    for key, label in (_CAPABILITY_LABELS.items() if snapshot["schema"] is None else []):
         state = statuses.get(key)
         if isinstance(state, dict):
             state = state.get("state")
@@ -4192,7 +5260,12 @@ def _format_capabilities(result: dict) -> str:
             command for command in commands[:256]
             if isinstance(command, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", command)
         })
-        shown = clean[:32]
+        budget = max(0, 3900 - len("\n".join(lines)))
+        shown = []
+        for command in clean[:32]:
+            if len(", ".join(shown + [command])) > budget:
+                break
+            shown.append(command)
         suffix = f"\n… ещё {len(clean) - len(shown)}" if len(clean) > len(shown) else ""
         lines.append(f"\n<b>Заявлено команд:</b> {len(clean)}")
         if shown:
@@ -4228,7 +5301,7 @@ async def on_cmd_sysinfo(cq: CallbackQuery):
         await _replace_callback_message(
             cq,
             _lex("device_timeout", seconds="12"),
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
         return
     info = devices.get(result.get("device_id")) or {}
@@ -4247,7 +5320,7 @@ async def on_cmd_sysinfo(cq: CallbackQuery):
         f"🧠 RAM: {ram_used} / {ram_total} ГБ ({ram_pct}%)\n"
         f"💾 Диск: {disk_used} / {disk_total} ГБ ({disk_pct}%)\n"
         f"⏱ Аптайм: {uptime_str}",
-        reply_markup=back_to_device_kb(),
+        delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
     )
 
 
@@ -4322,13 +5395,13 @@ async def on_cmd_status(cq: CallbackQuery):
         await _replace_callback_message(
             cq,
             _lex("device_no_response"),
-            reply_markup=system_menu(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=system_menu(),
         )
         return
     await _replace_callback_message(
         cq,
         device_card(target),
-        reply_markup=system_menu(),
+        delivery_guard=_callback_delivery_guard(cq, target), reply_markup=system_menu(),
     )
 
 
@@ -4411,8 +5484,8 @@ async def on_cat_media(cq: CallbackQuery):
         await cq.answer(_lex("device_required"), show_alert=True)
         return
     await _replace_callback_message(cq,
-        _lex_html("category_media", device=target_label(target)),
-        reply_markup=media_menu(cq.from_user.id if cq.from_user else None),
+        _lex_html("category_screen", device=target_label(target)),
+        reply_markup=screen_menu(target=target, user_id=cq.from_user.id if cq.from_user else None),
     )
     await cq.answer()
 
@@ -4425,7 +5498,7 @@ async def on_cat_screen(cq: CallbackQuery):
         return
     await _replace_callback_message(cq,
         _lex_html("category_screen", device=target_label(target)),
-        reply_markup=screen_menu(),
+        reply_markup=screen_menu(target=target, user_id=cq.from_user.id if cq.from_user else None),
     )
     await cq.answer()
 
@@ -4438,7 +5511,7 @@ async def on_cat_input(cq: CallbackQuery):
         return
     await _replace_callback_message(cq,
         _lex_html("category_input", device=target_label(target)),
-        reply_markup=input_menu(),
+        reply_markup=input_menu(cq.from_user.id if cq.from_user else None),
     )
     await cq.answer()
 
@@ -4464,7 +5537,7 @@ async def on_cat_network(cq: CallbackQuery):
         return
     await _replace_callback_message(cq,
         _lex_html("category_network", device=target_label(target)),
-        reply_markup=network_menu(),
+        reply_markup=network_menu(cq.from_user.id if cq.from_user else None),
     )
     await cq.answer()
 
@@ -4492,7 +5565,7 @@ async def on_cat_terminal(cq: CallbackQuery):
         return
     await _replace_callback_message(cq,
         _lex_html("category_terminal", device=target_label(target)),
-        reply_markup=terminal_menu(),
+        reply_markup=terminal_menu(cq.from_user.id if cq.from_user else None),
     )
     await cq.answer()
 
@@ -4545,28 +5618,53 @@ async def on_proc_page(cq: CallbackQuery):
     if not target or target == "all":
         await cq.answer(_lex("single_device_only"), show_alert=True)
         return
+    user_id = int(cq.from_user.id) if cq.from_user else 0
+    callback = str(cq.data or "")
+    if not _device_action_still_allowed(user_id, callback, target):
+        await cq.answer(_lex("input_access_revoked"), show_alert=True)
+        return
     refresh = cq.data == "proc:refresh"
     page = 0 if refresh else int(cq.data.split(":", 1)[1] or 0)
     cache = None if refresh else LAST_PROCESSES.get(target)
     if not cache or time.time() - cache["ts"] > 30:
         await cq.answer("⚙️ Запрашиваю процессы...")
         processes_collector.reset()
+        # The role/device grant may have changed after the callback filter ran.
+        # Recheck at the side-effect boundary; a visible/stale button is not authority.
+        if not _device_action_still_allowed(user_id, callback, target):
+            await _replace_callback_message(
+                cq, _lex("input_access_revoked"), reply_markup=back_to_device_kb()
+            )
+            return
         if not transport.publish_command(target, "processes", top_n=15):
             await _replace_callback_message(
                 cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb()
             )
             return
         res = await processes_collector.wait(15.0)
+        # Process names are sensitive device data. Do not cache or display a late
+        # response after a grant has been removed while the request was in flight.
+        if not _device_action_still_allowed(user_id, callback, target):
+            await _replace_callback_message(
+                cq, _lex("action_result_hidden_after_revoke"),
+                reply_markup=back_to_device_kb(),
+            )
+            return
         if not res:
             await _replace_callback_message(
                 cq,
                 _lex("device_no_response"),
-                reply_markup=back_to_device_kb(),
+                delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
             )
             await cq.answer()
             return
         cache = {"ts": time.time(), "items": res.get("top", [])}
         LAST_PROCESSES[target] = cache
+    elif not _device_action_still_allowed(user_id, callback, target):
+        await _replace_callback_message(
+            cq, _lex("input_access_revoked"), reply_markup=back_to_device_kb()
+        )
+        return
     items = cache.get("items", [])
     per = 8
     pages = max(1, (len(items) + per - 1) // per)
@@ -4576,6 +5674,12 @@ async def on_proc_page(cq: CallbackQuery):
     for it in chunk:
         label = f"🔪 {it.get('name', '?')} · {it.get('mem_percent', 0)}%"
         kb.button(text=_limit_button_label(label), callback_data=f"killq:{it.get('pid')}", style="danger")
+    details = []
+    for item in chunk:
+        pid = html.escape(str(item.get("pid", "?"))[:16])
+        name = html.escape(str(item.get("name") or "?")[:48])
+        memory = html.escape(str(item.get("mem_percent", 0))[:12])
+        details.append(f"• <code>{pid}</code> · {name} · {memory}%")
     if pages > 1:
         if page > 0:
             kb.button(text="◀️", callback_data=f"proc:{page - 1}", style="primary")
@@ -4584,9 +5688,19 @@ async def on_proc_page(cq: CallbackQuery):
             kb.button(text="▶️", callback_data=f"proc:{page + 1}", style="primary")
     kb.button(text=_nav("refresh"), callback_data="proc:refresh", style="success")
     kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
     kb.adjust(1)
-    text = f"⚙️ <b>Процессы</b> · {html.escape(target_label(target))} (топ-{len(items)})"
-    await _replace_callback_message(cq, text, reply_markup=kb.as_markup())
+    text = (
+        f"⚙️ <b>Процессы</b> · {html.escape(target_label(target)[:80])} (топ-{len(items)})"
+        + ("\n" + "\n".join(details) if details else "")
+    )
+    await _replace_callback_message(
+        cq,
+        text,
+        delivery_guard=_callback_delivery_guard(cq, target), reply_markup=_filter_device_keyboard(
+            kb.as_markup(), cq.from_user.id if cq.from_user else None,
+        ),
+    )
     await cq.answer()
 
 
@@ -4597,7 +5711,8 @@ async def on_kill_confirm(cq: CallbackQuery):
         cq,
         f"🔪 Убить процесс <code>{html.escape(pid)}</code>?",
         reply_markup=confirm_kb(
-            f"kill:{pid}", yes_text=_lex("confirm_kill_process_button")
+            f"kill:{pid}", yes_text=_lex("confirm_kill_process_button"),
+            user_id=cq.from_user.id if cq.from_user else None,
         ),
     )
     await cq.answer()
@@ -4666,24 +5781,45 @@ async def on_all_screenshot(cq: CallbackQuery):
         return
     await cq.answer("📸 Собираю скриншоты...")
     results = await multi_screenshot.wait_window(14.0)
-    sent = 0
-    for r in results[:6]:
-        img = r.get("image")
-        if not img:
-            continue
-        try:
-            photo = BufferedInputFile(base64.b64decode(img), filename="screenshot.jpg")
-            await bot.send_photo(
-                ADMIN_ID,
-                photo=photo,
-                caption=f"📸 {html.escape(target_label(r.get('device_id', '')))}",
-            )
-            sent += 1
-        except Exception:
-            log.exception("Не удалось отправить скриншот")
-    await _replace_callback_message(
-        cq, f"📸 Скриншоты собраны: {sent}.", reply_markup=devices_menu()
-    )
+    collected = 0
+    manifest = []
+    diagnostics = []
+    archive_bytes = io.BytesIO()
+    with zipfile.ZipFile(archive_bytes, "w", zipfile.ZIP_DEFLATED) as archive:
+        for index, result in enumerate(results, 1):
+            if not result.get("image") or result.get("state") not in (None, "success"):
+                diagnostics.append(f"{html.escape(target_label(str(result.get('device_id') or 'unknown'))[:80])}: {_screenshot_failure_help(result)}")
+                continue
+            try:
+                image = _decode_screenshot_image(result)
+                device_id = str(result.get("device_id") or "unknown")
+                name = target_label(device_id)
+                filename = _safe_transfer_filename(
+                    f"{index:02d}-{device_id}-{name}.jpg".replace("/", "_").replace("\\", "_")
+                )
+                archive.writestr(filename, image)
+                manifest.append({"file": filename, "device_id": device_id, "device_name": name})
+                collected += 1
+            except (ValueError, TypeError, OSError):
+                log.warning("Некорректный скриншот в сводке устройства", exc_info=True)
+                diagnostics.append(f"{html.escape(str(result.get('device_id') or 'unknown')[:80])}: {_screenshot_failure_help({'state': 'file_unreadable'})}")
+        archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False).encode("utf-8"))
+    caption = f"📸 Скриншоты собраны: {collected}."
+    if diagnostics:
+        # Keep complete HTML blocks within the Telegram message/caption bounds.
+        for diagnostic in diagnostics:
+            if len(caption) + len(diagnostic) + 2 > (1000 if collected else 3900):
+                caption += "\nОстальные ответы: повтори запрос для конкретного устройства."
+                break
+            caption += "\n\n" + diagnostic
+    if collected:
+        await _replace_callback_with_media(
+            cq, bot.send_document, chat_id=cq.message.chat.id,
+            document=BufferedInputFile(archive_bytes.getvalue(), filename="screenshots.zip"),
+            caption=caption, reply_markup=devices_menu(),
+        )
+    else:
+        await _replace_callback_message(cq, caption, reply_markup=devices_menu())
     await cq.answer()
 
 
@@ -4757,12 +5893,12 @@ async def on_cmd_disks(cq: CallbackQuery):
         return
     if not res:
         await _replace_callback_message(
-            cq, _lex("device_no_response"), reply_markup=back_to_device_kb()
+            cq, _lex("device_no_response"), delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb()
         )
         return
     lines = res.get("lines", [])
     text = "🗂 <b>Диски</b>:\n" + "\n".join(html.escape(l) for l in lines)
-    await _replace_callback_message(cq, text, reply_markup=back_to_device_kb())
+    await _replace_callback_message(cq, text, delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb())
 
 
 @router.callback_query(AdminFilter(), F.data == "vol:opts")
@@ -4814,7 +5950,7 @@ async def on_mic_dur(cq: CallbackQuery):
         await _replace_callback_message(
             cq,
             "⏳ Звук не получен — офлайн или нет микрофона.",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
         await cq.answer()
         return
@@ -4822,14 +5958,14 @@ async def on_mic_dur(cq: CallbackQuery):
         audio = BufferedInputFile(base64.b64decode(res.get("audio")), filename="mic.ogg")
         await _replace_callback_with_media(
             cq,
-            bot.send_voice,
+            bot.send_voice, delivery_guard=_callback_delivery_guard(cq, target),
             voice=audio,
             caption=f"🎙 {html.escape(target_label(target))} · {dur}с",
         )
     except Exception:
         log.exception("Не удалось отправить аудио")
         await _replace_callback_message(
-            cq, _lex("mqtt_publish_failed"), reply_markup=back_to_device_kb()
+            cq, _lex("mqtt_publish_failed"), delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb()
         )
     await cq.answer()
 
@@ -5035,7 +6171,7 @@ async def on_fav_menu(cq: CallbackQuery):
     favs = devices.get_favorites(target)
     await _replace_callback_message(cq,
         _lex_html("favorites_page_intro", device=target_label(target)),
-        reply_markup=_favorites_kb(target, favs),
+        reply_markup=_favorites_kb(target, favs, cq.from_user.id if cq.from_user else None),
     )
     await cq.answer()
 
@@ -5051,7 +6187,7 @@ async def on_fav_toggle(cq: CallbackQuery):
     favs = devices.get_favorites(target)
     await _replace_callback_message(cq,
         _lex_html("favorites_page_intro", device=target_label(target)),
-        reply_markup=_favorites_kb(target, favs),
+        reply_markup=_favorites_kb(target, favs, cq.from_user.id if cq.from_user else None),
     )
     await cq.answer("Добавлено ⭐" if added else "Убрано")
 
@@ -5138,28 +6274,21 @@ async def on_confirm_action(cq: CallbackQuery):
     await _replace_callback_message(
         cq,
         f"⚠️ {text}",
-        reply_markup=confirm_kb(yes_cb, yes_text=_lex("confirm_yes_button")),
+        reply_markup=confirm_kb(
+            yes_cb,
+            yes_text=_lex("confirm_yes_button"),
+            user_id=cq.from_user.id if cq.from_user else None,
+        ),
     )
     await cq.answer()
 
 
 @router.callback_query(OwnerFilter(), F.data == "shell:ok")
 async def on_shell_ok(cq: CallbackQuery, state: FSMContext):
-    target = SESSION.get("target")
-    if not target:
-        await cq.answer(_lex("target_required"), show_alert=True)
+    if not cq.from_user or cq.from_user.id != ADMIN_ID:
+        await cq.answer("Доступно только владельцу.", show_alert=True)
         return
-    if target == "all":
-        await cq.answer(_lex("single_device_only"), show_alert=True)
-        return
-    await state.set_state(Form.wait_shell)
-    await state.update_data(command_target=target)
-    await _replace_callback_message(
-        cq,
-        _lex("shell_prompt"),
-        reply_markup=back_to_device_kb(),
-    )
-    await cq.answer()
+    await on_cmd_shell(cq, state)
 
 
 @router.callback_query(AdminFilter(), F.data == "openapp:ok")
@@ -5237,7 +6366,16 @@ def _device_action_still_allowed(user_id: int, callback: str, target: str) -> bo
     """Recheck the action and target immediately before publishing to MQTT."""
     if not target or target == "all" or devices.get(target) is None:
         return False
-    return access_store.can_use_callback(user_id, callback, ADMIN_ID, target)
+    return (
+        access_store.can_use_callback(user_id, callback, ADMIN_ID, target)
+        and _device_supports_callback(callback, target)
+    )
+
+
+def _callback_delivery_guard(cq: CallbackQuery, target: str):
+    """Pin the exact callback/user/target before waiting for a card lock."""
+    user_id, callback = int(cq.from_user.id), str(cq.data or "")
+    return lambda: _simple_command_still_allowed(user_id, callback, target)
 
 
 async def _callback_result_access_or_report(
@@ -5430,6 +6568,7 @@ async def on_files_open(cq: CallbackQuery, state: FSMContext):
 @router.message(AdminFilter(), Form.wait_path)
 async def on_path_input(message: Message, state: FSMContext):
     data = await state.get_data()
+    authorization_data = dict(data)
     mode = data.get("path_mode", "list")
     await state.clear()
     target = data.get("target") or SESSION.get("target")
@@ -5472,20 +6611,20 @@ async def on_path_input(message: Message, state: FSMContext):
             await _replace_user_card(
                 message,
                 _lex_html("files_upload_saved", path=result.get("path") or dest),
-                reply_markup=back_to_device_kb(),
+                delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb(),
             )
         else:
             error = (result or {}).get("error") or _lex("device_no_response")
             await _replace_user_card(
                 message,
                 _lex_html("files_upload_failed", error=error),
-                reply_markup=back_to_device_kb(),
+                delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb(),
             )
         return
 
     path = (message.text or "").strip()
     if not path:
-        await _replace_user_card(message, _lex("files_empty_path"), reply_markup=back_to_device_kb())
+        await _replace_user_card(message, _lex("files_empty_path"), delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb())
         return
 
     if mode == "list":
@@ -5494,7 +6633,7 @@ async def on_path_input(message: Message, state: FSMContext):
             return
         sent, command_id = publish_tracked("dir_list", _target=target, path=path)
         if not sent:
-            await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
+            await _replace_user_card(message, _lex("mqtt_disconnected"), delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb())
             return
         result = await fun_text_collector.wait_for(target, "dir_list", timeout=15.0, command_id=command_id)
         if not _pending_device_input_still_allowed(message, data, target):
@@ -5504,7 +6643,7 @@ async def on_path_input(message: Message, state: FSMContext):
         await _replace_user_card(
             message,
             _lex_html("files_list_result", text=str(text)[:3500]),
-            reply_markup=back_to_device_kb(),
+            delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb(),
         )
     elif mode == "get":
         if not _pending_device_input_still_allowed(message, data, target):
@@ -5512,7 +6651,7 @@ async def on_path_input(message: Message, state: FSMContext):
             return
         sent, command_id = publish_tracked("file_get", _target=target, path=path)
         if not sent:
-            await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
+            await _replace_user_card(message, _lex("mqtt_disconnected"), delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb())
             return
         result = await file_collector.wait_for(target, "file_get", timeout=30.0, command_id=command_id)
         # File content is sensitive; if authorization changed while waiting,
@@ -5521,20 +6660,20 @@ async def on_path_input(message: Message, state: FSMContext):
             await _report_revoked_after_publish(message)
             return
         if not result:
-            await _replace_user_card(message, _lex("files_download_timeout"), reply_markup=back_to_device_kb())
+            await _replace_user_card(message, _lex("files_download_timeout"), delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb())
             return
         if not result.get("ok", False):
             await _replace_user_card(
                 message,
                 _lex_html("files_download_failed", error=result.get("error") or ""),
-                reply_markup=back_to_device_kb(),
+                delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb(),
             )
             return
         encoded = result.get("data") or result.get("b64") or ""
         try:
             data = base64.b64decode(encoded, validate=True)
         except (ValueError, TypeError):
-            await _replace_user_card(message, _lex("files_download_corrupt"), reply_markup=back_to_device_kb())
+            await _replace_user_card(message, _lex("files_download_corrupt"), delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb())
             return
         await _replace_user_card_with_document(
             message,
@@ -5543,7 +6682,7 @@ async def on_path_input(message: Message, state: FSMContext):
                 filename=_safe_transfer_filename(result.get("filename") or result.get("name")),
             ),
             caption=_lex_html("files_download_caption", device=target_label(target)),
-            reply_markup=back_to_device_kb(),
+            delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb(),
         )
     elif mode == "del":
         if not _pending_device_input_still_allowed(message, data, target):
@@ -5551,7 +6690,7 @@ async def on_path_input(message: Message, state: FSMContext):
             return
         sent, command_id = publish_tracked("file_del", _target=target, path=path)
         if not sent:
-            await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
+            await _replace_user_card(message, _lex("mqtt_disconnected"), delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb())
             return
         result = await fun_text_collector.wait_for(target, "file_del", timeout=15.0, command_id=command_id)
         if not _pending_device_input_still_allowed(message, data, target):
@@ -5561,13 +6700,13 @@ async def on_path_input(message: Message, state: FSMContext):
             await _replace_user_card(
                 message,
                 _lex_html("files_delete_done", path=path),
-                reply_markup=back_to_device_kb(),
+                delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb(),
             )
         else:
             await _replace_user_card(
                 message,
                 _lex_html("files_delete_failed", error=(result or {}).get("error") or _lex("device_no_response")),
-                reply_markup=back_to_device_kb(),
+                delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb(),
             )
     elif mode == "open":
         if not _pending_device_input_still_allowed(message, data, target):
@@ -5575,7 +6714,7 @@ async def on_path_input(message: Message, state: FSMContext):
             return
         sent, command_id = publish_tracked("path_open", _target=target, path=path)
         if not sent:
-            await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
+            await _replace_user_card(message, _lex("mqtt_disconnected"), delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb())
             return
         result = await fun_text_collector.wait_for(target, "path_open", timeout=10.0, command_id=command_id)
         if not _pending_device_input_still_allowed(message, data, target):
@@ -5585,19 +6724,20 @@ async def on_path_input(message: Message, state: FSMContext):
             await _replace_user_card(
                 message,
                 _lex_html("files_open_done", path=path),
-                reply_markup=back_to_device_kb(),
+                delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb(),
             )
         else:
             await _replace_user_card(
                 message,
                 _lex_html("files_open_failed", error=(result or {}).get("error") or _lex("device_no_response")),
-                reply_markup=back_to_device_kb(),
+                delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb(),
             )
 
 
 @router.message(AdminFilter(), Form.wait_find)
 async def on_find_input(message: Message, state: FSMContext):
     data = await state.get_data()
+    authorization_data = dict(data)
     await state.clear()
     target = data.get("target") or SESSION.get("target")
     pattern = (message.text or "").strip()
@@ -5620,12 +6760,12 @@ async def on_find_input(message: Message, state: FSMContext):
         return
     text = (result or {}).get("text")
     if not text:
-        await _replace_user_card(message, _lex("files_find_no_response"), reply_markup=back_to_device_kb())
+        await _replace_user_card(message, _lex("files_find_no_response"), delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb())
         return
     await _replace_user_card(
         message,
         _lex_html("files_find_result", text=str(text)[:3500]),
-        reply_markup=back_to_device_kb(),
+        delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb(),
     )
 
 
@@ -6279,6 +7419,9 @@ async def on_cmd_nightlight(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
+    if not _device_action_still_allowed(int(cq.from_user.id), cq.data or "", target):
+        await cq.answer("Действие недоступно для этого устройства.", show_alert=True)
+        return
     current_state = bool(SESSION.get(f"nightlight_{target}", False))
     new_state = not current_state
     sent, command_id = publish_tracked("display_night_light", enabled=new_state)
@@ -6336,7 +7479,182 @@ async def on_rotate_select(cq: CallbackQuery):
     )
 
 
+def _update_operation_text(operation) -> str:
+    return (
+        f"Обновление <code>{html.escape(operation.release_tag)}</code>\n"
+        f"Устройство: <code>{html.escape(operation.device_id)}</code>\n"
+        f"Этап: <b>{html.escape(operation.state)}</b>\n"
+        f"Последнее событие: <code>{operation.changed_at}</code>\n"
+        f"Операция: <code>{operation.operation_id}</code>"
+    )
+
+
+def _update_batch_keyboard(operation, user_id):
+    kb = InlineKeyboardBuilder()
+    if get_user_role(user_id) == Role.OWNER and len(update_coordinator.store.batch(operation.batch_id)) > 1:
+        kb.button(text=_lex("versions_install_button", tag=f"{operation.release_tag} · Rollout"), callback_data=f"versions:rollout:{operation.batch_id}")
+    kb.button(text=_lex("versions_back_device"), callback_data="back:device", style="primary")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+async def _wait_update_operation(operation_id, timeout, status_msg, user_id):
+    deadline = time.monotonic() + timeout
+    previous = None
+    while time.monotonic() < deadline:
+        operation = update_coordinator.observed(operation_id, now=time.time())
+        if operation is None:
+            return None
+        if not _simple_command_still_allowed(user_id, f"versions:install_confirm:{operation.release_tag}", operation.device_id):
+            return None
+        if operation.state != previous:
+            await _replace_message_card(status_msg, user_id, _update_operation_text(operation), reply_markup=back_to_device_kb())
+            previous = operation.state
+        if operation.state in UPDATE_TERMINAL or operation.state == "unknown":
+            return operation
+        await asyncio.sleep(1)
+    update_coordinator.timeout(operation_id, now=time.time())
+    return update_coordinator.observed(operation_id, now=time.time())
+
+
+async def _coordinated_agent_update(cq, label, timeout, release_tag, update_devices=None, update_release=None):
+    target = SESSION.get("target")
+    if not target:
+        await cq.answer(_lex("target_required"), show_alert=True)
+        return None
+    if not release_tag:
+        await cq.answer()
+        await _replace_callback_message(cq, "Выбери подписанный релиз для установки.", reply_markup=_version_root_menu())
+        return None
+    user_id = int(cq.from_user.id)
+    callback = str(cq.data or "")
+    await cq.answer(_lex_html("command_started", emoji="🔄", label=label))
+    if SESSION.get("target") != target or not _simple_command_still_allowed(user_id, callback, target):
+        await _replace_callback_message(cq, _lex("input_access_revoked"), reply_markup=back_to_device_kb())
+        return None
+    info = devices.get(target) or {}
+    component = release_catalog.component_for(str(info.get("os") or ""))
+    if not component or not info.get("online") or time.time() - float(info.get("last_seen") or 0) > 120:
+        await _replace_callback_message(cq, _lex("versions_install_offline"), reply_markup=back_to_device_kb())
+        return None
+    if update_release is None or (
+        update_release.tag != release_tag
+        or _version_install_block_reason("agent", update_release, component, info)
+    ):
+        await _replace_callback_message(cq, _lex("versions_install_component_unsupported"), reply_markup=back_to_device_kb())
+        return None
+    try:
+        manifest_digest = hashlib.sha256(release_catalog.manifest_signing_bytes(update_release.manifest)).hexdigest()
+        operation = update_coordinator.start_batch(update_devices or [target], release_tag, component, now=time.time(), manifest_digest=manifest_digest)[0]
+        def eligible(op):
+            if not _simple_command_still_allowed(user_id, callback, op.device_id):
+                return False
+            if update_release is not None and _version_install_block_reason("agent", update_release, op.component, devices.get(op.device_id)):
+                return False
+            return True
+        def send(op):
+            try:
+                return publish("agent_update", _target=op.device_id, id=op.operation_id,
+                               update=True, release_tag=op.release_tag, manifest_digest=op.manifest_digest)
+            except Exception:
+                log.exception("Неопределённый результат отправки обновления %s", op.operation_id)
+                return None
+        update_coordinator.dispatch_ready(operation.batch_id, send, now=time.time(), eligible=eligible)
+    except (OSError, ValueError):
+        await _replace_callback_message(cq, "Состояние обновления неизвестно. Журнал недоступен или есть другая активная операция.", reply_markup=back_to_device_kb())
+        return None
+    observed = update_coordinator.observed(operation.operation_id, now=time.time())
+    if observed and observed.state == "queued" and update_coordinator.store.trusted and not update_coordinator.store.is_published(operation.operation_id):
+        if not _simple_command_still_allowed(user_id, callback, target):
+            await _replace_callback_message(cq, _lex("action_result_hidden_after_revoke"), reply_markup=back_to_device_kb())
+            return None
+        await _replace_callback_message(cq, "Команда обновления не отправлена. Можно повторить установку; операция сохранена для повторной попытки.", reply_markup=back_to_device_kb())
+        return {"ok": False, "operation_id": operation.operation_id, "update_state": "queued", "sent": False, "retryable": True}
+    status_msg = await _replace_callback_message(cq, _update_operation_text(observed or operation), reply_markup=back_to_device_kb())
+    result = await _wait_update_operation(operation.operation_id, timeout, status_msg, user_id)
+    if not _simple_command_still_allowed(user_id, callback, target):
+        await _replace_callback_message(cq, _lex("action_result_hidden_after_revoke"), reply_markup=back_to_device_kb())
+        return None
+    if result is None:
+        await _replace_message_card(status_msg, user_id, "Состояние обновления: unknown. Подтверждение устройства отсутствует.", reply_markup=back_to_device_kb())
+        return None
+    await _replace_message_card(status_msg, user_id, _update_operation_text(result), reply_markup=_update_batch_keyboard(result, user_id))
+    return {"ok": result.state == "succeeded", "operation_id": result.operation_id, "update_state": result.state}
+
+
+def _is_read_only_check(callback: str, action: str, publish_kwargs: dict) -> bool:
+    # Never let arguments or a reused wire action turn a mutation into a check.
+    return check_store.READ_ONLY_CHECKS.get(callback) == action and not publish_kwargs
+
+
+def _check_delivery_allowed(user_id: int, target: str, callback: str) -> bool:
+    return (get_user_role(user_id) in (Role.OWNER, Role.USER)
+            and _simple_command_still_allowed(user_id, callback, target))
+
+
+def _last_check_summary(user_id: int, target: str, callback: str) -> str:
+    if not _check_delivery_allowed(user_id, target, callback):
+        return ""
+    try:
+        return check_store.summary(check_store.get_last_check(target, callback))
+    except (OSError, ValueError, TypeError):
+        return "Последняя проверка: нет достоверных данных."
+
+
+def _correlated_check_outcome(result, target: str, action: str, command_id: str) -> str:
+    if not isinstance(result, dict) or not command_id or (
+        result.get("device_id"), result.get("type"), result.get("id")
+    ) != (target, action, command_id):
+        return "unknown"
+    # Only structured codes are evidence. Free-form text is not classified or stored.
+    state = result.get("outcome") or result.get("state")
+    if state in ("unsupported", "not_supported"):
+        return "unsupported"
+    if state in ("needs_permission", "permission_denied"):
+        return "needs_permission"
+    if result.get("ok") is True:
+        return "succeeded"
+    if result.get("ok") is False:
+        return "failed"
+    return "unknown"
+
+
+def _save_action_check(target: str, callback: str, command_id: str, outcome: str,
+                       info: dict, latency_ms: int | None) -> check_store.CheckRecord | None:
+    component = release_catalog.component_for(str(info.get("os") or ""))
+    platform = {"windows_agent": "windows", "mac_agent": "macos"}.get(component, "unknown")
+    version = str(info.get("version") or "unknown")
+    if not check_store._VERSION.fullmatch(version):
+        version = "unknown"
+    try:
+        record = check_store.CheckRecord(
+            device_id=target, callback=callback, platform=platform, agent_version=version,
+            checked_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            latency_ms=latency_ms, outcome=outcome, correlation_id=command_id,
+        )
+        check_store._validate(record)
+    except (ValueError, TypeError):
+        return None
+    try:
+        check_store.record_check(record)
+    except (OSError, ValueError, TypeError):
+        # No exception details: even invalid identifiers could contain private data.
+        log.warning("Could not persist sanitized action check metadata")
+    # Current evidence is independent of persistence. Never substitute an older row.
+    return record
+
+
+def _current_check_summary(user_id, target, callback, record, outcome):
+    if not _check_delivery_allowed(user_id, target, callback):
+        return ""
+    if record is None:
+        return f"Последняя проверка (текущий запрос): {outcome}; metadata недоступна."
+    return check_store.summary(record).replace("Последняя проверка:", "Последняя проверка (текущий запрос):", 1)
+
+
 async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, label: str, timeout: float = 12.0, **publish_kwargs):
+    if action == "agent_update":
+        return await _coordinated_agent_update(cq, label, timeout, publish_kwargs.get("release_tag"), publish_kwargs.get("update_devices"), publish_kwargs.get("update_release"))
     target = SESSION.get("target")
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
@@ -6352,30 +7670,46 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
             cq, _lex("input_access_revoked"), reply_markup=back_to_device_kb()
         )
         return None
+    is_check = _is_read_only_check(authorization_callback, action, publish_kwargs)
+    delivery_options = {"delivery_guard": lambda: (
+        _check_delivery_allowed(user_id, target, authorization_callback) if is_check
+        else _simple_command_still_allowed(user_id, authorization_callback, target))}
+    check_info = dict(devices.get(target) or {}) if is_check else {}
     # Another update can change SESSION while answer() is awaiting Telegram.
     # Pin the target captured before that await into the publish itself.
     sent, command_id = publish_tracked(
         action, **{**publish_kwargs, "_target": target}
     )
     if not sent:
-        await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
+        text = _lex("mqtt_disconnected")
+        if is_check:
+            current_check = _save_action_check(target, authorization_callback, command_id, "unknown", check_info, None)
+            text += "\n\n" + _current_check_summary(user_id, target, authorization_callback, current_check, "unknown")
+        await _replace_callback_message(cq, text, reply_markup=back_to_device_kb(), **delivery_options)
         return
 
     # Одна карточка на всю операцию: меню -> прогресс -> результат.
+    waiting_text = _lex_html(
+        "command_waiting", emoji=emoji, label=label, device=target_label(target),
+    )
+    if is_check:
+        waiting_text += "\n\nПредыдущая сохранённая проверка:\n" + _last_check_summary(user_id, target, authorization_callback)
     status_msg = await _replace_callback_message(
         cq,
-        _lex_html(
-            "command_waiting",
-            emoji=emoji,
-            label=label,
-            device=target_label(target),
-        ),
+        waiting_text,
         reply_markup=back_to_device_kb(),
+        **delivery_options,
     )
 
     # A single real progress state is more reliable than a rapid, decorative
     # edit loop that can hit Telegram rate limits and look like a freeze.
+    # Collector-wait latency excludes unrelated Telegram progress-card delivery.
+    started_at = time.monotonic()
     result = await fun_text_collector.wait_for(target, action, timeout=timeout, command_id=command_id)
+    if is_check:
+        outcome = "timed_out" if result is None else _correlated_check_outcome(result, target, action, command_id)
+        current_check = _save_action_check(target, authorization_callback, command_id, outcome, check_info,
+                           min(86400000, max(0, int((time.monotonic() - started_at) * 1000))))
 
     # Results can contain private device data (for example saved Wi-Fi
     # passwords). Do not deliver or return them if the exact original grant was
@@ -6389,10 +7723,14 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
         )
         return None
 
-    if result is None:
+    if is_check:
+        # Metadata-only diagnostics do not echo exception text, paths or raw output.
+        text = _current_check_summary(user_id, target, authorization_callback, current_check, outcome)
+    elif result is None:
         text = _lex("device_timeout", seconds=str(int(timeout)))
     else:
-        text = result.get("text") or result.get("error")
+        text = (format_location_result(result) if action == "geo_location"
+                else result.get("text") or result.get("error"))
         if not text:
             text = (
                 _lex("device_command_completed")
@@ -6410,8 +7748,14 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
         status_msg,
         user_id,
         final_text,
-        reply_markup=back_to_device_kb(),
+        reply_markup=(_location_result_keyboard(result or {}, user_id)
+                      if action == "geo_location" else back_to_device_kb()),
+        **delivery_options,
     )
+    if not _simple_command_still_allowed(user_id, authorization_callback, target):
+        return None
+    if is_check:
+        return {"ok": outcome == "succeeded", "outcome": outcome, "id": command_id}
     return result
 
 
@@ -6764,6 +8108,17 @@ async def on_cmd_guardian_menu(cq: CallbackQuery):
     await cq.answer()
 
 
+def _companion_row(row: dict) -> str:
+    text = f"{row['name']}: {row['state']}"
+    if row["version"]:
+        text += f" · v{row['version']}"
+    if row["reason"]:
+        text += f" · {companion_status.REASONS[row['reason']]}"
+    if row["available_version"]:
+        text += f" · подписанный пакет {row['available_version']}"
+    return text
+
+
 def _version_context(kind: str) -> tuple[str, str, str] | None:
     """Return title, component key and current version for one version page."""
     if kind == "server":
@@ -6776,7 +8131,7 @@ def _version_context(kind: str) -> tuple[str, str, str] | None:
     if not component:
         return None
     if kind == "keeper":
-        current = str((info.get("guardian") or {}).get("version") or "?")
+        current = companion_status.device_companions(info, now=time.time())[0]["version"] or "?"
         return "Guard Keeper", component, current
     return "X-EDGE-W" if component == "windows_agent" else "X-EDGE-M", component, str(info.get("version") or "?")
 
@@ -6790,9 +8145,14 @@ def _version_root_menu(server: bool = False):
         target = SESSION.get("target") or ""
         info = devices.get(target) or {}
         agent = str(info.get("version") or "?")
-        keeper = str((info.get("guardian") or {}).get("version") or "?")
+        keeper = companion_status.device_companions(info, now=time.time())[0]["version"] or "?"
         kb.button(text=_limit_button_label(_lex("versions_agent_button", version=agent)), callback_data="versions:list:agent:0", style="primary")
         kb.button(text=_limit_button_label(_lex("versions_keeper_button", version=keeper)), callback_data="versions:list:keeper:0", style="primary")
+        for operation in reversed(update_coordinator.store.all()):
+            batch = update_coordinator.store.batch(operation.batch_id)
+            if len(batch) > 1 and batch[0].device_id == target:
+                kb.button(text=f"Canary / rollout {operation.release_tag}", callback_data=f"versions:rollout:{operation.batch_id}")
+                break
         kb.button(text=_lex("versions_back_device"), callback_data="back:device", style="primary")
     kb.adjust(1)
     return kb.as_markup()
@@ -6812,9 +8172,15 @@ def _version_install_block_reason(kind: str, release, component: str, info: dict
         return "versions_install_component_unsupported"
     if not release.has_source_update_payload(component):
         return "versions_install_payload_missing"
+    if not release.signed_source_update_payload(component):
+        return "versions_install_trust_missing"
     if not info:
         return "versions_missing_device"
+    if release_catalog.component_for(str(info.get("os") or "")) != component:
+        return "versions_install_component_unsupported"
     if not release_catalog.supports_release_manifest_update(str(info.get("version") or "")):
+        return "versions_install_requires_agent"
+    if type(info.get("update_manifest_binding_protocol")) is not int or info["update_manifest_binding_protocol"] < 1:
         return "versions_install_requires_agent"
     if info.get("update_mode") != "source":
         return "versions_install_frozen"
@@ -6823,6 +8189,49 @@ def _version_install_block_reason(kind: str, release, component: str, info: dict
     if _status_dot(info) == "⚪":
         return "versions_install_offline"
     return None
+
+
+def _version_state_text(current: str, release, component: str) -> str:
+    state = release_catalog.version_state(current, release, component)
+    if component in {"windows_keeper", "mac_keeper"}:
+        info = devices.get(SESSION.get("target")) or {}
+        keeper = companion_status.device_companions(info, [release], now=time.time())[0]
+        return (
+            f"Доступная версия пакета: {html.escape(keeper['available_version'] or 'unknown')}\n"
+            f"ОС: {html.escape(state['os'])}\n"
+            f"Подпись: {state['signature']}\n"
+            f"Состояние установленной версии: {keeper['state']}\n"
+            f"Поддержка компонента: {'unsupported' if keeper['state'] == 'unsupported' else 'supported'}"
+        )
+    return (
+        f"Доступная версия: {html.escape(state['available'] or 'unknown')}\n"
+        f"ОС: {html.escape(state['os'])}\n"
+        f"Подпись: {state['signature']}\n"
+        f"Состояние установленной версии: {'unknown' if state['unknown'] else 'installed'}\n"
+        f"Поддержка компонента: {'unsupported' if state['unsupported'] else 'supported'}"
+    )
+
+
+_DISPLAYED_VERSION_RELEASES: dict[int, dict[str, dict]] = {}
+
+
+def _version_selection(release, component: str, target: str, info: dict) -> dict:
+    return {"target": str(target), "tag": release.tag, "component": component,
+            "os": str(info.get("os") or ""),
+            "manifest": hashlib.sha256(release_catalog.manifest_signing_bytes(release.manifest)).hexdigest()}
+
+
+def _remember_version_selection(user_id: int, release, component: str, target: str, info: dict) -> None:
+    with _PENDING_VERSION_INSTALLS_LOCK:
+        now = time.time()
+        # A displayed keyboard expires as a unit; retain only the current page.
+        choices = _DISPLAYED_VERSION_RELEASES.setdefault(user_id, {})
+        for tag in list(choices):
+            if now - choices[tag]["created_at"] > 180:
+                choices.pop(tag)
+        if len(choices) >= 16:
+            choices.clear()
+        choices[release.tag] = {**_version_selection(release, component, target, info), "created_at": now}
 
 
 def _version_install_confirmation_kb(tag: str):
@@ -6849,13 +8258,19 @@ def _clear_pending_version_install(user_id: int) -> None:
 @router.callback_query(AdminFilter(), F.data == "versions:device")
 async def on_versions_device(cq: CallbackQuery):
     target = SESSION.get("target")
-    if not target or not devices.get(target):
+    info = devices.get(target) if target else None
+    if not info:
         await cq.answer(_lex("versions_missing_device"), show_alert=True)
         return
     await _replace_callback_message(
         cq,
         f"<b>{_lex_html('versions_device_title', device=target_label(target))}</b>\n"
-        f"{_lex('versions_device_intro')}",
+        f"{_lex('versions_device_intro')}\n\n"
+        f"Агент: {html.escape(str(info.get('version') or '?'))}\n"
+        + "\n".join(html.escape(_companion_row(row)) for row in companion_status.device_companions(info, release_catalog.catalog.cached(), now=time.time()))
+        + "\n\nОстановка через Guard Keeper останавливает рабочий агент; Guardian остаётся доступен. "
+        "Удаление автозапуска и локальных данных — отдельная подтверждаемая операция владельца. "
+        "Подготовка удаления или таймаут не подтверждают завершение; на macOS исходники и .env могут оставаться.",
         reply_markup=_version_root_menu(),
     )
     await cq.answer()
@@ -6925,7 +8340,7 @@ async def on_versions_list(cq: CallbackQuery):
             None,
         )
     for release in shown:
-        available = release.has_package(component)
+        available = release.signed_package(component)
         phrase_key = "versions_release_available" if available else "versions_release_missing"
         lines.append(_lex_html(phrase_key, tag=release.tag, name=release.name[:55]))
         icon = "✅" if available else "○"
@@ -6935,6 +8350,7 @@ async def on_versions_list(cq: CallbackQuery):
             style="success" if available else "primary",
         )
         if kind == "agent" and _version_install_block_reason(kind, release, component, info) is None:
+            _remember_version_selection(int(cq.from_user.id), release, component, target, info)
             kb.button(
                 text=_limit_button_label(_lex("versions_install_button", tag=release.tag)),
                 callback_data=f"versions:install:agent:{release.tag}",
@@ -7015,7 +8431,7 @@ async def on_versions_detail(cq: CallbackQuery):
     if not release:
         await cq.answer(_lex("versions_not_found"), show_alert=True)
         return
-    available = release.has_package(component)
+    available = release.signed_package(component)
     status = _lex("versions_package_found" if available else "versions_package_missing")
     notes = release.notes.strip() or _lex("versions_notes_empty")
     note_chunks = await asyncio.to_thread(_split_html_escaped_text, notes)
@@ -7031,11 +8447,14 @@ async def on_versions_detail(cq: CallbackQuery):
     if notes_page + 1 < note_count:
         kb.button(text=_lex("versions_notes_next"), callback_data=f"versions:detail:{kind}:{tag}:{notes_page + 1}", style="primary")
     if install_reason is None:
+        _remember_version_selection(int(cq.from_user.id), release, component, target, info)
         kb.button(
             text=_limit_button_label(_lex("versions_install_button", tag=release.tag)),
             callback_data=f"versions:install:agent:{release.tag}",
             style="success",
         )
+        if get_user_role(cq.from_user.id) == Role.OWNER:
+            kb.button(text=_lex("versions_install_button", tag=f"{release.tag} · Canary"), callback_data=f"versions:canary:{release.tag}")
     elif (
         kind == "agent"
         and get_user_role(cq.from_user.id) == Role.OWNER
@@ -7052,6 +8471,7 @@ async def on_versions_detail(cq: CallbackQuery):
         cq,
         f"<b>{_lex_html('versions_detail_title', title=title, tag=release.tag)}</b>\n"
         f"{_lex_html('versions_installed', version=current)}\n"
+        f"{_version_state_text(current, release, component)}\n"
         f"{_lex_html('versions_published', date=release.published_at[:10] or '—')}\n"
         f"{html.escape(status)}\n\n"
         f"<b>{_lex('versions_notes_title', page=str(notes_page + 1), count=str(note_count))}</b>\n"
@@ -7116,12 +8536,12 @@ async def on_versions_bootstrap(cq: CallbackQuery):
 
 
 @router.callback_query(AdminFilter(), F.data.startswith("versions:install:agent:"))
-async def on_versions_install_select(cq: CallbackQuery):
+async def on_versions_install_select(cq: CallbackQuery, canary: bool = False):
     parts = cq.data.split(":")
-    if len(parts) != 4 or parts[2] != "agent":
+    if (canary and (len(parts) != 3 or get_user_role(cq.from_user.id) != Role.OWNER)) or (not canary and (len(parts) != 4 or parts[2] != "agent")):
         await cq.answer(_lex("versions_bad_request"), show_alert=True)
         return
-    tag = parts[3]
+    tag = parts[-1]
     target = SESSION.get("target")
     info = devices.get(target) if target else None
     context = _version_context("agent")
@@ -7130,7 +8550,7 @@ async def on_versions_install_select(cq: CallbackQuery):
         return
     _, component, _ = context
     try:
-        releases = await asyncio.to_thread(release_catalog.catalog.list)
+        releases = await asyncio.to_thread(release_catalog.catalog.list, refresh=True)
     except (OSError, ValueError):
         await cq.answer(_lex("versions_catalog_unavailable"), show_alert=True)
         return
@@ -7138,6 +8558,10 @@ async def on_versions_install_select(cq: CallbackQuery):
     if release is None:
         await cq.answer(_lex("versions_not_found"), show_alert=True)
         return
+    if SESSION.get("target") != target or not _simple_command_still_allowed(int(cq.from_user.id), cq.data, target):
+        await cq.answer(_lex("input_access_revoked"), show_alert=True)
+        return
+    info = devices.get(target)
     reason = _version_install_block_reason("agent", release, component, info)
     if reason:
         await cq.answer(_lex(reason), show_alert=True)
@@ -7145,15 +8569,80 @@ async def on_versions_install_select(cq: CallbackQuery):
 
     user_id = int(cq.from_user.id)
     with _PENDING_VERSION_INSTALLS_LOCK:
+        displayed = _DISPLAYED_VERSION_RELEASES.get(user_id, {}).get(tag)
+    selection = _version_selection(release, component, target, info)
+    if not displayed or time.time() - displayed["created_at"] > 180 or any(displayed.get(key) != value for key, value in selection.items()):
+        await cq.answer(_lex("versions_install_expired"), show_alert=True)
+        return
+    with _PENDING_VERSION_INSTALLS_LOCK:
         _PENDING_VERSION_INSTALLS[user_id] = {
-            "target": str(target), "tag": tag, "created_at": time.time(),
+            **selection, "created_at": time.time(),
         }
+        if canary:
+            candidates = [target] + sorted(
+                device for device, candidate in devices.all().items()
+                if device != target
+                and release_catalog.component_for(str(candidate.get("os") or "")) == component
+                and _version_install_block_reason("agent", release, component, candidate) is None
+                and _simple_command_still_allowed(user_id, cq.data, device)
+            )
+            _PENDING_VERSION_INSTALLS[user_id]["update_devices"] = candidates[:100]
     await cq.answer()
     await _replace_callback_message(
         cq,
-        _lex_html("versions_install_confirm_body", device=target_label(target), tag=release.tag),
+        _lex_html("versions_install_confirm_body", device=target_label(target), tag=release.tag)
+        + ("\nCanary первым: <code>" + html.escape(target) + "</code>\nОстальные после подтверждённого здоровья: "
+           + ", ".join(html.escape(device) for device in candidates[1:]) if canary else ""),
         reply_markup=_version_install_confirmation_kb(tag),
     )
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("versions:canary:"))
+async def on_versions_canary_select(cq: CallbackQuery):
+    await on_versions_install_select(cq, canary=True)
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("versions:rollout:"))
+async def on_versions_rollout(cq: CallbackQuery):
+    parts = str(cq.data or "").split(":")
+    if len(parts) != 3 or get_user_role(cq.from_user.id) != Role.OWNER:
+        await cq.answer(_lex("input_access_revoked"), show_alert=True)
+        return
+    batch = update_coordinator.store.batch(parts[2])
+    if not batch or SESSION.get("target") != batch[0].device_id:
+        await cq.answer("Группа неизвестна или выбрано другое устройство.", show_alert=True)
+        return
+    canary = batch[0]
+    user_id = int(cq.from_user.id)
+    try:
+        releases = await asyncio.to_thread(release_catalog.catalog.list, refresh=True)
+        release = next((item for item in releases if item.tag == canary.release_tag), None)
+        if not release or not release_catalog.verify_release_metadata(release, release.manifest) or hashlib.sha256(release_catalog.manifest_signing_bytes(release.manifest)).hexdigest() != canary.manifest_digest:
+            await cq.answer(_lex("versions_catalog_unavailable"), show_alert=True)
+            return
+        await cq.answer()
+        def eligible(op):
+            if get_user_role(user_id) != Role.OWNER or SESSION.get("target") != canary.device_id:
+                return False
+            info = devices.get(op.device_id)
+            canary_info = devices.get(canary.device_id) or {}
+            if not canary_info.get("online") or time.time() - float(canary_info.get("last_seen") or 0) > 120:
+                return False
+            if not _simple_command_still_allowed(user_id, cq.data, op.device_id) or _version_install_block_reason("agent", release, op.component, info):
+                return False
+            return True
+        def send(op):
+            return publish("agent_update", _target=op.device_id, id=op.operation_id,
+                           update=True, release_tag=op.release_tag, manifest_digest=op.manifest_digest)
+        sent = update_coordinator.dispatch_ready(canary.batch_id, send, now=time.time(), eligible=eligible)
+        observed = update_coordinator.observed(canary.operation_id, now=time.time())
+        if observed is None:
+            raise ValueError("untrusted journal")
+        text = _update_operation_text(observed)
+        text += "\nПродолжение: " + (", ".join(html.escape(op.device_id) for op in sent) if sent else "заблокировано, уже отправлено или ждёт свежий canary health_check.")
+        await _replace_callback_message(cq, text, reply_markup=_update_batch_keyboard(canary, user_id))
+    except (OSError, ValueError):
+        await _replace_callback_message(cq, "Состояние rollout неизвестно. Журнал или каталог недоступен.", reply_markup=back_to_device_kb())
 
 
 @router.callback_query(AdminFilter(), F.data.startswith("versions:install_cancel:"))
@@ -7215,7 +8704,7 @@ async def on_versions_install_confirm(cq: CallbackQuery):
         return
     _, component, _ = context
     try:
-        releases = await asyncio.to_thread(release_catalog.catalog.list)
+        releases = await asyncio.to_thread(release_catalog.catalog.list, refresh=True)
     except (OSError, ValueError):
         _clear_pending_version_install(user_id)
         await cq.answer(_lex("versions_catalog_unavailable"), show_alert=True)
@@ -7225,6 +8714,19 @@ async def on_versions_install_confirm(cq: CallbackQuery):
         _clear_pending_version_install(user_id)
         await cq.answer(_lex("versions_not_found"), show_alert=True)
         return
+    info = devices.get(target)
+    allowed = get_user_role(user_id) in {Role.OWNER, Role.COOWNER, Role.USER} and _simple_command_still_allowed(user_id, cq.data, target)
+    same_selection = (
+        SESSION.get("target") == target and info
+        and pending.get("component") == component
+        and pending.get("os") == str(info.get("os") or "")
+        and release_catalog.verify_release_metadata(release, release.manifest)
+        and pending.get("manifest") == hashlib.sha256(release_catalog.manifest_signing_bytes(release.manifest)).hexdigest()
+    )
+    if not allowed or not same_selection:
+        _clear_pending_version_install(user_id)
+        await cq.answer(_lex("input_access_revoked"), show_alert=True)
+        return
     reason = _version_install_block_reason("agent", release, component, info)
     if reason:
         _clear_pending_version_install(user_id)
@@ -7232,7 +8734,21 @@ async def on_versions_install_confirm(cq: CallbackQuery):
         return
 
     with _PENDING_VERSION_INSTALLS_LOCK:
+        # Refresh can outlive the confirmation window while the agent remains
+        # online. Check expiry again immediately before consuming/dispatching.
+        expired = time.time() - float(pending.get("created_at") or 0) > 180
         _PENDING_VERSION_INSTALLS.pop(user_id, None)
+    if expired:
+        await cq.answer(_lex("versions_install_expired"), show_alert=True)
+        return
+    update_devices = pending.get("update_devices")
+    if update_devices and (get_user_role(user_id) != Role.OWNER or any(
+        not _simple_command_still_allowed(user_id, cq.data, device)
+        or _version_install_block_reason("agent", release, component, devices.get(device))
+        for device in update_devices
+    )):
+        await cq.answer(_lex("input_access_revoked"), show_alert=True)
+        return
     await simple_command(
         cq,
         "agent_update",
@@ -7241,6 +8757,8 @@ async def on_versions_install_confirm(cq: CallbackQuery):
         timeout=110.0,
         update=True,
         release_tag=tag,
+        update_release=release,
+        **({"update_devices": update_devices} if update_devices else {}),
     )
 
 
@@ -7304,6 +8822,12 @@ async def on_cmd_net_ping(cq: CallbackQuery):
 @router.callback_query(AnyAccessFilter(), F.data == "cmd:geo_location")
 async def on_cmd_geo_location(cq: CallbackQuery):
     await simple_command(cq, "geo_location", "⚠️", _lex("geo_beta"), timeout=16.0)
+
+
+@router.callback_query(OwnerFilter(), F.data == "location:ip")
+async def on_cmd_geo_location_ip(cq: CallbackQuery):
+    await simple_command(cq, "geo_location", "⚠️", _lex("geo_beta"),
+                         timeout=16.0, ip_fallback=True)
 
 
 @router.message(F.from_user.id != ADMIN_ID)

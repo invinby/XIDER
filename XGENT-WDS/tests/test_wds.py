@@ -59,7 +59,12 @@ def test_agent_mqtt_callbacks_write_connected_and_disconnected_health(client, mo
     monkeypatch.setattr(wds, "write_runtime_health", lambda component, connected: written.append((component, connected)))
     monkeypatch.setattr(wds.sys, "frozen", True, raising=False)
 
+    client._client.subscribe.side_effect = [(0, 101), (0, 102)]
     client._on_connect(client._client, None, None, 0)
+    assert written == []
+    client._on_subscribe(client._client, None, 101, [0])
+    assert written == []
+    client._on_subscribe(client._client, None, 102, [0])
     client._on_disconnect(client._client, None, None, 7)
 
     assert written == [("agent", True), ("agent", False)]
@@ -231,7 +236,7 @@ def test_windows_remote_update_does_not_claim_success_without_signed_release(cli
             ValueError("В релизе нет единственной пары source ZIP и release manifest.")
         ),
     )
-    client._do_agent_update({"update": True})
+    client._do_agent_update({"update": True, "manifest_digest": "a" * 64})
 
     responses = [
         payload
@@ -558,13 +563,17 @@ def test_shell_routing_uses_capture(client, monkeypatch):
     def fake_run(cmd, **kwargs):
         captured["cmd"] = cmd
         captured["kwargs"] = kwargs
+        kwargs["stdout"].write(b"ok\n")
         r = type("R", (), {})()
         r.stdout = "ok\n"
         r.stderr = ""
         r.returncode = 0
         return r
 
-    monkeypatch.setattr(wds.subprocess, "run", fake_run)
+    monkeypatch.setattr(wds._load_command_approval_component("shell_execution"), "_run_process", fake_run)
+    # Exercise the subprocess/result path independently; signature and replay
+    # rejection are covered by test_shell_approval_gate.py.
+    monkeypatch.setattr(wds, "_reserve_shell_approval", lambda _client, _payload: True)
     client._dispatch({"type": "shell", "command": "whoami", "id": "s1"})
     topics = _wait_for_topic(client, "/shell")
     assert captured["cmd"] == "whoami"
@@ -579,7 +588,8 @@ def test_shell_routing_uses_capture(client, monkeypatch):
 def test_shell_timeout_reports_error(client, monkeypatch):
     def fake_run(*a, **kw):
         raise wds.subprocess.TimeoutExpired(cmd="x", timeout=20)
-    monkeypatch.setattr(wds.subprocess, "run", fake_run)
+    monkeypatch.setattr(wds._load_command_approval_component("shell_execution"), "_run_process", fake_run)
+    monkeypatch.setattr(wds, "_reserve_shell_approval", lambda _client, _payload: True)
     client._dispatch({"type": "shell", "command": "sleep 999"})
     topics = _wait_for_topic(client, "/shell")
     payload = next(p for t, p in topics if t.endswith("/shell"))
@@ -664,7 +674,7 @@ def test_geoip_uses_https_fallback_and_reports_approximation(client, monkeypatch
         return Response(b'{"ip":"203.0.113.10","city":"Test","country":"XX","loc":"1.0,2.0"}')
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    client._do_geo_location({})
+    client._do_geo_location({"ip_fallback": True})
     results = [payload for topic, payload in _publish_calls(client) if topic.endswith("/geo_location")]
     assert results and results[-1]["ok"] is True
     assert "не GPS" in results[-1]["text"]
@@ -688,9 +698,9 @@ def test_geoip_lookup_obeys_total_deadline_and_publishes_once(client, monkeypatc
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr(client, "_publish_response", lambda topic, payload: publications.append((topic, payload)))
 
-    client._do_geo_location({"id": "geo-456"})
+    client._do_geo_location({"id": "geo-456", "ip_fallback": True})
 
-    assert timeouts == [4.0, 3.0]
+    assert timeouts == [3.0, 3.0]
     assert len(publications) == 1
     assert publications[0][0] == "geo_location"
     assert publications[0][1]["type"] == "geo_location"

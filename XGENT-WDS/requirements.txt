@@ -11,3 +11,5 @@ pyperclip
 sounddevice
 soundfile
 cryptography>=42.0
+winrt-Windows.Devices.Geolocation>=3.2; sys_platform == "win32"
+winrt-Windows.Security.Authorization.AppCapabilityAccess>=3.2; sys_platform == "win32"

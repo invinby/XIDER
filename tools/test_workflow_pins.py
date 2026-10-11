@@ -7,9 +7,11 @@ WORKFLOW = ROOT / ".github" / "workflows" / "build-agents.yml"
 WORKFLOWS = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
 EXPECTED_ACTIONS = {
     "actions/checkout": ("11bd71901bbe5b1630ceea73d27597364c9af683", "v4.2.2"),
+    "actions/setup-node": ("49933ea5288caeca8642d1e84afbd3f7d6820020", "v4.4.0"),
     "actions/setup-python": ("a26af69be951a213d495a4c3e4e4022e16d87065", "v5.6.0"),
     "actions/upload-artifact": ("ea165f8d65b6e75b540449e92b4886f43607fa02", "v4.6.2"),
     "actions/download-artifact": ("d3f86a106a0bac45b974a628896c90dbdf5c8093", "v4.3.0"),
+    "actions/upload-pages-artifact": ("fc324d3547104276b827a68afc52ff2a11cc49c9", "v5.0.0"),
     "softprops/action-gh-release": ("72f2c25fcb47643c292f7107632f7a47c1df5cd8", "v2.3.2"),
 }
 

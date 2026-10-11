@@ -37,27 +37,20 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r XGENT-WDS/requirements.txt
-          pip install pyinstaller
+          pip install pyinstaller==6.22.3
 
       - name: "Build Windows EXE via PyInstaller"
         run: |
           cd XGENT-WDS
           pyinstaller --clean XGENT-WDS.spec
-          $contents = pyi-archive_viewer -l -r -b .\dist\XGENT-WDS.exe | Out-String
-          if ($LASTEXITCODE -ne 0) { throw "Could not inspect XGENT-WDS.exe archive." }
-          if ($contents -notmatch '(?m)^\s*release_signature\s*$') {
-            throw "The Windows executable does not contain release_signature."
-          }
-          if ($contents -notmatch '(?m)^\s*update_package\s*$') {
-            throw "The Windows executable does not contain update_package."
-          }
-          if ($contents -notmatch 'cryptography\.hazmat\.primitives\.asymmetric\.ed25519') {
-            throw "The Windows executable does not contain Ed25519 verification support."
-          }
+          python ..\tools\verify_command_approval_bundle.py --executable dist/XGENT-WDS.exe
           Copy-Item .env.example dist/.env.example
           Copy-Item install_agent.ps1 dist/install_agent.ps1
           Copy-Item start_agent.bat dist/start_agent.bat
           Copy-Item stop_agent.bat dist/stop_agent.bat
+          $package = Join-Path $env:RUNNER_TEMP 'XGENT-WDS-Windows.zip'
+          Compress-Archive -Path .\dist\* -DestinationPath $package -Force
+          python ..\tools\verify_command_approval_bundle.py --public-only-zip $package
 
       - name: "Upload Windows EXE Artifact"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -66,9 +59,18 @@ jobs:
           path: XGENT-WDS/dist/*
 
   build-macos:
-    name: "Build macOS Agent (Mach-O Standalone)"
+    name: "Build signed and notarized macOS app"
     runs-on: macos-latest
-
+    environment:
+      name: xider-macos-signing
+    env:
+      XIDER_MACOS_SIGNING_IDENTITY: ${{ secrets.XIDER_MACOS_SIGNING_IDENTITY }}
+      APPLE_CERTIFICATE_B64: ${{ secrets.APPLE_CERTIFICATE_B64 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
     steps:
       - name: "Checkout repository"
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -79,42 +81,66 @@ jobs:
           python-version: "3.12"
           cache: "pip"
 
+      - name: "Block release when signing or notarization credentials are missing"
+        run: python tools/verify_macos_bundle.py --release-credentials
+
+      - name: "Import Apple certificate into temporary keychain"
+        run: |
+          python -c 'import os,base64,pathlib; pathlib.Path(os.environ["RUNNER_TEMP"],"xider-signing.p12").write_bytes(base64.b64decode(os.environ["APPLE_CERTIFICATE_B64"],validate=True))'
+          security create-keychain -p "$APPLE_KEYCHAIN_PASSWORD" "$RUNNER_TEMP/xider-signing.keychain-db"
+          security set-keychain-settings -lut 21600 "$RUNNER_TEMP/xider-signing.keychain-db"
+          security unlock-keychain -p "$APPLE_KEYCHAIN_PASSWORD" "$RUNNER_TEMP/xider-signing.keychain-db"
+          security import "$RUNNER_TEMP/xider-signing.p12" -k "$RUNNER_TEMP/xider-signing.keychain-db" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign >/dev/null
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$APPLE_KEYCHAIN_PASSWORD" "$RUNNER_TEMP/xider-signing.keychain-db" >/dev/null
+          security list-keychains -d user -s "$RUNNER_TEMP/xider-signing.keychain-db" "$HOME/Library/Keychains/login.keychain-db"
+
       - name: "Install dependencies"
         run: |
           python -m pip install --upgrade pip
-          pip install -r XGENT-MCS/requirements.txt
-          pip install pyinstaller
+          pip install -r XGENT-MCS/requirements.txt pyinstaller==6.22.3
 
-      - name: "Build macOS Standalone Binary via PyInstaller"
+      - name: "Build and verify the signed app before packaging"
         run: |
           cd XGENT-MCS
-          pyinstaller --clean XGENT-MCS.spec
-          contents="$(pyi-archive_viewer -l -r -b dist/XGENT-MCS)"
-          if ! printf '%s\n' "$contents" | grep -Eq '^[[:space:]]*release_signature[[:space:]]*$'; then
-            echo "The macOS executable does not contain release_signature." >&2
-            exit 1
-          fi
-          if ! printf '%s\n' "$contents" | grep -Eq '^[[:space:]]*update_package[[:space:]]*$'; then
-            echo "The macOS executable does not contain update_package." >&2
-            exit 1
-          fi
-          if ! printf '%s\n' "$contents" | grep -Eq '^[[:space:]]*fake_update_screen[[:space:]]*$'; then
-            echo "The macOS executable does not contain the local fake-update demo screen." >&2
-            exit 1
-          fi
-          chmod +x dist/XGENT-MCS
-          cp .env.example dist/.env.example
-          cp start_agent.sh dist/start_agent.sh
-          cp stop_agent.sh dist/stop_agent.sh
-          cd dist
-          zip -r XGENT-MCS-macos.zip XGENT-MCS
-          zip -r XGENT-MCS-macos-bundle.zip XGENT-MCS .env.example start_agent.sh stop_agent.sh
+          bash make_app.sh
+          codesign -dv --verbose=4 dist/XIDER.app
+          plutil -p dist/XIDER.app/Contents/Info.plist
+          python ../tools/verify_macos_bundle.py dist/XIDER.app
+          python ../tools/verify_command_approval_bundle.py --executable dist/XIDER.app/Contents/MacOS/XGENT-MCS
 
-      - name: "Upload macOS Binary Artifact"
+      - name: "Notarize and staple without changing signed app contents"
+        run: |
+          ditto -c -k --keepParent XGENT-MCS/dist/XIDER.app "$RUNNER_TEMP/xider-notarization.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/xider-notarization.zip" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple XGENT-MCS/dist/XIDER.app
+          python tools/verify_macos_bundle.py XGENT-MCS/dist/XIDER.app --distribution
+
+      - name: "Create and verify the final ZIP artifact"
+        run: |
+          cd XGENT-MCS
+          cp .env.example dist/.env.example
+          cp start_agent.sh stop_agent.sh dist/
+          cd dist
+          zip -r XGENT-MCS-macos-bundle.zip XIDER.app .env.example start_agent.sh stop_agent.sh
+          python ../../tools/verify_command_approval_bundle.py --public-only-zip XGENT-MCS-macos-bundle.zip
+          mkdir "$RUNNER_TEMP/xider-final-extracted"
+          ditto -x -k XGENT-MCS-macos-bundle.zip "$RUNNER_TEMP/xider-final-extracted"
+          python ../../tools/verify_macos_bundle.py "$RUNNER_TEMP/xider-final-extracted/XIDER.app" --distribution
+          codesign -dv --verbose=4 "$RUNNER_TEMP/xider-final-extracted/XIDER.app"
+          plutil -p "$RUNNER_TEMP/xider-final-extracted/XIDER.app/Contents/Info.plist"
+
+      - name: "Upload verified signed macOS app artifact"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: XGENT-MCS-macOS
           path: XGENT-MCS/dist/XGENT-MCS-macos-bundle.zip
+
+      - name: "Remove temporary signing material"
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/xider-signing.keychain-db" >/dev/null 2>&1 || true
+          rm -f "$RUNNER_TEMP/xider-signing.p12"
+
 
   pack-components:
     name: "Package Guard Keeper and server components"
@@ -166,7 +192,12 @@ jobs:
             XGENT-MCS/requirements.txt XGENT-MCS/.env.example; do
             unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Fxq "$file"
           done
-          git archive --format=zip --output=artifacts/X-STAB-server.zip HEAD TG-BOT-SERVER deploy
+          git archive --format=zip --output=artifacts/X-STAB-server.zip HEAD TG-BOT-SERVER deploy XGENT-MCS/release_signature.py
+          python tools/verify_command_approval_bundle.py \
+            --public-only-zip artifacts/XIDER-source.zip \
+            --public-only-zip artifacts/Guard-Keeper-Windows.zip \
+            --public-only-zip artifacts/Guard-Keeper-macOS.zip \
+            --public-only-zip artifacts/X-STAB-server.zip
 
       - name: "Upload component packages"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

@@ -83,6 +83,9 @@ install -d -o root -g xider -m 0750 "${APP_DIR}/incoming"
 chown root:xider "${ENV_FILE}"
 chmod 0640 "${ENV_FILE}"
 
+# Persistent server-only key stays outside the checkout and release archives.
+"${APP_DIR}/TG-BOT-SERVER/venv/bin/python" "${APP_DIR}/deploy/provision_command_signing_key.py" --env-file "${ENV_FILE}"
+
 systemctl daemon-reload
 systemctl enable xider-bot.service
 systemctl restart xider-bot.service

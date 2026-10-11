@@ -177,8 +177,11 @@ class Guardian:
 
     def agent_pid(self) -> int | None:
         try:
+            bundled = SCRIPT_DIR / "XIDER.app/Contents/MacOS/XGENT-MCS"
+            worker_pattern = (str(bundled) if bundled.is_file() or self.state.get("worker_runtime") == "bundle"
+                              else str(SCRIPT_DIR / "xgent_mcs.py"))
             result = subprocess.run(
-                ["pgrep", "-f", str(SCRIPT_DIR / "xgent_mcs.py")],
+                ["pgrep", "-f", worker_pattern],
                 capture_output=True, text=True, check=False,
             )
             for line in result.stdout.splitlines():
@@ -187,6 +190,9 @@ class Guardian:
                 except ValueError:
                     continue
                 if pid != os.getpid():
+                    if worker_pattern == str(bundled) and self.state.get("worker_runtime") != "bundle":
+                        self.state["worker_runtime"] = "bundle"
+                        _save_state(self.state, "worker_runtime")
                     return pid
         except OSError:
             pass
@@ -302,12 +308,24 @@ class Guardian:
             finally:
                 fcntl.flock(lock_file, fcntl.LOCK_UN)
 
+    def _worker_command(self) -> list[str]:
+        bundled = SCRIPT_DIR / "XIDER.app/Contents/MacOS/XGENT-MCS"
+        if bundled.is_file():
+            self.state["worker_runtime"] = "bundle"
+            _save_state(self.state, "worker_runtime")
+            return [str(bundled)]
+        if self.state.get("worker_runtime") == "bundle":
+            raise RuntimeError("Owner removed XIDER.app; local reinstall is required; no source fallback.")
+        return [self._worker_python(), str(SCRIPT_DIR / "xgent_mcs.py")]
+
     def start_agent(self) -> int | None:
         self._require_running_intent()
         pid = self.agent_pid()
         if pid:
             return pid
-        restored = self._restore_missing_agent_files()
+        worker_command = self._worker_command()
+        restored = ([] if self.state.get("worker_runtime") == "bundle"
+                    else self._restore_missing_agent_files())
         if restored:
             log.info("Restored signed release files: %s", ", ".join(restored))
         self._require_running_intent()
@@ -316,7 +334,7 @@ class Guardian:
         log_path = SCRIPT_DIR / "agent.log"
         with log_path.open("a", encoding="utf-8") as log_handle:
             proc = subprocess.Popen(
-                [self._worker_python(), str(SCRIPT_DIR / "xgent_mcs.py")],
+                worker_command,
                 cwd=str(SCRIPT_DIR), env=env,
                 stdout=log_handle, stderr=subprocess.STDOUT,
                 start_new_session=True,

@@ -222,6 +222,11 @@ def test_command_matrix_records_source_support_permissions_and_stability_for_eve
     assert rows["prank_random_clicks"]["platforms"]["macos"]["stability"]["state"] == "known_source_limited"
     assert rows["prank_invert_screen"]["platforms"]["macos"]["source_behavior"]["state"] == "fallback_only"
     assert rows["display_brightness"]["platforms"]["macos"]["stability"]["state"] == "dependency_gated_unverified"
+    permission_settings = rows["permission_settings"]
+    for platform in ("windows", "macos"):
+        assert permission_settings["platforms"][platform]["source_support"] == "declared_and_handler"
+        assert "permission_settings_ui" in permission_settings["platforms"][platform]["permission_profile_ids"]
+        assert "fixed, allowlisted settings target" in permission_settings["platforms"][platform]["source_behavior"]["evidence"]
 
     guardian_rows = {row["command"]: row for row in matrix["guardian_commands"]}
     assert set(guardian_rows) == {"auto_restart", "restart", "start", "status", "stop"}

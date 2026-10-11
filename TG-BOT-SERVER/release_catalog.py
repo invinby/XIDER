@@ -12,8 +12,14 @@ import re
 import threading
 import time
 import urllib.request
-from dataclasses import dataclass
+import sys
+from pathlib import Path
+from dataclasses import dataclass, replace
 from typing import Callable
+
+# Server bundles carry this canonical module; never maintain a second verifier.
+sys.path.append(str(Path(__file__).resolve().parents[1] / "XGENT-MCS"))
+from release_signature import verify_manifest_signature, manifest_signing_bytes
 
 
 RELEASES_URL = "https://api.github.com/repos/invinby/XIDER/releases"
@@ -36,6 +42,12 @@ class Release:
     published_at: str
     notes: str
     asset_names: frozenset[str]
+    manifest: dict | None = None
+
+    def signed_package(self, component: str) -> bool:
+        return verify_release_metadata(self, self.manifest) and any(
+            asset["component"] == component for asset in self.manifest["assets"]
+        )
 
     def has_package(self, component: str) -> bool:
         return bool(self.asset_names & _ASSET_NAMES.get(component, set()))
@@ -44,14 +56,78 @@ class Release:
         """Require both the platform bundle and the inputs used by source updater."""
         return self.has_package(component) and _SOURCE_UPDATE_ASSETS.issubset(self.asset_names)
 
+    def signed_source_update_payload(self, component: str) -> bool:
+        return self.has_source_update_payload(component) and self.signed_package(component) and any(
+            asset["name"] == "XIDER-source.zip" and asset["component"] == "source"
+            for asset in self.manifest["assets"]
+        )
+
 
 def component_for(os_name: str, keeper: bool = False) -> str | None:
     low = str(os_name or "").lower()
-    if "win" in low:
-        return "windows_keeper" if keeper else "windows_agent"
     if "mac" in low or "darwin" in low:
         return "mac_keeper" if keeper else "mac_agent"
+    if "win" in low:
+        return "windows_keeper" if keeper else "windows_agent"
     return None
+
+
+_PLATFORMS = {"windows_agent": "windows", "mac_agent": "macos", "windows_keeper": "windows", "mac_keeper": "macos", "server": "linux"}
+
+
+def verify_release_metadata(release: Release, manifest: dict) -> bool:
+    """Verify publisher inventory, not downloaded artifact bytes (agent owns that)."""
+    try:
+        verify_manifest_signature(manifest)
+        if manifest.get("schema") != 1 or manifest.get("release") != release.tag:
+            return False
+        assets = manifest.get("assets")
+        if not isinstance(assets, list) or not assets or "release-manifest.json" not in release.asset_names:
+            return False
+        seen = set()
+        for asset in assets:
+            if not isinstance(asset, dict):
+                return False
+            name = asset.get("name")
+            component = asset.get("component")
+            if not isinstance(name, str) or name in seen or name not in release.asset_names:
+                return False
+            seen.add(name)
+            if type(asset.get("size")) is not int or asset["size"] < 0 or not re.fullmatch(r"[0-9a-f]{64}", str(asset.get("sha256", ""))):
+                return False
+            expected = next((key for key, names in _ASSET_NAMES.items() if name in names), None)
+            if expected and (component != expected or asset.get("platform") != _PLATFORMS[expected]):
+                return False
+            if component in _PLATFORMS and (name not in _ASSET_NAMES[component] or asset.get("platform") != _PLATFORMS[component]):
+                return False
+            if name == "XIDER-source.zip" and (component != "source" or asset.get("platform") != "all"):
+                return False
+        return True
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return False
+
+
+def version_state(current: str, release: Release, component: str, manifest: dict | None = None) -> dict:
+    metadata = manifest if manifest is not None else release.manifest
+    verified = verify_release_metadata(release, metadata)
+    supported = release.has_package(component)
+    available = verified and supported and any(asset["component"] == component for asset in metadata["assets"])
+    known = bool(_TAG.fullmatch("v" + str(current or "").removeprefix("v")))
+    return {"installed": current if known else None, "available": release.tag if available else None,
+            "unsupported": not supported, "unknown": not known, "os": _PLATFORMS.get(component, "unknown"),
+            "signature": "verified" if verified else "unknown", "published_at": release.published_at, "changelog": release.notes}
+
+
+def _download_manifest(release: Release) -> dict:
+    request = urllib.request.Request(
+        f"https://github.com/invinby/XIDER/releases/download/{release.tag}/release-manifest.json",
+        headers={"User-Agent": "XIDER-X-LEDGER"},
+    )
+    with urllib.request.urlopen(request, timeout=6) as response:
+        raw = response.read(1_000_001)
+    if len(raw) > 1_000_000:
+        raise ValueError("Manifest too large")
+    return json.loads(raw.decode("utf-8"))
 
 
 def parse_releases(payload: object) -> list[Release]:
@@ -101,23 +177,35 @@ def _download() -> object:
 
 
 class Catalog:
-    def __init__(self, loader: Callable[[], object] = _download) -> None:
+    def __init__(self, loader: Callable[[], object] = _download, manifest_loader: Callable[[Release], dict] = _download_manifest) -> None:
         self._loader = loader
+        self._manifest_loader = manifest_loader
         self._lock = threading.Lock()
         self._releases: list[Release] = []
         self._fetched_at = 0.0
 
-    def list(self) -> list[Release]:
+    def list(self, *, refresh: bool = False) -> list[Release]:
         with self._lock:
             # На свежем CI/хосте monotonic() может быть меньше TTL. Нулевой
             # timestamp означает, что каталог ещё ни разу не загружался, а не
             # действующий кэш от эпохи процесса.
-            if self._fetched_at and time.monotonic() - self._fetched_at < 600:
+            if not refresh and self._fetched_at and time.monotonic() - self._fetched_at < 600:
                 return list(self._releases)
             try:
                 releases = parse_releases(self._loader())
+                signed = []
+                for release in releases:
+                    if "release-manifest.json" in release.asset_names:
+                        try:
+                            manifest = self._manifest_loader(release)
+                            if verify_release_metadata(release, manifest):
+                                release = replace(release, manifest=manifest)
+                        except (OSError, ValueError):
+                            pass
+                    signed.append(release)
+                releases = signed
             except (OSError, ValueError, json.JSONDecodeError):
-                if self._fetched_at:
+                if self._fetched_at and not refresh:
                     return list(self._releases)
                 raise
             self._releases = releases

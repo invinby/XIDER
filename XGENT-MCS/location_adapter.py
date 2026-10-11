@@ -1,0 +1,241 @@
+"""Bounded one-shot location results; native adapters never request remote consent."""
+import datetime
+import json
+import math
+import time
+import urllib.request
+
+def result(state, label, source="system", latitude=None, longitude=None, accuracy_m=None):
+    return {"source": source, "state": state, "latitude": latitude, "longitude": longitude,
+            "accuracy_m": accuracy_m, "label": label,
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+
+def read_system_location(backend=None):
+    try:
+        backend = backend or native_backend()
+        permission, enabled = backend.diagnose()
+        guidance = "Откройте настройки на самом устройстве: " + SETTINGS
+        if not enabled or permission == "unavailable":
+            return result("unavailable", "Служба/датчик геолокации недоступны. " + guidance)
+        if permission == "denied":
+            return result("denied", "Доступ к системной геолокации запрещён. " + guidance)
+        if permission != "granted":
+            return result("needs_live_test", "Разрешение не подтверждено; нужен видимый локальный consent. " + guidance)
+        latitude, longitude, accuracy = backend.read_once(8.0)
+        if not all(type(v) in (float, int) and math.isfinite(v) for v in (latitude, longitude, accuracy)):
+            return result("unknown", "Некорректный ответ системной геолокации. " + guidance)
+        if not (-90 <= latitude <= 90 and -180 <= longitude <= 180 and accuracy >= 0):
+            return result("unknown", "Некорректный ответ системной геолокации. " + guidance)
+        return result("granted", "Системная геолокация; точность определяется ОС, источник не обязательно GPS.",
+                      latitude=latitude, longitude=longitude, accuracy_m=accuracy)
+    except PermissionError:
+        return result("denied", "ОС отказала в доступе. Настройки: " + SETTINGS)
+    except TimeoutError:
+        return result("needs_live_test", "Тайм-аут разового запроса. Настройки: " + SETTINGS)
+    except (ImportError, OSError):
+        return result("unavailable", "Системная геолокация недоступна. Настройки: " + SETTINGS)
+    except Exception:
+        # Native exceptions can contain private location details: never log them.
+        return result("needs_live_test", "Нужна проверка на устройстве. Настройки: " + SETTINGS)
+
+def read_ip_estimate():
+    deadline = time.monotonic() + 6.0
+    for url in ("https://ipapi.co/json/", "https://ipinfo.io/json"):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "XIDER-Agent/3"})
+            with urllib.request.urlopen(req, timeout=min(3.0, remaining)) as response:
+                raw = response.read(16385)
+            if len(raw) > 16384:
+                continue
+            data = json.loads(raw)
+            if not isinstance(data, dict) or data.get("error") or data.get("status") == "fail":
+                continue
+            parts = [str(data[key])[:100] for key in ("city", "region", "country_name")
+                     if isinstance(data.get(key), str) and data[key]]
+            if not parts:
+                continue
+            return result("granted", ", ".join(parts), source="ip_estimate")
+        except (OSError, ValueError):
+            continue
+    return result("unavailable", "Оценка города/региона по IP недоступна.", source="ip_estimate")
+
+def location_capability():
+    """Read permission metadata only: never request consent or a position."""
+    try:
+        permission, enabled = native_backend().diagnose()
+        state = ("unavailable" if not enabled or permission == "unavailable" else
+                 permission if permission in ("granted", "denied") else "needs_live_test")
+    except (ImportError, OSError):
+        state = "unavailable"
+    except Exception:
+        state = "needs_live_test"
+    return state, ("source=system; uncertainty=unknown until explicit one-shot read. "
+                   "Optional source=ip_estimate is city/region only; uncertainty=unknown. "
+                   "Owner-local settings: " + SETTINGS)
+
+
+def location_text(value):
+    if value["source"] == "ip_estimate":
+        return "Приблизительная оценка города/региона по IP, не GPS; точность неизвестна.\n" + value["label"]
+    if value["state"] == "granted":
+        return (value["label"] + "\n" + str(value["latitude"]) + ", " + str(value["longitude"])
+                + "\nПогрешность: " + str(value["accuracy_m"]) + " м")
+    return value["label"]
+
+SETTINGS = "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices"
+_runtime = None
+
+class MacLocationRuntime:
+    """Owned by the main Cocoa run loop; MQTT threads submit bounded requests."""
+    def __init__(self):
+        import queue
+        import threading
+        if threading.current_thread() is not threading.main_thread():
+            raise RuntimeError("Main Cocoa thread required")
+        import CoreLocation
+        from Foundation import NSObject, NSRunLoop, NSDate
+        self.core = CoreLocation
+        self.runloop, self.date = NSRunLoop.currentRunLoop(), NSDate
+        self.queue = queue.Queue()
+        self.active = []
+        class Delegate(NSObject):
+            def locationManager_didUpdateLocations_(delegate, manager, locations):
+                job = delegate.job
+                if not job["cancelled"]:
+                    location = locations[-1]
+                    coord = location.coordinate()
+                    job["value"] = (coord.latitude, coord.longitude, location.horizontalAccuracy())
+                    job["done"].set()
+                manager.stopUpdatingLocation()
+            def locationManager_didFailWithError_(delegate, manager, error):
+                job = delegate.job
+                job["error"] = PermissionError() if error.code() == 1 else OSError()
+                job["done"].set()
+                manager.stopUpdatingLocation()
+        self.delegate_class = Delegate
+
+    def pump(self):
+        import queue
+        import time
+        while True:
+            try:
+                job = self.queue.get_nowait()
+            except queue.Empty:
+                break
+            if job["cancelled"] or time.monotonic() >= job["deadline"]:
+                continue
+            if not self.core.CLLocationManager.locationServicesEnabled():
+                job["error"] = OSError()
+                job["done"].set()
+                continue
+            if self.core.CLLocationManager.authorizationStatus() not in (3, 4):
+                job["error"] = PermissionError()
+                job["done"].set()
+                continue
+            try:
+                manager = self.core.CLLocationManager.alloc().init()
+                delegate = self.delegate_class.alloc().init()
+                delegate.job = job
+                manager.setDelegate_(delegate)
+                self.active.append((manager, delegate, job))
+                manager.requestLocation()  # exactly one fix, no startUpdatingLocation
+            except Exception:
+                job["error"] = OSError()
+                job["done"].set()
+        self.runloop.runUntilDate_(self.date.dateWithTimeIntervalSinceNow_(0.1))
+        for manager, delegate, job in list(self.active):
+            if job["done"].is_set() or time.monotonic() >= job["deadline"]:
+                job["cancelled"] = True
+                manager.stopUpdatingLocation()
+                manager.setDelegate_(None)
+                self.active.remove((manager, delegate, job))
+
+    def read_once(self, timeout):
+        import threading
+        import time
+        job = {"done": threading.Event(), "deadline": time.monotonic() + timeout, "cancelled": False}
+        self.queue.put(job)
+        if not job["done"].wait(timeout):
+            job["cancelled"] = True
+            raise TimeoutError()
+        if "error" in job:
+            raise job["error"]
+        return job["value"]
+
+def signed_bundle_available():
+    import sys
+    import subprocess
+    from pathlib import Path
+    if sys.platform != "darwin" or not getattr(sys, "frozen", False):
+        return False
+    executable = Path(sys.executable).resolve()
+    app = next((p for p in executable.parents if p.suffix == ".app"), None)
+    if app is None:
+        return False
+    import plistlib
+    try:
+        with (app / "Contents/Info.plist").open("rb") as stream:
+            info = plistlib.load(stream)
+        if info.get("CFBundleIdentifier") != "com.xider.agent" or not info.get("NSLocationUsageDescription", "").strip():
+            return False
+        verified = subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)],
+                                  capture_output=True, timeout=10)
+        identity = subprocess.run(["codesign", "-dv", "--verbose=4", str(app)],
+                                  capture_output=True, text=True, timeout=10)
+        details = identity.stdout + identity.stderr
+        return (verified.returncode == identity.returncode == 0 and "Signature=adhoc" not in details
+                and ("Authority=Apple Development:" in details or "Authority=Developer ID Application:" in details)
+                and "TeamIdentifier=not set" not in details)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return False
+
+def initialize_runtime():
+    global _runtime
+    if signed_bundle_available():
+        try:
+            _runtime = MacLocationRuntime()
+        except (ImportError, OSError):
+            _runtime = None
+    return _runtime
+
+class MacLocationBackend:
+    def diagnose(self):
+        if _runtime is None:
+            return "unknown", True
+        core = _runtime.core
+        permission = {0: "not_determined", 1: "denied", 2: "denied", 3: "granted", 4: "granted"}.get(
+            int(core.CLLocationManager.authorizationStatus()), "unknown")
+        return permission, bool(core.CLLocationManager.locationServicesEnabled())
+
+    def read_once(self, timeout):
+        return _runtime.read_once(timeout)
+
+def native_backend():
+    return MacLocationBackend()
+
+def visible_local_setup():
+    """Explicit local flag shows a foreground explanation before OS consent."""
+    if not signed_bundle_available():
+        raise RuntimeError("Location setup requires the exact properly signed XIDER.app.")
+    import time
+    from AppKit import NSApplication, NSAlert, NSAlertFirstButtonReturn
+    from Foundation import NSRunLoop, NSDate
+    import CoreLocation
+    app = NSApplication.sharedApplication()
+    app.setActivationPolicy_(0)
+    app.activateIgnoringOtherApps_(True)
+    alert = NSAlert.alloc().init()
+    alert.setMessageText_("Разрешить разовую геолокацию XIDER?")
+    alert.setInformativeText_("После вашего согласия ОС запросит разрешение. XIDER читает одну позицию только по явному запросу; фонового отслеживания нет.")
+    alert.addButtonWithTitle_("Открыть системный запрос")
+    alert.addButtonWithTitle_("Отмена")
+    if alert.runModal() != NSAlertFirstButtonReturn:
+        return
+    manager = CoreLocation.CLLocationManager.alloc().init()
+    manager.requestWhenInUseAuthorization()
+    deadline = time.monotonic() + 120
+    while manager.authorizationStatus() == 0 and time.monotonic() < deadline:
+        NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.1))

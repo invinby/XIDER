@@ -1,3 +1,4 @@
+param([switch]$UnicodeRefreshOnly)
 $ErrorActionPreference = 'Stop'
 $bootstrap = (Resolve-Path (Join-Path $PSScriptRoot '..\bootstrap-agent.ps1')).Path
 $fixture = Join-Path $env:TEMP ('xider-bootstrap-swap-' + [guid]::NewGuid().ToString('N'))
@@ -17,6 +18,13 @@ $global:XiderMockOldTasks = $true
 $global:XiderMockOldRunning = @{ 'XIDER Agent' = $true; 'XIDER Guardian' = $true }
 $global:XiderMockRestored = @()
 $global:XiderMockRestarted = @()
+
+function global:ssh.exe {
+    $global:LASTEXITCODE = 0
+    'SHARED_KEY=remote-must-not-overwrite-local'
+    'XIDER_COMMAND_VERIFY_KEYSET_B64=eyIzMDk3ZTJkZWUyY2I0YTM0IjoiSVZMNDBadDVIU1JGTWtMaFh5NnJiTGZQLW50cVh0TUFsNVlPQnBpQjJ4SSJ9'
+    'SERVER_PRIVATE_SENTINEL=must-not-transfer'
+}
 
 function Get-ScheduledTask {
     param($TaskName, $ErrorAction)
@@ -129,7 +137,9 @@ function New-OldInstall($installRoot) {
         'MQTT_TLS=true',
         'MQTT_USERNAME=test-user',
         'MQTT_PASSWORD=test-password-not-real',
-        'ENCRYPT_PAYLOAD=true'
+        'ENCRYPT_PAYLOAD=true',
+        'DEVICE_ID=preserve-device',
+        'UNRELATED=preserve-setting'
     ), $utf8)
 }
 
@@ -151,6 +161,7 @@ try {
     [IO.File]::WriteAllText((Join-Path $agentSource 'new-marker.txt'), 'new-version', $utf8)
     Compress-Archive -Path (Join-Path $sourceRoot 'XIDER-fixture') -DestinationPath $archive
 
+    if (-not $UnicodeRefreshOnly) {
     $rollbackRoot = Join-Path $fixture 'rollback-install'
     New-OldInstall $rollbackRoot
     . $bootstrap -InstallRoot $rollbackRoot -SourceArchive $archive -PreflightOnly
@@ -226,12 +237,37 @@ try {
         }
     }
 
+    }
     $successRoot = Join-Path $fixture 'success-install'
     New-OldInstall $successRoot
+    # ASCII source keeps this fixture safe under PS5.1's own script decoding.
+    # The .env itself is intentionally BOM-less UTF-8 with Unicode credentials.
+    $unicodePassword = -join @([char]0x043F, [char]0x0430, [char]0x0440, [char]0x043E, [char]0x043B, [char]0x044C, [char]0x4E2D)
+    $unicodeSetting = -join @([char]0x043D, [char]0x0430, [char]0x0441, [char]0x0442, [char]0x0440, [char]0x043E, [char]0x0439, [char]0x043A, [char]0x0430)
+    $successEnvPath = Join-Path $successRoot 'git-ver\XGENT-WDS\.env'
+    $successEnvText = [IO.File]::ReadAllText($successEnvPath, $utf8).
+        Replace('MQTT_PASSWORD=test-password-not-real', "MQTT_PASSWORD=$unicodePassword").
+        Replace('UNRELATED=preserve-setting', "UNRELATED=$unicodeSetting")
+    $successEnvText += "XIDER_COMMAND_VERIFY_KEYSET_B64=old`r`nPRESERVE_LF=keep`n"
+    [IO.File]::WriteAllText($successEnvPath, $successEnvText, $utf8)
+    $originalEnvBytes = [IO.File]::ReadAllBytes($successEnvPath)
+    if ($originalEnvBytes[0] -eq 0xEF) { throw 'Unicode fixture unexpectedly contains a BOM.' }
+    $publicKeyset = 'eyIzMDk3ZTJkZWUyY2I0YTM0IjoiSVZMNDBadDVIU1JGTWtMaFh5NnJiTGZQLW50cVh0TUFsNVlPQnBpQjJ4SSJ9'
+    $expectedEnvBytes = $utf8.GetBytes($successEnvText.Replace('XIDER_COMMAND_VERIFY_KEYSET_B64=old', "XIDER_COMMAND_VERIFY_KEYSET_B64=$publicKeyset"))
     $global:XiderMockInstallerResult = 'success'
     $global:XiderMockHealthStatus = 'connected'
     $global:XiderMockOldTasks = $false
     & $bootstrap -InstallRoot $successRoot -SourceArchive $archive -HealthTimeoutSeconds 3
+    $actualEnvBytes = [IO.File]::ReadAllBytes($successEnvPath)
+    if ([Convert]::ToBase64String($actualEnvBytes) -cne [Convert]::ToBase64String($expectedEnvBytes)) {
+        throw 'Public refresh corrupted BOM-less UTF-8 values or unrelated line endings.'
+    }
+    $installedEnv = Get-Content -LiteralPath $successEnvPath -Encoding UTF8
+    foreach ($expected in @('SHARED_KEY=test-secret-not-real-0123456789', 'DEVICE_ID=preserve-device',
+                            "MQTT_PASSWORD=$unicodePassword", "UNRELATED=$unicodeSetting", "XIDER_COMMAND_VERIFY_KEYSET_B64=$publicKeyset")) {
+        if ($installedEnv -notcontains $expected) { throw "Bootstrap lost or failed to deliver $expected." }
+    }
+    if ($installedEnv -match 'SERVER_PRIVATE_SENTINEL|PRIVATE KEY') { throw 'Private server data reached the agent.' }
     if (-not (Test-Path -LiteralPath (Join-Path $successRoot 'git-ver\XGENT-WDS\new-marker.txt'))) {
         throw 'The new checkout was not activated.'
     }

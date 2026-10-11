@@ -272,7 +272,7 @@ def test_version_screens_follow_six_voices_and_keep_release_callbacks(monkeypatc
 
     class FakeDevices:
         def get(self, device_id):
-            return {"os": "macOS", "version": "3.3.8", "guardian": {"version": "1.2.0"}}
+            return {"os": "macOS", "version": "3.3.8", "guardian": {"version": "1.2.0", "version_source": "guardian"}, "guardian_last_seen": bot.time.time()}
 
     monkeypatch.setattr(bot, "devices", FakeDevices())
     release = ledger.Release(
@@ -585,10 +585,10 @@ def test_server_cards_follow_all_six_voices_and_escape_runtime_values(monkeypatc
             bot.bot_settings, "get",
             lambda key, default=None, selected=style: selected if key == "ui_style" else default,
         )
-        overview = bot.server_overview_text(approval=True, connected=False)
+        overview = bot.server_overview_text(approval=True, connected=False, user_id=bot.ADMIN_ID)
         assert "&lt;fixture&amp;build&gt;" in overview
         assert "&lt;fixture&build&gt;" not in overview
-        assert xlex.render("server_mqtt_line", style, state="ожидает подключения") in overview
+        assert xlex.render("server_mqtt_line", style, state="disconnected") in overview
         assert xlex.render("server_approval_line", style, state="включено") in overview
         overview_cards.add(overview)
 
@@ -597,7 +597,7 @@ def test_server_cards_follow_all_six_voices_and_escape_runtime_values(monkeypatc
         assert xlex.render("server_confirm_warning", style) in confirmation
         confirmation_cards.add(confirmation)
 
-        metrics = bot.server_metrics_text({"load": 12.3, "memory": 45.6, "disk": 78.9})
+        metrics = bot.server_metrics_text({"load": 12.3, "memory": 45.6, "disk": 78.9, "checked_at": bot.time.time()})
         assert "12.3%" in metrics and "45.6%" in metrics and "78.9%" in metrics
         metrics_cards.add(metrics)
 
@@ -608,10 +608,10 @@ def test_server_cards_follow_all_six_voices_and_escape_runtime_values(monkeypatc
 
         confirm_buttons = {
             button.callback_data: button.text
-            for row in bot.server_confirm_menu("update").inline_keyboard
+            for row in bot.server_confirm_menu("update", "fixture-nonce").inline_keyboard
             for button in row
         }
-        assert set(confirm_buttons) == {"server_confirm:update", "menu:server"}
+        assert set(confirm_buttons) == {"server_confirm:fixture-nonce", "server_cancel:fixture-nonce"}
         assert all(len(label) <= 64 for label in confirm_buttons.values())
     assert len(overview_cards) > 1
     assert len(confirmation_cards) > 1

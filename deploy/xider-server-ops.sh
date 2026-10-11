@@ -4,6 +4,11 @@ set -Eeuo pipefail
 SERVICE="xider-bot.service"
 UPDATE_HELPER="/usr/local/libexec/xider/update-server.sh"
 
+if [[ "$#" -ne 1 ]]; then
+  echo "Usage: xider-server-ops {status|logs|restart|update|rollback}" >&2
+  exit 2
+fi
+
 case "${1:-}" in
   status)
     exec /bin/systemctl show "$SERVICE" --no-page \
@@ -19,11 +24,10 @@ case "${1:-}" in
     exec /bin/bash "$UPDATE_HELPER" update
     ;;
   rollback)
-    shift
-    exec /bin/bash "$UPDATE_HELPER" rollback "$@"
+    exec /bin/bash "$UPDATE_HELPER" rollback
     ;;
   *)
-    echo "Usage: xider-server-ops {status|logs|restart|update|rollback [backup-archive]}" >&2
+    echo "Usage: xider-server-ops {status|logs|restart|update|rollback}" >&2
     exit 2
     ;;
 esac
