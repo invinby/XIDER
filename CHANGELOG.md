@@ -16,6 +16,8 @@
   Activation and rollback use same-volume directory renames instead of
   recursive folder moves; the old checkout remains as a backup.
 - Aligned bot, Windows, and macOS source/build metadata at 4.2.1.
+- Documentation now distinguishes source version and release notes from
+  publication, live services, and physical-device acceptance.
 
 ### Русский
 
@@ -31,6 +33,8 @@
   Переключение и откат используют переименование папок на том же диске вместо
   рекурсивного переноса; прежняя версия сохраняется резервной копией.
 - Версии исходников бота, Windows- и macOS-агентов согласованы на 4.2.1.
+- Документация разделяет версию исходников и страницу релизов с публикацией,
+  действующими сервисами и приёмкой на физических устройствах.
 
 Офлайн-проверки не заменяют проверку на физическом устройстве или Telegram.
 

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -13,6 +15,15 @@ MERMAID_BLOCK = re.compile(r"```mermaid\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
 
 class ReadmeMermaidTests(unittest.TestCase):
+    def test_readme_diagrams_parse_with_pinned_mermaid_cli(self) -> None:
+        validator = ROOT / "tools" / "validate_mermaid.py"
+        result = subprocess.run(
+            [sys.executable, str(validator), *(str(path) for path in README_FILES)],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_mermaid_blocks_do_not_label_unsupported_bidirectional_edges(self) -> None:
         for readme in README_FILES:
             with self.subTest(readme=readme.name):
