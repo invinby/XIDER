@@ -228,7 +228,11 @@ do_update() {
       echo "Release bundle is missing the server helper deploy/${helper}." >&2; return 5;
     }
   done
-  if ! cmp -s "${APP_DIR}/TG-BOT-SERVER/requirements.txt" "${source_dir}/TG-BOT-SERVER/requirements.txt"; then
+  # Compare logical lines, not checkout-specific CRLF/LF bytes. A real package
+  # change still fails closed until dependency installation is transactional.
+  if ! cmp -s \
+    <(sed 's/\r$//' "${APP_DIR}/TG-BOT-SERVER/requirements.txt") \
+    <(sed 's/\r$//' "${source_dir}/TG-BOT-SERVER/requirements.txt"); then
     echo "Dependency changes are not yet supported by this in-place updater; current install is unchanged." >&2
     return 6
   fi
