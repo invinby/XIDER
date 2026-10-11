@@ -100,6 +100,23 @@
 - [ ] Report actual result separately from MQTT publish acceptance.
 - [ ] Rerun tests and commit URL-flow changes.
 
+#### Task 5: Close screenshot runtime and Telegram-delivery gaps
+
+**Files:** Modify `XGENT-MCS/xgent_mcs.py`, `XGENT-MCS/tests/test_screenshot.py`, `TG-BOT-SERVER/bot.py`, and `TG-BOT-SERVER/tests/test_screenshot.py` or `tests/test_bot_ui.py`.
+
+**Evidence:** The capability probe accepts `/usr/sbin/screencapture` when it is not in `PATH`, but the capture handler only checks and executes the bare command name. Separately, `_replace_callback_with_media_unlocked` catches Telegram sender exceptions and returns the previous card, so the screenshot handler's `transport_failed` fallback is unreachable on actual photo-send errors. Screenshot captions also interpolate the device label into HTML without escaping.
+
+- [x] Add a macOS-agent regression for a missing `PATH` entry with the absolute system binary available; assert capability detection and screenshot execution resolve the same executable.
+- [x] Add a bot regression that runs the real media-card helper with a sender that fails; preserve the existing card and render the screenshot delivery diagnostic in that card.
+- [x] Escape the device label in screenshot HTML caption and test a label containing `<`, `&`, and quotes.
+- [x] Implement the smallest changes; keep other media-card callers' current recovery behavior unchanged.
+- [x] Run focused MCS screenshot and bot screenshot/UI tests, then the full component test runner. Keep physical Mac and live Telegram acceptance explicitly unverified unless actually performed.
+- [x] Commit the focused follow-up and obtain independent task review.
+
+Task 5 verification (2026-10-12): mocked MCS screenshot **19 passed**, bot screenshot **26 passed**, final bot UI **319 passed**. Full `py -3.12 tools/run_tests.py` exited **0**: six isolated suites and Windows deployment fixtures passed. That full-run bot collection was **853 passed / 1 skipped** before the additional default-media-recovery test; the final 319-test UI run includes it. Physical Mac capture/TCC and live Telegram delivery remain **unverified**. Independent review is approved.
+
+Task 5 independent review (2026-10-12): **approved** with no Critical, Important, or Minor findings. Reviewer confirmed screenshot-only sender-error propagation, default behavior for other media callers, HTML escaping, and guard/card-lock behavior. Physical Mac capture/TCC, live Telegram delivery, and deployment remain unverified.
+
 ## Общие команды
 
 ```powershell

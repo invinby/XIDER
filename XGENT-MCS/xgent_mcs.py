@@ -286,8 +286,12 @@ def _module_available(name: str) -> bool:
         return False
 
 
+def _resolve_command(name: str, fallback_paths: tuple[str, ...]) -> str | None:
+    return shutil.which(name) or next((path for path in fallback_paths if Path(path).is_file()), None)
+
+
 def _command_available(name: str, fallback_paths: tuple[str, ...]) -> bool:
-    return bool(shutil.which(name) or any(Path(path).is_file() for path in fallback_paths))
+    return bool(_resolve_command(name, fallback_paths))
 
 
 _COMMAND_MODULE_LOADER = None
@@ -1206,14 +1210,15 @@ class XgentClient:
         tmp_path = None
         capture_completed = False
         try:
+            capture_command = _resolve_command("screencapture", ("/usr/sbin/screencapture",))
             if not _screenshot_session_available():
                 result.update(state="session_unavailable", detail="No active owner GUI console session")
-            elif not shutil.which("screencapture"):
+            elif not capture_command:
                 result.update(state="tool_missing", detail="screencapture is unavailable")
             else:
                 with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                     tmp_path = tmp.name
-                res = subprocess.run(["screencapture", "-x", tmp_path], capture_output=True, timeout=10)
+                res = subprocess.run([capture_command, "-x", tmp_path], capture_output=True, timeout=10)
                 capture_completed = True
                 if res.returncode != 0:
                     stderr = res.stderr.decode("utf-8", errors="replace") if isinstance(res.stderr, bytes) else str(res.stderr or "")
