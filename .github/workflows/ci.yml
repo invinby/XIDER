@@ -88,6 +88,12 @@ jobs:
             if ($errors.Count) { $errors | ForEach-Object { Write-Error $_ }; throw "PowerShell syntax error in $($file.FullName)" }
           }
 
+      - name: "Validate Python source syntax"
+        shell: pwsh
+        run: |
+          $exclude = '(^|[\\/])(\.venv|venv|node_modules|build|dist|__pycache__)([\\/]|$)'
+          python -m compileall -q -x $exclude TG-BOT-SERVER XGENT-WDS XGENT-MCS ops tools deploy
+
       - name: "Validate Windows PowerShell 5 installer syntax"
         shell: powershell
         run: |
