@@ -30,7 +30,7 @@
 ---
 
 **Дата:** 2026-10-08  
-**Статус:** Tasks 1–3 реализованы и проверены. Task 4 одобрен владельцем 2026-10-12 и выполняется: canonical URL подтверждён, Actions deploy подготовлен; live acceptance ещё не пройдена.
+**Статус:** Tasks 1–4 реализованы и проверены. GitHub Pages опубликован через Actions на подтверждённом canonical URL; live acceptance пройдена 2026-10-12.
 **Спецификация:** раздел 13 и документальные критерии раздела 14 [TARPED redesign](../specs/2026-10-08-tarped-product-redesign-design.md)
 
 ## Цель
@@ -88,8 +88,8 @@
 
 - [x] Confirm exact canonical Pages URL with the owner: `https://invinby.github.io/XIDER/`.
 - [x] Receive separate owner approval to switch Pages to GitHub Actions and publish at the confirmed URL (2026-10-12).
-- [ ] Merge the main-only guarded deployment workflow, switch Pages source from legacy `main:/docs` to Actions, and publish only the validated `site/` artifact.
-- [ ] Verify live HTTP response, RU/EN pages and local links; set the repository homepage to the confirmed canonical Pages URL. Preserve the existing concise bilingual description; do not edit the personal account profile.
+- [x] Merge main-only guarded deployment workflow (commit `7a58dee`), switch Pages source from legacy `main:/docs` to Actions, and publish only the validated `site/` artifact (run `38179646685`, both jobs passed).
+- [x] Verify live `200` responses for `/`, `/ru.html`, and `/styles.css`; the English and Russian documents declare `lang="en"` and `lang="ru"`. Static local-link checks passed. Set repository homepage to `https://invinby.github.io/XIDER/`; preserve the existing concise bilingual description and leave the personal account profile unchanged.
 
 ## Коммиты
 
