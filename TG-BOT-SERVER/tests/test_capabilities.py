@@ -149,6 +149,27 @@ def test_windows_capability_card_offers_only_allowlisted_unresolved_settings_to_
     assert "permsettings:file_access" not in callbacks
 
 
+@pytest.mark.parametrize("style", ("xtech", "xperson", "xpikmi", "xtarped", "xcore", "xadam"))
+def test_permission_settings_button_uses_neutral_copy_without_changing_xlex(style, monkeypatch):
+    result = snapshot("denied")
+    result["commands"] = ["capabilities", "permission_settings"]
+    monkeypatch.setattr(
+        bot.bot_settings,
+        "get",
+        lambda key, default=None: style if key == "ui_style" else default,
+    )
+
+    kb = bot._capabilities_keyboard(result, user_id=bot.ADMIN_ID)
+    button = next(
+        button
+        for row in kb.inline_keyboard
+        for button in row
+        if button.callback_data == "permsettings:camera"
+    )
+
+    assert button.text == "⚙️ Показать настройки: Камера"
+
+
 def test_windows_permission_settings_dispatch_requires_owner_and_known_permission(monkeypatch):
     called = []
 

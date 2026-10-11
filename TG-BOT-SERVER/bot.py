@@ -5071,7 +5071,7 @@ def _capabilities_keyboard(result: dict | None = None, user_id: int | None = Non
                     or not _CAPABILITY_SETTINGS[platform].get(item["id"])):
                 continue
             kb.button(
-                text=_lex("system_permission_settings_button", item=_SNAPSHOT_LABELS[item["id"]]),
+                text=f"⚙️ Показать настройки: {_SNAPSHOT_LABELS[item['id']]}",
                 callback_data=f"permsettings:{item['id']}",
                 style="primary",
             )
