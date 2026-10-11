@@ -62,6 +62,36 @@ def _read_stream(handle) -> tuple[str, bool]:
     return text, len(prefix) > STREAM_BYTES or redacted_truncated
 
 
+def _terminate_owned_tree(process):
+    if os.name == "nt":
+        import psutil
+        try:
+            root = psutil.Process(process.pid)
+            # Snapshot identities before taskkill can reap/reparent the root.
+            owned = list(reversed(root.children(recursive=True))) + [root]
+        except psutil.Error:
+            owned = []
+        try:
+            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        finally:
+            # Do not let taskkill's failure bypass cleanup. Process objects
+            # retain their identities; kill checks PID reuse, unlike name kills.
+            for child in owned:
+                try:
+                    child.kill()
+                except psutil.Error:
+                    pass
+            psutil.wait_procs(owned, timeout=1)
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
 def _run_process(command, *, shell, stdout, stderr, timeout):
     """Bound the shell and its ordinary descendants to one process lifetime."""
     options = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
@@ -72,17 +102,18 @@ def _run_process(command, *, shell, stdout, stderr, timeout):
     except BaseException:
         # Terminate the whole group before reaping the shell. In particular,
         # TimeoutExpired must not leave a child executing an approved command.
-        if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
-        else:
+        try:
+            _terminate_owned_tree(process)
+        except Exception:
+            # Cleanup errors must not replace the original command timeout.
+            pass
+        finally:
             try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=1)
+            except Exception:
                 pass
-        if process.poll() is None:
-            process.kill()
-        process.wait(timeout=5)
         raise
     return process
 
