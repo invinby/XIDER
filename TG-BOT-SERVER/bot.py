@@ -2548,7 +2548,7 @@ FUN_RESPONSE_TYPES = {
     "screen_off", "screensaver_on", "wallpaper_set",
     "display_brightness", "display_night_light", "display_rotate",
     # Загрузка и прочее
-    "download_url", "proc_kill_name",
+    "download_url", "proc_kill_name", "permission_settings",
     # Режим ожидания (Watchdog) и автозапуск
     "standby_sleep", "wake", "autorun_status", "autorun_enable", "autorun_disable",
     # Системные утилиты и диагностика
@@ -4974,7 +4974,51 @@ async def on_cmd_capabilities(cq: CallbackQuery):
     if not res:
         await _replace_callback_message(cq, _lex("device_no_response"), delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb())
         return
-    await _replace_callback_message(cq, _format_capabilities(res), delivery_guard=_callback_delivery_guard(cq, target), reply_markup=_capabilities_keyboard())
+    user_id = int(cq.from_user.id) if cq.from_user else 0
+    await _replace_callback_message(
+        cq,
+        _format_capabilities(res),
+        delivery_guard=_callback_delivery_guard(cq, target),
+        reply_markup=_capabilities_keyboard(res, user_id=user_id),
+    )
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("permsettings:"))
+async def on_permission_settings(cq: CallbackQuery):
+    """Open a fixed macOS privacy pane only after the owner taps its button."""
+    target = _require_target(cq)
+    permission = str(cq.data or "").partition(":")[2]
+    if not target:
+        await cq.answer(_lex("target_required"), show_alert=True)
+        return
+    if permission not in _CAPABILITY_SETTINGS["macOS"]:
+        await cq.answer("Неизвестный раздел настроек; ничего не отправлено.", show_alert=True)
+        return
+    info = devices.get(target) or {}
+    if not str(info.get("os") or "").lower().startswith(("mac", "darwin")):
+        await cq.answer("Эта кнопка работает только для Mac.", show_alert=True)
+        return
+    commands = (info.get("capabilities") or {}).get("commands", [])
+    if not isinstance(commands, list) or "permission_settings" not in commands:
+        await cq.answer()
+        await _replace_callback_message(
+            cq,
+            "Агент пока не умеет удалённо открывать панель разрешений. Сначала обнови его, затем снова запусти проверку возможностей.",
+            reply_markup=back_to_device_kb(),
+        )
+        return
+    callback = f"permsettings:{permission}"
+    if not _device_action_still_allowed(int(cq.from_user.id), callback, target):
+        await cq.answer(_lex("input_access_revoked"), show_alert=True)
+        return
+    await simple_command(
+        cq,
+        "permission_settings",
+        "⚙️",
+        _SNAPSHOT_LABELS[permission],
+        timeout=15.0,
+        permission=permission,
+    )
 
 
 def format_location_result(result: dict) -> str:
@@ -5008,8 +5052,24 @@ def format_location_result(result: dict) -> str:
             + label + "\nПроверено: " + when)
 
 
-def _capabilities_keyboard():
+def _capabilities_keyboard(result: dict | None = None, user_id: int | None = None):
     kb = InlineKeyboardBuilder()
+    snapshot = _parse_capability_snapshot(result or {})
+    user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
+    commands = result.get("commands") if isinstance(result, dict) else None
+    commands = set(commands) if isinstance(commands, list) else set()
+    if (get_user_role(user_id) == Role.OWNER
+            and snapshot["platform"]
+            and snapshot["platform"].startswith("macOS")
+            and "permission_settings" in commands):
+        for item in snapshot["items"]:
+            if item["state"] in {"granted", "unavailable"}:
+                continue
+            kb.button(
+                text=_lex("system_permission_settings_button", item=_SNAPSHOT_LABELS[item["id"]]),
+                callback_data=f"permsettings:{item['id']}",
+                style="primary",
+            )
     kb.button(text=_nav("refresh"), callback_data="cmd:capabilities")
     kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
     kb.adjust(1)
@@ -5153,6 +5213,11 @@ def _format_capabilities(result: dict) -> str:
         if snapshot["platform"].startswith("macOS"):
             lines.append("macOS: Системные настройки → Конфиденциальность и безопасность → нужный раздел. "
                          "Разреши фактическое приложение XIDER; при запросе ОС перезапусти его.")
+            commands = result.get("commands") if isinstance(result.get("commands"), list) else []
+            if "permission_settings" in commands:
+                lines.append("Для открытия раздела на Mac нажми соответствующую кнопку ниже; затем подтверди доступ вручную и обнови проверку.")
+            else:
+                lines.append("Удалённое открытие раздела появится после обновления агента до версии с поддержкой этой команды.")
         else:
             lines.append("Windows: Параметры → Конфиденциальность и безопасность → Камера / Микрофон / Расположение. "
                          "Для камеры и микрофона: «Разрешить классическим приложениям». "

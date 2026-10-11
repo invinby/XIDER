@@ -241,7 +241,7 @@ SUPPORTED_COMMANDS = (
     "open_url", "notify", "sound", "status_request", "screenshot", "webcam",
     "sysinfo", "processes", "battery", "network", "services", "clipboard",
     "clipboard_set", "kill_process", "disks", "volume_set",
-    "mic", "shell", "open_app", "capabilities", "lock", "volume_toggle",
+    "mic", "shell", "open_app", "capabilities", "permission_settings", "lock", "volume_toggle",
     "power", "stop",
     "dir_list", "file_get", "file_put", "file_del", "find_file", "path_open",
     "ext_ip", "geo_location", "screen_off", "screensaver_on", "wallpaper_set",
@@ -651,6 +651,7 @@ class XgentClient:
             "shell": self._do_shell,
             "open_app": self._do_open_app,
             "capabilities": self._do_capabilities,
+            "permission_settings": self._do_permission_settings,
             "lock": self._do_lock_screen,
             "volume_toggle": self._do_volume_toggle,
             "power": self._do_power,
@@ -1457,6 +1458,45 @@ class XgentClient:
     def _do_open_app(self, payload: dict) -> None:
         app = (payload.get("app") or "").strip()
         if app: subprocess.run(["open", app], check=False)
+
+    def _do_permission_settings(self, payload: dict) -> dict:
+        """Open one fixed macOS privacy pane; this never grants permission."""
+        settings = {
+            "screen_recording": "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+            "camera": "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera",
+            "microphone": "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+            "location": "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices",
+            "accessibility": "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            "file_access": "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders",
+        }
+        permission = payload.get("permission")
+        uri = settings.get(permission) if isinstance(permission, str) else None
+        result = {
+            "type": "permission_settings",
+            "device_id": DEVICE_ID,
+            "permission": permission if uri else "unknown",
+            "ok": False,
+        }
+        if uri:
+            try:
+                opened = subprocess.run(
+                    ["open", uri], check=False, capture_output=True, text=True, timeout=10
+                )
+                result["ok"] = opened.returncode == 0
+                result["text"] = (
+                    "Открыл нужный раздел Системных настроек. Выдай разрешение приложению XIDER вручную; агент сам его не включает."
+                    if result["ok"] else
+                    "macOS не подтвердила открытие настроек. Проверь активный сеанс пользователя и открой раздел вручную."
+                )
+            except (OSError, subprocess.SubprocessError):
+                result["text"] = "Не удалось открыть настройки macOS. Проверь активный сеанс пользователя и открой раздел вручную."
+        else:
+            result["text"] = "Неизвестный раздел настроек; команда отклонена."
+        command_id = payload.get("id") or getattr(self._command_context, "cmd_id", None)
+        if isinstance(command_id, str) and command_id:
+            result["id"] = command_id
+        self._publish_response("permission_settings", result)
+        return result
 
     def _do_capabilities(self, payload: dict) -> None:
         feature_status = _detect_feature_status()

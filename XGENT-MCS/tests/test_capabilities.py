@@ -2,6 +2,8 @@
 
 import xgent_mcs as mcs
 import datetime
+import threading
+from types import SimpleNamespace
 
 
 def test_feature_report_never_claims_live_permissions(monkeypatch):
@@ -91,3 +93,41 @@ def test_snapshot_missing_dependencies_are_unavailable(monkeypatch):
     assert items["camera"]["state"] == "unavailable"
     assert items["microphone"]["state"] == "unavailable"
     assert items["screen_recording"]["state"] == "unavailable"
+
+
+def test_permission_settings_opens_only_the_allowlisted_macos_pane(monkeypatch):
+    client = object.__new__(mcs.XgentClient)
+    client._command_context = threading.local()
+    client._command_context.cmd_id = "permission-request-1"
+    responses = []
+    calls = []
+    client._publish_response = lambda topic, payload: responses.append((topic, dict(payload))) or True
+    monkeypatch.setattr(mcs.subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs)) or SimpleNamespace(returncode=0))
+
+    result = client._do_permission_settings({"permission": "camera"})
+
+    assert calls == [(([
+        "open",
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera",
+    ],), {"check": False, "capture_output": True, "text": True, "timeout": 10})]
+    assert result["ok"] is True
+    assert result["permission"] == "camera"
+    assert result["id"] == "permission-request-1"
+    assert responses[0][0] == "permission_settings"
+    assert "XIDER" in responses[0][1]["text"]
+
+
+def test_permission_settings_rejects_arbitrary_or_unknown_targets(monkeypatch):
+    client = object.__new__(mcs.XgentClient)
+    client._command_context = threading.local()
+    responses = []
+    calls = []
+    client._publish_response = lambda topic, payload: responses.append((topic, dict(payload))) or True
+    monkeypatch.setattr(mcs.subprocess, "run", lambda *args, **kwargs: calls.append(args))
+
+    result = client._do_permission_settings({"permission": "file:///tmp/anything"})
+
+    assert calls == []
+    assert result["ok"] is False
+    assert result["permission"] == "unknown"
+    assert responses[0][0] == "permission_settings"

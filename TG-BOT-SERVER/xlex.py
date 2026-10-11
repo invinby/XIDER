@@ -1756,6 +1756,14 @@ COPY.update({
         "xcore": "📊 Карта возможностей",
         "xadam": "📊 Возможности устройства",
     },
+    "system_permission_settings_button": {
+        "xtech": "⚙️ Открыть настройки: {item}",
+        "xperson": "⚙️ Показать настройку «{item}» на Mac",
+        "xpikmi": "🎀 Открыть настройку на макбучике: {item}",
+        "xtarped": "⚙️ Показать на Mac: {item}",
+        "xcore": "⚙️ Панель разрешения: {item}",
+        "xadam": "⚙️ Настройки доступа: {item}",
+    },
     "system_refresh_status_button": {
         "xtech": "🔄 Обновить статус",
         "xperson": "🔄 Проверить статус ещё раз",

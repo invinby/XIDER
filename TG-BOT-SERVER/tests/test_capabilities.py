@@ -95,6 +95,96 @@ def test_recheck_uses_existing_callback_and_no_agent_uri_buttons():
     assert all(button.url is None for button in buttons)
 
 
+def test_mac_capability_card_shows_remote_settings_buttons_only_for_unresolved_permissions():
+    result = snapshot("needs_live_test")
+    result["commands"] = ["capabilities", "permission_settings"]
+    result["items"] = [
+        {**item, "state": "granted" if item["id"] == "camera" else item["state"]}
+        for item in result["items"]
+    ]
+
+    kb = bot._capabilities_keyboard(result, user_id=bot.ADMIN_ID)
+    buttons = [button for row in kb.inline_keyboard for button in row]
+    callbacks = {button.callback_data for button in buttons}
+
+    assert "permsettings:screen_recording" in callbacks
+    assert "permsettings:microphone" in callbacks
+    assert "permsettings:location" in callbacks
+    assert "permsettings:accessibility" in callbacks
+    assert "permsettings:file_access" in callbacks
+    assert "permsettings:camera" not in callbacks
+    assert all(button.url is None for button in buttons)
+
+
+def test_mac_capability_card_hides_remote_settings_buttons_until_agent_supports_them():
+    result = snapshot("needs_live_test")
+    result["commands"] = ["capabilities"]
+
+    kb = bot._capabilities_keyboard(result, user_id=bot.ADMIN_ID)
+    callbacks = {
+        button.callback_data
+        for row in kb.inline_keyboard
+        for button in row
+    }
+
+    assert not any(callback.startswith("permsettings:") for callback in callbacks)
+
+
+def test_remote_permission_settings_callback_dispatches_only_known_mac_permission(monkeypatch):
+    called = []
+
+    async def answer(*_args, **_kwargs):
+        pass
+
+    async def simple_command(*args, **kwargs):
+        called.append((args, kwargs))
+
+    monkeypatch.setattr(bot, "SESSION", {"target": "mac-1"})
+    monkeypatch.setattr(bot.devices, "get", lambda _target: {
+        "os": "macOS 27.0",
+        "capabilities": {"commands": ["permission_settings"]},
+    })
+    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: True)
+    monkeypatch.setattr(bot, "simple_command", simple_command)
+    cq = SimpleNamespace(
+        answer=answer,
+        from_user=SimpleNamespace(id=bot.ADMIN_ID),
+        data="permsettings:camera",
+    )
+
+    asyncio.run(bot.on_permission_settings(cq))
+
+    assert called == [((cq, "permission_settings", "⚙️", "Камера"), {
+        "timeout": 15.0,
+        "permission": "camera",
+    })]
+
+
+def test_remote_permission_settings_callback_rejects_untrusted_permission_value(monkeypatch):
+    alerts = []
+    called = []
+
+    async def answer(*_args, **kwargs):
+        alerts.append(kwargs)
+
+    async def simple_command(*args, **kwargs):
+        called.append((args, kwargs))
+
+    monkeypatch.setattr(bot, "SESSION", {"target": "mac-1"})
+    monkeypatch.setattr(bot.devices, "get", lambda _target: {"os": "macOS 27.0"})
+    monkeypatch.setattr(bot, "simple_command", simple_command)
+    cq = SimpleNamespace(
+        answer=answer,
+        from_user=SimpleNamespace(id=bot.ADMIN_ID),
+        data="permsettings:file:///tmp/evil",
+    )
+
+    asyncio.run(bot.on_permission_settings(cq))
+
+    assert called == []
+    assert alerts and alerts[0].get("show_alert") is True
+
+
 def test_capabilities_handler_displays_recheck_after_correlated_response(monkeypatch):
     rendered = []
     published = []
