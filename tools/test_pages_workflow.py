@@ -9,15 +9,25 @@ PAGES_WORKFLOW = ROOT / ".github" / "workflows" / "pages.yml"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
 
-def test_pages_workflow_validates_pull_requests_without_deploying() -> None:
+def test_pages_workflow_validates_pull_requests_and_gates_deploy_to_main_push() -> None:
     workflow = PAGES_WORKFLOW.read_text(encoding="utf-8")
 
     assert re.search(r"^\s*pull_request:\s*$", workflow, re.MULTILINE)
     assert re.search(r"^permissions:\s*\n\s+contents:\s*read\s*$", workflow, re.MULTILINE)
-    assert "actions/deploy-pages" not in workflow
-    assert not re.search(r"^\s*pages:\s*write\s*$", workflow, re.MULTILINE)
-    assert not re.search(r"^\s*id-token:\s*write\s*$", workflow, re.MULTILINE)
-    assert not re.search(r"^\s*environment:\s*$", workflow, re.MULTILINE)
+
+    deploy = re.search(r"(?ms)^  deploy:\n(?P<body>.*?)(?=^  [a-zA-Z_-]+:|\Z)", workflow)
+    assert deploy, "Pages deploy must be an explicit, separate job"
+    body = deploy.group("body")
+    assert re.search(
+        r"^    if:\s*github\.event_name == 'push' && github\.ref == 'refs/heads/main'\s*$",
+        body,
+        re.MULTILINE,
+    )
+    assert re.search(r"^    needs:\s*build\s*$", body, re.MULTILINE)
+    assert re.search(r"^    environment:\s*$\n\s+name:\s*github-pages\s*$", body, re.MULTILINE)
+    assert re.search(r"^\s+pages:\s*write\s*$", body, re.MULTILINE)
+    assert re.search(r"^\s+id-token:\s*write\s*$", body, re.MULTILINE)
+    assert "actions/deploy-pages@" in body
 
 
 def test_pages_artifact_is_built_only_from_the_static_site_directory() -> None:
@@ -25,7 +35,7 @@ def test_pages_artifact_is_built_only_from_the_static_site_directory() -> None:
 
     assert "actions/upload-pages-artifact@" in workflow
     assert re.search(r"^\s*path:\s*site/?\s*$", workflow, re.MULTILINE)
-    assert "deploy-pages" not in workflow
+    assert re.search(r"^\s*id:\s*deployment\s*$", workflow, re.MULTILINE)
 
 
 def test_every_external_action_is_pinned_to_a_full_commit_sha() -> None:
