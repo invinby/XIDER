@@ -130,6 +130,55 @@ def test_mac_capability_card_hides_remote_settings_buttons_until_agent_supports_
     assert not any(callback.startswith("permsettings:") for callback in callbacks)
 
 
+def test_windows_capability_card_offers_only_allowlisted_unresolved_settings_to_owner():
+    result = snapshot("needs_live_test", platform="Windows 11")
+    result["commands"] = ["capabilities", "permission_settings"]
+    result["items"] = [
+        {**item, "state": "granted" if item["id"] == "camera" else item["state"]}
+        for item in result["items"]
+    ]
+
+    kb = bot._capabilities_keyboard(result, user_id=bot.ADMIN_ID)
+    callbacks = {button.callback_data for row in kb.inline_keyboard for button in row}
+
+    assert "permsettings:camera" not in callbacks
+    assert "permsettings:microphone" in callbacks
+    assert "permsettings:location" in callbacks
+    assert "permsettings:screen_recording" not in callbacks
+    assert "permsettings:accessibility" not in callbacks
+    assert "permsettings:file_access" not in callbacks
+
+
+def test_windows_permission_settings_dispatch_requires_owner_and_known_permission(monkeypatch):
+    called = []
+
+    async def answer(*_args, **_kwargs):
+        pass
+
+    async def simple_command(*args, **kwargs):
+        called.append((args, kwargs))
+
+    monkeypatch.setattr(bot, "SESSION", {"target": "win-1"})
+    monkeypatch.setattr(bot.devices, "get", lambda _target: {
+        "os": "Windows 11",
+        "capabilities": {"commands": ["permission_settings"]},
+    })
+    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: True)
+    monkeypatch.setattr(bot, "simple_command", simple_command)
+    cq = SimpleNamespace(
+        answer=answer,
+        from_user=SimpleNamespace(id=bot.ADMIN_ID),
+        data="permsettings:camera",
+    )
+
+    asyncio.run(bot.on_permission_settings(cq))
+
+    assert called == [((cq, "permission_settings", "⚙️", "Камера"), {
+        "timeout": 15.0,
+        "permission": "camera",
+    })]
+
+
 def test_remote_permission_settings_callback_dispatches_only_known_mac_permission(monkeypatch):
     called = []
 

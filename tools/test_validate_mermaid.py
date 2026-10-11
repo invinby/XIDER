@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import validate_mermaid
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -41,3 +43,17 @@ def test_unclosed_mermaid_fence_fails(tmp_path):
     result = run_validator(path)
     assert result.returncode != 0
     assert "unclosed" in result.stdout
+
+
+def test_github_linux_renderer_uses_runner_compatible_sandbox_config(monkeypatch):
+    monkeypatch.setattr(validate_mermaid.sys, "platform", "linux")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
+    assert validate_mermaid._puppeteer_args() == ["--no-sandbox", "--disable-setuid-sandbox"]
+
+
+def test_local_renderer_does_not_disable_browser_sandbox(monkeypatch):
+    monkeypatch.setattr(validate_mermaid.sys, "platform", "linux")
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+
+    assert validate_mermaid._puppeteer_args() == []

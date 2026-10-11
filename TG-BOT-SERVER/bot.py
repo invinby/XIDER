@@ -4985,18 +4985,21 @@ async def on_cmd_capabilities(cq: CallbackQuery):
 
 @router.callback_query(OwnerFilter(), F.data.startswith("permsettings:"))
 async def on_permission_settings(cq: CallbackQuery):
-    """Open a fixed macOS privacy pane only after the owner taps its button."""
+    """Open a fixed platform privacy pane only after the owner taps its button."""
     target = _require_target(cq)
     permission = str(cq.data or "").partition(":")[2]
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
-    if permission not in _CAPABILITY_SETTINGS["macOS"]:
-        await cq.answer("Неизвестный раздел настроек; ничего не отправлено.", show_alert=True)
-        return
     info = devices.get(target) or {}
-    if not str(info.get("os") or "").lower().startswith(("mac", "darwin")):
-        await cq.answer("Эта кнопка работает только для Mac.", show_alert=True)
+    os_name = str(info.get("os") or "").lower()
+    platform = (
+        "macOS" if os_name.startswith(("mac", "darwin"))
+        else "Windows" if os_name.startswith("windows")
+        else None
+    )
+    if not platform or permission not in _CAPABILITY_SETTINGS[platform]:
+        await cq.answer("Неизвестный раздел настроек; ничего не отправлено.", show_alert=True)
         return
     commands = (info.get("capabilities") or {}).get("commands", [])
     if not isinstance(commands, list) or "permission_settings" not in commands:
@@ -5058,12 +5061,14 @@ def _capabilities_keyboard(result: dict | None = None, user_id: int | None = Non
     user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
     commands = result.get("commands") if isinstance(result, dict) else None
     commands = set(commands) if isinstance(commands, list) else set()
+    platform = next((name for name in _CAPABILITY_SETTINGS
+                     if isinstance(snapshot["platform"], str) and snapshot["platform"].startswith(name)), None)
     if (get_user_role(user_id) == Role.OWNER
-            and snapshot["platform"]
-            and snapshot["platform"].startswith("macOS")
+            and platform
             and "permission_settings" in commands):
         for item in snapshot["items"]:
-            if item["state"] in {"granted", "unavailable"}:
+            if (item["state"] in {"granted", "unavailable"}
+                    or not _CAPABILITY_SETTINGS[platform].get(item["id"])):
                 continue
             kb.button(
                 text=_lex("system_permission_settings_button", item=_SNAPSHOT_LABELS[item["id"]]),
@@ -5220,8 +5225,13 @@ def _format_capabilities(result: dict) -> str:
                 lines.append("Удалённое открытие раздела появится после обновления агента до версии с поддержкой этой команды.")
         else:
             lines.append("Windows: Параметры → Конфиденциальность и безопасность → Камера / Микрофон / Расположение. "
-                         "Для камеры и микрофона: «Разрешить классическим приложениям». "
-                         "Для файлов и UI нет общего разрешения TCC: проверь ACL и сеанс; UAC подтверждает владелец.")
+                         "Для камеры и микрофона проверь «Разрешить классическим приложениям».")
+            commands = result.get("commands") if isinstance(result.get("commands"), list) else []
+            if "permission_settings" in commands:
+                lines.append("Для камеры, микрофона или расположения нажми кнопку нужного раздела ниже и подтверди доступ вручную.")
+            else:
+                lines.append("Кнопки перехода появятся после обновления агента; пока открой раздел вручную.")
+            lines.append("Для файлового доступа отдельного разрешения нет: проверь ACL. UAC подтверждает владелец.")
 
     raw_statuses = result.get("feature_status")
     raw_features = result.get("features")

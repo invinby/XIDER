@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -12,6 +14,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FENCE = re.compile(r"(?im)^```mermaid\s*\r?\n(.*?)^```\s*$", re.DOTALL)
 OPEN = re.compile(r"(?im)^```mermaid\s*$")
+
+
+def _puppeteer_args() -> list[str]:
+    """Use Chromium's required hosted-runner workaround only in read-only CI."""
+    if sys.platform == "linux" and os.environ.get("GITHUB_ACTIONS") == "true":
+        # GitHub's Ubuntu AppArmor policy blocks unprivileged user namespaces.
+        # This CI job has read-only repo access and no secrets; local renders keep sandboxing.
+        return ["--no-sandbox", "--disable-setuid-sandbox"]
+    return []
 
 
 def main(argv: list[str]) -> int:
@@ -43,8 +54,14 @@ def main(argv: list[str]) -> int:
                 input_path = Path(directory) / "diagram.mmd"
                 output_path = Path(directory) / "diagram.svg"
                 input_path.write_text(block.group(1), encoding="utf-8")
+                command = [str(cli), "-i", str(input_path), "-o", str(output_path), "--quiet"]
+                puppeteer_args = _puppeteer_args()
+                if puppeteer_args:
+                    config_path = Path(directory) / "puppeteer.json"
+                    config_path.write_text(json.dumps({"args": puppeteer_args}), encoding="utf-8")
+                    command.extend(["--puppeteerConfigFile", str(config_path)])
                 result = subprocess.run(
-                    [str(cli), "-i", str(input_path), "-o", str(output_path), "--quiet"],
+                    command,
                     capture_output=True,
                     text=True,
                 )

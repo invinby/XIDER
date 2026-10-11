@@ -1,6 +1,7 @@
 import server_ops
 import asyncio
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,6 +23,33 @@ def fake_process(monkeypatch, stdout="", code=0):
         return SimpleNamespace(returncode=code, stdout=stdout, stderr="")
     monkeypatch.setattr(server_ops.subprocess, "run", run)
     return seen
+
+
+def _wrapper_test_command():
+    if os.name != "nt":
+        return ["bash", "-s", "--"]
+    wsl = shutil.which("wsl.exe") or shutil.which("wsl")
+    if not wsl:
+        return None
+    try:
+        probe = subprocess.run(
+            [wsl, "-d", "Ubuntu", "--exec", "bash", "-lc", "true"],
+            capture_output=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if probe.returncode != 0:
+        return None
+    return [wsl, "-d", "Ubuntu", "--", "bash", "-s", "--"]
+
+
+def test_windows_wrapper_test_skips_without_ubuntu_wsl(monkeypatch):
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(shutil, "which", lambda _name: "wsl.exe")
+    monkeypatch.setattr(subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(returncode=0xFFFFFFFF))
+
+    assert _wrapper_test_command() is None
 
 
 def test_status_keeps_stack_states_independent(monkeypatch):
@@ -52,12 +80,14 @@ def test_inactive_service_is_failure_even_when_host_responds(monkeypatch):
 
 @pytest.mark.parametrize("args", [("status", "extra"), ("rollback", "/tmp/arbitrary.zip"), ("restart", "other.service"), ("bogus",)])
 def test_privileged_wrapper_rejects_extra_arguments_before_any_action(args):
+    command = _wrapper_test_command()
+    if command is None:
+        pytest.skip("Ubuntu WSL is not installed; the same wrapper contract runs in the Ubuntu CI job")
     script = (Path(__file__).resolve().parents[2] / "deploy/xider-server-ops.sh").read_text(encoding="utf-8")
     # Replace executable boundaries so even a broken guard cannot run a service
     # or updater. The real case/argument validation still executes in bash.
     for executable in ("/bin/systemctl", "/usr/bin/journalctl", "/bin/bash"):
         script = script.replace(executable, "/usr/bin/printf")
-    command = ["wsl", "-d", "Ubuntu", "--", "bash", "-s", "--"] if os.name == "nt" else ["bash", "-s", "--"]
     result = subprocess.run(command + list(args), input=script.encode(), capture_output=True, timeout=15)
     assert result.returncode == 2
     assert b"Usage:" in result.stderr

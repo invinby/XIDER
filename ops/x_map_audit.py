@@ -114,6 +114,11 @@ PERMISSION_PROFILES = {
         "windows": "Действуют привилегии Windows и политика устройства; привилегии не повышаются автоматически.",
         "macos": "Действуют привилегии macOS и политика устройства; привилегии не повышаются автоматически.",
     },
+    "permission_settings_ui": {
+        "label": "Переход к настройкам разрешений",
+        "windows": "Команда открывает только фиксированную страницу Параметров Windows; владелец сам проверяет и меняет доступ.",
+        "macos": "Команда открывает только фиксированную страницу Системных настроек; решение TCC принимает пользователь локально.",
+    },
     "agent_lifecycle": {
         "label": "Жизненный цикл агента",
         "windows": "Действие меняет состояние собственного агента; запуск/остановка Guardian и Task Scheduler подчиняются сохранённому намерению владельца.",
@@ -189,6 +194,14 @@ KNOWN_UNRETESTED_REPORTS = {
 }
 
 KNOWN_SOURCE_BEHAVIOR = {
+    ("permission_settings", "windows"): {
+        "state": "handler_present",
+        "evidence": "Handler opens only a fixed, allowlisted settings target; it never grants access or changes an OS permission.",
+    },
+    ("permission_settings", "macos"): {
+        "state": "handler_present",
+        "evidence": "Handler opens only a fixed, allowlisted settings target; it never grants access or changes an OS permission.",
+    },
     ("display_brightness", "macos"): {
         "state": "dependency_gated",
         "evidence": "Handler requires the external `brightness` executable; missing dependency returns failure.",
@@ -348,6 +361,8 @@ def _permission_profile_ids(command: str, *, guardian: bool = False) -> list[str
         return ["guardian_service"]
 
     profiles = {"agent_account"}
+    if command == "permission_settings":
+        profiles.add("permission_settings_ui")
     if command in {"screenshot", "webcam", "mic", "clipboard", "clipboard_set"}:
         profiles.add("interactive_session")
     if command == "screenshot":

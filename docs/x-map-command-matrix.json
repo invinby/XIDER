@@ -1,6 +1,6 @@
 {
   "source_only": true,
-  "worker_command_count": 119,
+  "worker_command_count": 120,
   "guardian_command_count": 5,
   "permission_profile_gaps": [],
   "permission_profiles": {
@@ -88,6 +88,11 @@
       "label": "Системное действие",
       "windows": "Действуют привилегии Windows и политика устройства; привилегии не повышаются автоматически.",
       "macos": "Действуют привилегии macOS и политика устройства; привилегии не повышаются автоматически."
+    },
+    "permission_settings_ui": {
+      "label": "Переход к настройкам разрешений",
+      "windows": "Команда открывает только фиксированную страницу Параметров Windows; владелец сам проверяет и меняет доступ.",
+      "macos": "Команда открывает только фиксированную страницу Системных настроек; решение TCC принимает пользователь локально."
     },
     "agent_lifecycle": {
       "label": "Жизненный цикл агента",
@@ -1347,6 +1352,41 @@
           "permission_profile_ids": [
             "agent_account",
             "filesystem_read"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "permission_settings",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "Handler opens only a fixed, allowlisted settings target; it never grants access or changes an OS permission."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "permission_settings_ui"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "Handler opens only a fixed, allowlisted settings target; it never grants access or changes an OS permission."
+          },
+          "permission_profile_ids": [
+            "agent_account",
+            "permission_settings_ui"
           ],
           "stability": {
             "state": "source_only_unverified",

@@ -355,6 +355,7 @@ SUPPORTED_COMMANDS = (
     "mic",
     "open_app",
     "capabilities",
+    "permission_settings",
     "lock",
     "volume_toggle",
     "power",
@@ -981,6 +982,7 @@ class XgentClient:
             "mic": self._do_mic,
             "open_app": self._do_open_app,
             "capabilities": self._do_capabilities,
+            "permission_settings": self._do_permission_settings,
             "lock": self._do_lock_screen,
             "volume_toggle": self._do_volume_toggle,
             "power": self._do_power,
@@ -1723,6 +1725,43 @@ class XgentClient:
             response["command_approval_protocol"] = 1
         self._publish_response("capabilities", response)
         log.info("Отчёт о возможностях отправлен")
+
+    def _do_permission_settings(self, payload: dict) -> dict:
+        """Open one fixed Windows privacy page; this never changes a grant."""
+        settings = {
+            "camera": "ms-settings:privacy-webcam",
+            "microphone": "ms-settings:privacy-microphone",
+            "location": "ms-settings:privacy-location",
+        }
+        permission = payload.get("permission")
+        uri = settings.get(permission) if isinstance(permission, str) else None
+        result = {
+            "type": "permission_settings",
+            "device_id": DEVICE_ID,
+            "permission": permission if uri else "unknown",
+            "ok": False,
+        }
+        command_id = payload.get("id")
+        if isinstance(command_id, str) and command_id:
+            result["id"] = command_id
+        opener = getattr(os, "startfile", None)
+        if uri and callable(opener):
+            try:
+                opener(uri)
+                result["ok"] = True
+                result["text"] = (
+                    "Переход к Параметрам конфиденциальности запущен. Разреши доступ вручную; "
+                    "для камеры и микрофона проверь доступ классических приложений. "
+                    "Агент сам разрешения не меняет."
+                )
+            except OSError:
+                result["text"] = "Не удалось открыть Параметры Windows; открой нужный раздел вручную."
+        elif uri:
+            result["text"] = "Открытие Параметров Windows доступно только в Windows-сеансе; ничего не изменено."
+        else:
+            result["text"] = "Неизвестный или неподдерживаемый раздел настроек; команда отклонена."
+        self._publish_response("permission_settings", result)
+        return result
 
     def _do_clipboard(self, payload: dict) -> None:
         """Чтение буфера обмена (без записи)."""

@@ -42,10 +42,15 @@ py -3.12 ops/x_map_audit.py
 - `stability.state = source_gap` means the declared command and handler/branch
   are inconsistent or missing.
 
-The current snapshot records 119 worker commands and five Guard Keeper commands
+The current snapshot records 120 worker commands and five Guard Keeper commands
 for each platform. Mac screenshot and IP-geolocation rows retain the known
 unretested reports; the rest remain explicitly source-only until device tests
 are recorded. IP geolocation is approximate and is not GPS.
+
+`permission_settings` is supported by both agents for fixed OS privacy pages
+(Mac: Camera, Microphone, Location, Screen Recording, Accessibility and Files;
+Windows: Camera, Microphone and Location). It only opens Settings; it never
+grants a permission. Windows file access remains governed by filesystem ACLs.
 
 The JSON snapshot is tested against the current source in
 `ops/tests/test_x_map_audit.py`, so a changed handler inventory cannot silently
