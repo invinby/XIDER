@@ -43,7 +43,7 @@ if not Path(sys.argv[2]).is_file():
 PY
 chmod +x "${MOCK_BIN}/systemctl" "${MOCK_BIN}/chown"
 printf 'old\n' >"${APP_DIR}/TG-BOT-SERVER/bot.py"
-printf 'test-dependency==1\n' >"${APP_DIR}/TG-BOT-SERVER/requirements.txt"
+printf 'test-dependency==1\r\n' >"${APP_DIR}/TG-BOT-SERVER/requirements.txt"
 printf 'keep-runtime-config\n' >"${APP_DIR}/TG-BOT-SERVER/.env"
 printf 'keep-runtime-override\n' >"${APP_DIR}/TG-BOT-SERVER/.env.production"
 printf 'private-key-fixture\n' >"${APP_DIR}/TG-BOT-SERVER/fixture.key"
@@ -61,9 +61,10 @@ with ZipFile(sys.argv[1], "w") as archive:
     archive.writestr(prefix + "TG-BOT-SERVER/bot.py", sys.argv[2] + "\n")
     if sys.argv[2] == "bad":
         archive.writestr(prefix + "TG-BOT-SERVER/new-feature.py", "pass\n")
-    # Windows checkouts can put CRLF in this text manifest. The updater must
-    # compare requirements by lines, not reject an otherwise identical release.
-    archive.writestr(prefix + "TG-BOT-SERVER/requirements.txt", "test-dependency==1\r\n")
+    # The installed app and release archive can have different line endings.
+    # They must compare equal only when their actual dependency lines match.
+    requirements = "test-dependency==2\r\n" if sys.argv[2] == "dependency-change" else "test-dependency==1\r\n"
+    archive.writestr(prefix + "TG-BOT-SERVER/requirements.txt", requirements)
     archive.writestr(prefix + "XGENT-WDS/agent.py", "pass\n")
     archive.writestr(prefix + "XGENT-MCS/agent.py", "pass\n")
     archive.writestr(prefix + "deploy/xider-bot.service", "[Service]\nExecStart=/new\n")
@@ -128,6 +129,14 @@ grep -q 'ExecStart=/new' "${UNIT_DIR}/${SERVICE}"
 backup_file="$(compgen -G "${BACKUP_DIR}/xider-*.tar.gz")"
 tar -tzf "${backup_file}" >"${TEMP_ROOT}/backup-files.txt"
 ! grep -E '\.env|fixture\.key' "${TEMP_ROOT}/backup-files.txt"
+
+make_bundle dependency-change
+printf 'signed-test-manifest\n' >"${MANIFEST}"
+if run_update; then
+  echo 'Expected a real dependency change to be rejected.' >&2
+  exit 1
+fi
+[[ "$(<"${APP_DIR}/TG-BOT-SERVER/bot.py")" == good ]]
 
 make_bundle bad
 printf 'signed-test-manifest\n' >"${MANIFEST}"
