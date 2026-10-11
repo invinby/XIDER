@@ -1,4 +1,4 @@
-name: "Build and validate Pages source (no publish)"
+name: "Build and deploy XIDER Pages"
 
 on:
   push:
@@ -45,7 +45,23 @@ jobs:
       - name: "Check static site links and accessibility basics"
         run: python tools/check_site.py
 
-      - name: "Package static files for later approved publication"
+      - name: "Package static files for GitHub Pages"
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: site
+
+  deploy:
+    name: "Publish validated site"
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: "Deploy GitHub Pages artifact"
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
