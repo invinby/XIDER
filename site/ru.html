@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="description" content="XIDER — исходный код системы управления устройствами Windows и macOS, на которые у владельца есть разрешение.">
+    <title>XIDER · TARPED — управление устройствами с разрешения владельца</title>
+    <link rel="icon" href="assets/xider-mark.png" type="image/png">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">К содержанию</a>
+    <header class="masthead">
+      <a class="brand" href="ru.html" aria-label="На главную XIDER">
+        <span class="brand-mark"><img src="assets/xider-mark.png" alt=""></span>
+        <span class="brand-name">XIDER <span>/</span> TARPED</span>
+      </a>
+      <nav class="primary-nav" aria-label="Главная навигация">
+        <a href="#system">Система</a>
+        <a href="#boundaries">Границы</a>
+        <a href="#status">Статус</a>
+        <a href="https://github.com/invinby/XIDER">GitHub <span aria-hidden="true">↗</span></a>
+      </nav>
+      <div class="language-switch" aria-label="Язык">
+        <a href="index.html" lang="en" hreflang="en">EN</a>
+        <span aria-current="page">RU</span>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="signal-dot" aria-hidden="true"></span> С РАЗРЕШЕНИЯ ВЛАДЕЛЬЦА · WINDOWS + macOS</p>
+          <h1 id="hero-title">Один путь команды.<br><span>Контроль остаётся у владельца.</span></h1>
+          <p class="hero-lede">XIDER — исходный код системы управления устройствами, которые принадлежат тебе или управлять которыми тебе явно разрешили. Telegram-бот проверяет доступ, передаёт подписанную MQTT-команду, а выбранный агент возвращает результат.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://github.com/invinby/XIDER">Исходный код <span aria-hidden="true">↗</span></a>
+            <a class="text-link" href="https://github.com/invinby/XIDER/blob/main/README.ru.md">Руководство проекта <span aria-hidden="true">→</span></a>
+          </div>
+          <p class="hero-note">Версия исходников <strong>4.2.1</strong> · номер версии не доказывает, что пакет опубликован или установлен.</p>
+        </div>
+
+        <figure class="route-figure" aria-labelledby="route-caption">
+          <figcaption id="route-caption"><span>01 / ПУТЬ КОМАНДЫ</span><span>СХЕМА ИЗ ИСХОДНИКОВ</span></figcaption>
+          <ol class="route-list" aria-label="Путь команды от владельца до агента устройства">
+            <li><span class="route-index">01</span><span class="route-copy"><strong>Владелец</strong><small>Аккаунт Telegram · доступ проверяется</small></span><span class="route-tag">ТЫ</span></li>
+            <li><span class="route-index">02</span><span class="route-copy"><strong>TG-BOT-SERVER</strong><small>Роли, права, маршрутизация команды</small></span><span class="route-tag">БОТ</span></li>
+            <li><span class="route-index">03</span><span class="route-copy"><strong>MQTT broker</strong><small>TLS-транспорт · подписанные сообщения</small></span><span class="route-tag">TLS</span></li>
+            <li class="route-endpoints"><span class="route-index">04</span><span class="route-copy"><strong>Агент устройства</strong><small>Команду выполняет выбранное устройство</small></span><span class="endpoint-tags"><span>WINDOWS</span><span>macOS</span></span></li>
+          </ol>
+          <p class="route-foot"><span class="route-line" aria-hidden="true"></span>Отправка команды не доказывает её выполнение. Агент должен вернуть результат.</p>
+        </figure>
+      </section>
+
+      <div class="fact-ribbon" aria-label="Факты о проекте">
+        <span><b>02</b> платформы агентов</span><span><b>06</b> голосов интерфейса</span><span><b>01</b> граница доступа, заданная владельцем</span>
+      </div>
+
+      <section class="section-block" id="system" aria-labelledby="system-title">
+        <div class="section-heading">
+          <p class="eyebrow">СИСТЕМА ПО ЧАСТЯМ</p>
+          <h2 id="system-title">Небольшая панель управления.<br><span>У каждой части — своя задача.</span></h2>
+          <p>У каждого компонента своя ответственность. Стиль текста интерфейса не меняет права доступа и поведение команд.</p>
+        </div>
+        <ol class="component-list">
+          <li><span class="component-number">01</span><div><h3>TG-BOT-SERVER</h3><p>Интерфейс Telegram, проверка ролей, управление устройствами и каталог релизов.</p></div><span class="component-kind">УПРАВЛЕНИЕ</span></li>
+          <li><span class="component-number">02</span><div><h3>XGENT-WDS <span>+</span> XGENT-MCS</h3><p>Агенты для Windows и macOS: получают разрешённую команду и сообщают результат.</p></div><span class="component-kind">АГЕНТЫ</span></li>
+          <li><span class="component-number">03</span><div><h3>Guard Keeper</h3><p>Сообщает состояние supervisor и может восстановить агент согласно локальной настройке. Не включит выключенный компьютер и не вернёт устройство без сети.</p></div><span class="component-kind">КОНТРОЛЬ</span></li>
+          <li><span class="component-number">04</span><div><h3>X-DOCK <span>·</span> X-LEDGER</h3><p>Подписанное обновление агента и каталог GitHub-релизов. Выбранную версию подтверждает владелец; пакет проходит проверку подписи.</p></div><span class="component-kind">РЕЛИЗЫ</span></li>
+          <li><span class="component-number">05</span><div><h3>X-LEX</h3><p>Шесть голосов интерфейса: X-TECH, X-PERSON, X-PIKMI, X-TARPED, X-CORE и X-ADAM. Меняются формулировки, а не права.</p></div><span class="component-kind">ИНТЕРФЕЙС</span></li>
+        </ol>
+      </section>
+
+      <section class="boundary-section" id="boundaries" aria-labelledby="boundaries-title">
+        <div class="boundary-intro">
+          <p class="eyebrow">ГРАНИЦЫ ДОВЕРИЯ — ЧАСТЬ ПРОЕКТА</p>
+          <h2 id="boundaries-title">Управлять удобно.<br><span>Ограничения — честно.</span></h2>
+          <p>Для устройств владельца или устройств, которыми ему явно разрешили управлять. Не для обхода согласия операционной системы.</p>
+        </div>
+        <div class="boundary-columns">
+          <article>
+            <span class="boundary-index">A / ДОСТУП</span>
+            <h3>Права заданы явно</h3>
+            <p>Защищённый владелец определяется конфигурацией. Для остальных аккаунтов есть роли пользователя, гостя или блокировка; права пользователя ограничены устройством и разрешёнными действиями.</p>
+            <p>MQTT использует TLS и HMAC-подписи сообщений. Шифрование содержимого зависит от <code>ENCRYPT_PAYLOAD</code>; нельзя считать его включённым в любой локальной конфигурации.</p>
+          </article>
+          <article>
+            <span class="boundary-index">B / РЕАЛЬНОСТЬ</span>
+            <h3>Статус — не гарантия</h3>
+            <p>Статус «онлайн» означает, что недавно пришёл heartbeat, а не гарантирует доступность. Геолокация по IP приблизительная и не является GPS.</p>
+            <p>Камера, микрофон, запись экрана и другие защищённые функции требуют разрешённой команды и соответствующего разрешения ОС. Отправка команды сама по себе не подтверждает её выполнение на физическом устройстве.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="status-section" id="status" aria-labelledby="status-title">
+        <div class="status-topline"><span class="status-label"><span class="status-square" aria-hidden="true"></span> СНИМОК ИСХОДНИКОВ</span><span class="status-version">4.2.1</span></div>
+        <div class="status-content">
+          <h2 id="status-title">Что проверено — и что ещё нет.</h2>
+          <div class="status-grid">
+            <div><span class="status-key">ЕСТЬ В РЕПОЗИТОРИИ</span><p>Исходный код, история релизов и офлайн-тестовые фикстуры.</p></div>
+            <div><span class="status-key">ЗДЕСЬ НЕ ЗАЯВЛЕНО</span><p>Проверка действующих Telegram, MQTT, production VPS или физических Mac/Windows.</p></div>
+            <div><span class="status-key">ГДЕ ИСКАТЬ ДАЛЬШЕ</span><p>В истории релизов и чек-листе приёмки — результаты для конкретных версий.</p></div>
+          </div>
+          <a class="text-link" href="https://github.com/invinby/XIDER/releases">Открыть подтверждения по релизам <span aria-hidden="true">↗</span></a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <a class="footer-brand" href="ru.html">XIDER <span>/</span> TARPED</a>
+      <p>Лицензия MIT · используй только на своих устройствах или с разрешения владельца.</p>
+      <nav aria-label="Ссылки проекта"><a href="https://github.com/invinby/XIDER/blob/main/SECURITY.md">Безопасность</a><a href="https://github.com/invinby/XIDER/blob/main/CHANGELOG.md">История релизов</a><a href="https://github.com/invinby/XIDER/blob/main/LICENSE">Лицензия</a></nav>
+      <a class="back-top" href="#main">Наверх ↑</a>
+    </footer>
+  </body>
+</html>
