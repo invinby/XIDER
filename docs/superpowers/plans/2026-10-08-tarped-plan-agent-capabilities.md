@@ -111,9 +111,11 @@
 - [x] Escape the device label in screenshot HTML caption and test a label containing `<`, `&`, and quotes.
 - [x] Implement the smallest changes; keep other media-card callers' current recovery behavior unchanged.
 - [x] Run focused MCS screenshot and bot screenshot/UI tests, then the full component test runner. Keep physical Mac and live Telegram acceptance explicitly unverified unless actually performed.
-- [ ] Commit the focused follow-up and obtain independent task review.
+- [x] Commit the focused follow-up and obtain independent task review.
 
-Task 5 verification (2026-10-12): mocked MCS screenshot **19 passed**, bot screenshot **26 passed**, final bot UI **319 passed**. Full `py -3.12 tools/run_tests.py` exited **0**: six isolated suites and Windows deployment fixtures passed. That full-run bot collection was **853 passed / 1 skipped** before the additional default-media-recovery test; the final 319-test UI run includes it. Physical Mac capture/TCC and live Telegram delivery remain **unverified**. Independent review remains pending.
+Task 5 verification (2026-10-12): mocked MCS screenshot **19 passed**, bot screenshot **26 passed**, final bot UI **319 passed**. Full `py -3.12 tools/run_tests.py` exited **0**: six isolated suites and Windows deployment fixtures passed. That full-run bot collection was **853 passed / 1 skipped** before the additional default-media-recovery test; the final 319-test UI run includes it. Physical Mac capture/TCC and live Telegram delivery remain **unverified**. Independent review is approved.
+
+Task 5 independent review (2026-10-12): **approved** with no Critical, Important, or Minor findings. Reviewer confirmed screenshot-only sender-error propagation, default behavior for other media callers, HTML escaping, and guard/card-lock behavior. Physical Mac capture/TCC, live Telegram delivery, and deployment remain unverified.
 
 ## Общие команды
 
