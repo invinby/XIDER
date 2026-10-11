@@ -2279,17 +2279,21 @@ async def _replace_media_card_with_text(
 
 
 async def _replace_callback_with_media(
-    cq: CallbackQuery, sender, *, chat_id: int | None = None, delivery_guard=None, **media_kwargs
+    cq: CallbackQuery, sender, *, chat_id: int | None = None, delivery_guard=None,
+    raise_delivery_error: bool = False, **media_kwargs
 ):
     async with _card_update(cq.message.chat.id, cq.from_user.id):
         if not _delivery_allowed(delivery_guard):
             return await _replace_message_card_unlocked(cq.message, cq.from_user.id,
                 _lex("action_result_hidden_after_revoke"), back_to_device_kb())
-        return await _replace_callback_with_media_unlocked(cq, sender, chat_id=chat_id, **media_kwargs)
+        return await _replace_callback_with_media_unlocked(
+            cq, sender, chat_id=chat_id, raise_delivery_error=raise_delivery_error, **media_kwargs
+        )
 
 
 async def _replace_callback_with_media_unlocked(
-    cq: CallbackQuery, sender, *, chat_id: int | None = None, **media_kwargs
+    cq: CallbackQuery, sender, *, chat_id: int | None = None,
+    raise_delivery_error: bool = False, **media_kwargs
 ):
     """Make returned media the current card and remove/neutralize the prior card."""
     media_kwargs.setdefault("reply_markup", back_to_device_kb())
@@ -2298,6 +2302,8 @@ async def _replace_callback_with_media_unlocked(
         sent = await sender(chat_id if chat_id is not None else cq.message.chat.id, **media_kwargs)
     except Exception:
         log.warning("Не удалось отправить media-карточку", exc_info=True)
+        if raise_delivery_error:
+            raise
         return _card_message(cq.message, old_id)
     try:
         await bot.delete_message(cq.message.chat.id, old_id)
@@ -4799,14 +4805,15 @@ async def on_cmd_screenshot(cq: CallbackQuery):
         await _replace_callback_with_media(
             cq,
             bot.send_photo, delivery_guard=_callback_delivery_guard(cq, target),
+            raise_delivery_error=True,
             photo=photo,
-            caption=f"📸 <b>{target_label(target)}</b>",
+            caption=f"📸 <b>{html.escape(target_label(target))}</b>",
         )
-    except Exception:
+    except Exception as exc:
         log.exception("Ошибка доставки скриншота")
         await _replace_callback_message(
             cq,
-            _screenshot_failure_help({"state": "transport_failed", "detail": "Telegram result delivery failed"}),
+            _screenshot_failure_help({"state": "transport_failed", "detail": f"{type(exc).__name__}: {str(exc)[:500]}"}),
             delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
 

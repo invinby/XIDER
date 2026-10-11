@@ -9,6 +9,28 @@ from PIL import Image
 import xgent_mcs as agent
 
 
+def test_capture_uses_system_binary_when_missing_from_path(monkeypatch, tmp_path):
+    sent, invoked = [], []
+    client = object.__new__(agent.XgentClient)
+    client._publish_response = lambda topic, value: sent.append(value) or True
+    monkeypatch.setattr(agent, "_screenshot_session_available", lambda: True)
+    monkeypatch.setattr(agent.shutil, "which", lambda name: None)
+    original_is_file = Path.is_file
+    monkeypatch.setattr(Path, "is_file", lambda path: path.as_posix() == "/usr/sbin/screencapture" or original_is_file(path))
+    assert agent._command_available("screencapture", ("/usr/sbin/screencapture",))
+    original_temp = agent.tempfile.NamedTemporaryFile
+    monkeypatch.setattr(agent.tempfile, "NamedTemporaryFile", lambda **kwargs: original_temp(dir=tmp_path, **kwargs))
+    def capture(args, **kwargs):
+        invoked.append(args)
+        Image.new("RGB", (10, 10), "red").save(args[-1])
+        return SimpleNamespace(returncode=0, stderr=b"")
+    monkeypatch.setattr(agent.subprocess, "run", capture)
+    client._do_screenshot({})
+    assert sent[-1]["state"] == "success"
+    assert invoked[0][:2] == ["/usr/sbin/screencapture", "-x"]
+    assert not Path(invoked[0][-1]).exists()
+
+
 @pytest.mark.parametrize("case,state", [
     ("denied", "permission_denied"), ("session", "session_unavailable"),
     ("missing", "tool_missing"), ("exit", "command_failed"),
@@ -30,6 +52,9 @@ def test_capture_diagnostics_and_cleanup(monkeypatch, tmp_path, case, state):
     client._publish_response = publish
     monkeypatch.setattr(agent, "_screenshot_session_available", lambda: case != "session", raising=False)
     monkeypatch.setattr(agent.shutil, "which", lambda name: None if case == "missing" else name)
+    if case == "missing":
+        original_is_file = Path.is_file
+        monkeypatch.setattr(Path, "is_file", lambda path: False if path.as_posix() == "/usr/sbin/screencapture" else original_is_file(path))
     original_temp = agent.tempfile.NamedTemporaryFile
     def temporary(**kwargs):
         file = original_temp(dir=tmp_path, **kwargs)

@@ -6282,6 +6282,58 @@ def _card_telegram(monkeypatch, tmp_path):
     return telegram
 
 
+def _successful_screenshot_fixture(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    monkeypatch.setattr(bot, "SESSION", {"target": "mac1"})
+    monkeypatch.setattr(bot, "_simple_command_still_allowed", lambda *args: True)
+    monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (True, "screenshot-request"))
+    monkeypatch.setattr(bot, "_decode_screenshot_image", lambda result: b"PRIVATE")
+    async def wait(*args):
+        return {"state": "success", "image": "cHJpdmF0ZQ=="}
+    monkeypatch.setattr(bot, "screenshot_collector", SimpleNamespace(wait_for=wait))
+    return telegram
+
+
+def test_screenshot_sender_failure_renders_diagnostic_in_existing_card(monkeypatch, tmp_path):
+    telegram = _successful_screenshot_fixture(monkeypatch, tmp_path)
+    async def fail(*args, **kwargs):
+        raise RuntimeError("Telegram <network> delivery failed")
+    monkeypatch.setattr(telegram, "send_photo", fail)
+    asyncio.run(bot.on_cmd_screenshot(telegram.callback("cmd:screenshot")))
+    assert bot.ui_cards.get(10, 20) == 30
+    assert list(telegram.cards) == [30]
+    assert not telegram.sent
+    assert "Не подтверждена доставка результата" in telegram.cards[30]["text"]
+    assert "Telegram &lt;network&gt; delivery failed" in telegram.cards[30]["text"]
+
+
+def test_media_sender_failure_keeps_default_card_recovery(monkeypatch, tmp_path):
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    async def fail(*args, **kwargs):
+        raise RuntimeError("Telegram send failed")
+    result = asyncio.run(bot._replace_callback_with_media(telegram.callback(), fail, photo=b"PRIVATE"))
+    assert result.message_id == 30
+    assert bot.ui_cards.get(10, 20) == 30
+    assert list(telegram.cards) == [30]
+    assert telegram.cards[30]["text"] == "Menu"
+    assert not telegram.sent
+
+
+def test_screenshot_caption_escapes_device_label(monkeypatch, tmp_path):
+    telegram = _successful_screenshot_fixture(monkeypatch, tmp_path)
+    monkeypatch.setattr(bot, "target_label", lambda target: 'Mac <owner> & "guest"')
+    captions = []
+    original_send = telegram.send_photo
+    async def send(*args, **kwargs):
+        captions.append(kwargs["caption"])
+        return await original_send(*args, **kwargs)
+    monkeypatch.setattr(telegram, "send_photo", send)
+    asyncio.run(bot.on_cmd_screenshot(telegram.callback("cmd:screenshot")))
+    assert captions == ["📸 <b>Mac &lt;owner&gt; &amp; &quot;guest&quot;</b>"]
+    assert bot.ui_cards.get(10, 20) != 30
+
+
 def test_stale_media_callback_and_operation_result_keep_current_index(monkeypatch, tmp_path):
     telegram = _card_telegram(monkeypatch, tmp_path)
     telegram.cards[30]["media"] = True
