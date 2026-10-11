@@ -105,7 +105,7 @@ def test_capabilities_handler_displays_recheck_after_correlated_response(monkeyp
     async def allowed(*_args, **_kwargs):
         return True
 
-    async def render(_cq, text, reply_markup=None):
+    async def render(_cq, text, reply_markup=None, **_kwargs):
         rendered.append((text, reply_markup))
 
     class Collector:
@@ -122,7 +122,7 @@ def test_capabilities_handler_displays_recheck_after_correlated_response(monkeyp
     monkeypatch.setattr(bot, "_replace_callback_message", render)
     monkeypatch.setattr(bot, "publish_tracked", publish)
     monkeypatch.setattr(bot, "capabilities_collector", Collector())
-    asyncio.run(bot.on_cmd_capabilities(SimpleNamespace(answer=answer)))
+    asyncio.run(bot.on_cmd_capabilities(SimpleNamespace(answer=answer, from_user=SimpleNamespace(id=bot.ADMIN_ID), data="cmd:capabilities")))
     assert published == [("capabilities", {"_target": "dev"})]
     assert "2026-10-08T10:00:00+00:00" in rendered[0][0]
     callbacks = {button.callback_data for row in rendered[0][1].inline_keyboard for button in row}

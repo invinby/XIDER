@@ -31,7 +31,7 @@ def test_handler_maps_failure_to_safe_help(monkeypatch, state, instruction):
     monkeypatch.setattr(bot, "screenshot_collector", Collector())
     monkeypatch.setattr(bot, "_callback_result_access_or_report", allowed)
     monkeypatch.setattr(bot, "_replace_callback_message", render)
-    asyncio.run(bot.on_cmd_screenshot(SimpleNamespace(answer=answer)))
+    asyncio.run(bot.on_cmd_screenshot(SimpleNamespace(answer=answer, from_user=SimpleNamespace(id=bot.ADMIN_ID), data="cmd:screenshot")))
     assert instruction in shown[0]
     assert "&lt;diagnostic&gt;" in shown[0]
     assert "разрешено" not in shown[0]
@@ -53,7 +53,7 @@ def test_response_timeout_does_not_assert_device_offline(monkeypatch):
     monkeypatch.setattr(bot, "screenshot_collector", Collector())
     monkeypatch.setattr(bot, "_callback_result_access_or_report", allowed)
     monkeypatch.setattr(bot, "_replace_callback_message", render)
-    asyncio.run(bot.on_cmd_screenshot(SimpleNamespace(answer=answer)))
+    asyncio.run(bot.on_cmd_screenshot(SimpleNamespace(answer=answer, from_user=SimpleNamespace(id=bot.ADMIN_ID), data="cmd:screenshot")))
     assert "офлайн" not in shown[0]
     assert "достав" in shown[0]
 
@@ -82,7 +82,7 @@ def test_modern_image_validation_and_delivery(monkeypatch, case):
     monkeypatch.setattr(bot, "_callback_result_access_or_report", allowed)
     monkeypatch.setattr(bot, "_replace_callback_message", render)
     monkeypatch.setattr(bot, "_replace_callback_with_media", media)
-    asyncio.run(bot.on_cmd_screenshot(SimpleNamespace(answer=answer)))
+    asyncio.run(bot.on_cmd_screenshot(SimpleNamespace(answer=answer, from_user=SimpleNamespace(id=bot.ADMIN_ID), data="cmd:screenshot")))
     if case == "success":
         assert photos == [buffer.getvalue()]
     else:
@@ -105,7 +105,7 @@ def test_bulk_failures_are_owner_visible(monkeypatch):
     monkeypatch.setattr(bot.multi_screenshot, "wait_window", results)
     monkeypatch.setattr(bot, "_replace_callback_message", render)
     monkeypatch.setattr(bot, "target_label", lambda value: value)
-    asyncio.run(bot.on_all_screenshot(SimpleNamespace(answer=answer)))
+    asyncio.run(bot.on_all_screenshot(SimpleNamespace(answer=answer, from_user=SimpleNamespace(id=bot.ADMIN_ID), data="cmd:screenshot")))
     assert "mac" in shown[0]
     assert "Запись экрана" in shown[0]
     assert "могут отличаться" in shown[0]
@@ -150,7 +150,7 @@ def test_single_full_decode_and_dimension_gate(monkeypatch, case):
     monkeypatch.setattr(bot, "_callback_result_access_or_report", allowed)
     monkeypatch.setattr(bot, "_replace_callback_message", render)
     monkeypatch.setattr(bot, "_replace_callback_with_media", media)
-    asyncio.run(bot.on_cmd_screenshot(SimpleNamespace(answer=answer)))
+    asyncio.run(bot.on_cmd_screenshot(SimpleNamespace(answer=answer, from_user=SimpleNamespace(id=bot.ADMIN_ID), data="cmd:screenshot")))
     if case in {"valid", "legacy"}:
         assert photos == [data]
     else:

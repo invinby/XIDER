@@ -3711,7 +3711,7 @@ setTimeout(()=>window.close(),15000);
                 "xgencrypto.py",
                 "release_signature.py",
                 "update_package.py",
-                "command_module_loader.py", "command_signing.py", "command_replay.py", "shell_execution.py",
+                "command_module_loader.py", "command_signing.py", "command_replay.py", "shell_execution.py", "location_adapter.py",
             )
             backup_dir = CONFIG_DIR / "agent-backups" / (
                 f"{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns()}"

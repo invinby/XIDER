@@ -239,7 +239,7 @@ def test_private_check_delivery_rechecks_grant_during_card_retry(tmp_path, monke
     monkeypatch.setattr(bot.asyncio, "sleep", no_sleep)
     assert "delivery_guard" in __import__("inspect").signature(bot._replace_message_card).parameters, "delivery-time guard missing"
     asyncio.run(bot._replace_message_card(Message(), 1, "PRIVATE metadata", delivery_guard=lambda: allowed[0]))
-    assert not delivered
+    assert delivered == [bot._lex("action_result_hidden_after_revoke")]
 
 
 def test_private_check_delivery_rechecks_after_lock_wait(tmp_path, monkeypatch):
@@ -262,7 +262,7 @@ def test_private_check_delivery_rechecks_after_lock_wait(tmp_path, monkeypatch):
             return self
     assert "delivery_guard" in __import__("inspect").signature(bot._replace_message_card).parameters, "delivery-time guard missing"
     asyncio.run(bot._replace_message_card(Message(), 1, "PRIVATE metadata", delivery_guard=lambda: allowed[0]))
-    assert not delivered
+    assert delivered == [bot._lex("action_result_hidden_after_revoke")]
 
 
 def test_handler_wires_final_summary_guard_through_retry(check_ui, monkeypatch, tmp_path):
@@ -289,8 +289,8 @@ def test_handler_wires_final_summary_guard_through_retry(check_ui, monkeypatch, 
     monkeypatch.setattr(bot, "fun_text_collector", Collector())
     monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (True, "abc123"))
     asyncio.run(bot._simple_command_unlocked(cq, "sys_uptime", "X", "fixture"))
-    assert len(attempts) == 1
-    assert not delivered
+    assert len(attempts) == 2
+    assert delivered == [bot._lex("action_result_hidden_after_revoke")]
 
 
 def test_private_check_fallback_rechecks_after_stale_card_await(tmp_path, monkeypatch):

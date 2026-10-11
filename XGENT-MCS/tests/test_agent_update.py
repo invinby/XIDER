@@ -294,7 +294,7 @@ def source_update(monkeypatch, tmp_path):
         "release_signature.py", "update_package.py", "guardian_recovery.py", "start_agent.sh",
         "command_module_loader.py", "command_signing.py", "command_replay.py", "shell_execution.py",
         "xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py",
-        "fake_update_screen.py",
+        "fake_update_screen.py", "location_adapter.py",
         "xider_guardian.py", "requirements.txt", "setup_mac.py",
         "stop_agent.sh", "start_guardian.sh",
     )
@@ -355,6 +355,20 @@ def test_source_update_serializes_until_exec_and_does_not_spawn_guardian(source_
     restarts[0]()
     assert execs == [(mcs.sys.executable, [mcs.sys.executable, str(install / "xgent_mcs.py"), "--example"])]
     assert not client._update_lock.locked()
+
+
+def test_old_source_update_installs_missing_location_adapter_and_rollback_removes_it(source_update, monkeypatch):
+    client, install, state_root, _, sent, _, restarts = source_update
+    adapter = install / "location_adapter.py"
+    adapter.unlink()
+    monkeypatch.setattr(mcs.os, "execv", lambda *_args: (_ for _ in ()).throw(OSError("restart failed")))
+    client._do_agent_update({"manifest_digest": "a" * 64, "release_tag": "v4.2.0"})
+    assert sent[-1][1]["state"] == "restarting"
+    assert adapter.read_bytes() == b"# new signed source\n"
+    restarts[0]()
+    assert sent[-1][1]["state"] == "restart_failed"
+    assert not adapter.exists()
+    assert not (state_root / package.UPDATE_STATE_NAME).exists()
 
 
 def test_dependency_change_keeps_running_source_and_environment(source_update):

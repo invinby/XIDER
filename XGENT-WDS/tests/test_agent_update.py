@@ -27,6 +27,42 @@ def test_missing_manifest_pin_fails_before_download(monkeypatch):
     assert sent[-1][1]['state'] == 'manifest_pin_required'
 
 
+def test_old_windows_source_update_adds_location_adapter_and_rollback_removes_it(monkeypatch, tmp_path):
+    import update_package as package
+    install = tmp_path / "old-install"
+    install.mkdir()
+    original = ("xgent_wds.py", "config.py", "crypto.py", "xgencrypto.py", "release_signature.py", "update_package.py",
+                "command_module_loader.py", "command_signing.py", "command_replay.py", "shell_execution.py")
+    for name in original:
+        (install / name).write_bytes(b"# previous\n")
+    client, sent = _update_client()
+    monkeypatch.setattr(wds, "__file__", str(install / "xgent_wds.py"))
+    monkeypatch.setattr(wds, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(wds.sys, "frozen", False, raising=False)
+    threads = []
+    class DeferredThread:
+        def __init__(self, *, target, **kwargs):
+            threads.append(target)
+        def start(self):
+            pass
+    def download(manifest, archive, **kwargs):
+        Path(manifest).write_text("fixture", encoding="utf-8")
+        with zipfile.ZipFile(archive, "w") as bundle:
+            for name in (*original, "location_adapter.py"):
+                component = "XGENT-WDS" if name in original[:4] or name == "location_adapter.py" else "XGENT-MCS"
+                bundle.writestr(f"XIDER/{component}/{name}", "# selected\n")
+        return "v4.2.0"
+    monkeypatch.setattr(wds, "download_verified_source_archive", download)
+    monkeypatch.setattr(wds.threading, "Thread", DeferredThread)
+    client._do_agent_update(dict(update=True, manifest_digest="a" * 64, release_tag="v4.2.0", id="old-install-update"))
+    assert sent[-1][1]["state"] == "restarting"
+    assert (install / "location_adapter.py").read_bytes() == b"# selected\n"
+    result = package.rollback_unhealthy_agent(tmp_path / package.UPDATE_STATE_NAME, install)
+    assert "location_adapter.py" in result["removed"]
+    assert not (install / "location_adapter.py").exists()
+    assert (install / "xgent_wds.py").read_bytes() == b"# previous\n"
+
+
 def test_updated_approval_helpers_are_loaded_from_transaction_and_rollback_restores_fallback(monkeypatch, tmp_path):
     import update_package as package
 
@@ -157,7 +193,7 @@ def test_source_update_validates_and_installs_only_windows_allowlist(monkeypatch
     assert installed[0]["files"] == (
         "xgent_wds.py", "config.py", "crypto.py", "xgencrypto.py",
         "release_signature.py", "update_package.py",
-        "command_module_loader.py", "command_signing.py", "command_replay.py", "shell_execution.py",
+        "command_module_loader.py", "command_signing.py", "command_replay.py", "shell_execution.py", "location_adapter.py",
     )
     assert installed[0]["install_dir"] == Path(wds.__file__).resolve().parent
     assert installed[0]["transaction_path"] == tmp_path / wds.UPDATE_STATE_NAME
@@ -229,7 +265,7 @@ def test_windows_install_failure_reports_actual_matching_rollback_receipt(monkey
     install.mkdir()
     files = ("xgent_wds.py", "config.py", "crypto.py", "xgencrypto.py",
              "release_signature.py", "update_package.py", "command_module_loader.py",
-             "command_signing.py", "command_replay.py", "shell_execution.py")
+             "command_signing.py", "command_replay.py", "shell_execution.py", "location_adapter.py")
     for name in files:
         (install / name).write_text("# previous\n", encoding="utf-8")
     (install / ".env").write_text("private fixture", encoding="utf-8")
@@ -237,7 +273,7 @@ def test_windows_install_failure_reports_actual_matching_rollback_receipt(monkey
         Path(manifest).write_text("fixture", encoding="utf-8")
         with zipfile.ZipFile(archive, "w") as bundle:
             for name in files:
-                component = "XGENT-WDS" if name in files[:4] else "XGENT-MCS"
+                component = "XGENT-WDS" if name in files[:4] or name == "location_adapter.py" else "XGENT-MCS"
                 bundle.writestr(f"XIDER/{component}/{name}", "# replacement\n")
         return "v4.2.0"
     client, sent = _update_client()

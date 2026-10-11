@@ -96,7 +96,7 @@ def test_shell_enforces_execution_timeout(monkeypatch, tmp_path, requested, expe
         assert kwargs["timeout"] == expected
         _stream_result(kwargs, stdout=b"partial", stderr=b"error", returncode=0)
         raise wds.subprocess.TimeoutExpired(command, expected, output=b"partial", stderr=b"error")
-    monkeypatch.setattr(wds.subprocess, "run", expired)
+    monkeypatch.setattr(wds._load_command_approval_component("shell_execution"), "_run_process", expired)
     client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval(), "timeout": requested})
     result = client.responses[-1][1]
     assert result["status"] == "timeout"
@@ -108,7 +108,7 @@ def test_shell_enforces_execution_timeout(monkeypatch, tmp_path, requested, expe
 
 def test_shell_caps_each_utf8_stream_before_transport(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
-    monkeypatch.setattr(wds.subprocess, "run", lambda *a, **kw: _stream_result(kw,
+    monkeypatch.setattr(wds._load_command_approval_component("shell_execution"), "_run_process", lambda *a, **kw: _stream_result(kw,
         stdout="а" * 5000, stderr="🙂" * 3000, returncode=7))
     client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
     result = client.responses[-1][1]
@@ -125,7 +125,7 @@ def test_shell_caps_each_utf8_stream_before_transport(monkeypatch, tmp_path):
 
 def test_shell_exact_limit_is_not_marked_truncated(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
-    monkeypatch.setattr(wds.subprocess, "run", lambda *a, **kw: _stream_result(kw,
+    monkeypatch.setattr(wds._load_command_approval_component("shell_execution"), "_run_process", lambda *a, **kw: _stream_result(kw,
         stdout="x" * 8192, stderr="", returncode=0))
     client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
     result = client.responses[-1][1]
@@ -139,7 +139,7 @@ def test_shell_exception_does_not_echo_command_or_exception_credentials(monkeypa
     client = _client(monkeypatch, tmp_path)
     def failed(*args, **kwargs):
         raise OSError("password=synthetic-password command=" + COMMAND)
-    monkeypatch.setattr(wds.subprocess, "run", failed)
+    monkeypatch.setattr(wds._load_command_approval_component("shell_execution"), "_run_process", failed)
     client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
     result = client.responses[-1][1]
     assert result["status"] == "error"
@@ -149,7 +149,7 @@ def test_shell_exception_does_not_echo_command_or_exception_credentials(monkeypa
 
 def test_shell_redacts_each_stream_before_byte_cap(monkeypatch, tmp_path, caplog):
     client = _client(monkeypatch, tmp_path)
-    monkeypatch.setattr(wds.subprocess, "run", lambda *a, **kw: _stream_result(kw,
+    monkeypatch.setattr(wds._load_command_approval_component("shell_execution"), "_run_process", lambda *a, **kw: _stream_result(kw,
         stdout='password="synthetic long password"\ntoken=synthetic-token\n' + "x" * 9000,
         stderr='-----BEGIN OPENSSH PRIVATE KEY-----\nprivate-fixture', returncode=0))
     client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
@@ -163,7 +163,7 @@ def test_shell_redacts_each_stream_before_byte_cap(monkeypatch, tmp_path, caplog
 
 def test_shell_drops_incomplete_utf8_codepoint_at_cap(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
-    monkeypatch.setattr(wds.subprocess, "run", lambda *a, **kw: _stream_result(kw,
+    monkeypatch.setattr(wds._load_command_approval_component("shell_execution"), "_run_process", lambda *a, **kw: _stream_result(kw,
         stdout="x" * 8191 + "🙂", stderr="", returncode=0))
     client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
     assert client.responses[-1][1]["stdout"] == "x" * 8191
@@ -190,7 +190,7 @@ def test_shell_stream_redaction_handles_truncated_and_token_forms(raw, secret):
 def test_shell_raw_capture_boundary_never_transmits_token_fragment(monkeypatch, tmp_path, padding):
     client = _client(monkeypatch, tmp_path)
     raw = 'password="' + 'a' * padding + '"\n123456:abcdefghijklmnopqrstuvwxyz'
-    monkeypatch.setattr(wds.subprocess, "run", lambda *a, **kw: _stream_result(
+    monkeypatch.setattr(wds._load_command_approval_component("shell_execution"), "_run_process", lambda *a, **kw: _stream_result(
         kw, stdout=raw, stderr=raw, returncode=0))
     client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
     result = client.responses[-1][1]
@@ -206,7 +206,7 @@ def test_shell_hyphen_token_beyond_output_cap_is_redacted(monkeypatch, tmp_path,
     client = _client(monkeypatch, tmp_path)
     suffix = "abcdefghijklmnopqrs" + hyphens
     raw = 'password="' + 'a' * 8240 + '"\n123456:' + suffix
-    monkeypatch.setattr(wds.subprocess, "run", lambda *a, **kw: _stream_result(
+    monkeypatch.setattr(wds._load_command_approval_component("shell_execution"), "_run_process", lambda *a, **kw: _stream_result(
         kw, stdout=raw, stderr=raw, returncode=0))
     client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
     result = client.responses[-1][1]
@@ -226,7 +226,6 @@ def test_shell_execution_policy_is_loaded_from_canonical_module():
     assert helper.bounded_stream("x" * 9000) == ("x" * 8192, True)
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows inherited-pipe regression")
 def test_shell_returns_on_timeout_with_child_holding_inherited_output(monkeypatch, tmp_path):
     import psutil
     import time
@@ -240,7 +239,9 @@ def test_shell_returns_on_timeout_with_child_holding_inherited_output(monkeypatc
         "Path(sys.argv[1]).write_text(json.dumps([os.getpid(), child.pid]), encoding='utf-8')\n"
         "print('fixture ready', flush=True)\n"
         "time.sleep(5)\n", encoding="utf-8")
-    command = wds.subprocess.list2cmdline([sys.executable, str(script), str(pids)])
+    import shlex
+    args = [sys.executable, str(script), str(pids)]
+    command = wds.subprocess.list2cmdline(args) if sys.platform == "win32" else shlex.join(args)
     started = time.monotonic()
     try:
         client._do_shell({"type": "shell", "command": command,
@@ -249,8 +250,8 @@ def test_shell_returns_on_timeout_with_child_holding_inherited_output(monkeypatc
         assert pids.is_file(), "controlled child fixture never reached readiness"
         parent_pid, child_pid = json.loads(pids.read_text(encoding="utf-8"))
         assert parent_pid != child_pid
-        assert str(script) in psutil.Process(parent_pid).cmdline()
-        assert "xider-inherited-output-fixture" in psutil.Process(child_pid).cmdline()
+        for pid in (parent_pid, child_pid):
+            assert not psutil.pid_exists(pid) or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
         assert "fixture ready" in client.responses[-1][1]["stdout"]
         assert elapsed < 2.5, "handler waited for the grandchild's inherited pipes"
         assert client.responses[-1][1]["status"] == "timeout"
@@ -270,7 +271,7 @@ def test_shell_returns_on_timeout_with_child_holding_inherited_output(monkeypatc
 def test_windows_unsigned_and_hmac_only_shell_never_reach_subprocess(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     calls = []
-    monkeypatch.setattr(wds.subprocess, "run", _fake_run(calls))
+    monkeypatch.setattr(wds._load_command_approval_component("shell_execution"), "_run_process", _fake_run(calls))
 
     client._do_shell({"type": "shell", "command": COMMAND, "id": "mqtt-1"})
     client._do_shell({"type": "shell", "command": COMMAND, "signature": "hmac-only"})
@@ -294,7 +295,7 @@ def test_windows_unsigned_and_hmac_only_shell_never_reach_subprocess(monkeypatch
 def test_windows_invalid_approval_never_reaches_subprocess(monkeypatch, tmp_path, approval_factory):
     client = _client(monkeypatch, tmp_path)
     calls = []
-    monkeypatch.setattr(wds.subprocess, "run", _fake_run(calls))
+    monkeypatch.setattr(wds._load_command_approval_component("shell_execution"), "_run_process", _fake_run(calls))
 
     client._do_shell({"type": "shell", "command": COMMAND, "approval": approval_factory()})
 
@@ -306,7 +307,7 @@ def test_windows_missing_public_key_fails_closed(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     monkeypatch.delenv("XIDER_COMMAND_VERIFY_KEYSET_B64")
     calls = []
-    monkeypatch.setattr(wds.subprocess, "run", _fake_run(calls))
+    monkeypatch.setattr(wds._load_command_approval_component("shell_execution"), "_run_process", _fake_run(calls))
 
     client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
 
@@ -325,7 +326,7 @@ def test_windows_missing_approval_component_fails_closed(monkeypatch, tmp_path, 
 
     monkeypatch.setattr(wds, "_load_command_approval_component", load_component)
     calls = []
-    monkeypatch.setattr(wds.subprocess, "run", _fake_run(calls))
+    monkeypatch.setattr(original_loader("shell_execution"), "_run_process", _fake_run(calls))
 
     client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
 
@@ -470,7 +471,7 @@ def test_windows_valid_approval_runs_exact_command_once_and_ledger_excludes_secr
         stored = json.loads(ledger_path.read_text(encoding="utf-8"))
         assert stored["entries"]["approval_123456789"] == EXPIRES_AT
 
-    monkeypatch.setattr(wds.subprocess, "run", _fake_run(calls, assert_reserved_before_subprocess))
+    monkeypatch.setattr(wds._load_command_approval_component("shell_execution"), "_run_process", _fake_run(calls, assert_reserved_before_subprocess))
     client._do_shell({"type": "shell", "command": COMMAND, "approval": _approval()})
 
     assert len(calls) == 1
@@ -490,7 +491,7 @@ def test_windows_replay_is_rejected_after_store_reconstruction(monkeypatch, tmp_
     second.responses = []
     second._publish_response = lambda topic, payload: second.responses.append((topic, payload))
     calls = []
-    monkeypatch.setattr(wds.subprocess, "run", _fake_run(calls))
+    monkeypatch.setattr(wds._load_command_approval_component("shell_execution"), "_run_process", _fake_run(calls))
     request = {"type": "shell", "command": COMMAND, "approval": _approval()}
 
     first._do_shell(request)
@@ -513,7 +514,7 @@ def test_windows_concurrent_duplicate_approval_runs_once(monkeypatch, tmp_path):
         release.wait(timeout=2)
         return _stream_result(kwargs, stdout="ok", stderr="", returncode=0)
 
-    monkeypatch.setattr(wds.subprocess, "run", blocking_run)
+    monkeypatch.setattr(wds._load_command_approval_component("shell_execution"), "_run_process", blocking_run)
     request = {"type": "shell", "command": COMMAND, "approval": _approval()}
     with ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(client._do_shell, request)
@@ -530,7 +531,7 @@ def test_windows_corrupt_unwritable_and_full_replay_stores_fail_closed(monkeypat
     corrupt = _client(monkeypatch, tmp_path)
     corrupt._command_replay_ledger.path.write_text("not-json", encoding="utf-8")
     calls = []
-    monkeypatch.setattr(wds.subprocess, "run", _fake_run(calls))
+    monkeypatch.setattr(wds._load_command_approval_component("shell_execution"), "_run_process", _fake_run(calls))
     request = {"type": "shell", "command": COMMAND, "approval": _approval()}
     corrupt._do_shell(request)
     assert calls == []

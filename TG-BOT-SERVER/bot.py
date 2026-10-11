@@ -279,21 +279,21 @@ async def on_cmd_clipboard(cq: CallbackQuery):
     if result is None:
         await _replace_callback_message(cq,
             _lex("device_timeout", seconds="10"),
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
         return
     text = result.get("text")
     if not text:
         await _replace_callback_message(cq,
             "⚠️ Буфер обмена пуст или недоступен.",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
     else:
         # Экранируем текст для безопасного вывода
         safe_text = html.escape(text)
         await _replace_callback_message(cq,
             f"📋 <b>Буфер обмена:</b>\n<pre>{safe_text}</pre>",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
 
 
@@ -322,20 +322,20 @@ async def on_cmd_processes(cq: CallbackQuery):
     if result is None:
         await _replace_callback_message(cq,
             _lex("device_timeout", seconds="15"),
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
         return
     lines = result.get("lines", [])
     if not lines:
         await _replace_callback_message(cq,
             "⚠️ Не удалось получить список процессов.",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
     else:
         text = "\n".join(html.escape(line) for line in lines)
         await _replace_callback_message(cq,
             f"⚙️ <b>Топ-5 процессов по памяти:</b>\n<pre>{text}</pre>",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
 
 
@@ -364,14 +364,14 @@ async def on_cmd_mic(cq: CallbackQuery):
     if result is None:
         await _replace_callback_message(cq,
             "⏳ Звук не получен за 20 сек — устройство офлайн или нет микрофона.",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
         return
     audio_b64 = result.get("audio")
     if not audio_b64:
         await _replace_callback_message(cq,
             "⚠️ Устройство ответило ошибкой или микрофон недоступен.",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
         return
     try:
@@ -381,13 +381,13 @@ async def on_cmd_mic(cq: CallbackQuery):
             cq, bot.send_voice,
             voice=audio_file,
             caption=f"🎙 <b>{html.escape(target_label(target))}</b>",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
     except Exception:
         log.exception("Ошибка декодирования аудио")
         await _replace_callback_message(cq,
             "⚠️ Ошибка обработки звука.",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
 
 
@@ -522,10 +522,13 @@ async def on_shell_approve(cq: CallbackQuery):
         _audit_shell_result(approved, actor, "signing_unavailable", None)
         await cq.answer("Подпись команды недоступна. Создайте новый запрос после настройки сервера.", show_alert=True)
         return
-    _audit_shell_result(approved, actor, "sent" if sent else "publish_failed", None)
+    _audit_shell_result(approved, actor, "sent" if sent is True else "publish_unknown" if sent is None else "publish_failed", None)
     await cq.answer()
-    await _replace_callback_message(cq, "Команда отправлена." if sent else _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
-    if not sent:
+    dispatch_text = ("Команда отправлена." if sent is True else
+                     "Доставка команды пока не подтверждена. Ожидаю ответ на тот же запрос; повторная отправка не выполняется."
+                     if sent is None else _lex("mqtt_disconnected"))
+    await _replace_callback_message(cq, dispatch_text, reply_markup=back_to_device_kb())
+    if sent is False:
         return
     result = await shell_collector.wait_for(approved.device_id, "shell", 20.0, approved.request_id)
     code = (result or {}).get("returncode")
@@ -553,7 +556,7 @@ async def on_shell_approve(cq: CallbackQuery):
             suffix += f"\n[{stream.upper()}: вывод ограничен 8192 байт]"
     output = html.escape(safe_output[:2800] + suffix)
     text = (_lex("command_result", emoji="💻", label="Shell", device=html.escape(target_label(approved.device_id)), text=output)
-            if result is not None else _lex("device_timeout", seconds="20"))
+            if result is not None else "Результат команды неизвестен: ответ за 20 секунд не получен. Команда могла выполниться; повторно она не отправлялась.")
     await _replace_callback_message(cq, text, reply_markup=back_to_device_kb())
 
 
@@ -2276,9 +2279,12 @@ async def _replace_media_card_with_text(
 
 
 async def _replace_callback_with_media(
-    cq: CallbackQuery, sender, *, chat_id: int | None = None, **media_kwargs
+    cq: CallbackQuery, sender, *, chat_id: int | None = None, delivery_guard=None, **media_kwargs
 ):
     async with _card_update(cq.message.chat.id, cq.from_user.id):
+        if not _delivery_allowed(delivery_guard):
+            return await _replace_message_card_unlocked(cq.message, cq.from_user.id,
+                _lex("action_result_hidden_after_revoke"), back_to_device_kb())
         return await _replace_callback_with_media_unlocked(cq, sender, chat_id=chat_id, **media_kwargs)
 
 
@@ -2337,7 +2343,8 @@ def _card_message(message: Message, message_id: int):
 async def _replace_message_card(message: Message, user_id: int, text: str, reply_markup=None, *, delivery_guard=None):
     async with _card_update(message.chat.id, user_id):
         if not _delivery_allowed(delivery_guard):
-            return message
+            return await _replace_message_card_unlocked(message, user_id,
+                _lex("action_result_hidden_after_revoke"), back_to_device_kb())
         options = {"delivery_guard": delivery_guard} if delivery_guard is not None else {}
         return await _replace_message_card_unlocked(message, user_id, text, reply_markup, **options)
 
@@ -2353,6 +2360,9 @@ async def _replace_message_card_unlocked(message: Message, user_id: int, text: s
     if _message_has_media(message):
         return await _replace_media_card_with_text(message, user_id, text, reply_markup, **options)
     exc = await _edit_card_with_retry(message, text, reply_markup, **options)
+    if not _delivery_allowed(delivery_guard):
+        return await _replace_message_card_unlocked(message, user_id,
+            _lex("action_result_hidden_after_revoke"), back_to_device_kb())
     if exc is None:
         try:
             ui_cards.set_card(message.chat.id, user_id, message.message_id)
@@ -2380,16 +2390,21 @@ async def _replace_message_card_unlocked(message: Message, user_id: int, text: s
     return sent
 
 
-async def _replace_user_card(message: Message, text: str, reply_markup=None) -> int | None:
+async def _replace_user_card(message: Message, text: str, reply_markup=None, *, delivery_guard=None) -> int | None:
     async with _card_update(message.chat.id, message.from_user.id):
-        return await _replace_user_card_unlocked(message, text, reply_markup)
+        if not _delivery_allowed(delivery_guard):
+            text, reply_markup, delivery_guard = _lex("action_result_hidden_after_revoke"), back_to_device_kb(), None
+        options = {"delivery_guard": delivery_guard} if delivery_guard is not None else {}
+        return await _replace_user_card_unlocked(message, text, reply_markup, **options)
 
 
-async def _replace_user_card_unlocked(message: Message, text: str, reply_markup=None) -> int | None:
+async def _replace_user_card_unlocked(message: Message, text: str, reply_markup=None, *, delivery_guard=None) -> int | None:
     """Edit this user's registered bot card; create a replacement only if stale."""
     chat_id = message.chat.id
     user_id = message.from_user.id
     card_id = ui_cards.get(chat_id, user_id)
+    if not _delivery_allowed(delivery_guard):
+        return card_id
     if card_id:
         try:
             await bot.edit_message_text(
@@ -2405,13 +2420,15 @@ async def _replace_user_card_unlocked(message: Message, text: str, reply_markup=
                 return card_id
             if _is_media_text_edit_error(exc):
                 sent = await _replace_media_card_with_text(
-                    message, user_id, text, reply_markup, old_message_id=card_id
+                    message, user_id, text, reply_markup, old_message_id=card_id, delivery_guard=delivery_guard
                 )
                 return sent.message_id
             if not await _stale_card_allows_replacement(chat_id, card_id, exc):
                 log.warning("Не удалось обновить карточку %s: %s", card_id, exc)
                 return card_id
 
+    if not _delivery_allowed(delivery_guard):
+        return await _replace_user_card_unlocked(message, _lex("action_result_hidden_after_revoke"), back_to_device_kb())
     try:
         sent = await message.answer(text, reply_markup=reply_markup)
     except Exception:
@@ -2425,9 +2442,11 @@ async def _replace_user_card_unlocked(message: Message, text: str, reply_markup=
 
 
 async def _replace_user_card_with_document(
-    message: Message, document: BufferedInputFile, caption: str, reply_markup=None
+    message: Message, document: BufferedInputFile, caption: str, reply_markup=None, *, delivery_guard=None
 ) -> int | None:
     async with _card_update(message.chat.id, message.from_user.id):
+        if not _delivery_allowed(delivery_guard):
+            return await _replace_user_card_unlocked(message, _lex("action_result_hidden_after_revoke"), back_to_device_kb())
         return await _replace_user_card_with_document_unlocked(message, document, caption, reply_markup)
 
 
@@ -4755,7 +4774,7 @@ async def on_cmd_screenshot(cq: CallbackQuery):
         await _replace_callback_message(
             cq,
             "⏳ Ответ не получен за 15 сек. Проверь MQTT и доставку команды; состояние устройства и разрешения неизвестны.",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
         return
     img_b64 = result.get("image")
@@ -4763,7 +4782,7 @@ async def on_cmd_screenshot(cq: CallbackQuery):
         await _replace_callback_message(
             cq,
             _screenshot_failure_help(result),
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
         return
     try:
@@ -4773,13 +4792,13 @@ async def on_cmd_screenshot(cq: CallbackQuery):
         log.exception("Ошибка декодирования скриншота")
         await _replace_callback_message(
             cq, _screenshot_failure_help({"state": "file_unreadable"}),
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
         return
     try:
         await _replace_callback_with_media(
             cq,
-            bot.send_photo,
+            bot.send_photo, delivery_guard=_callback_delivery_guard(cq, target),
             photo=photo,
             caption=f"📸 <b>{target_label(target)}</b>",
         )
@@ -4788,7 +4807,7 @@ async def on_cmd_screenshot(cq: CallbackQuery):
         await _replace_callback_message(
             cq,
             _screenshot_failure_help({"state": "transport_failed", "detail": "Telegram result delivery failed"}),
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
 
 
@@ -4819,7 +4838,7 @@ async def on_cmd_webcam(cq: CallbackQuery):
         await _replace_callback_message(
             cq,
             "⏳ Снимок не получен за 20 сек — устройство офлайн или нет вебки.",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
         return
     img_b64 = result.get("image")
@@ -4827,7 +4846,7 @@ async def on_cmd_webcam(cq: CallbackQuery):
         await _replace_callback_message(
             cq,
             "⚠️ Устройство ответило ошибкой или камера недоступна.",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
         return
     try:
@@ -4835,7 +4854,7 @@ async def on_cmd_webcam(cq: CallbackQuery):
         photo = BufferedInputFile(img_bytes, filename="webcam.jpg")
         await _replace_callback_with_media(
             cq,
-            bot.send_photo,
+            bot.send_photo, delivery_guard=_callback_delivery_guard(cq, target),
             photo=photo,
             caption=f"📷 <b>{target_label(target)}</b>",
         )
@@ -4844,7 +4863,7 @@ async def on_cmd_webcam(cq: CallbackQuery):
         await _replace_callback_message(
             cq,
             "⚠️ Ошибка обработки снимка вебки.",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
 
 
@@ -4868,15 +4887,15 @@ async def on_cmd_battery(cq: CallbackQuery):
     if not await _callback_result_access_or_report(cq, target, published=True):
         return
     if not res:
-        await _replace_callback_message(cq, _lex("device_no_response"), reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, _lex("device_no_response"), delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb())
         return
     if not res.get("available"):
-        await _replace_callback_message(cq, "🔋 Батарея отсутствует на устройстве.", reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, "🔋 Батарея отсутствует на устройстве.", delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb())
         return
     pct = res.get("percent", "?")
     state = res.get("state", "?")
     tl = res.get("time_left") or "Неизвестно"
-    await _replace_callback_message(cq, f"🔋 <b>Батарея:</b> {pct}%\nСтатус: {state}\nОсталось: {tl}", reply_markup=back_to_device_kb())
+    await _replace_callback_message(cq, f"🔋 <b>Батарея:</b> {pct}%\nСтатус: {state}\nОсталось: {tl}", delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb())
 
 @router.callback_query(AdminFilter(), F.data == "cmd:network")
 async def on_cmd_network(cq: CallbackQuery):
@@ -4898,14 +4917,14 @@ async def on_cmd_network(cq: CallbackQuery):
     if not await _callback_result_access_or_report(cq, target, published=True):
         return
     if not res:
-        await _replace_callback_message(cq, _lex("device_no_response"), reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, _lex("device_no_response"), delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb())
         return
     lines = []
     for i in res.get("interfaces", []):
         if i.get("up"):
             ip = i.get("ipv4") or i.get("ipv6") or "No IP"
             lines.append(f"• <b>{i['name']}</b>: {ip}")
-    await _replace_callback_message(cq, "🌐 <b>Сеть:</b>\n" + ("\n".join(lines) if lines else "Нет активных интерфейсов"), reply_markup=back_to_device_kb())
+    await _replace_callback_message(cq, "🌐 <b>Сеть:</b>\n" + ("\n".join(lines) if lines else "Нет активных интерфейсов"), delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb())
 
 @router.callback_query(AdminFilter(), F.data == "cmd:services")
 async def on_cmd_services(cq: CallbackQuery):
@@ -4927,11 +4946,11 @@ async def on_cmd_services(cq: CallbackQuery):
     if not await _callback_result_access_or_report(cq, target, published=True):
         return
     if not res:
-        await _replace_callback_message(cq, _lex("device_no_response"), reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, _lex("device_no_response"), delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb())
         return
     tot = res.get("total", "?")
     run = res.get("running", "?")
-    await _replace_callback_message(cq, f"🛠 <b>Службы:</b>\nВсего: {tot}\nЗапущено: {run}", reply_markup=back_to_device_kb())
+    await _replace_callback_message(cq, f"🛠 <b>Службы:</b>\nВсего: {tot}\nЗапущено: {run}", delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb())
 
 @router.callback_query(AdminFilter(), F.data == "cmd:capabilities")
 async def on_cmd_capabilities(cq: CallbackQuery):
@@ -4953,9 +4972,9 @@ async def on_cmd_capabilities(cq: CallbackQuery):
     if not await _callback_result_access_or_report(cq, target, published=True):
         return
     if not res:
-        await _replace_callback_message(cq, _lex("device_no_response"), reply_markup=back_to_device_kb())
+        await _replace_callback_message(cq, _lex("device_no_response"), delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb())
         return
-    await _replace_callback_message(cq, _format_capabilities(res), reply_markup=_capabilities_keyboard())
+    await _replace_callback_message(cq, _format_capabilities(res), delivery_guard=_callback_delivery_guard(cq, target), reply_markup=_capabilities_keyboard())
 
 
 def format_location_result(result: dict) -> str:
@@ -5207,7 +5226,7 @@ async def on_cmd_sysinfo(cq: CallbackQuery):
         await _replace_callback_message(
             cq,
             _lex("device_timeout", seconds="12"),
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
         return
     info = devices.get(result.get("device_id")) or {}
@@ -5226,7 +5245,7 @@ async def on_cmd_sysinfo(cq: CallbackQuery):
         f"🧠 RAM: {ram_used} / {ram_total} ГБ ({ram_pct}%)\n"
         f"💾 Диск: {disk_used} / {disk_total} ГБ ({disk_pct}%)\n"
         f"⏱ Аптайм: {uptime_str}",
-        reply_markup=back_to_device_kb(),
+        delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
     )
 
 
@@ -5301,13 +5320,13 @@ async def on_cmd_status(cq: CallbackQuery):
         await _replace_callback_message(
             cq,
             _lex("device_no_response"),
-            reply_markup=system_menu(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=system_menu(),
         )
         return
     await _replace_callback_message(
         cq,
         device_card(target),
-        reply_markup=system_menu(),
+        delivery_guard=_callback_delivery_guard(cq, target), reply_markup=system_menu(),
     )
 
 
@@ -5560,7 +5579,7 @@ async def on_proc_page(cq: CallbackQuery):
             await _replace_callback_message(
                 cq,
                 _lex("device_no_response"),
-                reply_markup=back_to_device_kb(),
+                delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
             )
             await cq.answer()
             return
@@ -5603,7 +5622,7 @@ async def on_proc_page(cq: CallbackQuery):
     await _replace_callback_message(
         cq,
         text,
-        reply_markup=_filter_device_keyboard(
+        delivery_guard=_callback_delivery_guard(cq, target), reply_markup=_filter_device_keyboard(
             kb.as_markup(), cq.from_user.id if cq.from_user else None,
         ),
     )
@@ -5799,12 +5818,12 @@ async def on_cmd_disks(cq: CallbackQuery):
         return
     if not res:
         await _replace_callback_message(
-            cq, _lex("device_no_response"), reply_markup=back_to_device_kb()
+            cq, _lex("device_no_response"), delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb()
         )
         return
     lines = res.get("lines", [])
     text = "🗂 <b>Диски</b>:\n" + "\n".join(html.escape(l) for l in lines)
-    await _replace_callback_message(cq, text, reply_markup=back_to_device_kb())
+    await _replace_callback_message(cq, text, delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb())
 
 
 @router.callback_query(AdminFilter(), F.data == "vol:opts")
@@ -5856,7 +5875,7 @@ async def on_mic_dur(cq: CallbackQuery):
         await _replace_callback_message(
             cq,
             "⏳ Звук не получен — офлайн или нет микрофона.",
-            reply_markup=back_to_device_kb(),
+            delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb(),
         )
         await cq.answer()
         return
@@ -5864,14 +5883,14 @@ async def on_mic_dur(cq: CallbackQuery):
         audio = BufferedInputFile(base64.b64decode(res.get("audio")), filename="mic.ogg")
         await _replace_callback_with_media(
             cq,
-            bot.send_voice,
+            bot.send_voice, delivery_guard=_callback_delivery_guard(cq, target),
             voice=audio,
             caption=f"🎙 {html.escape(target_label(target))} · {dur}с",
         )
     except Exception:
         log.exception("Не удалось отправить аудио")
         await _replace_callback_message(
-            cq, _lex("mqtt_publish_failed"), reply_markup=back_to_device_kb()
+            cq, _lex("mqtt_publish_failed"), delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb()
         )
     await cq.answer()
 
@@ -6278,6 +6297,12 @@ def _device_action_still_allowed(user_id: int, callback: str, target: str) -> bo
     )
 
 
+def _callback_delivery_guard(cq: CallbackQuery, target: str):
+    """Pin the exact callback/user/target before waiting for a card lock."""
+    user_id, callback = int(cq.from_user.id), str(cq.data or "")
+    return lambda: _simple_command_still_allowed(user_id, callback, target)
+
+
 async def _callback_result_access_or_report(
     cq: CallbackQuery, target: str, *, published: bool = False
 ) -> bool:
@@ -6468,6 +6493,7 @@ async def on_files_open(cq: CallbackQuery, state: FSMContext):
 @router.message(AdminFilter(), Form.wait_path)
 async def on_path_input(message: Message, state: FSMContext):
     data = await state.get_data()
+    authorization_data = dict(data)
     mode = data.get("path_mode", "list")
     await state.clear()
     target = data.get("target") or SESSION.get("target")
@@ -6510,20 +6536,20 @@ async def on_path_input(message: Message, state: FSMContext):
             await _replace_user_card(
                 message,
                 _lex_html("files_upload_saved", path=result.get("path") or dest),
-                reply_markup=back_to_device_kb(),
+                delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb(),
             )
         else:
             error = (result or {}).get("error") or _lex("device_no_response")
             await _replace_user_card(
                 message,
                 _lex_html("files_upload_failed", error=error),
-                reply_markup=back_to_device_kb(),
+                delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb(),
             )
         return
 
     path = (message.text or "").strip()
     if not path:
-        await _replace_user_card(message, _lex("files_empty_path"), reply_markup=back_to_device_kb())
+        await _replace_user_card(message, _lex("files_empty_path"), delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb())
         return
 
     if mode == "list":
@@ -6532,7 +6558,7 @@ async def on_path_input(message: Message, state: FSMContext):
             return
         sent, command_id = publish_tracked("dir_list", _target=target, path=path)
         if not sent:
-            await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
+            await _replace_user_card(message, _lex("mqtt_disconnected"), delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb())
             return
         result = await fun_text_collector.wait_for(target, "dir_list", timeout=15.0, command_id=command_id)
         if not _pending_device_input_still_allowed(message, data, target):
@@ -6542,7 +6568,7 @@ async def on_path_input(message: Message, state: FSMContext):
         await _replace_user_card(
             message,
             _lex_html("files_list_result", text=str(text)[:3500]),
-            reply_markup=back_to_device_kb(),
+            delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb(),
         )
     elif mode == "get":
         if not _pending_device_input_still_allowed(message, data, target):
@@ -6550,7 +6576,7 @@ async def on_path_input(message: Message, state: FSMContext):
             return
         sent, command_id = publish_tracked("file_get", _target=target, path=path)
         if not sent:
-            await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
+            await _replace_user_card(message, _lex("mqtt_disconnected"), delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb())
             return
         result = await file_collector.wait_for(target, "file_get", timeout=30.0, command_id=command_id)
         # File content is sensitive; if authorization changed while waiting,
@@ -6559,20 +6585,20 @@ async def on_path_input(message: Message, state: FSMContext):
             await _report_revoked_after_publish(message)
             return
         if not result:
-            await _replace_user_card(message, _lex("files_download_timeout"), reply_markup=back_to_device_kb())
+            await _replace_user_card(message, _lex("files_download_timeout"), delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb())
             return
         if not result.get("ok", False):
             await _replace_user_card(
                 message,
                 _lex_html("files_download_failed", error=result.get("error") or ""),
-                reply_markup=back_to_device_kb(),
+                delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb(),
             )
             return
         encoded = result.get("data") or result.get("b64") or ""
         try:
             data = base64.b64decode(encoded, validate=True)
         except (ValueError, TypeError):
-            await _replace_user_card(message, _lex("files_download_corrupt"), reply_markup=back_to_device_kb())
+            await _replace_user_card(message, _lex("files_download_corrupt"), delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb())
             return
         await _replace_user_card_with_document(
             message,
@@ -6581,7 +6607,7 @@ async def on_path_input(message: Message, state: FSMContext):
                 filename=_safe_transfer_filename(result.get("filename") or result.get("name")),
             ),
             caption=_lex_html("files_download_caption", device=target_label(target)),
-            reply_markup=back_to_device_kb(),
+            delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb(),
         )
     elif mode == "del":
         if not _pending_device_input_still_allowed(message, data, target):
@@ -6589,7 +6615,7 @@ async def on_path_input(message: Message, state: FSMContext):
             return
         sent, command_id = publish_tracked("file_del", _target=target, path=path)
         if not sent:
-            await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
+            await _replace_user_card(message, _lex("mqtt_disconnected"), delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb())
             return
         result = await fun_text_collector.wait_for(target, "file_del", timeout=15.0, command_id=command_id)
         if not _pending_device_input_still_allowed(message, data, target):
@@ -6599,13 +6625,13 @@ async def on_path_input(message: Message, state: FSMContext):
             await _replace_user_card(
                 message,
                 _lex_html("files_delete_done", path=path),
-                reply_markup=back_to_device_kb(),
+                delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb(),
             )
         else:
             await _replace_user_card(
                 message,
                 _lex_html("files_delete_failed", error=(result or {}).get("error") or _lex("device_no_response")),
-                reply_markup=back_to_device_kb(),
+                delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb(),
             )
     elif mode == "open":
         if not _pending_device_input_still_allowed(message, data, target):
@@ -6613,7 +6639,7 @@ async def on_path_input(message: Message, state: FSMContext):
             return
         sent, command_id = publish_tracked("path_open", _target=target, path=path)
         if not sent:
-            await _replace_user_card(message, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
+            await _replace_user_card(message, _lex("mqtt_disconnected"), delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb())
             return
         result = await fun_text_collector.wait_for(target, "path_open", timeout=10.0, command_id=command_id)
         if not _pending_device_input_still_allowed(message, data, target):
@@ -6623,19 +6649,20 @@ async def on_path_input(message: Message, state: FSMContext):
             await _replace_user_card(
                 message,
                 _lex_html("files_open_done", path=path),
-                reply_markup=back_to_device_kb(),
+                delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb(),
             )
         else:
             await _replace_user_card(
                 message,
                 _lex_html("files_open_failed", error=(result or {}).get("error") or _lex("device_no_response")),
-                reply_markup=back_to_device_kb(),
+                delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb(),
             )
 
 
 @router.message(AdminFilter(), Form.wait_find)
 async def on_find_input(message: Message, state: FSMContext):
     data = await state.get_data()
+    authorization_data = dict(data)
     await state.clear()
     target = data.get("target") or SESSION.get("target")
     pattern = (message.text or "").strip()
@@ -6658,12 +6685,12 @@ async def on_find_input(message: Message, state: FSMContext):
         return
     text = (result or {}).get("text")
     if not text:
-        await _replace_user_card(message, _lex("files_find_no_response"), reply_markup=back_to_device_kb())
+        await _replace_user_card(message, _lex("files_find_no_response"), delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb())
         return
     await _replace_user_card(
         message,
         _lex_html("files_find_result", text=str(text)[:3500]),
-        reply_markup=back_to_device_kb(),
+        delivery_guard=lambda: _pending_device_input_still_allowed(message, authorization_data, target), reply_markup=back_to_device_kb(),
     )
 
 
@@ -7569,8 +7596,9 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
         )
         return None
     is_check = _is_read_only_check(authorization_callback, action, publish_kwargs)
-    delivery_options = ({"delivery_guard": lambda: _check_delivery_allowed(user_id, target, authorization_callback)}
-                        if is_check else {})
+    delivery_options = {"delivery_guard": lambda: (
+        _check_delivery_allowed(user_id, target, authorization_callback) if is_check
+        else _simple_command_still_allowed(user_id, authorization_callback, target))}
     check_info = dict(devices.get(target) or {}) if is_check else {}
     # Another update can change SESSION while answer() is awaiting Telegram.
     # Pin the target captured before that await into the publish itself.
@@ -7649,6 +7677,8 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
                       if action == "geo_location" else back_to_device_kb()),
         **delivery_options,
     )
+    if not _simple_command_still_allowed(user_id, authorization_callback, target):
+        return None
     if is_check:
         return {"ok": outcome == "succeeded", "outcome": outcome, "id": command_id}
     return result

@@ -3,6 +3,8 @@
 Redirect to temporary files instead of pipes: killing a timed-out shell must
 not wait for a descendant which still holds an inherited output handle.
 """
+import os
+import signal
 import re
 import subprocess
 import tempfile
@@ -60,11 +62,36 @@ def _read_stream(handle) -> tuple[str, bool]:
     return text, len(prefix) > STREAM_BYTES or redacted_truncated
 
 
+def _run_process(command, *, shell, stdout, stderr, timeout):
+    """Bound the shell and its ordinary descendants to one process lifetime."""
+    options = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
+               else {"start_new_session": True})
+    process = subprocess.Popen(command, shell=shell, stdout=stdout, stderr=stderr, **options)
+    try:
+        process.wait(timeout=timeout)
+    except BaseException:
+        # Terminate the whole group before reaping the shell. In particular,
+        # TimeoutExpired must not leave a child executing an approved command.
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=5)
+        raise
+    return process
+
+
 def execute_shell(command: str, requested_timeout=None) -> dict:
     timeout = shell_timeout(requested_timeout)
     with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
         try:
-            result = subprocess.run(command, shell=True, stdout=stdout_file,
+            result = _run_process(command, shell=True, stdout=stdout_file,
                                     stderr=stderr_file, timeout=timeout)
             code = result.returncode
             status = "completed" if code == 0 else "failed"

@@ -11,6 +11,167 @@ import pytest
 import bot
 
 
+@pytest.mark.parametrize("reply", [{"output": "done", "returncode": 0, "status": "completed"}, None])
+def test_shell_ambiguous_publish_waits_same_request_without_resubmission(monkeypatch, tmp_path, reply):
+    Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
+    waits, audits = [], []
+    def publish(*args, **kwargs):
+        published.append((args, kwargs))
+        return None
+    async def wait(*args):
+        waits.append(args)
+        return reply
+    monkeypatch.setattr(bot.transport, "publish_command", publish)
+    monkeypatch.setattr(bot.shell_collector, "wait_for", wait)
+    monkeypatch.setattr(bot.access_store, "_write_audit_row", lambda row: audits.append(row["status"]) if row.get("kind") == "command_execution" else None)
+    async def scenario():
+        pending = await request()
+        await bot.on_shell_approve(Callback(f"cmd:shell-approve:{pending.request_id}"))
+        return pending
+    pending = asyncio.run(scenario())
+    assert len(published) == 1
+    assert waits == [("a", "shell", 20.0, pending.request_id)]
+    assert audits == ["attempting", "publish_unknown", "completed" if reply else "result_timeout"]
+    texts = "\n".join(item[0] for item in rendered)
+    assert "Доставка команды пока не подтверждена" in texts
+    if reply is None:
+        assert "Команда могла выполниться" in texts
+    else:
+        assert "done" in texts
+
+
+@pytest.mark.parametrize("flow", ["callback_text", "media", "document", "user_text"])
+def test_private_card_rechecks_delivery_grant_after_waiting_for_lock(monkeypatch, tmp_path, flow):
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    allowed = True
+    async def scenario():
+        nonlocal allowed
+        async with bot._card_update(10, 20):
+            guard = lambda: allowed
+            if flow == "callback_text":
+                operation = bot._replace_callback_message(telegram.callback(), "PRIVATE", delivery_guard=guard)
+            elif flow == "media":
+                operation = bot._replace_callback_with_media(telegram.callback(), telegram.send_photo, photo=b"PRIVATE", delivery_guard=guard)
+            elif flow == "document":
+                operation = bot._replace_user_card_with_document(telegram.message(), b"PRIVATE", "PRIVATE", delivery_guard=guard)
+            else:
+                operation = bot._replace_user_card(telegram.message(), "PRIVATE", delivery_guard=guard)
+            task = asyncio.create_task(operation)
+            await asyncio.sleep(0)
+            allowed = False
+        await task
+    asyncio.run(scenario())
+    assert not telegram.sent
+    assert "PRIVATE" not in str(telegram.cards)
+    assert telegram.cards[30]["text"] == bot._lex("action_result_hidden_after_revoke")
+
+
+@pytest.mark.parametrize("handler,collector,callback,result", [
+    ("on_cmd_clipboard", "clipboard_collector", "cmd:clipboard", {"text": "PRIVATE"}),
+    ("on_cmd_screenshot", "screenshot_collector", "cmd:screenshot", {"image": "cHJpdmF0ZQ=="}),
+    ("on_cmd_webcam", "webcam_collector", "cmd:webcam", {"image": "cHJpdmF0ZQ=="}),
+    ("on_cmd_mic", "mic_collector", "cmd:mic", {"audio": "cHJpdmF0ZQ=="}),
+    ("on_mic_dur", "mic_collector", "micdur:5", {"audio": "cHJpdmF0ZQ=="}),
+    ("simple", "fun_text_collector", "cmd:wifi", {"text": "PRIVATE"}),
+    ("simple", "fun_text_collector", "cmd:geo", {"text": "PRIVATE"}),
+])
+def test_device_handler_guard_survives_collector_to_delivery_lock_race(monkeypatch, tmp_path, handler, collector, callback, result):
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    allowed = True
+    monkeypatch.setattr(bot, "SESSION", {"target": "device-1"})
+    monkeypatch.setattr(bot, "_simple_command_still_allowed", lambda *args: allowed)
+    monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (True, "request-1"))
+    monkeypatch.setattr(bot, "target_label", lambda *args: "Device")
+    monkeypatch.setattr(bot, "_decode_screenshot_image", lambda *args: b"PRIVATE")
+    async def scenario():
+        nonlocal allowed
+        held, release = asyncio.Event(), asyncio.Event()
+        async def hold():
+            async with bot._card_update(10, 20):
+                held.set()
+                await release.wait()
+        holders = []
+        async def wait(*args, **kwargs):
+            holders.append(asyncio.create_task(hold()))
+            await held.wait()
+            return result
+        from types import SimpleNamespace
+        monkeypatch.setattr(bot, collector, SimpleNamespace(wait_for=wait))
+        cq = telegram.callback(callback)
+        operation = (bot.simple_command(cq, "net_wifi_passwords" if callback == "cmd:wifi" else "geo_location", "", "Result")
+                     if handler == "simple" else getattr(bot, handler)(cq))
+        task = asyncio.create_task(operation)
+        await held.wait()
+        await asyncio.sleep(0)
+        allowed = False
+        release.set()
+        await task
+        await asyncio.gather(*holders)
+    asyncio.run(scenario())
+    assert "PRIVATE" not in str(telegram.cards)
+    assert not telegram.sent
+    assert telegram.cards[30]["text"] == bot._lex("action_result_hidden_after_revoke")
+
+
+def test_private_text_retry_rechecks_revoked_permission(monkeypatch, tmp_path):
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    allowed = True
+    original = telegram.edit_message_text
+    async def edit(text, **kwargs):
+        nonlocal allowed
+        if text == "PRIVATE":
+            allowed = False
+            raise RuntimeError("transient Telegram failure")
+        return await original(text, **kwargs)
+    monkeypatch.setattr(telegram, "edit_message_text", edit)
+    asyncio.run(bot._replace_callback_message(telegram.callback(), "PRIVATE", delivery_guard=lambda: allowed))
+    assert not telegram.sent
+    assert telegram.cards[30]["text"] == bot._lex("action_result_hidden_after_revoke")
+
+
+@pytest.mark.parametrize("mode", ["list", "get", "find"])
+def test_file_result_rechecks_fsm_grant_inside_delivery_lock(monkeypatch, tmp_path, mode):
+    from types import SimpleNamespace
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    allowed = True
+    monkeypatch.setattr(bot, "get_user_role", lambda *args: bot.Role.USER)
+    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *args: allowed)
+    monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (True, "file-request"))
+    monkeypatch.setattr(bot, "target_label", lambda *args: "Device")
+    class State:
+        async def get_data(self):
+            return dict(path_mode=mode, target="device-1", authorization_target="device-1", authorization_callback=f"files:{mode}")
+        async def clear(self):
+            pass
+    async def scenario():
+        nonlocal allowed
+        held, release = asyncio.Event(), asyncio.Event()
+        async def hold():
+            async with bot._card_update(10, 20):
+                held.set()
+                await release.wait()
+        holders = []
+        async def wait(*args, **kwargs):
+            holders.append(asyncio.create_task(hold()))
+            await held.wait()
+            return dict(ok=True, text="PRIVATE", data=base64.b64encode(b"PRIVATE").decode(), filename="private.txt")
+        monkeypatch.setattr(bot, "fun_text_collector", SimpleNamespace(wait_for=wait))
+        monkeypatch.setattr(bot, "file_collector", SimpleNamespace(wait_for=wait))
+        message = telegram.message()
+        message.text = "Documents/private.txt"
+        task = asyncio.create_task((bot.on_find_input if mode == "find" else bot.on_path_input)(message, State()))
+        await held.wait()
+        await asyncio.sleep(0)
+        allowed = False
+        release.set()
+        await task
+        await asyncio.gather(*holders)
+    asyncio.run(scenario())
+    assert "PRIVATE" not in str(telegram.cards)
+    assert not telegram.sent
+    assert telegram.cards[30]["text"] == bot._lex("action_result_hidden_after_revoke")
+
+
 @pytest.mark.parametrize("actor", [100, 200])
 def test_shell_input_routes_exact_preview_to_owner_without_publish(monkeypatch, tmp_path, actor):
     from types import SimpleNamespace
@@ -1465,7 +1626,7 @@ def test_revalidates_revoked_grant(monkeypatch):
     )
     monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: published.append((args, kwargs)))
 
-    async def replace(_cq, text, reply_markup=None):
+    async def replace(_cq, text, reply_markup=None, **_kwargs):
         shown.append(text)
 
     monkeypatch.setattr(bot, "_replace_callback_message", replace)
@@ -1600,7 +1761,7 @@ def test_saved_url_opens_count_picker_on_selected_device(monkeypatch):
     monkeypatch.setattr(bot, "target_label", lambda target: target)
     shown = []
 
-    async def replace(_cq, text, reply_markup=None):
+    async def replace(_cq, text, reply_markup=None, **_kwargs):
         shown.append((text, reply_markup))
 
     monkeypatch.setattr(bot, "_replace_callback_message", replace)
@@ -1999,10 +2160,8 @@ def test_simple_command_pins_captured_device_when_session_changes_during_answer(
 
     assert bot.SESSION["target"] == "device-2"
     assert published == [("net_wifi_passwords", {"_target": "device-1"})]
-    assert authorization_checks == [
-        (77, "cmd:wifi", "device-1"),
-        (77, "cmd:wifi", "device-1"),
-    ]
+    assert len(authorization_checks) >= 2
+    assert set(authorization_checks) == {(77, "cmd:wifi", "device-1")}
     assert "visible result" in edits[-1]
 
 
@@ -2027,7 +2186,7 @@ def test_simple_command_does_not_publish_if_original_grant_is_revoked_during_ans
             nonlocal allowed
             allowed = False
 
-    async def replace(_cq, text, reply_markup=None):
+    async def replace(_cq, text, reply_markup=None, **_kwargs):
         cards.append((text, reply_markup))
 
     def action_is_allowed(user_id, callback, target):
@@ -2090,7 +2249,7 @@ def test_simple_command_hides_wifi_password_result_if_grant_revoked_while_waitin
         checks.append((user_id, callback, target, allowed))
         return allowed
 
-    async def replace(_cq, text, reply_markup=None):
+    async def replace(_cq, text, reply_markup=None, **_kwargs):
         cards.append((text, reply_markup))
 
     monkeypatch.setitem(bot.SESSION, "target", "device-1")
@@ -2166,7 +2325,7 @@ def test_sensitive_callback_hides_result_if_grant_is_revoked_during_wait(
         published.append((sent_action, kwargs))
         return True, "ticket-1"
 
-    async def replace(_cq, text, reply_markup=None):
+    async def replace(_cq, text, reply_markup=None, **_kwargs):
         replacement_cards.append((text, reply_markup))
 
     monkeypatch.setitem(bot.SESSION, "target", "device-1")
@@ -2209,7 +2368,7 @@ def test_sensitive_callback_reports_revocation_before_publish_as_not_sent(monkey
             nonlocal allowed
             allowed = False
 
-    async def replace(_cq, text, reply_markup=None):
+    async def replace(_cq, text, reply_markup=None, **_kwargs):
         replacement_cards.append(text)
 
     monkeypatch.setitem(bot.SESSION, "target", "device-1")
@@ -2291,7 +2450,7 @@ def test_simple_command_rejects_non_owner_all_device_target(monkeypatch):
         async def answer(self, *_args, **_kwargs):
             pass
 
-    async def replace(_cq, text, reply_markup=None):
+    async def replace(_cq, text, reply_markup=None, **_kwargs):
         cards.append(text)
 
     def device_grant(user_id, callback, target):
@@ -2745,7 +2904,7 @@ def test_granted_user_shell_confirm_cannot_publish_or_approve(monkeypatch):
         async def answer(self, *args, **kwargs):
             pass
 
-    async def replace(_cq, text, reply_markup=None):
+    async def replace(_cq, text, reply_markup=None, **_kwargs):
         rendered.append((text, reply_markup))
 
     monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: published.append((args, kwargs)))
@@ -2857,7 +3016,7 @@ def test_manual_install_callback_edits_the_active_card(
         async def answer(self, *args, **kwargs):
             answers.append((args, kwargs))
 
-    async def replace(_cq, text, reply_markup=None):
+    async def replace(_cq, text, reply_markup=None, **_kwargs):
         edits.append((text, reply_markup))
 
     monkeypatch.setattr(bot, "_replace_callback_message", replace)
@@ -2974,7 +3133,7 @@ def test_process_results_filter_kill_controls_and_keep_granted_pagination(monkey
         async def answer(self, *args, **kwargs):
             pass
 
-    async def replace(_cq, text, reply_markup=None):
+    async def replace(_cq, text, reply_markup=None, **_kwargs):
         rendered.append((text, reply_markup))
 
     monkeypatch.setattr(bot, "_replace_callback_message", replace)
@@ -3024,7 +3183,7 @@ def test_process_details_remain_visible_with_only_one_specific_kill_grant(monkey
         async def answer(self, *args, **kwargs):
             pass
 
-    async def replace(_cq, text, reply_markup=None):
+    async def replace(_cq, text, reply_markup=None, **_kwargs):
         rendered.append((text, reply_markup))
 
     monkeypatch.setattr(bot, "_replace_callback_message", replace)
@@ -3123,7 +3282,7 @@ def test_process_refresh_rechecks_grant_immediately_before_publish(monkeypatch):
         async def wait(self, _timeout):
             return {"top": []}
 
-    async def replace(_cq, text, reply_markup=None):
+    async def replace(_cq, text, reply_markup=None, **_kwargs):
         rendered.append((text, reply_markup))
 
     monkeypatch.setattr(bot, "_device_action_still_allowed", still_allowed)
@@ -3170,7 +3329,7 @@ def test_process_refresh_hides_results_if_grant_is_revoked_while_waiting(monkeyp
         async def wait(self, _timeout):
             return {"top": [{"pid": 42, "name": "secret-process", "mem_percent": 1}]}
 
-    async def replace(_cq, text, reply_markup=None):
+    async def replace(_cq, text, reply_markup=None, **_kwargs):
         rendered.append((text, reply_markup))
 
     monkeypatch.setattr(bot, "_device_action_still_allowed", still_allowed)
@@ -3371,7 +3530,7 @@ def test_check_update_blocks_old_mac_without_sending_update_or_shell(monkeypatch
     async def no_update(*args, **kwargs):
         sent.append((args, kwargs))
 
-    async def replace(_cq, text, reply_markup=None):
+    async def replace(_cq, text, reply_markup=None, **_kwargs):
         shown.append((text, reply_markup))
 
     class Callback:
@@ -3419,7 +3578,7 @@ def test_check_update_blocks_old_windows_before_sending_update(monkeypatch):
     async def no_update(*args, **kwargs):
         sent.append((args, kwargs))
 
-    async def replace(_cq, text, reply_markup=None):
+    async def replace(_cq, text, reply_markup=None, **_kwargs):
         shown.append((text, reply_markup))
 
     class Callback:
@@ -3490,7 +3649,7 @@ def test_selected_release_install_requires_confirmation_and_dispatches_exact_tag
     monkeypatch.setattr(bot.release_catalog.catalog, "list", lambda **kwargs: [release])
     cards = []
 
-    async def replace(_cq, text, reply_markup=None):
+    async def replace(_cq, text, reply_markup=None, **_kwargs):
         cards.append((text, reply_markup))
 
     monkeypatch.setattr(bot, "_replace_callback_message", replace)
@@ -3572,7 +3731,7 @@ def test_agent_release_catalog_has_a_direct_install_action(monkeypatch, signed_c
     monkeypatch.setattr(bot.release_catalog.catalog, "list", lambda **kwargs: [release])
     cards = []
 
-    async def replace(_cq, text, reply_markup=None):
+    async def replace(_cq, text, reply_markup=None, **_kwargs):
         cards.append((text, reply_markup))
 
     monkeypatch.setattr(bot, "_replace_callback_message", replace)
@@ -3631,7 +3790,7 @@ def test_legacy_agent_version_page_offers_owner_bootstrap_command(monkeypatch):
     monkeypatch.setattr(bot.release_catalog.catalog, "list", lambda: [release])
     cards = []
 
-    async def replace(_cq, text, reply_markup=None):
+    async def replace(_cq, text, reply_markup=None, **_kwargs):
         cards.append((text, reply_markup))
 
     monkeypatch.setattr(bot, "_replace_callback_message", replace)
@@ -3736,7 +3895,7 @@ def test_check_update_blocks_frozen_packages_without_sending_command(monkeypatch
     async def no_update(*args, **kwargs):
         sent.append((args, kwargs))
 
-    async def replace(_cq, text, reply_markup=None):
+    async def replace(_cq, text, reply_markup=None, **_kwargs):
         shown.append((text, reply_markup))
 
     class Callback:

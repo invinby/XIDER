@@ -32,7 +32,7 @@ RECOVERY_FILES = (
     "xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py",
     "release_signature.py", "update_package.py", "guardian_recovery.py",
     "command_module_loader.py", "command_signing.py", "command_replay.py", "shell_execution.py",
-    "xider_guardian.py", "requirements.txt", "setup_mac.py", "fake_update_screen.py",
+    "xider_guardian.py", "requirements.txt", "setup_mac.py", "fake_update_screen.py", "location_adapter.py",
     "start_agent.sh", "stop_agent.sh", "start_guardian.sh",
 )
 _RELEASE = re.compile(r"^v\d{1,6}\.\d{1,6}\.\d{1,6}$")

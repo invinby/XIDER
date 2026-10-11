@@ -2653,7 +2653,7 @@ end tell'''
             "release_signature.py", "update_package.py", "guardian_recovery.py", "start_agent.sh",
             "command_module_loader.py", "command_signing.py", "command_replay.py", "shell_execution.py",
             "xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py",
-            "fake_update_screen.py",
+            "fake_update_screen.py", "location_adapter.py",
             "xider_guardian.py", "requirements.txt", "setup_mac.py",
             "stop_agent.sh", "start_guardian.sh",
         )

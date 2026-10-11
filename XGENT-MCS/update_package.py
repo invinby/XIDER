@@ -95,7 +95,7 @@ AGENT_UPDATE_FILES = frozenset({
     "xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py",
     "release_signature.py", "update_package.py", "guardian_recovery.py", "xider_guardian.py",
     "command_module_loader.py", "command_signing.py", "command_replay.py", "shell_execution.py",
-    "fake_update_screen.py",
+    "fake_update_screen.py", "location_adapter.py",
     "requirements.txt", "setup_mac.py",
     "start_agent.sh", "stop_agent.sh", "start_guardian.sh",
     "xgent_wds.py", "xider_guardian_wds.py",

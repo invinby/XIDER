@@ -242,7 +242,7 @@ def append_command_audit(*, request_id: str, command_hash: str, status: str,
                          exit_code: int | None) -> None:
     """Typed execution metadata. This API cannot accept command text/output."""
     statuses = {"attempting", "sent", "completed", "failed", "timeout", "error", "rejected",
-                "signing_unavailable", "publish_failed", "result_timeout"}
+                "signing_unavailable", "publish_failed", "publish_unknown", "result_timeout"}
     if (not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request_id)
             or not isinstance(command_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", command_hash)
             or status not in statuses

@@ -495,6 +495,20 @@ def test_signed_package_recovers_missing_worker_without_overwriting_present_file
     assert json.loads((recovery_root / "current.json").read_text())["slot"] == slot
 
 
+def test_signed_recovery_restores_location_adapter_absent_in_old_install(signed_recovery, tmp_path):
+    recovery, manifest, archive, recovery_root, payloads = signed_recovery
+    assert "location_adapter.py" in payloads
+    recovery.stage_recovery_package(manifest, archive, recovery_root)
+    install = tmp_path / "old-agent"
+    install.mkdir()
+    for name, payload in payloads.items():
+        if name != "location_adapter.py":
+            (install / name).write_bytes(payload)
+    restored = recovery.restore_missing_agent_files(install, recovery_root)
+    assert restored == ["location_adapter.py"]
+    assert (install / "location_adapter.py").read_bytes() == payloads["location_adapter.py"]
+
+
 @pytest.mark.parametrize("tamper", ["archive", "manifest", "unknown-key"])
 def test_tampered_recovery_package_never_creates_worker_files(
     signed_recovery, tmp_path, tamper, monkeypatch
