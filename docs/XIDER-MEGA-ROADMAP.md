@@ -2672,3 +2672,41 @@ Go и Rust по упаковке, сопровождению, диагности
   release remains unverified. A read-only SSH attempt to `16.16.200.207` in
   BatchMode failed with `Permission denied (publickey,password)`; this attempt
   did not inspect or change the server.
+
+## 36. Verified main deployment and publication recheck · 2026-10-13
+
+- Rechecked official GitHub refs: `origin/main` is
+  `09d75d466c3c25e85266a12733e690c2d2516f94`; the latest public release is
+  still `v4.2.1` (published 2026-10-07). The server package was built from a
+  clean detached checkout of that exact `origin/main` commit, not from the
+  divergent Desktop checkout or the docs branch.
+- The signed server bundle was accepted by the root-owned verifier and applied
+  through `deploy/update-server.sh`. The updater created a pre-change backup,
+  preserved the live `.env`, and reported a successful stable-service health
+  check. A post-deploy read-only check confirmed `xider-bot.service` is
+  `active/enabled`, `NRestarts=0`, and the live `bot.py` SHA-256 matches the
+  source file at `origin/main` (`630d3385…28fbd5e68`). The backup archive was
+  readable and its entry list contained no `.env`, private keys, certificates,
+  or `_secrets_embed.py`. Live rollback was not deliberately exercised; its
+  automated fixtures passed below.
+- Fresh `py -3.12 tools/run_tests.py` on the same `origin/main` commit passed:
+  bot **881 passed / 1 skipped**; Windows agent **197 passed**; macOS agent
+  **305 passed / 1 skipped**; operations **28 passed / 1 skipped**; release
+  tools **111 passed / 2 subtests**; archive/signature tests **24 passed / 27
+  skipped**; Windows bootstrap preflight and transaction/rollback fixtures
+  passed. The elevated Task Scheduler staged-install fixture was skipped
+  because the current shell was not elevated. The first fresh run lacked the
+  pinned Mermaid dependency and failed five release-tool tests; after
+  `npm ci --prefix tools`, the Mermaid tests and complete suite passed.
+- GitHub Pages was already configured for Actions (`status=built`) and the
+  repository homepage points at the confirmed project URL. Live responses for
+  `/`, `/ru.html`, `/styles.css`, and the logo all returned HTTP 200; the RU
+  page declares `lang="ru"`. No Pages setting change or redeployment was
+  needed in this session.
+- Computer Use found no available apps, so no live Telegram click/command was
+  possible. The live bot service and source tests do not prove a Telegram →
+  MQTT → physical-device round trip. Windows task state was ambiguous on the
+  local host, and no physical Mac acceptance was performed. Those device and
+  Telegram gates remain open. No new GitHub Release was created; the public
+  `v4.2.1` artifact still lacks the signed macOS app needed for the planned
+  Core Location acceptance.
