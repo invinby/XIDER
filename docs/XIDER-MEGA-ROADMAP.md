@@ -2578,3 +2578,28 @@ Go и Rust по упаковке, сопровождению, диагности
   was created and no Mac/Windows agent binaries were updated. The new safe
   screenshot-response log will help distinguish agent result states from missing
   responses once a device reconnects and an owner screenshot request is exercised.
+
+## 34. Fresh acceptance snapshot after PR #24 · 2026-10-13
+
+- PR #24 records the signed deployment and is merged at `b7d259bdc08e48d822d6ff16b80f944cb56ce290`.
+  The resulting `main` CI run `38297122961` completed successfully on Python 3.11,
+  Python 3.12, and Unix installer validation.
+- Fresh focused local checks against the merged source: Telegram capability/location/
+  screenshot/UI tests **412 passed**; Windows capability/location/screenshot/URL tests
+  **61 passed**; macOS capability/location/screenshot/URL tests **66 passed**.
+  `TG-BOT-SERVER/xlex.py` has no diff from `origin/main`. The owner permission flow
+  is present on the device card (`🔐 Разрешения`) and leads to the capability snapshot,
+  per-permission guide, and allowlisted system-settings action.
+- Live site HEAD checks returned HTTP 200 for `/`, `/ru.html`, and `/styles.css`;
+  repository homepage is `https://invinby.github.io/XIDER/` and the description
+  remains bilingual.
+- Read-only VPS check after the deployment: `xider-bot.service` is `active/running`,
+  `NRestarts=0`. The sanitized device registry still shows the macOS agent (`4.3.0`)
+  offline (heartbeat age about 74 minutes) and Windows agent (`4.0.0`) offline
+  (about 21 hours 40 minutes); neither has a capability snapshot or a Guardian
+  heartbeat. No live Telegram-to-device action was tested in this check.
+- GitHub currently lists only the `github-pages` and `xider-release-signing`
+  environments; `xider-macos-signing` is absent. Therefore a properly signed,
+  notarized macOS artifact and the physical Core Location consent test remain
+  blocked on Apple signing/notarization setup. Do not label the current `main` as
+  a published device release: latest public release remains `v4.2.1`.
