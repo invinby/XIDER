@@ -2553,3 +2553,28 @@ Go и Rust по упаковке, сопровождению, диагности
   without corresponding screenshot response-state entries; it cannot distinguish
   a sleeping/offline agent from a missing response or broker-routing issue. The
   new local diagnostic must be deployed before a follow-up trace can narrow it.
+
+## 33. Signed server hotfix and current device availability · 2026-10-13
+
+- Published `fix(xider): улучшить скриншоты и очистку установки` as PR #23 and
+  merged it into `main` at `3866099775da50d2bae2dedeeb74cb093c97b1ba`.
+  PR CI passed: Python 3.11, Python 3.12, and Unix installer checks.
+- The deployment checkout's tracked-file tree hash matched `origin/main` exactly
+  (`4900d07b76ed3bf5a40ca7c71281727068b8d01b`). The signed bundle
+  `local-20261012T185950Z` was accepted by the VPS verifier and installed through
+  the normal backup/health-check/automatic-rollback updater. The live `.env` was
+  not uploaded or changed.
+- Backup: `/var/backups/xider/xider-20261012T190025Z-105272.tar.gz`;
+  `gzip -t` passed and the archive contains 440 entries. Post-deploy
+  `xider-bot.service` was active/running with `NRestarts=0`; installed
+  `/opt/xider/TG-BOT-SERVER/bot.py` SHA-256 matched the deployed source at
+  `d1173c6b306cefe9e796098dd923781b986e37364784143915b3be8a7936191e`.
+- A sanitized current device inventory shows Mac `MacBook-Air.local` (`4.3.0`)
+  offline with heartbeat age about 52 minutes and no recorded capabilities
+  snapshot; Windows `Strix` (`4.0.0`) is offline with heartbeat age about 21
+  hours. Therefore a real post-deploy Telegram→MQTT→Mac screenshot acceptance
+  was not possible in this check. No screenshot result is claimed.
+- This was a signed server-source hotfix only: no public `v4.3.1` GitHub Release
+  was created and no Mac/Windows agent binaries were updated. The new safe
+  screenshot-response log will help distinguish agent result states from missing
+  responses once a device reconnects and an owner screenshot request is exercised.
