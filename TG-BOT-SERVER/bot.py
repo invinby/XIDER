@@ -4990,6 +4990,53 @@ async def on_cmd_capabilities(cq: CallbackQuery):
     )
 
 
+@router.callback_query(OwnerFilter(), F.data.startswith("permhelp:"))
+async def on_permission_help(cq: CallbackQuery):
+    """Show a fixed, OS-specific permission guide on the existing bot card."""
+    target = _require_target(cq)
+    permission = str(cq.data or "").partition(":")[2]
+    if not target:
+        await cq.answer(_lex("target_required"), show_alert=True)
+        return
+    if permission not in _SNAPSHOT_LABELS:
+        await cq.answer("Неизвестное разрешение; ничего не открыто.", show_alert=True)
+        return
+
+    info = devices.get(target)
+    if not isinstance(info, dict):
+        await cq.answer(_lex("device_no_response"), show_alert=True)
+        return
+    os_name = str(info.get("os") or "").lower()
+    platform = (
+        "macOS" if os_name.startswith(("mac", "darwin"))
+        else "Windows" if os_name.startswith("windows")
+        else None
+    )
+    text = _format_permission_help(platform, permission)
+    if text is None:
+        await cq.answer("Для этой ОС нет проверенной инструкции.", show_alert=True)
+        return
+
+    capabilities = info.get("capabilities")
+    commands = capabilities.get("commands", []) if isinstance(capabilities, dict) else []
+    commands = (
+        {command for command in commands if isinstance(command, str)}
+        if isinstance(commands, list) else set()
+    )
+    kb = InlineKeyboardBuilder()
+    if permission in _CAPABILITY_SETTINGS.get(platform, {}) and "permission_settings" in commands:
+        kb.button(
+            text=f"↗️ Попробовать открыть: {_SNAPSHOT_LABELS[permission]}",
+            callback_data=f"permsettings:{permission}",
+            style="primary",
+        )
+    kb.button(text=_nav("refresh"), callback_data="cmd:capabilities")
+    kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
+    kb.adjust(1)
+    await cq.answer()
+    await _replace_callback_message(cq, text, reply_markup=kb.as_markup())
+
+
 @router.callback_query(OwnerFilter(), F.data.startswith("permsettings:"))
 async def on_permission_settings(cq: CallbackQuery):
     """Open a fixed platform privacy pane only after the owner taps its button."""
@@ -5070,18 +5117,20 @@ def _capabilities_keyboard(result: dict | None = None, user_id: int | None = Non
     commands = set(commands) if isinstance(commands, list) else set()
     platform = next((name for name in _CAPABILITY_SETTINGS
                      if isinstance(snapshot["platform"], str) and snapshot["platform"].startswith(name)), None)
-    if (get_user_role(user_id) == Role.OWNER
-            and platform
-            and "permission_settings" in commands):
+    if get_user_role(user_id) == Role.OWNER and platform:
         for item in snapshot["items"]:
-            if (item["state"] in {"granted", "unavailable"}
-                    or not _CAPABILITY_SETTINGS[platform].get(item["id"])):
-                continue
             kb.button(
-                text=f"⚙️ Показать настройки: {_SNAPSHOT_LABELS[item['id']]}",
-                callback_data=f"permsettings:{item['id']}",
-                style="primary",
+                text=f"❔ Как разрешить: {_SNAPSHOT_LABELS[item['id']]}",
+                callback_data=f"permhelp:{item['id']}",
             )
+            if ("permission_settings" in commands
+                    and item["state"] not in {"granted", "unavailable"}
+                    and _CAPABILITY_SETTINGS[platform].get(item["id"])):
+                kb.button(
+                    text=f"↗️ Попробовать открыть: {_SNAPSHOT_LABELS[item['id']]}",
+                    callback_data=f"permsettings:{item['id']}",
+                    style="primary",
+                )
     kb.button(text=_nav("refresh"), callback_data="cmd:capabilities")
     kb.button(text=_nav("back_device"), callback_data="back:device", style="primary")
     kb.adjust(1)
@@ -5137,6 +5186,93 @@ _CAPABILITY_SETTINGS = {
     "Windows": {"camera": "ms-settings:privacy-webcam", "microphone": "ms-settings:privacy-microphone",
                 "location": "ms-settings:privacy-location"},
 }
+
+_PERMISSION_HELP = {
+    "macOS": {
+        "screen_recording": (
+            "Открой  → Системные настройки → Конфиденциальность и безопасность → "
+            "Запись экрана (в новых версиях может называться «Запись экрана и системного аудио»). "
+            "Разреши приложению, которое фактически запускает XIDER и делает снимок. "
+            "После изменения перезапусти приложение, если этого попросит macOS."
+        ),
+        "camera": (
+            "Открой  → Системные настройки → Конфиденциальность и безопасность → Камера. "
+            "Включи доступ для приложения, из которого фактически работает XIDER; "
+            "при запросе macOS подтверди доступ на самом Mac."
+        ),
+        "microphone": (
+            "Открой  → Системные настройки → Конфиденциальность и безопасность → Микрофон. "
+            "Включи доступ для фактического приложения XIDER и подтверди системный запрос на Mac."
+        ),
+        "location": (
+            "Открой  → Системные настройки → Конфиденциальность и безопасность → Службы геолокации. "
+            "Включи службы геолокации и доступ для фактического приложения XIDER. "
+            "Переключатель сам по себе не подтверждает получение координат."
+        ),
+        "accessibility": (
+            "Открой  → Системные настройки → Конфиденциальность и безопасность → Универсальный доступ. "
+            "Разрешай только фактическому приложению XIDER и только если нужная функция управляет интерфейсом."
+        ),
+        "file_access": (
+            "Открой  → Системные настройки → Конфиденциальность и безопасность → Файлы и папки. "
+            "Разрешай XIDER только нужные для выбранной операции папки. "
+            "Не включай полный доступ к диску без отдельной необходимости."
+        ),
+    },
+    "Windows": {
+        "screen_recording": (
+            "Для классического desktop-агента Windows нет универсального переключателя разрешения "
+            "записи экрана, аналогичного macOS. Страница Graphics capture относится к возможностям "
+            "упакованных приложений и не является общим разрешением для этого агента. "
+            "Проверь активный пользовательский рабочий стол; "
+            "подтверждение — только успешный разрешённый тест снимка."
+        ),
+        "camera": (
+            "Открой Параметры → Конфиденциальность и безопасность → Камера. "
+            "Включи доступ к камере и «Разрешить классическим приложениям доступ к камере». "
+            "Общий переключатель не является индивидуальной проверкой XIDER — проверь пробным захватом."
+        ),
+        "microphone": (
+            "Открой Параметры → Конфиденциальность и безопасность → Микрофон. "
+            "Включи доступ к микрофону и «Разрешить классическим приложениям доступ к микрофону», "
+            "затем проверь разрешённой пробной записью."
+        ),
+        "location": (
+            "Открой Параметры → Конфиденциальность и безопасность → Расположение. "
+            "Включи службы геолокации и проверь доступ приложений. Для классических приложений "
+            "отдельный точный переключатель может отсутствовать; источник и точность нужно проверять отдельно."
+        ),
+        "accessibility": (
+            "В Windows нет общего переключателя доступа классического приложения к специальным возможностям, "
+            "эквивалентного macOS. Раздел «Специальные возможности» меняет функции Windows, "
+            "а не выдаёт XIDER универсальное разрешение. Не включай UAC или запуск от администратора "
+            "как замену такому разрешению."
+        ),
+        "file_access": (
+            "Для классического desktop-агента нет общего переключателя «Файлы и папки», который "
+            "контролирует весь доступ XIDER. Для конкретной папки проверь Свойства → Безопасность "
+            "и права учётной записи, под которой запущен агент. Не расширяй доступ ко всему диску."
+        ),
+    },
+}
+
+
+def _format_permission_help(platform: str | None, permission: str) -> str | None:
+    """Return static, allowlisted guidance; agent-provided text and URIs are never used."""
+    if platform not in _PERMISSION_HELP or permission not in _SNAPSHOT_LABELS:
+        return None
+    instructions = _PERMISSION_HELP[platform].get(permission)
+    if not instructions:
+        return None
+    label = html.escape(_SNAPSHOT_LABELS[permission])
+    instructions = html.escape(instructions)
+    return (
+        f"🧭 <b>Как разрешить: {label}</b>\n\n"
+        f"{instructions}\n\n"
+        "Это только инструкция: она не выдаёт разрешение и не доказывает доступ. "
+        "После изменения вернись к проверке; "
+        "доступ подтверждает только разрешённое пробное действие."
+    )
 
 
 def _parse_capability_snapshot(result: dict) -> dict:
@@ -5227,7 +5363,7 @@ def _format_capabilities(result: dict) -> str:
                          "Разреши фактическое приложение XIDER; при запросе ОС перезапусти его.")
             commands = result.get("commands") if isinstance(result.get("commands"), list) else []
             if "permission_settings" in commands:
-                lines.append("Для открытия раздела на Mac нажми соответствующую кнопку ниже; затем подтверди доступ вручную и обнови проверку.")
+                lines.append("Кнопка ниже пытается перейти к настройкам; если нужный раздел не откроется, пройди путь вручную. Подтверди доступ на Mac и обнови проверку.")
             else:
                 lines.append("Удалённое открытие раздела появится после обновления агента до версии с поддержкой этой команды.")
         else:
