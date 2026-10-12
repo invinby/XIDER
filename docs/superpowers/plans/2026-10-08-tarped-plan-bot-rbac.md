@@ -30,7 +30,7 @@
 ---
 
 **Дата:** 2026-10-08  
-**Статус:** локальная реализация Tasks 1–3 завершена и проверена; Task 4 и live Telegram acceptance открыты
+**Статус:** локальная реализация Tasks 1–4 завершена и проверена; live Telegram acceptance открыт
 **Спецификация:** разделы 4–7, 12 и 14 [TARPED redesign](../specs/2026-10-08-tarped-product-redesign-design.md)  
 **Границы:** `TG-BOT-SERVER`; не менять X-LEX (`xlex.py`, его данные, стили и golden-тесты).
 
@@ -95,11 +95,11 @@
 
 **Files:** Modify `TG-BOT-SERVER/ui_cards.py` only if its storage contract is insufficient; update relevant screen/command handlers in `bot.py`; extend `tests/test_ui_cards.py`, `tests/test_lifecycle_copy.py`, `tests/test_bot_ui.py`.
 
-- [ ] Add/extend transition tests for main → device → every category → operation progress/result → back/home, including repeated callbacks, missing card, Telegram edit failure and media-to-text transitions.
-- [ ] Reuse the indexed card for routine navigation/results; the only separate messages are the explicitly enumerated owner security alerts (`/start`, dangerous-action confirmation and deduplicated online/offline transitions).
-- [ ] Assert transient edit/send/delete errors never create a repeating message flood and the next callback can recover the current card id.
-- [ ] Add a repeated identical heartbeat test; if current transition-dedup test already covers it, extend that test rather than adding a duplicate.
-- [ ] Run `python -m pytest tests/test_ui_cards.py tests/test_lifecycle_copy.py tests/test_bot_ui.py -q`; expect one normal UI card per chat/user except listed security alerts.
+- [x] Add/extend transition tests for main → device → every category → operation progress/result → back/home, including repeated callbacks, missing card, Telegram edit failure and media-to-text transitions.
+- [x] Reuse the indexed card for routine navigation/results; the only separate messages are the explicitly enumerated owner security alerts (`/start`, dangerous-action confirmation and deduplicated online/offline transitions).
+- [x] Assert transient edit/send/delete errors never create a repeating message flood and the next callback can recover the current card id.
+- [x] Add a repeated identical heartbeat test; if current transition-dedup test already covers it, extend that test rather than adding a duplicate.
+- [x] Run `python -m pytest tests/test_ui_cards.py tests/test_lifecycle_copy.py tests/test_bot_ui.py -q`; expect one normal UI card per chat/user except listed security alerts.
 
 ## Приёмка
 

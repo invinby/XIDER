@@ -6625,6 +6625,75 @@ def test_navigation_category_operation_back_home_stays_one_card(monkeypatch, tmp
     asyncio.run(scenario())
 
 
+def test_versions_and_permission_check_round_trip_stays_one_card(monkeypatch, tmp_path):
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    monkeypatch.setattr(bot, "ADMIN_ID", 20)
+    _setup(monkeypatch, {
+        "mac-a": {
+            "name": "MacBook", "os": "macOS 14", "version": "4.2.1",
+            "capabilities": {"commands": ["capabilities", "permission_settings"]},
+        },
+    })
+    monkeypatch.setattr(bot, "SESSION", {"target": None})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot, "_visible_device_items", lambda _user_id: bot.devices.all())
+    async def allow_result(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(bot, "_callback_result_access_or_report", allow_result)
+    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: True)
+    monkeypatch.setattr(bot.release_catalog.catalog, "cached", lambda: [])
+    monkeypatch.setattr(bot, "publish_tracked", lambda *_args, **_kwargs: (True, "caps-1"))
+    snapshot = {
+        "schema": 1, "platform": "macOS 14", "checked_at": "2026-10-12T10:00:00+00:00",
+        "hostname": "MacBook", "version": "4.2.1", "commands": ["permission_settings"],
+        "items": [
+            {"id": "camera", "state": "permission_unverified", "detail": "Not yet tested."},
+        ],
+    }
+
+    class Capabilities:
+        async def wait_for(self, *_args, **_kwargs):
+            return snapshot
+
+    monkeypatch.setattr(bot, "capabilities_collector", Capabilities())
+    settings_calls = []
+
+    async def settings_command(cq, action, emoji, label, **kwargs):
+        settings_calls.append((action, kwargs))
+        return await bot._replace_callback_message(cq, "Settings handoff result", reply_markup=bot.back_to_device_kb())
+
+    monkeypatch.setattr(bot, "simple_command", settings_command)
+
+    async def scenario():
+        await bot.on_menu_main(telegram.callback("menu:main"))
+        await bot.on_menu_devices(telegram.callback("menu:devices"))
+        await bot.on_dev(telegram.callback("dev:mac-a"))
+        assert "cmd:capabilities" in _callback_data(bot.device_menu("mac-a", 20))
+
+        await bot.on_versions_device(telegram.callback("versions:device"))
+        assert "versions:list:agent:0" in _callback_data(telegram.cards[30]["markup"])
+        await bot.on_back_to_device(telegram.callback("back:device"))
+
+        await bot.on_cmd_capabilities(telegram.callback("cmd:capabilities"))
+        callbacks = _callback_data(telegram.cards[30]["markup"])
+        assert "permhelp:camera" in callbacks
+        assert "permsettings:camera" in callbacks
+
+        await bot.on_permission_help(telegram.callback("permhelp:camera"))
+        assert "Системные настройки" in telegram.cards[30]["text"]
+        await bot.on_permission_settings(telegram.callback("permsettings:camera"))
+        assert settings_calls == [("permission_settings", {"timeout": 15.0, "permission": "camera"})]
+
+        await bot.on_back_to_device(telegram.callback("back:device"))
+        await bot.on_menu_main(telegram.callback("menu:main"))
+        assert telegram.sent == []
+        assert list(telegram.cards) == [30]
+        assert bot.ui_cards.get(10, 20) == 30
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("flow", ["callback", "input", "media", "document"])
 def test_transient_card_failure_and_next_callback_recover_current_card(monkeypatch, tmp_path, flow):
     telegram = _card_telegram(monkeypatch, tmp_path)
