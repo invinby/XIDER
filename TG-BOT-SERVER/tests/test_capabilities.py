@@ -407,6 +407,44 @@ def test_capabilities_handler_displays_recheck_after_correlated_response(monkeyp
     assert {f"permhelp:{permission}" for permission in bot._SNAPSHOT_LABELS} <= callbacks
 
 
+def test_capabilities_timeout_keeps_retry_on_the_same_card(monkeypatch):
+    rendered = []
+
+    async def answer(*_args, **_kwargs):
+        pass
+
+    async def allowed(*_args, **_kwargs):
+        return True
+
+    async def render(_cq, text, reply_markup=None, **_kwargs):
+        rendered.append((text, reply_markup))
+
+    class Collector:
+        async def wait_for(self, *_args, **_kwargs):
+            return None
+
+    monkeypatch.setattr(bot, "SESSION", {"target": "dev"})
+    monkeypatch.setattr(bot, "_callback_result_access_or_report", allowed)
+    monkeypatch.setattr(bot, "_replace_callback_message", render)
+    monkeypatch.setattr(bot, "publish_tracked", lambda *_args, **_kwargs: (True, "ticket"))
+    monkeypatch.setattr(bot, "capabilities_collector", Collector())
+
+    asyncio.run(bot.on_cmd_capabilities(SimpleNamespace(
+        answer=answer,
+        from_user=SimpleNamespace(id=bot.ADMIN_ID),
+        data="cmd:capabilities",
+    )))
+
+    assert len(rendered) == 1
+    assert rendered[0][0] == bot._lex("device_no_response")
+    callbacks = {
+        button.callback_data
+        for row in rendered[0][1].inline_keyboard
+        for button in row
+    }
+    assert {"cmd:capabilities", "back:device"} <= callbacks
+
+
 def test_collector_replaces_stale_grant_when_new_envelope_has_no_commands(monkeypatch, tmp_path):
     from crypto import sign_message
     from device_store import DeviceStore
