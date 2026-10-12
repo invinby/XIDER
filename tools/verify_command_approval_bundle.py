@@ -9,7 +9,9 @@ import zipfile
 
 REQUIRED = {"command_module_loader", "command_signing", "command_replay", "shell_execution",
             "release_signature", "update_package",
-            "cryptography.hazmat.primitives.asymmetric.ed25519"}
+            "cryptography.hazmat.primitives.asymmetric.ed25519",
+            "winrt.windows.devices.geolocation",
+            "winrt.windows.security.authorization.appcapabilityaccess"}
 PRIVATE_KEY_BASENAMES = {"id_rsa", "id_ecdsa", "id_ed25519", "id_dsa"}
 PRIVATE_PEM_MARKER = re.compile(rb"(?m)^-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----\r?$")
 

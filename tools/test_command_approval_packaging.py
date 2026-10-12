@@ -44,6 +44,15 @@ def test_ci_pins_pyinstaller_and_checks_real_agent_archives():
     assert workflow.count("--public-only-zip") >= 4
 
 
+def test_windows_bundle_verifier_requires_geolocation_runtime_modules():
+    verifier = runpy.run_path(str(ROOT / "tools" / "verify_command_approval_bundle.py"))
+
+    assert {
+        "winrt.windows.devices.geolocation",
+        "winrt.windows.security.authorization.appcapabilityaccess",
+    } <= verifier["REQUIRED"]
+
+
 def test_public_only_archive_accepts_example_but_rejects_private_files(tmp_path):
     verifier = runpy.run_path(str(ROOT / "tools" / "verify_command_approval_bundle.py"))
     acceptable = tmp_path / "public.zip"
