@@ -64,10 +64,10 @@
 
 **Interface:** For every callback produced by every screen builder, record its handler route and one server-side access class: protected `OwnerFilter`, public `ReadOnlyFilter`, device/action grant through `access_store.can_use_callback(...)`, owner-approved request, or explicitly non-action. For each action record category, required permission, allowed roles/grants, OS support, timeout, result sensitivity and risk. Hidden keyboards are never the authorization boundary; sensitive data and publish paths recheck the matching authority.
 
-- [ ] Extend `test_rendered_menu_callbacks_match_a_registered_route` to include every root, device, category, server, admin, info and confirmation keyboard builder; assert every emitted callback maps to a registered route or an explicit documented no-op.
-- [ ] Add the companion metadata/access classification assertion; unknown action callbacks fail closed and no route is implicitly public because its button was hidden.
-- [ ] Run `python -m pytest tests/test_bot_ui.py::test_rendered_menu_callbacks_match_a_registered_route tests/test_access_store.py -q`; record existing failures before production edits.
-- [ ] Review the inventory for duplicated gates and stale callbacks; create no catalog unless a concrete metadata gap is found.
+- [x] Extend `test_rendered_menu_callbacks_match_a_registered_route` to include every root, device, category, server, admin, info and confirmation keyboard builder; assert every emitted callback maps to a registered route or an explicit documented no-op.
+- [x] Add the companion metadata/access classification assertion; unknown action callbacks fail closed and no route is implicitly public because its button was hidden.
+- [x] Run `python -m pytest tests/test_bot_ui.py::test_rendered_menu_callbacks_match_a_registered_route tests/test_access_store.py -q`; record existing failures before production edits.
+- [x] Review the inventory for duplicated gates and stale callbacks; create no catalog unless a concrete metadata gap is found.
 
 ### Task 2: Rebuild screens and align button visibility with server gates
 

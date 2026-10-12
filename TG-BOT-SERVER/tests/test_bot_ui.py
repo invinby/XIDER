@@ -4074,6 +4074,11 @@ def _rendered_callback_inventory(monkeypatch):
     monkeypatch.setattr(bot.access_store, "list_users", lambda: [
         {"id": 200, "role": "guest", "permissions": {}},
     ])
+    monkeypatch.setattr(
+        bot.update_coordinator.store,
+        "batch",
+        lambda _batch_id: [SimpleNamespace(device_id="device-1"), SimpleNamespace(device_id="device-2")],
+    )
     url_shortcuts = [{"id": "012345abcdef", "name": "Example", "url": "https://example.com"}]
     monkeypatch.setattr(
         bot.bot_settings,
@@ -4117,6 +4122,10 @@ def _rendered_callback_inventory(monkeypatch):
                 )
             ],
         }, user_id=bot.ADMIN_ID),
+        bot._location_result_keyboard({"state": "denied"}, bot.ADMIN_ID),
+        bot._update_batch_keyboard(
+            SimpleNamespace(batch_id="inventory-batch", release_tag="v4.1.0"), bot.ADMIN_ID,
+        ),
         *(bot.confirm_kb(callback) for callback in (
             "shell:ok", "openapp:ok", "stop:ok", "stopall:ok", "guardianstop:ok", "sleep:ok", "kill:123",
         )),
@@ -4208,10 +4217,41 @@ def test_rendered_menu_callbacks_match_a_registered_route(monkeypatch):
     assert not unmatched, f"Buttons have no callback route: {sorted(unmatched)}"
 
 
+def test_ip_fallback_keyboard_is_in_inventory_and_owner_gated(monkeypatch):
+    monkeypatch.setattr(
+        bot,
+        "get_user_role",
+        lambda user_id: bot.Role.OWNER if user_id == bot.ADMIN_ID else bot.Role.GUEST,
+    )
+    owner_markup = bot._location_result_keyboard({"state": "denied"}, bot.ADMIN_ID)
+    guest_markup = bot._location_result_keyboard({"state": "denied"}, 200)
+    owner_callbacks = {
+        button.callback_data for row in owner_markup.inline_keyboard for button in row
+    }
+    guest_callbacks = {
+        button.callback_data for row in guest_markup.inline_keyboard for button in row
+    }
+    assert "location:ip" in owner_callbacks
+    assert "location:ip" not in guest_callbacks
+
+    callbacks = _rendered_callback_inventory(monkeypatch)
+    assert "location:ip" in callbacks, "Location result keyboard is missing from callback inventory"
+    route = _callback_routes("location:ip")
+    assert len(route) == 1
+    _assert_expected_callback_gate("location:ip", route[0])
+    metadata = _descriptive_callback_metadata("location:ip", route[0])
+    assert metadata["access_class"] == "protected OwnerFilter"
+    assert metadata["category"] == "network"
+    assert metadata["wire_action"] == "geo_location"
+    assert metadata["timeout"] == 16.0
+    assert metadata["result_sensitivity"] == "approximate city/region"
+    assert metadata["risk"] == "explicit external IP lookup"
+
+
 def _expected_callback_gate(callback):
     """Independent route contract: never inferred from the installed filter."""
     if callback in {"shell:ok", "menu:admin", "menu:target", "url:favorites", "versions:server"} or callback.startswith(
-        ("admin:", "devmg:", "install:", "server:", "server_confirm:", "url:fav:", "versions:bootstrap:", "versions:canary:", "versions:rollout:", "cmd:shell-approve:", "cmd:shell-cancel:", "permhelp:", "permsettings:")
+        ("admin:", "devmg:", "install:", "server:", "server_confirm:", "url:fav:", "versions:bootstrap:", "versions:canary:", "versions:rollout:", "cmd:shell-approve:", "cmd:shell-cancel:", "permhelp:", "permsettings:", "location:")
     ):
         return "OwnerFilter"
     if callback in {"menu:main", "menu:about", "menu:server", "menu:guest_devices", "guest:readonly", "url:cancel"} or callback.startswith(("about:chapter:", "url:count:")):
@@ -4335,6 +4375,10 @@ on_devmg_clear_all on_versions_install_select on_versions_canary_select on_versi
 _DEPENDENT_ACTION_CONTRACTS = {
     "on_permission_settings": dict(category="system", os_support=("Windows", "macOS"), timeout=15.0,
                                     result_sensitivity="settings launch acknowledgment", risk="local settings navigation"),
+    "on_cmd_geo_location_ip": dict(category="network", wire_action="geo_location",
+                                    os_support=("Windows", "macOS"), timeout=16.0,
+                                    result_sensitivity="approximate city/region",
+                                    risk="explicit external IP lookup"),
     "on_repeat": dict(category="history", os_support="unknown: selected HISTORY entry determines wire action",
                       timeout=0.0, result_sensitivity="unknown: selected HISTORY entry determines output",
                       risk="unknown: selected HISTORY entry determines side effect"),
