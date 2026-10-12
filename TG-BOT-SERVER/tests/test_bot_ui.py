@@ -692,6 +692,47 @@ def test_admin_mutations_require_confirm_and_reject_cancel_expiry_replay(monkeyp
     asyncio.run(scenario())
 
 
+def test_admin_unblock_requires_confirmation_and_restores_exact_prior_access(monkeypatch, tmp_path):
+    Callback, rendered = _admin_fixture(monkeypatch, tmp_path)
+    assert bot.access_store.set_role(100, 200, bot.Role.USER, 100)
+    assert bot.access_store.toggle_device(100, 200, "a", 100)
+    assert bot.access_store.toggle_callback(100, 200, "cmd:status", 100)
+    assert bot.access_store.set_blocked(100, 200, True, 100)
+    before = bot.access_store.get_user(200)
+    now = [1000.0]
+    monkeypatch.setattr(bot.time, "monotonic", lambda: now[0])
+
+    async def pending_confirmation():
+        await bot.on_admin_block(Callback("admin:block:200"))
+        assert bot.access_store.get_user(200) == before
+        actions = _callback_data(rendered[-1][1])
+        return next(value for value in actions if value.startswith("admin:confirm:")), next(
+            value for value in actions if value.startswith("admin:cancel:")
+        )
+
+    async def scenario():
+        confirm, cancel = await pending_confirmation()
+        await bot.on_admin_cancel(Callback(cancel))
+        await bot.on_admin_confirm(Callback(confirm))
+        assert bot.access_store.get_user(200) == before
+
+        confirm, _ = await pending_confirmation()
+        now[0] += 121
+        await bot.on_admin_confirm(Callback(confirm))
+        assert bot.access_store.get_user(200) == before
+
+        confirm, _ = await pending_confirmation()
+        await bot.on_admin_confirm(Callback(confirm))
+        restored = bot.access_store.get_user(200)
+        assert restored["role"] == bot.Role.USER
+        assert restored["permissions"] == before["permissions"]
+        assert bot.access_store.get_role(200, 100) == bot.Role.USER
+        await bot.on_admin_confirm(Callback(confirm))
+        assert bot.access_store.get_user(200) == restored
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("actor", [200, 300, 400])
 @pytest.mark.parametrize("handler,data", [
     ("on_admin_users", "admin:users"), ("on_admin_user", "admin:user:200"),

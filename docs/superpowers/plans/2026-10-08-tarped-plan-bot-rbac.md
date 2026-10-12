@@ -30,7 +30,7 @@
 ---
 
 **Дата:** 2026-10-08  
-**Статус:** локальная реализация Tasks 1–2 завершена и проверена; Tasks 3–4 и live Telegram acceptance открыты
+**Статус:** локальная реализация Tasks 1–3 завершена и проверена; Task 4 и live Telegram acceptance открыты
 **Спецификация:** разделы 4–7, 12 и 14 [TARPED redesign](../specs/2026-10-08-tarped-product-redesign-design.md)  
 **Границы:** `TG-BOT-SERVER`; не менять X-LEX (`xlex.py`, его данные, стили и golden-тесты).
 
@@ -86,10 +86,10 @@
 
 **Files:** Modify only required `on_admin_*` handlers in `TG-BOT-SERVER/bot.py`; reuse `access_store.py`; extend `tests/test_access_store.py` and `tests/test_bot_ui.py`.
 
-- [ ] First identify uncovered cases (current suite already covers first-start guest defaults, device-scoped grants, legacy `coowner` downgrade, block revocation/redaction and FSM grant rechecks); add failing tests only for gaps: shell-request grant versus owner-only approval, unblock/re-grant behavior, owner self-demotion/self-block, `/start` notification dedupe, direct unauthorized/unknown-ID admin callback, guest/blocked data reads, and confirmation/cancel/expiry for privileged role/grant/unblock changes.
-- [ ] Ensure the owner user list shows role, last activity/visit, granted devices and actions; every role change, block/unblock, per-device/action grant, text edit and outbound message flow is owner-only and sensitive changes require an explicit owner confirmation before commit.
-- [ ] Verify audit redacts credentials and excludes coordinates, file contents, raw shell/stdout; assert guest/blocked cannot read admin/audit details.
-- [ ] Run `python -m pytest tests/test_access_store.py tests/test_bot_ui.py -q`; expect all covered actions denied/allowed exactly by role and grant.
+- [x] First identify uncovered cases (current suite already covers first-start guest defaults, device-scoped grants, legacy `coowner` downgrade, block revocation/redaction and FSM grant rechecks); add failing tests only for gaps: shell-request grant versus owner-only approval, unblock/re-grant behavior, owner self-demotion/self-block, `/start` notification dedupe, direct unauthorized/unknown-ID admin callback, guest/blocked data reads, and confirmation/cancel/expiry for privileged role/grant/unblock changes.
+- [x] Ensure the owner user list shows role, last activity/visit, granted devices and actions; every role change, block/unblock, per-device/action grant, text edit and outbound message flow is owner-only and sensitive changes require an explicit owner confirmation before commit.
+- [x] Verify audit redacts credentials and excludes coordinates, file contents, raw shell/stdout; assert guest/blocked cannot read admin/audit details.
+- [x] Run `python -m pytest tests/test_access_store.py tests/test_bot_ui.py -q`; expect all covered actions denied/allowed exactly by role and grant.
 
 ### Task 4: Keep routine navigation and command feedback in one card
 
