@@ -4105,6 +4105,18 @@ def _rendered_callback_inventory(monkeypatch):
         bot.url_favorites_keyboard(), bot.url_favorites_keyboard(is_owner=True),
         bot._favorites_kb("device-1", ["status"]),
         bot._version_install_confirmation_kb("v4.1.0"),
+        bot._capabilities_keyboard({
+            "schema": 1,
+            "platform": "macOS 27.0",
+            "checked_at": "2026-10-08T10:00:00+00:00",
+            "commands": ["capabilities", "permission_settings"],
+            "items": [
+                {"id": permission, "state": "denied", "detail": "test"}
+                for permission in (
+                    "screen_recording", "camera", "microphone", "location", "accessibility", "file_access",
+                )
+            ],
+        }, user_id=bot.ADMIN_ID),
         *(bot.confirm_kb(callback) for callback in (
             "shell:ok", "openapp:ok", "stop:ok", "stopall:ok", "guardianstop:ok", "sleep:ok", "kill:123",
         )),
@@ -4138,6 +4150,7 @@ def _rendered_callback_inventory(monkeypatch):
         "it": {"pid": 123}, "page": 1, "i": 0, "notes_page": 1,
         "token": "0123456789abcdef0123456789abcdef",
         "approve_callback": "cmd:shell-approve:sample", "cancel_callback": "cmd:shell-cancel:sample",
+        "permission": "camera",
         "release": SimpleNamespace(tag="v4.1.0"),
         "bootstrap_release": SimpleNamespace(tag="v4.1.0"), "tag": "v4.1.0",
     }
@@ -4198,7 +4211,7 @@ def test_rendered_menu_callbacks_match_a_registered_route(monkeypatch):
 def _expected_callback_gate(callback):
     """Independent route contract: never inferred from the installed filter."""
     if callback in {"shell:ok", "menu:admin", "menu:target", "url:favorites", "versions:server"} or callback.startswith(
-        ("admin:", "devmg:", "install:", "server:", "server_confirm:", "url:fav:", "versions:bootstrap:", "versions:canary:", "versions:rollout:", "cmd:shell-approve:", "cmd:shell-cancel:")
+        ("admin:", "devmg:", "install:", "server:", "server_confirm:", "url:fav:", "versions:bootstrap:", "versions:canary:", "versions:rollout:", "cmd:shell-approve:", "cmd:shell-cancel:", "permhelp:", "permsettings:")
     ):
         return "OwnerFilter"
     if callback in {"menu:main", "menu:about", "menu:server", "menu:guest_devices", "guest:readonly", "url:cancel"} or callback.startswith(("about:chapter:", "url:count:")):
@@ -4307,6 +4320,7 @@ on_sleep_ok power power 0 acknowledgment power_interruption
 
 _NAVIGATION_ROUTES = frozenset("""
 on_about_chapter on_menu_about on_menu_main on_menu_devices on_menu_server on_menu_admin on_menu_target
+on_permission_help
 on_guest_devices on_guest_readonly on_noop on_back_to_device on_dev on_cat_device on_cat_files on_files_menu
 on_cat_input on_cat_media on_cat_network on_cat_power on_cat_pranks on_cat_screen on_cat_system on_cat_terminal
 on_cmd_guardian_menu on_cmd_rotate on_menu_wallpaper on_fav_menu on_mic_opts on_vol_opts on_prank_page
@@ -4319,6 +4333,8 @@ on_devmg_clear_all on_versions_install_select on_versions_canary_select on_versi
 
 
 _DEPENDENT_ACTION_CONTRACTS = {
+    "on_permission_settings": dict(category="system", os_support=("Windows", "macOS"), timeout=15.0,
+                                    result_sensitivity="settings launch acknowledgment", risk="local settings navigation"),
     "on_repeat": dict(category="history", os_support="unknown: selected HISTORY entry determines wire action",
                       timeout=0.0, result_sensitivity="unknown: selected HISTORY entry determines output",
                       risk="unknown: selected HISTORY entry determines side effect"),

@@ -87,6 +87,44 @@ def test_limited_diagnostic_explains_permitted_trial_only():
     assert "не выдаёт разрешения" in text
 
 
+@pytest.mark.parametrize("platform", ("macOS", "Windows"))
+@pytest.mark.parametrize("permission", (
+    "screen_recording", "camera", "microphone", "location", "accessibility", "file_access",
+))
+def test_permission_help_exists_for_every_capability_and_never_claims_a_grant(platform, permission):
+    text = bot._format_permission_help(platform, permission)
+
+    assert isinstance(text, str) and text
+    assert bot._SNAPSHOT_LABELS[permission] in text
+    assert "не выдаёт разрешение" in text
+
+
+def test_permission_help_is_platform_specific_and_does_not_invent_windows_screen_toggle():
+    mac_camera = bot._format_permission_help("macOS", "camera")
+    win_camera = bot._format_permission_help("Windows", "camera")
+    win_screen = bot._format_permission_help("Windows", "screen_recording")
+
+    assert "Системные настройки → Конфиденциальность и безопасность → Камера" in mac_camera
+    assert "Параметры → Конфиденциальность и безопасность → Камера" in win_camera
+    assert "Разрешить классическим приложениям" in win_camera
+    assert "нет универсального переключателя" in win_screen
+    assert "Системные настройки" not in win_screen
+
+
+def test_macos_location_help_explains_first_grant_when_xider_is_missing_from_settings():
+    text = bot._format_permission_help("macOS", "location")
+
+    assert "Если XIDER ещё нет в списке" in text
+    assert "./XIDER.app/Contents/MacOS/XGENT-MCS --location-setup" in text
+    assert "корректно подписанным приложением" in text
+    assert "Бот не может запросить согласие удалённо" in text
+
+
+@pytest.mark.parametrize("platform,permission", [("Linux", "camera"), ("macOS", "shell"), ("Windows", "" )])
+def test_permission_help_rejects_unknown_platform_or_capability(platform, permission):
+    assert bot._format_permission_help(platform, permission) is None
+
+
 def test_recheck_uses_existing_callback_and_no_agent_uri_buttons():
     kb = bot._capabilities_keyboard()
     buttons = [button for row in kb.inline_keyboard for button in row]
@@ -114,6 +152,28 @@ def test_mac_capability_card_shows_remote_settings_buttons_only_for_unresolved_p
     assert "permsettings:file_access" in callbacks
     assert "permsettings:camera" not in callbacks
     assert all(button.url is None for button in buttons)
+
+
+def test_owner_capability_card_has_per_permission_help_but_other_roles_do_not(monkeypatch):
+    result = snapshot()
+    result["commands"] = ["capabilities", "permission_settings"]
+
+    owner_kb = bot._capabilities_keyboard(result, user_id=bot.ADMIN_ID)
+    owner_callbacks = {
+        button.callback_data
+        for row in owner_kb.inline_keyboard
+        for button in row
+    }
+    assert {f"permhelp:{permission}" for permission in bot._SNAPSHOT_LABELS} <= owner_callbacks
+
+    monkeypatch.setattr(bot, "get_user_role", lambda _uid: bot.Role.USER)
+    user_kb = bot._capabilities_keyboard(result, user_id=200)
+    user_callbacks = {
+        button.callback_data
+        for row in user_kb.inline_keyboard
+        for button in row
+    }
+    assert not any(callback.startswith("permhelp:") for callback in user_callbacks)
 
 
 def test_mac_capability_card_hides_remote_settings_buttons_until_agent_supports_them():
@@ -167,7 +227,7 @@ def test_permission_settings_button_uses_neutral_copy_without_changing_xlex(styl
         if button.callback_data == "permsettings:camera"
     )
 
-    assert button.text == "⚙️ Показать настройки: Камера"
+    assert button.text == "↗️ Попробовать открыть: Камера"
 
 
 def test_windows_permission_settings_dispatch_requires_owner_and_known_permission(monkeypatch):
@@ -255,6 +315,63 @@ def test_remote_permission_settings_callback_rejects_untrusted_permission_value(
     assert alerts and alerts[0].get("show_alert") is True
 
 
+def test_permission_help_replaces_current_card_and_offers_allowlisted_settings_button(monkeypatch):
+    rendered = []
+
+    async def answer(*_args, **_kwargs):
+        pass
+
+    async def render(_cq, text, reply_markup=None, **_kwargs):
+        rendered.append((text, reply_markup))
+
+    monkeypatch.setattr(bot, "SESSION", {"target": "mac-1"})
+    monkeypatch.setattr(bot.devices, "get", lambda _target: {
+        "os": "macOS 27.0",
+        "capabilities": {"commands": ["permission_settings"]},
+    })
+    monkeypatch.setattr(bot, "_replace_callback_message", render)
+    cq = SimpleNamespace(
+        answer=answer,
+        from_user=SimpleNamespace(id=bot.ADMIN_ID),
+        data="permhelp:camera",
+    )
+
+    asyncio.run(bot.on_permission_help(cq))
+
+    assert len(rendered) == 1
+    text, markup = rendered[0]
+    assert "Системные настройки → Конфиденциальность и безопасность → Камера" in text
+    callbacks = {button.callback_data for row in markup.inline_keyboard for button in row}
+    assert "permsettings:camera" in callbacks
+    assert "cmd:capabilities" in callbacks
+    assert "back:device" in callbacks
+
+
+def test_permission_help_rejects_unknown_callback_without_rendering(monkeypatch):
+    alerts = []
+    rendered = []
+
+    async def answer(*_args, **kwargs):
+        alerts.append(kwargs)
+
+    async def render(*args, **kwargs):
+        rendered.append((args, kwargs))
+
+    monkeypatch.setattr(bot, "SESSION", {"target": "mac-1"})
+    monkeypatch.setattr(bot.devices, "get", lambda _target: {"os": "macOS 27.0"})
+    monkeypatch.setattr(bot, "_replace_callback_message", render)
+    cq = SimpleNamespace(
+        answer=answer,
+        from_user=SimpleNamespace(id=bot.ADMIN_ID),
+        data="permhelp:file:///tmp/evil",
+    )
+
+    asyncio.run(bot.on_permission_help(cq))
+
+    assert alerts and alerts[0].get("show_alert") is True
+    assert rendered == []
+
+
 def test_capabilities_handler_displays_recheck_after_correlated_response(monkeypatch):
     rendered = []
     published = []
@@ -286,7 +403,8 @@ def test_capabilities_handler_displays_recheck_after_correlated_response(monkeyp
     assert published == [("capabilities", {"_target": "dev"})]
     assert "2026-10-08T10:00:00+00:00" in rendered[0][0]
     callbacks = {button.callback_data for row in rendered[0][1].inline_keyboard for button in row}
-    assert callbacks == {"cmd:capabilities", "back:device"}
+    assert {"cmd:capabilities", "back:device"} <= callbacks
+    assert {f"permhelp:{permission}" for permission in bot._SNAPSHOT_LABELS} <= callbacks
 
 
 def test_collector_replaces_stale_grant_when_new_envelope_has_no_commands(monkeypatch, tmp_path):
