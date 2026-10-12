@@ -30,7 +30,7 @@
 ---
 
 **Дата:** 2026-10-08  
-**Статус:** локальная реализация Tasks 1–4 завершена и проверена; live Telegram acceptance отдельно открыта
+**Статус:** локальная реализация Tasks 1–2 завершена и проверена; Tasks 3–4 и live Telegram acceptance открыты
 **Спецификация:** разделы 4–7, 12 и 14 [TARPED redesign](../specs/2026-10-08-tarped-product-redesign-design.md)  
 **Границы:** `TG-BOT-SERVER`; не менять X-LEX (`xlex.py`, его данные, стили и golden-тесты).
 
@@ -75,12 +75,12 @@
 
 **Interface:** Preserve callback-data for existing actions unless a route migration includes a compatibility test. For device/action controls, every non-owner button is rendered only when the same current user/device grant permits the handler; public read-only navigation and owner-only controls use their respective filters. Role checks continue at callback time and immediately before publish.
 
-- [ ] Add failing rendered-screen tests for the approved hierarchy: main → devices/server/admin/info; device → overview/diagnostics, display/media, files, network/apps, commands/processes, power, versions/update, permissions and extra functions; all routes return/back/home inside the same card.
-- [ ] Extend the role × navigation × callback × device × grant-revocation matrix to owner, granted user, ungranted user, guest and blocked across two devices; guest sees only public info, safe device summaries and read-only server overview, never sensitive results.
-- [ ] Test that a guessed callback, a changed device id, unsupported OS action, blocked user and stale role/grant are denied even if a keyboard still contains the callback.
-- [ ] Test that a granted user's shell grant remains request-only: the user cannot approve or publish; the positive owner preview/approve/cancel lifecycle is implemented and tested in the separate Command Approval Plan Task 3.
-- [ ] Implement screen layout and visibility changes using `access_store.can_use_callback(...)`; do not blindly convert all `kb.button(...)` calls or alter action semantics.
-- [ ] Run `python -m pytest tests/test_bot_ui.py tests/test_access_store.py -q`; expect the complete matrix to pass with no X-LEX edits.
+- [x] Add failing rendered-screen tests for the approved hierarchy: main → devices/server/admin/info; device → overview/diagnostics, display/media, files, network/apps, commands/processes, power, versions/update, permissions and extra functions; all routes return/back/home inside the same card.
+- [x] Extend the role × navigation × callback × device × grant-revocation matrix to owner, granted user, ungranted user, guest and blocked across two devices; guest sees only public info, safe device summaries and read-only server overview, never sensitive results.
+- [x] Test that a guessed callback, a changed device id, unsupported OS action, blocked user and stale role/grant are denied even if a keyboard still contains the callback.
+- [x] Test that a granted user's shell grant remains request-only: the user cannot approve or publish; the positive owner preview/approve/cancel lifecycle is implemented and tested in the separate Command Approval Plan Task 3.
+- [x] Implement screen layout and visibility changes using `access_store.can_use_callback(...)`; do not blindly convert all `kb.button(...)` calls or alter action semantics.
+- [x] Run `python -m pytest tests/test_bot_ui.py tests/test_access_store.py -q`; expect the complete matrix to pass with no X-LEX edits.
 
 ### Task 3: Close admin/RBAC gaps and protect the audit
 

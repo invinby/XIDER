@@ -62,7 +62,7 @@ CATEGORY_REQUIRED_GRANTS = {
     "cat:input": INPUT_ACTION_CALLBACKS,
     "cat:system": frozenset({
         "cmd:status", "cmd:sysinfo", "cmd:battery", "cmd:sys_uptime", "cmd:disks", "cmd:smart",
-        "cmd:sys_clean_temp", "cmd:apps", "cmd:capabilities",
+        "cmd:sys_clean_temp", "cmd:apps",
     }),
     "cat:network": frozenset({
         "fun:extip", "cmd:net_ping", "cmd:network", "cmd:wifi", "cmd:usb", "cmd:bluetooth",
@@ -85,14 +85,17 @@ CATEGORY_REQUIRED_GRANTS = {
     }),
     "cat:device": frozenset({
         "fav:menu", "hist:0", "cmd:autorun_status", "cmd:autorun_enable", "cmd:autorun_disable",
-        "cmd:capabilities",
     }),
 }
 
 CATEGORY_REQUIRED_GRANT_PREFIXES = {
     # Dynamic prank names are an existing wire namespace. Pagination is read-only
     # navigation within that exact grant family, never an additional privilege.
-    "cat:pranks": ("prank:", "cmd:prank_"),
+    # This root is the combined "extra functions / pranks" screen. Device
+    # settings remain separately filtered inside it, so users with only a
+    # settings grant can still reach their permitted panel without seeing
+    # any ungranted prank action.
+    "cat:pranks": ("prank:", "cmd:prank_", "fav:", "hist:", "cmd:autorun_"),
     "prankpage:": ("prank:", "cmd:prank_"),
 }
 

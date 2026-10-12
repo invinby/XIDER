@@ -1191,12 +1191,13 @@ def device_menu(device_id: str, user_id: int | None = None):
         text=_limit_button_label(_lex("versions_button", agent=agent_ver, keeper=keeper_ver)),
         callback="versions:device", style="success", user_id=user_id,
     )
-    _action_button(kb, text=_nav("device_settings"), callback="cat:device", user_id=user_id)
-    _action_button(kb, text=_nav("pranks"), callback="cat:pranks", style="success", user_id=user_id)
     _action_button(
-        kb, text=_lex("device_stop_agent_button"), callback="cfm:stop",
-        style="danger", user_id=user_id,
+        kb, text=_limit_button_label(
+            f"🔐 Разрешения · {_lex('system_capabilities_button')}"
+        ), callback="cmd:capabilities",
+        style="primary", user_id=user_id,
     )
+    _action_button(kb, text=_nav("pranks"), callback="cat:pranks", style="success", user_id=user_id)
 
     # Bottom row: Back
     kb.button(
@@ -1206,7 +1207,12 @@ def device_menu(device_id: str, user_id: int | None = None):
     )
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
 
-    kb.adjust(2)
+    content_count = len(list(kb.buttons)) - 2
+    row_widths = [2] * (content_count // 2)
+    if content_count % 2:
+        row_widths.append(1)
+    row_widths.append(2)
+    kb.adjust(*row_widths)
     return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
@@ -1339,7 +1345,6 @@ def system_menu(user_id: int | None = None):
     _action_button(kb, text=_lex("system_smart_button"), callback="cmd:smart", style="success", user_id=user_id)
     _action_button(kb, text=_lex("system_clean_temp_button"), callback="cmd:sys_clean_temp", style="danger", user_id=user_id)
     _action_button(kb, text=_lex("system_apps_button"), callback="cmd:apps", user_id=user_id)
-    _action_button(kb, text=_lex("system_capabilities_button"), callback="cmd:capabilities", user_id=user_id)
     _action_button(kb, text=_lex("system_refresh_status_button"), callback="cmd:status", style="success", user_id=user_id)
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
@@ -1490,7 +1495,7 @@ def guardian_menu():
     return _filter_device_keyboard(kb.as_markup())
 
 
-def pranks_menu(page: int = 1, target: str | None = None):
+def pranks_menu(page: int = 1, target: str | None = None, user_id: int | None = None):
     target = target or SESSION.get("target") or ""
     mouse_swapped = bool(SESSION.get(f"mouse_swapped_{target}", False))
     desktop_hidden = bool(SESSION.get(f"desktop_hidden_{target}", False))
@@ -1575,11 +1580,14 @@ def pranks_menu(page: int = 1, target: str | None = None):
             style="primary",
         )
 
+    _action_button(
+        kb, text=_nav("device_settings"), callback="cat:device", user_id=user_id,
+    )
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
 
-    kb.adjust(1, 2, 2, 2, 2, 2, 5, 2)
-    return _filter_device_keyboard(kb.as_markup())
+    kb.adjust(1, 2, 2, 2, 2, 2, 5, 1, 2)
+    return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
 def device_settings_menu(user_id: int | None = None):
@@ -5740,7 +5748,7 @@ async def on_cat_pranks(cq: CallbackQuery):
         return
     await _replace_callback_message(cq,
         _lex_html("category_pranks", device=target_label(target)),
-        reply_markup=pranks_menu(),
+        reply_markup=pranks_menu(user_id=cq.from_user.id if cq.from_user else None),
     )
     await cq.answer()
 
@@ -7413,7 +7421,9 @@ async def on_prank_swapmouse(cq: CallbackQuery):
     if publish("prank_swap_mouse", swap=new_state):
         SESSION[f"mouse_swapped_{target}"] = new_state
         try:
-            await cq.message.edit_reply_markup(reply_markup=pranks_menu(page=3, target=target))
+            await cq.message.edit_reply_markup(reply_markup=pranks_menu(
+                page=3, target=target, user_id=cq.from_user.id if cq.from_user else None,
+            ))
         except Exception:
             pass
         if new_state:
@@ -7440,7 +7450,9 @@ async def on_prank_hidedesktop(cq: CallbackQuery):
     if publish("prank_hide_desktop", hide=new_state):
         SESSION[f"desktop_hidden_{target}"] = new_state
         try:
-            await cq.message.edit_reply_markup(reply_markup=pranks_menu(page=1, target=target))
+            await cq.message.edit_reply_markup(reply_markup=pranks_menu(
+                page=1, target=target, user_id=cq.from_user.id if cq.from_user else None,
+            ))
         except Exception:
             pass
         if new_state:
@@ -7468,7 +7480,9 @@ async def on_prank_stop_all(cq: CallbackQuery):
                 page = p
                 break
         try:
-            await cq.message.edit_reply_markup(reply_markup=pranks_menu(page=page, target=target))
+            await cq.message.edit_reply_markup(reply_markup=pranks_menu(
+                page=page, target=target, user_id=cq.from_user.id if cq.from_user else None,
+            ))
         except Exception:
             pass
         await cq.answer("🛑 ВСЕ ПРИКОЛЫ ОСТАНОВЛЕНЫ! Мышь, экран и рабочий стол в норме.", show_alert=True)
@@ -8166,7 +8180,7 @@ async def on_prank_page(cq: CallbackQuery):
             page=p_name,
             device=target_label(target),
         ),
-        reply_markup=pranks_menu(page),
+        reply_markup=pranks_menu(page, user_id=cq.from_user.id if cq.from_user else None),
     )
     await cq.answer()
 

@@ -903,7 +903,7 @@ def test_middleware_audits_metadata_instead_of_message_or_callback_payload(monke
 
 DEVICE_SECTIONS = {
     "cat:system", "cat:screen", "cat:files", "cat:network", "cat:terminal",
-    "cat:power", "versions:device", "cat:device", "cat:pranks",
+    "cat:power", "versions:device", "cmd:capabilities", "cat:pranks",
 }
 
 
@@ -2738,8 +2738,14 @@ def test_capabilities_text_stays_within_telegram_message_limit():
 
 def test_device_menu_has_nine_category_buttons(monkeypatch):
     _setup(monkeypatch, {"dev1": {"name": "Dev"}})
-    cbs = _callback_data(bot.device_menu("dev1"))
+    markup = bot.device_menu("dev1")
+    cbs = _callback_data(markup)
     assert DEVICE_SECTIONS.issubset(set(cbs))
+    capabilities_button = next(
+        button for row in markup.inline_keyboard for button in row
+        if button.callback_data == "cmd:capabilities"
+    )
+    assert capabilities_button.text.startswith("🔐 Разрешения · ")
     assert "cat:media" not in cbs
     assert "cat:input" not in cbs
 
@@ -2762,7 +2768,7 @@ def test_navigation_uses_the_approved_root_and_device_hierarchy(monkeypatch):
             user_id == 100 or (
                 user_id == 200 and target == "dev1" and callback in {
                     "cat:system", "cat:screen", "cat:files", "cat:network",
-                    "cat:terminal", "cat:power", "cat:device", "cat:pranks",
+                    "cat:terminal", "cat:power", "cat:pranks", "cmd:capabilities",
                     "cmd:screenshot", "files:list", "cmd:apps", "proc:0", "dev:dev1",
                 }
             ),
@@ -2781,20 +2787,85 @@ def test_navigation_uses_the_approved_root_and_device_hierarchy(monkeypatch):
 
     expected_owner_sections = {
         "cat:system", "cat:screen", "cat:files", "cat:network", "cat:terminal",
-        "cat:power", "versions:device", "cat:device", "cat:pranks",
+        "cat:power", "versions:device", "cmd:capabilities", "cat:pranks",
     }
     owner_device = set(_callback_data(bot.device_menu("dev1", 100)))
     assert expected_owner_sections <= owner_device
+    assert "cat:device" not in owner_device
+    assert "cfm:stop" not in owner_device
     assert "dev:all" in _callback_data(bot.devices_menu(100))
     assert "ev:menu" in _callback_data(bot.admin_menu())
 
     user_device = set(_callback_data(bot.device_menu("dev1", 200)))
     assert {
         "cat:system", "cat:screen", "cat:files", "cat:network", "cat:terminal",
-        "cat:power", "cat:device", "cat:pranks",
+        "cat:power", "cat:pranks", "cmd:capabilities",
     } <= user_device
+    assert "cat:device" not in user_device
     assert "versions:device" not in user_device
     assert not any(callback.startswith(("devmg:", "admin:", "server:")) for callback in user_device)
+
+
+def test_permissions_and_device_settings_are_reachable_with_exact_device_grants(
+    monkeypatch, tmp_path,
+):
+    from types import SimpleNamespace
+    from roles import AdminFilter
+
+    _setup(monkeypatch, {
+        "mac-a": {"name": "Granted Mac", "os": "macOS"},
+        "pc-b": {"name": "Other PC", "os": "Windows"},
+    })
+    owner_id, user_id, guest_id = bot.ADMIN_ID, 200, 300
+    monkeypatch.setattr(bot.access_store, "FILE", tmp_path / "access.json")
+    monkeypatch.setattr(bot.access_store, "AUDIT_FILE", tmp_path / "audit.jsonl")
+    for identity in (user_id, guest_id):
+        bot.access_store.register_start(SimpleNamespace(
+            id=identity, username="test", first_name="Test", last_name="User",
+        ))
+    assert bot.access_store.set_role(owner_id, user_id, bot.Role.USER, owner_id)
+    assert bot.access_store.toggle_device(owner_id, user_id, "mac-a", owner_id)
+    assert bot.access_store.toggle_callback(owner_id, user_id, "cmd:capabilities", owner_id)
+    assert bot.access_store.toggle_callback(owner_id, user_id, "cmd:autorun_status", owner_id)
+    monkeypatch.setattr(bot, "SESSION", {"target": "mac-a"})
+
+    user_root = set(_callback_data(bot.device_menu("mac-a", user_id)))
+    assert "cmd:capabilities" in user_root
+    assert "cat:pranks" in user_root
+    assert "dev:mac-a" in _callback_data(bot.devices_menu(user_id))
+    assert "dev:pc-b" not in _callback_data(bot.devices_menu(user_id))
+    assert bot.access_store.can_use_callback(user_id, "cat:device", owner_id, "mac-a")
+
+    async def filter_callback(user: int, callback: str):
+        class Callback:
+            data = callback
+            from_user = SimpleNamespace(id=user)
+        return await AdminFilter()(Callback())
+
+    assert asyncio.run(filter_callback(user_id, "cmd:capabilities")) is True
+    assert asyncio.run(filter_callback(user_id, "cmd:screenshot")) is False
+    assert bot.access_store.toggle_callback(owner_id, user_id, "cmd:capabilities", owner_id) is False
+    assert "cmd:capabilities" not in _callback_data(bot.device_menu("mac-a", user_id))
+    assert asyncio.run(filter_callback(user_id, "cmd:capabilities")) is False
+    monkeypatch.setattr(bot, "SESSION", {"target": "pc-b"})
+    assert asyncio.run(filter_callback(user_id, "cmd:capabilities")) is False
+    assert "cmd:capabilities" not in _callback_data(bot.device_menu("pc-b", user_id))
+    assert "cat:pranks" not in _callback_data(bot.device_menu("pc-b", user_id))
+
+    monkeypatch.setattr(bot, "SESSION", {"target": "mac-a"})
+    assert "cat:device" in _callback_data(bot.pranks_menu(user_id=user_id, target="mac-a"))
+    assert "cmd:autorun_status" in _callback_data(bot.device_settings_menu(user_id))
+    assert _callback_data(bot.main_menu(guest_id)) == [
+        "menu:guest_devices", "menu:server", "menu:about",
+    ]
+    guest_callbacks = _callback_data(bot.guest_devices_menu())
+    assert guest_callbacks[-1] == "menu:main"
+    assert set(guest_callbacks) == {"guest:readonly", "menu:main"}
+    assert asyncio.run(filter_callback(guest_id, "cmd:capabilities")) is False
+    assert bot.access_store.set_blocked(owner_id, user_id, True, owner_id)
+    assert _callback_data(bot.main_menu(user_id)) == []
+    assert asyncio.run(filter_callback(user_id, "cmd:capabilities")) is False
+    assert asyncio.run(filter_callback(owner_id, "cmd:capabilities")) is True
 
 
 def test_non_owner_action_screens_require_the_current_device_action_grant(monkeypatch):
@@ -3049,9 +3120,10 @@ def test_primary_navigation_is_grouped_into_compact_dashboard_rows(monkeypatch):
         ["cat:system", "cat:screen"],
         ["cat:files", "cat:network"],
         ["cat:terminal", "cat:power"],
-        ["versions:device", "cat:device"],
-        ["cat:pranks", "cfm:stop"],
+        ["versions:device", "cmd:capabilities"],
+        ["cat:pranks"],
     ]
+    assert device_rows[5] == ["menu:target", "menu:main"]
     assert device_rows[-1] == ["menu:target", "menu:main"]
 
 
