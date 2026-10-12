@@ -111,6 +111,15 @@ def test_permission_help_is_platform_specific_and_does_not_invent_windows_screen
     assert "Системные настройки" not in win_screen
 
 
+def test_macos_location_help_explains_first_grant_when_xider_is_missing_from_settings():
+    text = bot._format_permission_help("macOS", "location")
+
+    assert "Если XIDER ещё нет в списке" in text
+    assert "./XIDER.app/Contents/MacOS/XGENT-MCS --location-setup" in text
+    assert "корректно подписанным приложением" in text
+    assert "Бот не может запросить согласие удалённо" in text
+
+
 @pytest.mark.parametrize("platform,permission", [("Linux", "camera"), ("macOS", "shell"), ("Windows", "" )])
 def test_permission_help_rejects_unknown_platform_or_capability(platform, permission):
     assert bot._format_permission_help(platform, permission) is None
