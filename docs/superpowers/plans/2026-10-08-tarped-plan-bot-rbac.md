@@ -30,7 +30,7 @@
 ---
 
 **Дата:** 2026-10-08  
-**Статус:** локальная реализация Tasks 1–4 завершена и проверена; live Telegram acceptance отдельно открыта
+**Статус:** локальная реализация Tasks 1–4 завершена и проверена; live Telegram acceptance открыт
 **Спецификация:** разделы 4–7, 12 и 14 [TARPED redesign](../specs/2026-10-08-tarped-product-redesign-design.md)  
 **Границы:** `TG-BOT-SERVER`; не менять X-LEX (`xlex.py`, его данные, стили и golden-тесты).
 
@@ -64,10 +64,10 @@
 
 **Interface:** For every callback produced by every screen builder, record its handler route and one server-side access class: protected `OwnerFilter`, public `ReadOnlyFilter`, device/action grant through `access_store.can_use_callback(...)`, owner-approved request, or explicitly non-action. For each action record category, required permission, allowed roles/grants, OS support, timeout, result sensitivity and risk. Hidden keyboards are never the authorization boundary; sensitive data and publish paths recheck the matching authority.
 
-- [ ] Extend `test_rendered_menu_callbacks_match_a_registered_route` to include every root, device, category, server, admin, info and confirmation keyboard builder; assert every emitted callback maps to a registered route or an explicit documented no-op.
-- [ ] Add the companion metadata/access classification assertion; unknown action callbacks fail closed and no route is implicitly public because its button was hidden.
-- [ ] Run `python -m pytest tests/test_bot_ui.py::test_rendered_menu_callbacks_match_a_registered_route tests/test_access_store.py -q`; record existing failures before production edits.
-- [ ] Review the inventory for duplicated gates and stale callbacks; create no catalog unless a concrete metadata gap is found.
+- [x] Extend `test_rendered_menu_callbacks_match_a_registered_route` to include every root, device, category, server, admin, info and confirmation keyboard builder; assert every emitted callback maps to a registered route or an explicit documented no-op.
+- [x] Add the companion metadata/access classification assertion; unknown action callbacks fail closed and no route is implicitly public because its button was hidden.
+- [x] Run `python -m pytest tests/test_bot_ui.py::test_rendered_menu_callbacks_match_a_registered_route tests/test_access_store.py -q`; record existing failures before production edits.
+- [x] Review the inventory for duplicated gates and stale callbacks; create no catalog unless a concrete metadata gap is found.
 
 ### Task 2: Rebuild screens and align button visibility with server gates
 
@@ -75,31 +75,31 @@
 
 **Interface:** Preserve callback-data for existing actions unless a route migration includes a compatibility test. For device/action controls, every non-owner button is rendered only when the same current user/device grant permits the handler; public read-only navigation and owner-only controls use their respective filters. Role checks continue at callback time and immediately before publish.
 
-- [ ] Add failing rendered-screen tests for the approved hierarchy: main → devices/server/admin/info; device → overview/diagnostics, display/media, files, network/apps, commands/processes, power, versions/update, permissions and extra functions; all routes return/back/home inside the same card.
-- [ ] Extend the role × navigation × callback × device × grant-revocation matrix to owner, granted user, ungranted user, guest and blocked across two devices; guest sees only public info, safe device summaries and read-only server overview, never sensitive results.
-- [ ] Test that a guessed callback, a changed device id, unsupported OS action, blocked user and stale role/grant are denied even if a keyboard still contains the callback.
-- [ ] Test that a granted user's shell grant remains request-only: the user cannot approve or publish; the positive owner preview/approve/cancel lifecycle is implemented and tested in the separate Command Approval Plan Task 3.
-- [ ] Implement screen layout and visibility changes using `access_store.can_use_callback(...)`; do not blindly convert all `kb.button(...)` calls or alter action semantics.
-- [ ] Run `python -m pytest tests/test_bot_ui.py tests/test_access_store.py -q`; expect the complete matrix to pass with no X-LEX edits.
+- [x] Add failing rendered-screen tests for the approved hierarchy: main → devices/server/admin/info; device → overview/diagnostics, display/media, files, network/apps, commands/processes, power, versions/update, permissions and extra functions; all routes return/back/home inside the same card.
+- [x] Extend the role × navigation × callback × device × grant-revocation matrix to owner, granted user, ungranted user, guest and blocked across two devices; guest sees only public info, safe device summaries and read-only server overview, never sensitive results.
+- [x] Test that a guessed callback, a changed device id, unsupported OS action, blocked user and stale role/grant are denied even if a keyboard still contains the callback.
+- [x] Test that a granted user's shell grant remains request-only: the user cannot approve or publish; the positive owner preview/approve/cancel lifecycle is implemented and tested in the separate Command Approval Plan Task 3.
+- [x] Implement screen layout and visibility changes using `access_store.can_use_callback(...)`; do not blindly convert all `kb.button(...)` calls or alter action semantics.
+- [x] Run `python -m pytest tests/test_bot_ui.py tests/test_access_store.py -q`; expect the complete matrix to pass with no X-LEX edits.
 
 ### Task 3: Close admin/RBAC gaps and protect the audit
 
 **Files:** Modify only required `on_admin_*` handlers in `TG-BOT-SERVER/bot.py`; reuse `access_store.py`; extend `tests/test_access_store.py` and `tests/test_bot_ui.py`.
 
-- [ ] First identify uncovered cases (current suite already covers first-start guest defaults, device-scoped grants, legacy `coowner` downgrade, block revocation/redaction and FSM grant rechecks); add failing tests only for gaps: shell-request grant versus owner-only approval, unblock/re-grant behavior, owner self-demotion/self-block, `/start` notification dedupe, direct unauthorized/unknown-ID admin callback, guest/blocked data reads, and confirmation/cancel/expiry for privileged role/grant/unblock changes.
-- [ ] Ensure the owner user list shows role, last activity/visit, granted devices and actions; every role change, block/unblock, per-device/action grant, text edit and outbound message flow is owner-only and sensitive changes require an explicit owner confirmation before commit.
-- [ ] Verify audit redacts credentials and excludes coordinates, file contents, raw shell/stdout; assert guest/blocked cannot read admin/audit details.
-- [ ] Run `python -m pytest tests/test_access_store.py tests/test_bot_ui.py -q`; expect all covered actions denied/allowed exactly by role and grant.
+- [x] First identify uncovered cases (current suite already covers first-start guest defaults, device-scoped grants, legacy `coowner` downgrade, block revocation/redaction and FSM grant rechecks); add failing tests only for gaps: shell-request grant versus owner-only approval, unblock/re-grant behavior, owner self-demotion/self-block, `/start` notification dedupe, direct unauthorized/unknown-ID admin callback, guest/blocked data reads, and confirmation/cancel/expiry for privileged role/grant/unblock changes.
+- [x] Ensure the owner user list shows role, last activity/visit, granted devices and actions; every role change, block/unblock, per-device/action grant, text edit and outbound message flow is owner-only and sensitive changes require an explicit owner confirmation before commit.
+- [x] Verify audit redacts credentials and excludes coordinates, file contents, raw shell/stdout; assert guest/blocked cannot read admin/audit details.
+- [x] Run `python -m pytest tests/test_access_store.py tests/test_bot_ui.py -q`; expect all covered actions denied/allowed exactly by role and grant.
 
 ### Task 4: Keep routine navigation and command feedback in one card
 
 **Files:** Modify `TG-BOT-SERVER/ui_cards.py` only if its storage contract is insufficient; update relevant screen/command handlers in `bot.py`; extend `tests/test_ui_cards.py`, `tests/test_lifecycle_copy.py`, `tests/test_bot_ui.py`.
 
-- [ ] Add/extend transition tests for main → device → every category → operation progress/result → back/home, including repeated callbacks, missing card, Telegram edit failure and media-to-text transitions.
-- [ ] Reuse the indexed card for routine navigation/results; the only separate messages are the explicitly enumerated owner security alerts (`/start`, dangerous-action confirmation and deduplicated online/offline transitions).
-- [ ] Assert transient edit/send/delete errors never create a repeating message flood and the next callback can recover the current card id.
-- [ ] Add a repeated identical heartbeat test; if current transition-dedup test already covers it, extend that test rather than adding a duplicate.
-- [ ] Run `python -m pytest tests/test_ui_cards.py tests/test_lifecycle_copy.py tests/test_bot_ui.py -q`; expect one normal UI card per chat/user except listed security alerts.
+- [x] Add/extend transition tests for main → device → every category → operation progress/result → back/home, including repeated callbacks, missing card, Telegram edit failure and media-to-text transitions.
+- [x] Reuse the indexed card for routine navigation/results; the only separate messages are the explicitly enumerated owner security alerts (`/start`, dangerous-action confirmation and deduplicated online/offline transitions).
+- [x] Assert transient edit/send/delete errors never create a repeating message flood and the next callback can recover the current card id.
+- [x] Add a repeated identical heartbeat test; if current transition-dedup test already covers it, extend that test rather than adding a duplicate.
+- [x] Run `python -m pytest tests/test_ui_cards.py tests/test_lifecycle_copy.py tests/test_bot_ui.py -q`; expect one normal UI card per chat/user except listed security alerts.
 
 ## Приёмка
 

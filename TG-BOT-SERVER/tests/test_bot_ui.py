@@ -692,6 +692,47 @@ def test_admin_mutations_require_confirm_and_reject_cancel_expiry_replay(monkeyp
     asyncio.run(scenario())
 
 
+def test_admin_unblock_requires_confirmation_and_restores_exact_prior_access(monkeypatch, tmp_path):
+    Callback, rendered = _admin_fixture(monkeypatch, tmp_path)
+    assert bot.access_store.set_role(100, 200, bot.Role.USER, 100)
+    assert bot.access_store.toggle_device(100, 200, "a", 100)
+    assert bot.access_store.toggle_callback(100, 200, "cmd:status", 100)
+    assert bot.access_store.set_blocked(100, 200, True, 100)
+    before = bot.access_store.get_user(200)
+    now = [1000.0]
+    monkeypatch.setattr(bot.time, "monotonic", lambda: now[0])
+
+    async def pending_confirmation():
+        await bot.on_admin_block(Callback("admin:block:200"))
+        assert bot.access_store.get_user(200) == before
+        actions = _callback_data(rendered[-1][1])
+        return next(value for value in actions if value.startswith("admin:confirm:")), next(
+            value for value in actions if value.startswith("admin:cancel:")
+        )
+
+    async def scenario():
+        confirm, cancel = await pending_confirmation()
+        await bot.on_admin_cancel(Callback(cancel))
+        await bot.on_admin_confirm(Callback(confirm))
+        assert bot.access_store.get_user(200) == before
+
+        confirm, _ = await pending_confirmation()
+        now[0] += 121
+        await bot.on_admin_confirm(Callback(confirm))
+        assert bot.access_store.get_user(200) == before
+
+        confirm, _ = await pending_confirmation()
+        await bot.on_admin_confirm(Callback(confirm))
+        restored = bot.access_store.get_user(200)
+        assert restored["role"] == bot.Role.USER
+        assert restored["permissions"] == before["permissions"]
+        assert bot.access_store.get_role(200, 100) == bot.Role.USER
+        await bot.on_admin_confirm(Callback(confirm))
+        assert bot.access_store.get_user(200) == restored
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("actor", [200, 300, 400])
 @pytest.mark.parametrize("handler,data", [
     ("on_admin_users", "admin:users"), ("on_admin_user", "admin:user:200"),
@@ -903,7 +944,7 @@ def test_middleware_audits_metadata_instead_of_message_or_callback_payload(monke
 
 DEVICE_SECTIONS = {
     "cat:system", "cat:screen", "cat:files", "cat:network", "cat:terminal",
-    "cat:power", "versions:device", "cat:device", "cat:pranks",
+    "cat:power", "versions:device", "cmd:capabilities", "cat:pranks",
 }
 
 
@@ -2738,8 +2779,14 @@ def test_capabilities_text_stays_within_telegram_message_limit():
 
 def test_device_menu_has_nine_category_buttons(monkeypatch):
     _setup(monkeypatch, {"dev1": {"name": "Dev"}})
-    cbs = _callback_data(bot.device_menu("dev1"))
+    markup = bot.device_menu("dev1")
+    cbs = _callback_data(markup)
     assert DEVICE_SECTIONS.issubset(set(cbs))
+    capabilities_button = next(
+        button for row in markup.inline_keyboard for button in row
+        if button.callback_data == "cmd:capabilities"
+    )
+    assert capabilities_button.text.startswith("🔐 Разрешения · ")
     assert "cat:media" not in cbs
     assert "cat:input" not in cbs
 
@@ -2762,7 +2809,7 @@ def test_navigation_uses_the_approved_root_and_device_hierarchy(monkeypatch):
             user_id == 100 or (
                 user_id == 200 and target == "dev1" and callback in {
                     "cat:system", "cat:screen", "cat:files", "cat:network",
-                    "cat:terminal", "cat:power", "cat:device", "cat:pranks",
+                    "cat:terminal", "cat:power", "cat:pranks", "cmd:capabilities",
                     "cmd:screenshot", "files:list", "cmd:apps", "proc:0", "dev:dev1",
                 }
             ),
@@ -2781,20 +2828,85 @@ def test_navigation_uses_the_approved_root_and_device_hierarchy(monkeypatch):
 
     expected_owner_sections = {
         "cat:system", "cat:screen", "cat:files", "cat:network", "cat:terminal",
-        "cat:power", "versions:device", "cat:device", "cat:pranks",
+        "cat:power", "versions:device", "cmd:capabilities", "cat:pranks",
     }
     owner_device = set(_callback_data(bot.device_menu("dev1", 100)))
     assert expected_owner_sections <= owner_device
+    assert "cat:device" not in owner_device
+    assert "cfm:stop" not in owner_device
     assert "dev:all" in _callback_data(bot.devices_menu(100))
     assert "ev:menu" in _callback_data(bot.admin_menu())
 
     user_device = set(_callback_data(bot.device_menu("dev1", 200)))
     assert {
         "cat:system", "cat:screen", "cat:files", "cat:network", "cat:terminal",
-        "cat:power", "cat:device", "cat:pranks",
+        "cat:power", "cat:pranks", "cmd:capabilities",
     } <= user_device
+    assert "cat:device" not in user_device
     assert "versions:device" not in user_device
     assert not any(callback.startswith(("devmg:", "admin:", "server:")) for callback in user_device)
+
+
+def test_permissions_and_device_settings_are_reachable_with_exact_device_grants(
+    monkeypatch, tmp_path,
+):
+    from types import SimpleNamespace
+    from roles import AdminFilter
+
+    _setup(monkeypatch, {
+        "mac-a": {"name": "Granted Mac", "os": "macOS"},
+        "pc-b": {"name": "Other PC", "os": "Windows"},
+    })
+    owner_id, user_id, guest_id = bot.ADMIN_ID, 200, 300
+    monkeypatch.setattr(bot.access_store, "FILE", tmp_path / "access.json")
+    monkeypatch.setattr(bot.access_store, "AUDIT_FILE", tmp_path / "audit.jsonl")
+    for identity in (user_id, guest_id):
+        bot.access_store.register_start(SimpleNamespace(
+            id=identity, username="test", first_name="Test", last_name="User",
+        ))
+    assert bot.access_store.set_role(owner_id, user_id, bot.Role.USER, owner_id)
+    assert bot.access_store.toggle_device(owner_id, user_id, "mac-a", owner_id)
+    assert bot.access_store.toggle_callback(owner_id, user_id, "cmd:capabilities", owner_id)
+    assert bot.access_store.toggle_callback(owner_id, user_id, "cmd:autorun_status", owner_id)
+    monkeypatch.setattr(bot, "SESSION", {"target": "mac-a"})
+
+    user_root = set(_callback_data(bot.device_menu("mac-a", user_id)))
+    assert "cmd:capabilities" in user_root
+    assert "cat:pranks" in user_root
+    assert "dev:mac-a" in _callback_data(bot.devices_menu(user_id))
+    assert "dev:pc-b" not in _callback_data(bot.devices_menu(user_id))
+    assert bot.access_store.can_use_callback(user_id, "cat:device", owner_id, "mac-a")
+
+    async def filter_callback(user: int, callback: str):
+        class Callback:
+            data = callback
+            from_user = SimpleNamespace(id=user)
+        return await AdminFilter()(Callback())
+
+    assert asyncio.run(filter_callback(user_id, "cmd:capabilities")) is True
+    assert asyncio.run(filter_callback(user_id, "cmd:screenshot")) is False
+    assert bot.access_store.toggle_callback(owner_id, user_id, "cmd:capabilities", owner_id) is False
+    assert "cmd:capabilities" not in _callback_data(bot.device_menu("mac-a", user_id))
+    assert asyncio.run(filter_callback(user_id, "cmd:capabilities")) is False
+    monkeypatch.setattr(bot, "SESSION", {"target": "pc-b"})
+    assert asyncio.run(filter_callback(user_id, "cmd:capabilities")) is False
+    assert "cmd:capabilities" not in _callback_data(bot.device_menu("pc-b", user_id))
+    assert "cat:pranks" not in _callback_data(bot.device_menu("pc-b", user_id))
+
+    monkeypatch.setattr(bot, "SESSION", {"target": "mac-a"})
+    assert "cat:device" in _callback_data(bot.pranks_menu(user_id=user_id, target="mac-a"))
+    assert "cmd:autorun_status" in _callback_data(bot.device_settings_menu(user_id))
+    assert _callback_data(bot.main_menu(guest_id)) == [
+        "menu:guest_devices", "menu:server", "menu:about",
+    ]
+    guest_callbacks = _callback_data(bot.guest_devices_menu())
+    assert guest_callbacks[-1] == "menu:main"
+    assert set(guest_callbacks) == {"guest:readonly", "menu:main"}
+    assert asyncio.run(filter_callback(guest_id, "cmd:capabilities")) is False
+    assert bot.access_store.set_blocked(owner_id, user_id, True, owner_id)
+    assert _callback_data(bot.main_menu(user_id)) == []
+    assert asyncio.run(filter_callback(user_id, "cmd:capabilities")) is False
+    assert asyncio.run(filter_callback(owner_id, "cmd:capabilities")) is True
 
 
 def test_non_owner_action_screens_require_the_current_device_action_grant(monkeypatch):
@@ -3049,9 +3161,10 @@ def test_primary_navigation_is_grouped_into_compact_dashboard_rows(monkeypatch):
         ["cat:system", "cat:screen"],
         ["cat:files", "cat:network"],
         ["cat:terminal", "cat:power"],
-        ["versions:device", "cat:device"],
-        ["cat:pranks", "cfm:stop"],
+        ["versions:device", "cmd:capabilities"],
+        ["cat:pranks"],
     ]
+    assert device_rows[5] == ["menu:target", "menu:main"]
     assert device_rows[-1] == ["menu:target", "menu:main"]
 
 
@@ -4074,6 +4187,11 @@ def _rendered_callback_inventory(monkeypatch):
     monkeypatch.setattr(bot.access_store, "list_users", lambda: [
         {"id": 200, "role": "guest", "permissions": {}},
     ])
+    monkeypatch.setattr(
+        bot.update_coordinator.store,
+        "batch",
+        lambda _batch_id: [SimpleNamespace(device_id="device-1"), SimpleNamespace(device_id="device-2")],
+    )
     url_shortcuts = [{"id": "012345abcdef", "name": "Example", "url": "https://example.com"}]
     monkeypatch.setattr(
         bot.bot_settings,
@@ -4117,6 +4235,10 @@ def _rendered_callback_inventory(monkeypatch):
                 )
             ],
         }, user_id=bot.ADMIN_ID),
+        bot._location_result_keyboard({"state": "denied"}, bot.ADMIN_ID),
+        bot._update_batch_keyboard(
+            SimpleNamespace(batch_id="inventory-batch", release_tag="v4.1.0"), bot.ADMIN_ID,
+        ),
         *(bot.confirm_kb(callback) for callback in (
             "shell:ok", "openapp:ok", "stop:ok", "stopall:ok", "guardianstop:ok", "sleep:ok", "kill:123",
         )),
@@ -4208,10 +4330,41 @@ def test_rendered_menu_callbacks_match_a_registered_route(monkeypatch):
     assert not unmatched, f"Buttons have no callback route: {sorted(unmatched)}"
 
 
+def test_ip_fallback_keyboard_is_in_inventory_and_owner_gated(monkeypatch):
+    monkeypatch.setattr(
+        bot,
+        "get_user_role",
+        lambda user_id: bot.Role.OWNER if user_id == bot.ADMIN_ID else bot.Role.GUEST,
+    )
+    owner_markup = bot._location_result_keyboard({"state": "denied"}, bot.ADMIN_ID)
+    guest_markup = bot._location_result_keyboard({"state": "denied"}, 200)
+    owner_callbacks = {
+        button.callback_data for row in owner_markup.inline_keyboard for button in row
+    }
+    guest_callbacks = {
+        button.callback_data for row in guest_markup.inline_keyboard for button in row
+    }
+    assert "location:ip" in owner_callbacks
+    assert "location:ip" not in guest_callbacks
+
+    callbacks = _rendered_callback_inventory(monkeypatch)
+    assert "location:ip" in callbacks, "Location result keyboard is missing from callback inventory"
+    route = _callback_routes("location:ip")
+    assert len(route) == 1
+    _assert_expected_callback_gate("location:ip", route[0])
+    metadata = _descriptive_callback_metadata("location:ip", route[0])
+    assert metadata["access_class"] == "protected OwnerFilter"
+    assert metadata["category"] == "network"
+    assert metadata["wire_action"] == "geo_location"
+    assert metadata["timeout"] == 16.0
+    assert metadata["result_sensitivity"] == "approximate city/region"
+    assert metadata["risk"] == "explicit external IP lookup"
+
+
 def _expected_callback_gate(callback):
     """Independent route contract: never inferred from the installed filter."""
     if callback in {"shell:ok", "menu:admin", "menu:target", "url:favorites", "versions:server"} or callback.startswith(
-        ("admin:", "devmg:", "install:", "server:", "server_confirm:", "url:fav:", "versions:bootstrap:", "versions:canary:", "versions:rollout:", "cmd:shell-approve:", "cmd:shell-cancel:", "permhelp:", "permsettings:")
+        ("admin:", "devmg:", "install:", "server:", "server_confirm:", "url:fav:", "versions:bootstrap:", "versions:canary:", "versions:rollout:", "cmd:shell-approve:", "cmd:shell-cancel:", "permhelp:", "permsettings:", "location:")
     ):
         return "OwnerFilter"
     if callback in {"menu:main", "menu:about", "menu:server", "menu:guest_devices", "guest:readonly", "url:cancel"} or callback.startswith(("about:chapter:", "url:count:")):
@@ -4335,6 +4488,10 @@ on_devmg_clear_all on_versions_install_select on_versions_canary_select on_versi
 _DEPENDENT_ACTION_CONTRACTS = {
     "on_permission_settings": dict(category="system", os_support=("Windows", "macOS"), timeout=15.0,
                                     result_sensitivity="settings launch acknowledgment", risk="local settings navigation"),
+    "on_cmd_geo_location_ip": dict(category="network", wire_action="geo_location",
+                                    os_support=("Windows", "macOS"), timeout=16.0,
+                                    result_sensitivity="approximate city/region",
+                                    risk="explicit external IP lookup"),
     "on_repeat": dict(category="history", os_support="unknown: selected HISTORY entry determines wire action",
                       timeout=0.0, result_sensitivity="unknown: selected HISTORY entry determines output",
                       risk="unknown: selected HISTORY entry determines side effect"),
@@ -6465,6 +6622,75 @@ def test_navigation_category_operation_back_home_stays_one_card(monkeypatch, tmp
         assert telegram.sent == []
         assert list(telegram.cards) == [30]
         assert bot.ui_cards.get(10, 20) == 30
+    asyncio.run(scenario())
+
+
+def test_versions_and_permission_check_round_trip_stays_one_card(monkeypatch, tmp_path):
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    monkeypatch.setattr(bot, "ADMIN_ID", 20)
+    _setup(monkeypatch, {
+        "mac-a": {
+            "name": "MacBook", "os": "macOS 14", "version": "4.2.1",
+            "capabilities": {"commands": ["capabilities", "permission_settings"]},
+        },
+    })
+    monkeypatch.setattr(bot, "SESSION", {"target": None})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot, "_visible_device_items", lambda _user_id: bot.devices.all())
+    async def allow_result(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(bot, "_callback_result_access_or_report", allow_result)
+    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: True)
+    monkeypatch.setattr(bot.release_catalog.catalog, "cached", lambda: [])
+    monkeypatch.setattr(bot, "publish_tracked", lambda *_args, **_kwargs: (True, "caps-1"))
+    snapshot = {
+        "schema": 1, "platform": "macOS 14", "checked_at": "2026-10-12T10:00:00+00:00",
+        "hostname": "MacBook", "version": "4.2.1", "commands": ["permission_settings"],
+        "items": [
+            {"id": "camera", "state": "permission_unverified", "detail": "Not yet tested."},
+        ],
+    }
+
+    class Capabilities:
+        async def wait_for(self, *_args, **_kwargs):
+            return snapshot
+
+    monkeypatch.setattr(bot, "capabilities_collector", Capabilities())
+    settings_calls = []
+
+    async def settings_command(cq, action, emoji, label, **kwargs):
+        settings_calls.append((action, kwargs))
+        return await bot._replace_callback_message(cq, "Settings handoff result", reply_markup=bot.back_to_device_kb())
+
+    monkeypatch.setattr(bot, "simple_command", settings_command)
+
+    async def scenario():
+        await bot.on_menu_main(telegram.callback("menu:main"))
+        await bot.on_menu_devices(telegram.callback("menu:devices"))
+        await bot.on_dev(telegram.callback("dev:mac-a"))
+        assert "cmd:capabilities" in _callback_data(bot.device_menu("mac-a", 20))
+
+        await bot.on_versions_device(telegram.callback("versions:device"))
+        assert "versions:list:agent:0" in _callback_data(telegram.cards[30]["markup"])
+        await bot.on_back_to_device(telegram.callback("back:device"))
+
+        await bot.on_cmd_capabilities(telegram.callback("cmd:capabilities"))
+        callbacks = _callback_data(telegram.cards[30]["markup"])
+        assert "permhelp:camera" in callbacks
+        assert "permsettings:camera" in callbacks
+
+        await bot.on_permission_help(telegram.callback("permhelp:camera"))
+        assert "Системные настройки" in telegram.cards[30]["text"]
+        await bot.on_permission_settings(telegram.callback("permsettings:camera"))
+        assert settings_calls == [("permission_settings", {"timeout": 15.0, "permission": "camera"})]
+
+        await bot.on_back_to_device(telegram.callback("back:device"))
+        await bot.on_menu_main(telegram.callback("menu:main"))
+        assert telegram.sent == []
+        assert list(telegram.cards) == [30]
+        assert bot.ui_cards.get(10, 20) == 30
+
     asyncio.run(scenario())
 
 
