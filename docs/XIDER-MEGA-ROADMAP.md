@@ -2402,3 +2402,154 @@ Go и Rust по упаковке, сопровождению, диагности
 - Это проверка исходника и фикстур. Полная совместимость компонентов,
   опубликованный новый release и live-деплой этого исправления остаются
   отдельными шагами; чек-лист X-LEDGER пока не закрыт.
+
+## 30. Перепроверка `main`, Pages и production · 2026-10-12
+
+- Каноническая рабочая копия сверена с `origin/main`: обе ссылки указывают на
+  `8478e5e6bf4a9383f0d6e0c046ade317a3e4e1a7` (`feat(bot): expose permissions
+  and verify TARPED navigation`, PR #22). Версия исходника — 4.3.0; последний
+  опубликованный GitHub Release по-прежнему `v4.2.1`. Это разные состояния:
+  наличие кода в `main` не означает публикацию релиза.
+- Свежий целевой прогон Telegram RBAC/UI/capabilities:
+  `py -3.12 -m pytest TG-BOT-SERVER/tests/test_access_store.py
+  TG-BOT-SERVER/tests/test_capabilities.py TG-BOT-SERVER/tests/test_bot_ui.py
+  -q` — **453 passed**. Это исходниковые тесты, не Telegram acceptance.
+- Проверка canary/cohort-механизма:
+  `py -3.12 -m pytest TG-BOT-SERVER/tests/test_update_coordinator.py
+  TG-BOT-SERVER/tests/test_update_store.py TG-BOT-SERVER/tests/test_update_routing.py
+  -q` — **66 passed**. Тесты требуют свежего health-сигнала canary, повторной
+  проверки подписанного manifest и блокируют продолжение при неуспехе/потере
+  журнала; реальное обновление физического устройства не выполнялось.
+- Геолокация/capabilities regressions: Windows **28 passed**, macOS **30 passed**,
+  Telegram **61 passed** в целевых `test_location.py`/`test_capabilities.py`.
+  Покрыты system-source state, явное IP-fallback и privacy gates; это unit tests,
+  реальную позицию или TCC/Windows consent они не запрашивали.
+- Терминальный owner-approval путь: `py -3.12 -m pytest
+  TG-BOT-SERVER/tests/test_bot_ui.py -k shell -q` — **54 passed**, 269
+  deselected. Проверяются привязка одобрения к точному preview, owner-only,
+  cancel/expiry/replay и запрет обычному user запускать/одобрять команду; реальную
+  shell-команду на production или физическом устройстве эти моки не запускали.
+- Проверка `git diff v4.2.1..origin/main -- TG-BOT-SERVER/xlex.py` пуста, и
+  между тегом и `main` нет коммитов, трогавших этот файл. Словарь и поведение
+  X-LEX сохранены относительно `v4.2.1`; новых изменений не вносилось.
+- GitHub Pages уже настроен на `build_type=workflow`; Actions build `38179646685`
+  завершился успешно. `https://invinby.github.io/XIDER/`, `/ru.html` и
+  `/styles.css` отвечают `200`; их live-содержимое совпадает с `site/` текущего
+  `main` после нормализации окончаний строк. После коммита страницы файлы сайта
+  не менялись.
+- Документация: `py -3.12 -m pytest tools/test_readme_parity.py
+  tools/test_readme_mermaid.py tools/test_validate_mermaid.py -q` — **25 passed,
+  2 subtests passed**; отдельный `tools/validate_mermaid.py README.md
+  README.ru.md` завершился с кодом 0. Вручную сверены все 10 парных разделов,
+  инструкции, статусы и ссылки двух README; пропущенных смысловых разделов или
+  противоречащих друг другу фактов не найдено. Ссылки на локальные файлы проходят
+  parity checker. `py -3.12 tools/check_site.py` и
+  `py -3.12 -m pytest tools/test_site.py tools/test_pages_workflow.py -q`
+  — **9 passed**, включая reduced-motion и keyboard focus. Описание репозитория
+  на GitHub двуязычное, homepage подтверждён canonical URL. По одобренному
+  docs-плану GitHub profile здесь означает metadata проекта `invinby/XIDER`;
+  личный профиль аккаунта не менялся и не входит в этот rollout.
+- Публичный release workflow требует сборку macOS из environment
+  `xider-macos-signing`. В GitHub сейчас видны только `github-pages` и
+  `xider-release-signing`; первый environment отсутствует (API `404`). В
+  `xider-release-signing` объявлен `XIDER_RELEASE_PRIVATE_KEY_B64`; значение
+  секрета не читалось. Поэтому тегирование само по себе не создаст полный
+  релиз, пока не появятся Apple signing/notarization credentials либо владелец
+  отдельно не утвердит и не проверит иной контракт поставки macOS.
+- До обновления read-only SSH к AWS `16.16.200.207` подтвердил, что
+  `xider-bot.service` активен и `version.py` сообщает 4.3.0 /
+  `X4.3.0-TARPED+20261012`, но `bot.py` ещё не имел callback `permhelp:`.
+  2026-10-12 выполнен штатный signed deploy из чистого detached worktree
+  `origin/main` (`8478e5e6bf4a9383f0d6e0c046ade317a3e4e1a7`) через
+  `deploy/upload-and-install.ps1`; серверный verifier принял подпись, updater
+  создал `/var/backups/xider/xider-20261012T170137Z-101451.tar.gz`, установил
+  source и сообщил об успешном health-check. После обновления `xider-bot.service`
+  имеет состояние `active/running`, PID `101569`, `NRestarts=0`; проверка
+  `gzip -t` backup прошла, архив содержит 438 записей. SHA-256 установленных
+  `bot.py`, `ui_cards.py`, `version.py` и `xlex.py` совпадают с чистым `main`;
+  в установленном source присутствуют `permhelp:` и `on_permission_help`.
+  Live Telegram-нажатие после обновления ещё не выполнялось, поэтому реальную
+  доставку карточки и инструкций на аккаунте владельца пока не принимаем.
+- Последний `CI - Test Suite` для `main` (`38273364619`, PR #22) завершился
+  успешно. Санитизированная read-only инвентаризация сервера на 2026-10-12
+  17:12 UTC показала две записи: macOS-агент `4.3.0` с heartbeat возрастом
+  около 2 секунд (online), но без свежего `capabilities_seen`; Windows-агент
+  `4.0.0` с heartbeat возрастом около 19 ч 27 мин (offline). Это свежесть
+  heartbeat и объявленная версия, не результат проверки разрешений и не
+  Telegram→MQTT→агент acceptance.
+- macOS screenshot source использует `/usr/sbin/screencapture -x`, валидирует
+  файл/изображение, ограничивает размер и удаляет временный файл; ошибки
+  возвращаются отдельными состояниями. Однако `tests/test_screenshot.py` мокает
+  capture и прямо исключает TCC prompt/live screen read. Поэтому кодовая обработка
+  покрыта тестами (вместе с capabilities regression: 26 passed на этом прогоне),
+  а причина прежнего реального отказа на Mac и выдача
+  Screen Recording для установленного executable всё ещё не подтверждены.
+- На AWS `xider-vault-backup.timer` и `xider-vault-promote.timer` отсутствуют
+  (`is-enabled=not-found`, `is-active=inactive`),
+  `/etc/xider/x-vault-backup.env` отсутствует, а в
+  `/var/backups/xider-vault` не найдено `.xvlt`-архивов. Это read-only проверка
+  основного VPS. При этом в `/var/backups/xider` есть обычный локальный rollback
+  archive от 2026-10-11: `gzip -t` прошёл, tar содержит 318 записей. Это
+  подтверждает целостность сжатого файла, но не проверяет stage-restore,
+  работоспособность восстановленного сервиса или offsite-копию. Второй VPS и
+  staging restore X-VAULT не проверены; основной сервер не содержит target
+  config. Исторический кандидат на второй сервер недоступен по TCP/22 из текущей
+  среды, его личность как standby не подтверждена. AWS CLI в рабочей среде не
+  установлен, открытой AWS Console-вкладки тоже нет; список остальных instances
+  подтвердить не удалось. Полные production backup/restore gates не пройдены —
+  второй VPS и stage-restore X-VAULT не проверены.
+- Физические Windows/macOS acceptance и Telegram/MQTT smoke остаются открытыми.
+  GitHub Release всё ещё `v4.2.1`: signed локальный VPS deploy не создавал публичный
+  `v4.3.0` release и не обновлял устройства. Следующие шаги: провести владельцем
+  Telegram smoke карточки разрешений; сверить второй VPS без изменения его
+  состояния; восстановить и реально проверить X-VAULT backup/restore; настроить
+  требуемый signing environment или получить отдельное архитектурное решение для
+  другого macOS-релизного контракта; собрать и проверить signed candidate на
+  текущем `main`; после допуска релиза провести health-check, затем принять Mac и
+  Windows permission, location, screenshot и RBAC round-trip на физических
+  устройствах.
+
+## 31. Windows bootstrap: elevation и очистка staging-секрета · 2026-10-12
+
+- Полная установка теперь останавливается до staging/download, если PowerShell не
+  elevated; `-PreflightOnly` остаётся доступен без администратора.
+- Удаление временной копии `.env` меняет только DACL через `icacls`, не вызывает
+  `Set-Acl` с требованием `SeSecurityPrivilege`; отдельный cleanup-status сообщает
+  правду, удалён ли файл или он остался после отказа.
+- `test_bootstrap_agent_preflight.ps1` прошёл, включая read-only ACL, сохранение
+  соседнего marker-файла и отказ cleanup; pinned preflight commit
+  `8478e5e6bf4a9383f0d6e0c046ade317a3e4e1a7` прошёл без установки.
+- Повторный `py -3.12 tools/run_tests.py` завершился `PASS`: bot **879 passed / 1
+  skipped**, Windows agent **197 passed**, macOS agent **305 passed / 1 skipped**,
+  ops **28 passed / 1 skipped**, release tools **111 passed / 2 subtests passed**,
+  deployment/signature **24 passed / 27 skipped**. Windows setup preflight,
+  installer selection и полный bootstrap transaction/rollback fixtures прошли.
+- Staged install/rollback fixture, требующая Task Scheduler registration, была
+  явно пропущена: текущая оболочка не elevated. Реальное обновление Windows-агента
+  и физическая проверка устройства не проводились.
+
+## 32. macOS screenshot transport metadata · 2026-10-12
+
+- Bot serializes macOS captures as JPEG. Telegram upload filenames now follow the
+  actual JPEG/PNG signature instead of always labeling the bytes `.png`.
+- Screenshot regressions assert actual uploaded bytes and filename; shared UI
+  fixtures now use a valid generated JPEG, so they exercise the real decode and
+  delivery path rather than bypassing it with arbitrary bytes.
+- The bot now records a correlated screenshot-response diagnostic (allowlisted
+  state/platform, command ID, and whether/how many base64 characters arrived)
+  without logging image content. The current VPS journal had command-publish
+  entries but no response-state entries; this diagnostic is local and has not
+  yet been deployed to that VPS.
+- Full `py -3.12 tools/run_tests.py` completed `PASS`: bot **880 passed / 1
+  skipped**, Windows agent **197 passed**, macOS agent **305 passed / 1 skipped**,
+  ops **28 passed / 1 skipped**, release tools **111 passed / 2 subtests passed**,
+  deployment/signature **24 passed / 27 skipped**. Windows staged install/rollback
+  requiring elevation was skipped as documented.
+- This fixes a real MIME/filename mismatch in source. It does **not** prove that
+  Telegram accepted the photo or that `screencapture` has Screen Recording access
+  on the physical Mac; owner-side Telegram/Mac smoke remains open.
+- A fresh read-only VPS check showed `xider-bot` active/running with zero
+  restarts. The 24-hour journal search still showed screenshot command publishes
+  without corresponding screenshot response-state entries; it cannot distinguish
+  a sleeping/offline agent from a missing response or broker-routing issue. The
+  new local diagnostic must be deployed before a follow-up trace can narrow it.

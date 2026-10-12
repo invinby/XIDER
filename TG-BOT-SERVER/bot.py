@@ -2904,6 +2904,37 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             )
 
     elif msg_type == "screenshot" and payload.get("type") == "screenshot":
+        allowed_states = {
+            "success", "permission_denied", "session_unavailable", "tool_missing",
+            "command_failed", "file_empty", "file_oversized", "file_unreadable",
+            "timeout", "transport_failed",
+        }
+        raw_state = payload.get("state")
+        state = raw_state if isinstance(raw_state, str) and raw_state in allowed_states else "unknown"
+        raw_platform = payload.get("platform")
+        platform = (
+            raw_platform
+            if isinstance(raw_platform, str) and raw_platform in {"macOS", "Windows"}
+            else "unknown"
+        )
+        encoded_image = payload.get("image")
+        image_b64_chars = len(encoded_image) if isinstance(encoded_image, str) else 0
+        raw_command_id = payload.get("id")
+        command_id = (
+            raw_command_id
+            if isinstance(raw_command_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", raw_command_id)
+            else "unknown"
+        )
+        log.info(
+            "Screenshot response received: device_id=%s id=%s state=%s platform=%s "
+            "image_present=%s image_b64_chars=%d",
+            device_id,
+            command_id,
+            state,
+            platform,
+            bool(image_b64_chars),
+            image_b64_chars,
+        )
         screenshot_collector.submit(device_id, payload)
         multi_screenshot.submit(device_id, payload)
 
@@ -4736,6 +4767,15 @@ def _decode_screenshot_image(result: dict) -> bytes:
     return data
 
 
+def _screenshot_filename(data: bytes) -> str:
+    """Keep Telegram's uploaded filename/content type aligned with image bytes."""
+    if data.startswith(b"\xff\xd8\xff"):
+        return "screenshot.jpg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "screenshot.png"
+    raise ValueError("Unsupported screenshot image format")
+
+
 def _screenshot_failure_help(result: dict) -> str:
     """Canonical screenshot states; unknown/legacy responses remain unverified."""
     instructions = {
@@ -4801,7 +4841,7 @@ async def on_cmd_screenshot(cq: CallbackQuery):
         return
     try:
         img_bytes = _decode_screenshot_image(result)
-        photo = BufferedInputFile(img_bytes, filename="screenshot.png")
+        photo = BufferedInputFile(img_bytes, filename=_screenshot_filename(img_bytes))
     except Exception:
         log.exception("Ошибка декодирования скриншота")
         await _replace_callback_message(
