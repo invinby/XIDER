@@ -5027,7 +5027,13 @@ async def on_cmd_capabilities(cq: CallbackQuery):
     if not await _callback_result_access_or_report(cq, target, published=True):
         return
     if not res:
-        await _replace_callback_message(cq, _lex("device_no_response"), delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb())
+        user_id = int(cq.from_user.id) if cq.from_user else 0
+        await _replace_callback_message(
+            cq,
+            _lex("device_no_response"),
+            delivery_guard=_callback_delivery_guard(cq, target),
+            reply_markup=_capabilities_keyboard(user_id=user_id),
+        )
         return
     user_id = int(cq.from_user.id) if cq.from_user else 0
     await _replace_callback_message(

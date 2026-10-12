@@ -2603,3 +2603,72 @@ Go и Rust по упаковке, сопровождению, диагности
   notarized macOS artifact and the physical Core Location consent test remain
   blocked on Apple signing/notarization setup. Do not label the current `main` as
   a published device release: latest public release remains `v4.2.1`.
+## 35. Current main and live capability-check readiness · 2026-10-13
+
+- The implementation baseline is official `origin/main`
+  `b4520ea4424f69d64e7e043a88646adb452d1b23`. This PR adds one
+  bot UI follow-up: if the capability request times out, the same
+  card retains the retry and back buttons; no X-LEX text or behavior changed.
+  `tools/node_modules/` is unrelated user data and remains untouched.
+- Fresh `python tools/run_tests.py` summary after the follow-up: bot **881 passed / 1 skipped**;
+  Windows agent **197 passed**; macOS agent **305 passed / 1 skipped**; ops
+  **28 passed / 1 skipped**; release tools **111 passed / 2 subtests passed**;
+  archive/signature checks **24 passed / 27 skipped**. Windows bootstrap
+  preflight and full transaction/rollback fixtures passed. The elevated
+  Task-Scheduler staged-install fixture was skipped because this shell is not
+  elevated. Overall runner summary: `PASS: 6 isolated component suites and
+  platform deployment fixtures`.
+- `python -m compileall -q TG-BOT-SERVER XGENT-WDS XGENT-MCS ops tools deploy`
+  and `python tools/check_site.py` both exited 0; the latter checked two HTML
+  pages. Focused README/RU-EN, Mermaid, site, and Pages workflow checks passed
+  **34 tests / 2 subtests**. GitHub Pages is already configured for Actions
+  (`build_type=workflow`, `status=built`); the latest main Pages run
+  `38179646685` succeeded, and live HEAD requests to `/`, `/ru.html`, and
+  `/styles.css` each returned HTTP 200. The live `xider-bot.service` is
+  `active`, and its deployed `bot.py` contains the `cmd:capabilities` callback
+  and permissions button prefix.
+- At server UTC `2026-10-12 20:27:09`, the sanitized registry showed `Strix`
+  (Windows 11, 4.3.0) online with a 3-second-old heartbeat; `MacBook-Air.local`
+  (macOS 27.0.1, 4.3.0) was offline, with its last heartbeat 545 seconds old.
+  The retained, rotated audit history contains frequent Mac online/offline
+  transitions (310 after collapsing repeated adjacent states); its latest
+  recorded Mac transition was offline at `20:21:01` UTC. The cause of this
+  intermittent connectivity is not determined. Neither device has sent a
+  capability snapshot. This is status telemetry only: no permission response,
+  OS settings handoff, screenshot, location, or Telegram-to-device command
+  acceptance is claimed.
+- On the local Windows host, Task Scheduler's `XIDER Agent` is `Running` and
+  launches `XGENT-WDS\xgent_wds.py` from the installed Python virtual
+  environment. Installed `config.py` reports 4.3.0; both it and `xgent_wds.py`
+  have the same Git blob IDs as `origin/main`, and the local `.env` exists.
+  The scheduled task launches Python, not an `.exe`. The owner-facing
+  permission button is present in the active bot source. The timeout path now
+  retains its same-card retry button in source and tests; this PR is not yet
+  merged or deployed. A live capability snapshot still needs the owner
+  to press it in Telegram and the server to receive the reply.
+- Terminal confirmation audit: the bot previews the exact command, target,
+  requester, expiry, and SHA-256 to the owner; each request expires after 120
+  seconds and is atomically consumed once. Windows/macOS agents verify the
+  signed command and reserve its ID in a durable replay ledger before process
+  execution; the typed audit records metadata/hash/status, not command or
+  output. Focused tests passed: bot **97 passed**, Windows gate **45 passed**,
+  macOS gate/signing **72 passed**. These are source/mock checks, not a live
+  shell command on a physical device.
+- GitHub read-only release check: latest public release remains **v4.2.1**
+  (2026-10-07); its tagged build run `37677663417` succeeded. The
+  exact public `release-manifest.json` and `XIDER-source.zip` assets were
+  downloaded to a temporary directory and accepted by
+  `python deploy/verify_server_bundle.py` as `Signed server bundle verified:
+  v4.2.1`; this proves artifact authenticity, not installation or deployment.
+  The public Mac ZIP also matches the signed manifest exactly (SHA-256
+  `0e93c31f0c931832b5b9228b059e8437470e9e28186cf0cd88d7542e88a9d45a`,
+  69,543,588 bytes), but contains only `XGENT-MCS`, `.env.example`,
+  `start_agent.sh`, and `stop_agent.sh`—no `XIDER.app`. Therefore the public
+  v4.2.1 Mac package cannot satisfy the planned signed Core Location bundle
+  flow; the newer source build remains gated on Apple signing credentials.
+  `xider-release-signing` environment and `XIDER_RELEASE_PRIVATE_KEY_B64`
+  secret are already configured; the secret value was not read. The
+  `xider-macos-signing` environment is still absent, so a signed/notarized Mac
+  release remains unverified. A read-only SSH attempt to `16.16.200.207` in
+  BatchMode failed with `Permission denied (publickey,password)`; this attempt
+  did not inspect or change the server.
