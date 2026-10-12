@@ -58,11 +58,12 @@ def test_response_timeout_does_not_assert_device_offline(monkeypatch):
     assert "достав" in shown[0]
 
 
-@pytest.mark.parametrize("case", ["invalid", "empty", "oversized", "delivery", "success", "failure_with_image"])
+@pytest.mark.parametrize("case", ["invalid", "empty", "oversized", "delivery", "success", "png", "failure_with_image"])
 def test_modern_image_validation_and_delivery(monkeypatch, case):
     shown, photos = [], []
     buffer = io.BytesIO()
-    Image.new("RGB", (10, 10)).save(buffer, format="JPEG")
+    image_format = "PNG" if case == "png" else "JPEG"
+    Image.new("RGB", (10, 10)).save(buffer, format=image_format)
     encoded = base64.b64encode(buffer.getvalue()).decode()
     if case == "invalid": encoded = base64.b64encode(b"not an image").decode()
     if case == "empty": encoded = ""
@@ -72,7 +73,7 @@ def test_modern_image_validation_and_delivery(monkeypatch, case):
     async def render(cq, text, **kwargs): shown.append(text)
     async def media(cq, sender, **kwargs):
         if case == "delivery": raise RuntimeError("Telegram delivery failed")
-        photos.append(kwargs["photo"].data)
+        photos.append((kwargs["photo"].data, kwargs["photo"].filename))
     class Collector:
         async def wait_for(self, *args):
             return {"state": "command_failed" if case == "failure_with_image" else "success", "detail": "diagnostic", "image": encoded}
@@ -83,8 +84,9 @@ def test_modern_image_validation_and_delivery(monkeypatch, case):
     monkeypatch.setattr(bot, "_replace_callback_message", render)
     monkeypatch.setattr(bot, "_replace_callback_with_media", media)
     asyncio.run(bot.on_cmd_screenshot(SimpleNamespace(answer=answer, from_user=SimpleNamespace(id=bot.ADMIN_ID), data="cmd:screenshot")))
-    if case == "success":
-        assert photos == [buffer.getvalue()]
+    if case in {"success", "png"}:
+        expected_filename = "screenshot.png" if case == "png" else "screenshot.jpg"
+        assert photos == [(buffer.getvalue(), expected_filename)]
     else:
         assert not photos
         assert shown

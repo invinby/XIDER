@@ -56,6 +56,35 @@ function global:ssh.exe {
     )
 }
 
+function Invoke-XiderElevationGuardRegression {
+    param([string]$Bootstrap, [string]$InstallRoot, [string]$SourceArchive)
+
+    $global:XiderElevationTestInstallerCalls = 0
+    function Get-ScheduledTask {
+        param($TaskName, $ErrorAction)
+        return $null
+    }
+    function powershell.exe {
+        $global:XiderElevationTestInstallerCalls++
+        $global:LASTEXITCODE = 17
+    }
+
+    $failure = ''
+    $failureType = ''
+    try {
+        & $Bootstrap -InstallRoot $InstallRoot -SourceArchive $SourceArchive -HealthTimeoutSeconds 1
+    } catch {
+        $failure = $_.Exception.Message
+        $failureType = $_.Exception.GetType().FullName
+    }
+    if ($failureType -ne 'System.UnauthorizedAccessException') {
+        throw 'A non-elevated full install did not fail with the actionable elevation error.'
+    }
+    if ((Test-Path -LiteralPath $InstallRoot) -or $global:XiderElevationTestInstallerCalls -ne 0) {
+        throw 'A non-elevated full install changed the target or invoked the installer before refusing.'
+    }
+}
+
 try {
     $bootstrapSource = Get-Content -LiteralPath $bootstrap -Raw
     if ($bootstrapSource -match 'PubkeyAuthentication=no|PreferredAuthentications=password') {
@@ -67,12 +96,100 @@ try {
         throw 'Windows bootstrap does not support the configured/default XIDER SSH key.'
     }
 
+    $tokens = $null; $parseErrors = $null
+    $bootstrapAst = [Management.Automation.Language.Parser]::ParseFile($bootstrap, [ref]$tokens, [ref]$parseErrors)
+    $elevationFunction = $bootstrapAst.Find({ param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Assert-XiderBootstrapElevation'
+    }, $true)
+    if (-not $elevationFunction) { throw 'Bootstrap elevation guard is missing.' }
+    Invoke-Expression $elevationFunction.Extent.Text
+    $nonAdminDenied = $false
+    try { Assert-XiderBootstrapElevation -IsElevated:$false }
+    catch { $nonAdminDenied = $_.Exception -is [UnauthorizedAccessException] }
+    if (-not $nonAdminDenied) { throw 'The elevation guard did not reject a non-admin install.' }
+    Assert-XiderBootstrapElevation -IsElevated:$false -PreflightOnly
+    Assert-XiderBootstrapElevation -IsElevated:$true
+
+    $secretCleanupFunction = $bootstrapAst.Find({ param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Remove-XiderPrivateFile'
+    }, $true)
+    if (-not $secretCleanupFunction) { throw 'Failed-install secret cleanup helper is missing.' }
+    Invoke-Expression $secretCleanupFunction.Extent.Text
+    $stageCleanupFunction = $bootstrapAst.Find({ param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Remove-XiderStageEnvironment'
+    }, $true)
+    if (-not $stageCleanupFunction) { throw 'Staging cleanup status helper is missing.' }
+    Invoke-Expression $stageCleanupFunction.Extent.Text
+    New-Item -ItemType Directory -Path $fixture -Force | Out-Null
+    $restrictedSecret = Join-Path $fixture 'restricted-env.fixture'
+    $preservedSibling = Join-Path $fixture 'preserved-marker.fixture'
+    [IO.File]::WriteAllText($restrictedSecret, 'synthetic secret fixture', $utf8)
+    [IO.File]::WriteAllText($preservedSibling, 'keep', $utf8)
+    $ownerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $readOnlyGrant = "*$($ownerSid.Value):(R)"
+    & icacls.exe $restrictedSecret /inheritance:r /grant:r $readOnlyGrant | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Could not create the read-only .env ACL fixture.' }
+    Remove-XiderPrivateFile -Path $restrictedSecret
+    if ((Test-Path -LiteralPath $restrictedSecret) -or
+        -not (Test-Path -LiteralPath $preservedSibling)) {
+        throw 'Failed-install cleanup did not remove only its read-only .env copy.'
+    }
+
+    $successfulStage = Join-Path $fixture 'stage-cleanup-success'
+    $successfulStageAgent = Join-Path $successfulStage 'XGENT-WDS'
+    New-Item -ItemType Directory -Path $successfulStageAgent -Force | Out-Null
+    $successfulStageEnv = Join-Path $successfulStageAgent '.env'
+    $successfulStageMarker = Join-Path $successfulStage 'keep.marker'
+    [IO.File]::WriteAllText($successfulStageEnv, 'synthetic stage secret', $utf8)
+    [IO.File]::WriteAllText($successfulStageMarker, 'keep', $utf8)
+    $successWarnings = @()
+    $successCleanup = Remove-XiderStageEnvironment -StagePath $successfulStage -WarningVariable successWarnings
+    $successWarningText = ($successWarnings | ForEach-Object { $_.Message }) -join ' '
+    $withoutEnvPhrase = ([string][char]0x0431) + [char]0x0435 + [char]0x0437 + ' .env'
+    if (-not $successCleanup -or (Test-Path -LiteralPath $successfulStageEnv) -or
+        -not (Test-Path -LiteralPath $successfulStageMarker) -or
+        $successWarningText -notlike "*$withoutEnvPhrase*") {
+        throw 'Successful staging cleanup must remove only .env and report that it is gone.'
+    }
+
+    $failedStage = Join-Path $fixture 'stage-cleanup-failure'
+    $failedStageAgent = Join-Path $failedStage 'XGENT-WDS'
+    New-Item -ItemType Directory -Path $failedStageAgent -Force | Out-Null
+    $failedStageEnv = Join-Path $failedStageAgent '.env'
+    [IO.File]::WriteAllText($failedStageEnv, 'synthetic stage secret', $utf8)
+    $realPrivateFileCleanup = (Get-Item -LiteralPath Function:\Remove-XiderPrivateFile).ScriptBlock
+    try {
+        Set-Item -LiteralPath Function:\Remove-XiderPrivateFile -Value {
+            param([string]$Path)
+            throw 'synthetic ACL failure'
+        }
+        $failureWarnings = @()
+        $failureCleanup = Remove-XiderStageEnvironment -StagePath $failedStage -WarningVariable failureWarnings
+    } finally {
+        Set-Item -LiteralPath Function:\Remove-XiderPrivateFile -Value $realPrivateFileCleanup
+    }
+    $failureWarningText = ($failureWarnings | ForEach-Object { $_.Message }) -join ' '
+    if ($failureCleanup -or -not (Test-Path -LiteralPath $failedStageEnv) -or
+        $failureWarningText -like "*$withoutEnvPhrase*" -or
+        $failureWarningText -notlike '*stage-cleanup-failure*') {
+        throw 'Failed staging cleanup must retain the .env and report that it remains.'
+    }
+
     New-Item -ItemType Directory -Path $agentSource,$envDir -Force | Out-Null
     foreach ($name in @('config.py','xgent_wds.py','xider_guardian_wds.py','install_agent.ps1','install_guardian.ps1','requirements.txt')) {
-        $body = if ($name -eq 'config.py') { 'VERSION = "fixture"' } else { 'fixture' }
+        $body = if ($name -eq 'config.py') { 'VERSION = "fixture"' } elseif ($name -eq 'requirements.txt') { '' } else { 'fixture' }
         [IO.File]::WriteAllText((Join-Path $agentSource $name), $body, $utf8)
     }
     Compress-Archive -Path (Join-Path $sourceRoot 'XIDER-fixture') -DestinationPath $archive
+
+    $currentPrincipal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+    if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        Invoke-XiderElevationGuardRegression -Bootstrap $bootstrap `
+            -InstallRoot (Join-Path $fixture 'elevation-install') -SourceArchive $archive
+    }
 
     $escapeName = 'xider-agent-bootstrap-escape-' + [guid]::NewGuid().ToString('N') + '.txt'
     # This bootstrap extracts beneath a second "unpacked" directory, so two

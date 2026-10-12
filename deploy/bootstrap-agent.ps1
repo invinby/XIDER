@@ -18,6 +18,65 @@ if ($Branch -notmatch '^[A-Za-z0-9._/-]+$' -or $Branch.Split('/') -contains '..'
 if ($Ref -and $Ref -notmatch '^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$') {
     throw 'XIDER_REF должен быть полным 40- или 64-символьным commit ID.'
 }
+
+function Assert-XiderBootstrapElevation {
+    param(
+        [Parameter(Mandatory)][bool]$IsElevated,
+        [switch]$PreflightOnly
+    )
+
+    if (-not $PreflightOnly -and -not $IsElevated) {
+        throw [UnauthorizedAccessException]::new(
+            'Запусти PowerShell от имени администратора. Активная версия, задачи и .env не изменены.'
+        )
+    }
+}
+
+function Remove-XiderPrivateFile {
+    param([Parameter(Mandatory)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
+
+    # A copied .env may carry a protected read-only ACL from the active install.
+    # Set-Acl can fail on ordinary Windows tokens because it also attempts to
+    # persist security metadata that requires SeSecurityPrivilege. icacls edits
+    # only the DACL; make the temporary secret owner-only, then remove it.
+    $ownerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    if (-not $ownerSid) { throw 'Не удалось определить владельца временного файла .env.' }
+    $ownerGrant = "*$($ownerSid.Value):(F)"
+    & icacls.exe $Path /inheritance:r /grant:r $ownerGrant | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Не удалось восстановить доступ к временной копии .env (icacls: $LASTEXITCODE)."
+    }
+    Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+}
+
+function Remove-XiderStageEnvironment {
+    param([Parameter(Mandatory)][string]$StagePath)
+
+    $stageEnv = Join-Path $StagePath 'XGENT-WDS\.env'
+    $removed = -not (Test-Path -LiteralPath $stageEnv -PathType Leaf)
+    if (-not $removed) {
+        try {
+            Remove-XiderPrivateFile -Path $stageEnv
+            $removed = -not (Test-Path -LiteralPath $stageEnv -PathType Leaf)
+        } catch {
+            $removed = $false
+        }
+    }
+
+    if ($removed) {
+        Write-Warning "Незавершённая подготовка оставлена без .env: $StagePath"
+    } else {
+        Write-Warning "Не удалось удалить временную копию .env; она осталась в staging-каталоге: $StagePath"
+    }
+    return $removed
+}
+
+$principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+$isElevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+Assert-XiderBootstrapElevation -IsElevated:$isElevated -PreflightOnly:$PreflightOnly
+
 $repoUrl = if ($Ref) {
     "https://github.com/invinby/XIDER/archive/$Ref.zip"
 } else {
@@ -672,7 +731,7 @@ catch {
             Stop-XiderManagedProcesses -AgentDirectory (Join-Path $repo 'XGENT-WDS')
             [IO.Directory]::Move($repo, $failed)
             $failedEnv = Join-Path $failed 'XGENT-WDS\.env'
-            if (Test-Path -LiteralPath $failedEnv) { Remove-Item -LiteralPath $failedEnv -Force }
+            if (Test-Path -LiteralPath $failedEnv) { Remove-XiderPrivateFile -Path $failedEnv }
         } catch { $rollbackProblems += "Не удалось убрать неудачную версию: $($_.Exception.Message)" }
     }
     if ($backup -and (Test-Path -LiteralPath $backup) -and -not (Test-Path -LiteralPath $repo)) {
@@ -703,9 +762,7 @@ catch {
 }
 finally {
     if ($stage -and (Test-Path -LiteralPath $stage)) {
-        $stageEnv = Join-Path $stage 'XGENT-WDS\.env'
-        if (Test-Path -LiteralPath $stageEnv) { Remove-Item -LiteralPath $stageEnv -Force -ErrorAction SilentlyContinue }
-        Write-Warning "Незавершённая подготовка оставлена без .env: $stage"
+        Remove-XiderStageEnvironment -StagePath $stage | Out-Null
     }
     Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue
 }

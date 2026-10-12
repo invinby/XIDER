@@ -11,6 +11,19 @@ import pytest
 import bot
 
 
+def _jpeg_test_image() -> bytes:
+    import io
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (2, 2), color="white").save(buffer, format="JPEG")
+    return buffer.getvalue()
+
+
+def _jpeg_test_image_b64() -> str:
+    return base64.b64encode(_jpeg_test_image()).decode("ascii")
+
+
 @pytest.mark.parametrize("reply", [{"output": "done", "returncode": 0, "status": "completed"}, None])
 def test_shell_ambiguous_publish_waits_same_request_without_resubmission(monkeypatch, tmp_path, reply):
     Callback, request, published, rendered = _shell_fixture(monkeypatch, tmp_path)
@@ -77,12 +90,14 @@ def test_private_card_rechecks_delivery_grant_after_waiting_for_lock(monkeypatch
 ])
 def test_device_handler_guard_survives_collector_to_delivery_lock_race(monkeypatch, tmp_path, handler, collector, callback, result):
     telegram = _card_telegram(monkeypatch, tmp_path)
+    if handler == "on_cmd_screenshot":
+        result = {"image": _jpeg_test_image_b64()}
     allowed = True
     monkeypatch.setattr(bot, "SESSION", {"target": "device-1"})
     monkeypatch.setattr(bot, "_simple_command_still_allowed", lambda *args: allowed)
     monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (True, "request-1"))
     monkeypatch.setattr(bot, "target_label", lambda *args: "Device")
-    monkeypatch.setattr(bot, "_decode_screenshot_image", lambda *args: b"PRIVATE")
+    monkeypatch.setattr(bot, "_decode_screenshot_image", lambda *args: _jpeg_test_image())
     async def scenario():
         nonlocal allowed
         held, release = asyncio.Event(), asyncio.Event()
@@ -4089,7 +4104,7 @@ def test_photo_response_becomes_current_navigation_card(monkeypatch, action):
 
     class FakeCollector:
         async def wait_for(self, *args, **kwargs):
-            return {"image": base64.b64encode(b"fixture-image").decode("ascii"),
+            return {"image": _jpeg_test_image_b64(),
                     "audio": base64.b64encode(b"fixture-audio").decode("ascii")}
 
     async def send_photo(*args, **kwargs):
@@ -6378,6 +6393,31 @@ def test_invalid_mqtt_envelope_logs_reason_without_payload(monkeypatch, caplog):
     assert "must-not-be-logged" not in caplog.text
 
 
+def test_screenshot_mqtt_response_logs_status_without_image_payload(monkeypatch, caplog):
+    encoded_image = "PRIVATE_SCREENSHOT_PAYLOAD"
+    payload = {
+        "type": "screenshot",
+        "device_id": "device-1",
+        "id": "request-1",
+        "state": "success",
+        "platform": "macOS",
+        "image": encoded_image,
+    }
+    submitted = []
+    monkeypatch.setattr(bot, "verify_message_detailed", lambda data: (data, None))
+    monkeypatch.setattr(bot.server_ops, "observe", lambda *args: None)
+    monkeypatch.setattr(bot.screenshot_collector, "submit", lambda *args: submitted.append(("single", args)))
+    monkeypatch.setattr(bot.multi_screenshot, "submit", lambda *args: submitted.append(("multi", args)))
+
+    with caplog.at_level("INFO", logger="xgent.bot"):
+        bot.on_mqtt_message(f"{bot.MQTT_PREFIX}/device-1/screenshot", payload)
+
+    assert [kind for kind, _args in submitted] == ["single", "multi"]
+    assert "state=success" in caplog.text
+    assert f"image_b64_chars={len(encoded_image)}" in caplog.text
+    assert encoded_image not in caplog.text
+
+
 class CardTelegram:
     """Telegram boundary double; registry and card-routing logic remain real."""
 
@@ -6461,9 +6501,8 @@ def _successful_screenshot_fixture(monkeypatch, tmp_path):
     monkeypatch.setattr(bot, "SESSION", {"target": "mac1"})
     monkeypatch.setattr(bot, "_simple_command_still_allowed", lambda *args: True)
     monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (True, "screenshot-request"))
-    monkeypatch.setattr(bot, "_decode_screenshot_image", lambda result: b"PRIVATE")
     async def wait(*args):
-        return {"state": "success", "image": "cHJpdmF0ZQ=="}
+        return {"state": "success", "image": _jpeg_test_image_b64()}
     monkeypatch.setattr(bot, "screenshot_collector", SimpleNamespace(wait_for=wait))
     return telegram
 

@@ -1,5 +1,10 @@
 param([switch]$UnicodeRefreshOnly)
 $ErrorActionPreference = 'Stop'
+$currentPrincipal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host 'Windows staged install/rollback fixture skipped: run this test elevated to exercise Task Scheduler registration.'
+    return
+}
 $bootstrap = (Resolve-Path (Join-Path $PSScriptRoot '..\bootstrap-agent.ps1')).Path
 $fixture = Join-Path $env:TEMP ('xider-bootstrap-swap-' + [guid]::NewGuid().ToString('N'))
 $sourceRoot = Join-Path $fixture 'source'
