@@ -2603,12 +2603,11 @@ Go и Rust по упаковке, сопровождению, диагности
   notarized macOS artifact and the physical Core Location consent test remain
   blocked on Apple signing/notarization setup. Do not label the current `main` as
   a published device release: latest public release remains `v4.2.1`.
-
 ## 35. Current main and live capability-check readiness · 2026-10-13
 
 - The implementation baseline is official `origin/main`
-  `b4520ea4424f69d64e7e043a88646adb452d1b23`. This checkout now has one
-  uncommitted bot UI follow-up: if the capability request times out, the same
+  `b4520ea4424f69d64e7e043a88646adb452d1b23`. This PR adds one
+  bot UI follow-up: if the capability request times out, the same
   card retains the retry and back buttons; no X-LEX text or behavior changed.
   `tools/node_modules/` is unrelated user data and remains untouched.
 - Fresh `python tools/run_tests.py` summary after the follow-up: bot **881 passed / 1 skipped**;
@@ -2644,8 +2643,8 @@ Go и Rust по упаковке, сопровождению, диагности
   have the same Git blob IDs as `origin/main`, and the local `.env` exists.
   The scheduled task launches Python, not an `.exe`. The owner-facing
   permission button is present in the active bot source. The timeout path now
-  retains its same-card retry button in source and tests, but this follow-up is
-  not published or deployed. A live capability snapshot still needs the owner
+  retains its same-card retry button in source and tests; this PR is not yet
+  merged or deployed. A live capability snapshot still needs the owner
   to press it in Telegram and the server to receive the reply.
 - Terminal confirmation audit: the bot previews the exact command, target,
   requester, expiry, and SHA-256 to the owner; each request expires after 120
