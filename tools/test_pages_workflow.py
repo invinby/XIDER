@@ -41,6 +41,7 @@ def test_pages_artifact_is_built_only_from_the_static_site_directory() -> None:
 def test_pages_generates_signed_installers_before_checking_and_uploading_site() -> None:
     workflow = PAGES_WORKFLOW.read_text(encoding="utf-8")
 
+    assert "python -m pip install pytest cryptography" in workflow
     generate = "python tools/build_pages_entrypoints.py site"
     check = "python tools/check_site.py"
     upload = "uses: actions/upload-pages-artifact@"
