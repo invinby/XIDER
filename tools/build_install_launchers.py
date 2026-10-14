@@ -83,8 +83,10 @@ def build_pages_launchers() -> dict[str, str]:
         "  $psi=New-Object Diagnostics.ProcessStartInfo; $psi.FileName=$env:ComSpec; $psi.Arguments='/d /s /c \"\"'+$c+'\"\"'; $psi.UseShellExecute=$false\n"
         "  $v=New-Object Diagnostics.Process; $v.StartInfo=$psi; [void]$v.Start(); $v.WaitForExit()\n"
         "  if($v.ExitCode -ne 0){throw 'XIDER installer signature verification failed'}\n"
-        "  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p\n"
-        "  if($LASTEXITCODE -ne 0){throw 'XIDER Windows installer failed'}\n"
+        "  Write-Host 'XIDER: requesting administrator approval (UAC)...'\n"
+        "  $args=@('-NoProfile','-ExecutionPolicy','Bypass','-File',\"`\"$p`\"\")\n"
+        "  $installer=Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ArgumentList $args\n"
+        "  if($installer.ExitCode -ne 0){throw ('XIDER Windows installer failed with exit code '+$installer.ExitCode)}\n"
         "} finally { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue }\n"
     )
     return {"mac": mac, "win.ps1": windows, ".nojekyll": ""}
