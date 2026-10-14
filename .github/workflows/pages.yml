@@ -8,6 +8,10 @@ on:
       - "tools/check_site.py"
       - "tools/test_site.py"
       - "tools/test_pages_workflow.py"
+      - "tools/build_pages_entrypoints.py"
+      - "tools/build_install_launchers.py"
+      - "tools/build_bootstrap_commands.py"
+      - "XGENT-MCS/release_signature.py"
       - ".github/workflows/pages.yml"
       - ".github/workflows/ci.yml"
   pull_request:
@@ -17,6 +21,10 @@ on:
       - "tools/check_site.py"
       - "tools/test_site.py"
       - "tools/test_pages_workflow.py"
+      - "tools/build_pages_entrypoints.py"
+      - "tools/build_install_launchers.py"
+      - "tools/build_bootstrap_commands.py"
+      - "XGENT-MCS/release_signature.py"
       - ".github/workflows/pages.yml"
       - ".github/workflows/ci.yml"
 
@@ -41,6 +49,9 @@ jobs:
 
       - name: "Test site and workflow contracts"
         run: python -m pytest tools/test_site.py tools/test_pages_workflow.py -q
+
+      - name: "Generate signed installer entry points"
+        run: python tools/build_pages_entrypoints.py site
 
       - name: "Check static site links and accessibility basics"
         run: python tools/check_site.py

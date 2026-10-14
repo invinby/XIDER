@@ -38,6 +38,25 @@ def test_pages_artifact_is_built_only_from_the_static_site_directory() -> None:
     assert re.search(r"^\s*id:\s*deployment\s*$", workflow, re.MULTILINE)
 
 
+def test_pages_generates_signed_installers_before_checking_and_uploading_site() -> None:
+    workflow = PAGES_WORKFLOW.read_text(encoding="utf-8")
+
+    generate = "python tools/build_pages_entrypoints.py site"
+    check = "python tools/check_site.py"
+    upload = "uses: actions/upload-pages-artifact@"
+    assert generate in workflow
+    assert workflow.index(generate) < workflow.index(check)
+    assert workflow.index(generate) < workflow.index(upload)
+
+    for source in (
+        '"tools/build_pages_entrypoints.py"',
+        '"tools/build_install_launchers.py"',
+        '"tools/build_bootstrap_commands.py"',
+        '"XGENT-MCS/release_signature.py"',
+    ):
+        assert source in workflow, f"Pages must rebuild when launcher input changes: {source}"
+
+
 def test_every_external_action_is_pinned_to_a_full_commit_sha() -> None:
     workflow = PAGES_WORKFLOW.read_text(encoding="utf-8")
     uses_lines = re.findall(r"^\s*uses:\s*([^\s]+)", workflow, re.MULTILINE)
