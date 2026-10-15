@@ -100,3 +100,20 @@ def test_requires_keyboard_visible_focus_treatment(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert ":focus-visible" in result.stdout
+
+
+def test_bilingual_landing_has_semantic_language_navigation_and_layout_stability() -> None:
+    root = Path(__file__).resolve().parents[1] / "site"
+    css = (root / "styles.css").read_text(encoding="utf-8")
+
+    for filename, label in (
+        ("index.html", 'aria-label="Language"'),
+        ("ru.html", 'aria-label="&#1071;&#1079;&#1099;&#1082;"'),
+    ):
+        html = (root / filename).read_text(encoding="utf-8")
+        assert f'<nav class="language-switch" {label}>' in html
+        assert '<img src="assets/xider-mark.png" alt="" width="726" height="726">' in html
+        assert 'name="theme-color" content="#f5f1ea"' in html
+        assert 'name="theme-color" content="#171818"' in html
+
+    assert "h1[id], h2[id], h3[id] { scroll-margin-top:" in css
