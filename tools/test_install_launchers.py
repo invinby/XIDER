@@ -37,7 +37,8 @@ def test_release_installers_reuse_the_exact_commit_pinned_bootstrap_verifiers():
 
 def test_pages_launchers_authenticate_latest_installer_before_running_it():
     pages = build_pages_launchers()
-    assert set(pages) == {"mac", "win.ps1", ".nojekyll"}
+    assert set(pages) == {"mac", "win.ps1", "win.txt", ".nojekyll"}
+    assert pages["win.txt"] == pages["win.ps1"]
     for platform, filename in (("macos", "mac"), ("windows", "win.ps1")):
         script = pages[filename]
         assert f"releases/latest/download/{INSTALLERS[platform]}" in script
@@ -107,7 +108,7 @@ def test_signer_rejects_missing_input_and_existing_signature(tmp_path, monkeypat
 
 def test_written_pages_entrypoints_have_exact_names_and_lf(tmp_path):
     outputs = write_files(tmp_path, build_pages_launchers())
-    assert {path.name for path in outputs} == {"mac", "win.ps1", ".nojekyll"}
+    assert {path.name for path in outputs} == {"mac", "win.ps1", "win.txt", ".nojekyll"}
     assert all(b"\r\n" not in path.read_bytes() for path in outputs)
 
 

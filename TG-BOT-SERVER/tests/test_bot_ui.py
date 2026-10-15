@@ -3064,7 +3064,7 @@ def test_manual_install_is_owner_only_and_uses_published_one_line_commands(monke
     assert "install:manual" not in _callback_data(bot.devices_menu(200))
 
     expected = {
-        "windows": "irm https://invinby.github.io/XIDER/win.ps1 | iex",
+        "windows": "irm https://invinby.github.io/XIDER/win.txt | iex",
         "macos": "curl -fsSL https://invinby.github.io/XIDER/mac | bash",
     }
     for selected_os, command in expected.items():
@@ -3117,7 +3117,7 @@ def test_manual_install_copy_has_complete_six_voice_xlex(monkeypatch):
     [
         (
             "install:windows",
-            "irm https://invinby.github.io/XIDER/win.ps1 | iex",
+            "irm https://invinby.github.io/XIDER/win.txt | iex",
             "install:macos",
         ),
         (
@@ -3723,7 +3723,7 @@ def test_check_update_blocks_old_windows_before_sending_update(monkeypatch):
     assert "4.0.0" in shown[0][0]
     assert "4.0.1" in shown[0][0]
     assert "Ничего не запускал" in shown[0][0]
-    assert "<code>irm https://invinby.github.io/XIDER/win.ps1 | iex</code>" in shown[0][0]
+    assert "<code>irm https://invinby.github.io/XIDER/win.txt | iex</code>" in shown[0][0]
 
 
 def test_check_update_allows_current_windows_source_agent(monkeypatch):
@@ -4041,7 +4041,7 @@ def test_check_update_blocks_frozen_packages_without_sending_command(monkeypatch
     command = (
         "curl -fsSL https://invinby.github.io/XIDER/mac | bash"
         if "mac" in os_name.lower()
-        else "irm https://invinby.github.io/XIDER/win.ps1 | iex"
+        else "irm https://invinby.github.io/XIDER/win.txt | iex"
     )
     assert f"<code>{command}</code>" in shown[0][0]
 

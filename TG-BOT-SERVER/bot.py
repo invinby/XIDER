@@ -1134,7 +1134,7 @@ def manual_install_command_screen(selected_os: str) -> str:
     commands = {
         "windows": (
             "manual_install_windows_title",
-            "irm https://invinby.github.io/XIDER/win.ps1 | iex",
+            "irm https://invinby.github.io/XIDER/win.txt | iex",
         ),
         "macos": (
             "manual_install_macos_title",
