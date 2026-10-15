@@ -89,7 +89,10 @@ def build_pages_launchers() -> dict[str, str]:
         "  if($installer.ExitCode -ne 0){throw ('XIDER Windows installer failed with exit code '+$installer.ExitCode)}\n"
         "} finally { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue }\n"
     )
-    return {"mac": mac, "win.ps1": windows, ".nojekyll": ""}
+    # Keep the legacy .ps1 URL for users who download it as a file, and publish
+    # identical bytes as .txt so PowerShell `irm ... | iex` receives text rather
+    # than a byte[] (GitHub Pages serves unknown .ps1 MIME as octet-stream).
+    return {"mac": mac, "win.ps1": windows, "win.txt": windows, ".nojekyll": ""}
 
 
 def write_files(directory: Path, files: dict[str, str]) -> list[Path]:
