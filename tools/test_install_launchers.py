@@ -50,7 +50,16 @@ def test_pages_launchers_authenticate_latest_installer_before_running_it():
     assert "-Verb RunAs" in pages["win.ps1"]
     assert "-Wait -PassThru" in pages["win.ps1"]
     assert "XIDER Windows installer failed" in pages["win.ps1"]
-    assert "requesting administrator approval (UAC)" in pages["win.ps1"]
+    assert "[4/4] Requesting administrator approval (UAC)..." in pages["win.ps1"]
+    for progress in (
+        "[1/4] Checking OpenSSH signature verifier...",
+        "[2/4] Downloading signed installer (up to 90 seconds)...",
+        "[3/4] Downloading signature and verifying publisher...",
+        "[4/4] Requesting administrator approval (UAC)...",
+        "XIDER launcher failed:",
+    ):
+        assert progress in pages["win.ps1"]
+    assert pages["win.ps1"].index("Checking OpenSSH signature verifier") < pages["win.ps1"].index("Downloading signed installer")
     assert "Set-ExecutionPolicy" not in pages["win.ps1"]
 
 
