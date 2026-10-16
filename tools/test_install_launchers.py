@@ -46,11 +46,16 @@ def test_pages_launchers_authenticate_latest_installer_before_running_it():
         assert "XIDER-INSTALLER-SHA256" in script
         assert INSTALLER_NAMESPACE in script
     assert pages["mac"].index("ssh-keygen -Y verify") < pages["mac"].index('bash "$p"')
-    assert pages["win.ps1"].index("$v.ExitCode -ne 0") < pages["win.ps1"].index("Start-Process")
+    assert pages["win.ps1"].index("$v.ExitCode -ne 0") < pages["win.ps1"].index("$installer=Start-Process")
     assert "-Verb RunAs" in pages["win.ps1"]
     assert "-Wait -PassThru" in pages["win.ps1"]
     assert "XIDER Windows installer failed" in pages["win.ps1"]
     assert "[4/4] Requesting administrator approval (UAC)..." in pages["win.ps1"]
+    assert "Read-Host 'OpenSSH Client is needed to verify the signed installer. Install the Windows optional feature now? [Y/N]'" in pages["win.ps1"]
+    assert "OpenSSH.Client~~~~0.0.1.0" in pages["win.ps1"]
+    assert "OpenSSH Client was not installed; no XIDER files were changed." in pages["win.ps1"]
+    assert "OpenSSH Client is still unavailable" in pages["win.ps1"]
+    assert pages["win.ps1"].index("Read-Host 'OpenSSH Client is needed") < pages["win.ps1"].index("releases/latest/download")
     for progress in (
         "[1/4] Checking OpenSSH signature verifier...",
         "[2/4] Downloading signed installer (up to 90 seconds)...",
