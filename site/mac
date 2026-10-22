@@ -1,0 +1,15 @@
+#!/bin/bash
+set -eu
+for tool in curl base64 shasum ssh-keygen; do
+  command -v "$tool" >/dev/null 2>&1 || { printf 'XIDER: required tool missing: %s\n' "$tool" >&2; exit 1; }
+done
+printf '%s\n' 'XIDER: downloading the latest signed macOS installer...'
+d="$(mktemp -d)"
+trap 'rm -rf "$d"' EXIT
+p="$d/install.sh"; s="$d/install.sig"; a="$d/allowed_signers"
+curl -fsSL --max-time 90 'https://github.com/invinby/XIDER/releases/latest/download/XIDER-install-macos.sh' -o "$p"
+curl -fsSL --max-time 90 'https://github.com/invinby/XIDER/releases/latest/download/XIDER-install-macos.sh.sig' -o "$s"
+printf '%s' 'eGlkZXItcmVsZWFzZSBzc2gtZWQyNTUxOSBBQUFBQzNOemFDMWxaREkxTlRFNUFBQUFJR2NCSmNFZXpSRXNhSzJHeks5UFFGbExNSytobVBwV2M5UmdSRzY1SFhYQwo=' | base64 -D > "$a"
+h="$(shasum -a 256 "$p" | awk '{print $1}')"
+printf 'XIDER-INSTALLER-SHA256\nmacos\n%s\n' "$h" | ssh-keygen -Y verify -f "$a" -I xider-release -n xider-installer@xider.link -s "$s"
+bash "$p"

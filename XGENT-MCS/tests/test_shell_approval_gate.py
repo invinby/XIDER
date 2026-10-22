@@ -239,6 +239,36 @@ def test_shell_execution_policy_is_loaded_from_canonical_module():
     assert helper.bounded_stream("x" * 9000) == ("x" * 8192, True)
 
 
+def test_shell_cancel_handler_is_registered_and_reports_unknown_without_echoing_command(monkeypatch, tmp_path):
+    assert "shell_cancel" in mcs.SUPPORTED_COMMANDS
+    client = _client(monkeypatch, tmp_path)
+    execution = mcs._load_command_approval_component("shell_execution")
+    calls = []
+    monkeypatch.setattr(execution, "cancel_shell", lambda request_id: calls.append(request_id) or "unknown")
+
+    client._do_shell_cancel({"type": "shell_cancel", "target_request_id": "approval_123456789"})
+
+    assert calls == ["approval_123456789"]
+    topic, response = client.responses[-1]
+    assert topic == "shell_cancel"
+    assert response["target_request_id"] == "approval_123456789"
+    assert response["status"] == "unknown"
+    assert "command" not in response and "output" not in response
+
+
+def test_shell_runner_registry_uses_signed_approval_request_id_not_outer_mqtt_id(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(mcs, "_reserve_shell_approval", lambda *_args: True)
+    execution = mcs._load_command_approval_component("shell_execution")
+    calls = []
+    monkeypatch.setattr(execution, "execute_shell", lambda *args, **kwargs: calls.append(kwargs) or {
+        "status": "completed", "returncode": 0, "stdout": "", "stderr": "", "output": "",
+    })
+    client._do_shell({"type": "shell", "id": "unrelated-mqtt-id", "command": COMMAND,
+                      "approval": _approval()})
+    assert calls == [{"request_id": "approval_123456789"}]
+
+
 def test_mac_unsigned_and_hmac_only_shell_never_reach_subprocess(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     calls = []

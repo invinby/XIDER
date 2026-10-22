@@ -50,6 +50,17 @@ LINUX_FIXTURES = (
 )
 
 
+def run_registry_gate(registry: Path = ROOT / "docs/features/feature-registry.json") -> int:
+    """Validate the approved feature catalog before running component suites."""
+    validator = ROOT / "tools/validate_feature_registry.py"
+    result = subprocess.run(
+        [sys.executable, str(validator), str(registry)],
+        cwd=ROOT,
+        check=False,
+    )
+    return result.returncode
+
+
 def run_platform_fixtures(env: dict[str, str]) -> list[str]:
     """Run platform-specific installer/rollback fixtures in isolated processes."""
     if os.name == "nt":
@@ -88,10 +99,20 @@ def main() -> int:
     env.update(TEST_ENV)
     failed: list[str] = []
 
+    print("\n=== Feature Registry gate ===", flush=True)
+    if run_registry_gate() != 0:
+        print("FAILED: Feature Registry validation; component suites were not started.")
+        return 1
+
     for label, cwd, test_path in SUITES:
         print(f"\n=== {label} ===", flush=True)
+        test_args = (
+            sorted(path.name for path in cwd.glob("test_*.py"))
+            if label == "Release tools" and test_path == "."
+            else [test_path]
+        )
         result = subprocess.run(
-            [sys.executable, "-m", "pytest", "-q", test_path],
+            [sys.executable, "-m", "pytest", "-q", *test_args],
             cwd=cwd,
             env=env,
             check=False,

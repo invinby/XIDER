@@ -18,6 +18,28 @@ def _update_client():
     return client, sent
 
 
+def test_vpn_route_helper_is_available_to_source_updates_and_frozen_build():
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "XGENT-WDS" / "xgent_wds.py").read_text(encoding="utf-8")
+    spec = (root / "XGENT-WDS" / "XGENT-WDS.spec").read_text(encoding="utf-8")
+    assert '"vpn_route.py"' in source
+    assert "'vpn_route'" in spec
+    assert '"endpoint_batch.py"' in source
+    assert "'endpoint_batch'" in spec
+    assert '"dnssec_check.py"' in source
+    assert "'dnssec_check'" in spec
+    assert '"latency_series.py"' in source
+    assert "'latency_series'" in spec
+    assert '"packet_loss_history.py"' in source
+    assert "'packet_loss_history'" in spec
+    assert '"jitter_measurement.py"' in source
+    assert "'jitter_measurement'" in spec
+    assert '"network_throughput.py"' in source
+    assert "'network_throughput'" in spec
+    assert '"network_link_speed.py"' in source
+    assert "'network_link_speed'" in spec
+
+
 def test_missing_manifest_pin_fails_before_download(monkeypatch):
     client, sent = _update_client()
     monkeypatch.setattr(wds.sys, 'frozen', False, raising=False)
@@ -48,18 +70,30 @@ def test_old_windows_source_update_adds_location_adapter_and_rollback_removes_it
     def download(manifest, archive, **kwargs):
         Path(manifest).write_text("fixture", encoding="utf-8")
         with zipfile.ZipFile(archive, "w") as bundle:
-            for name in (*original, "location_adapter.py"):
-                component = "XGENT-WDS" if name in original[:4] or name == "location_adapter.py" else "XGENT-MCS"
+            for name in (*original, "location_adapter.py", "camera_devices.py", "camera_series.py", "microphone_devices.py", "microphone_level.py", "audio_output_control.py", "media_temp.py", "media_history.py", "media_request_control.py", "display_contact_sheet.py", "window_capture.py", "dns_diagnostics.py", "dns_settings.py", "dns_comparison.py", "gateway_probe.py", "route_trace.py", "path_mtu.py", "captive_portal.py", "ipv6_connectivity.py", "tls_certificate.py", "service_probe.py", "endpoint_batch.py", "wifi_quality.py", "wifi_channel.py", "wifi_connection_history.py", "proxy_status.py", "vpn_route.py", "network_traffic.py", "network_traffic_schedule.py", "interface_status_history.py", "latency_series.py", "packet_loss_history.py", "jitter_measurement.py", "network_throughput.py", "network_link_speed.py", "route_lookup.py"):
+                component = "XGENT-WDS" if name in original[:4] or name in {"location_adapter.py", "camera_devices.py", "camera_series.py", "microphone_devices.py", "microphone_level.py", "audio_output_control.py", "media_temp.py", "media_history.py", "media_request_control.py", "display_contact_sheet.py", "window_capture.py", "dns_diagnostics.py", "dns_settings.py", "dns_comparison.py", "gateway_probe.py", "route_trace.py", "path_mtu.py", "captive_portal.py", "ipv6_connectivity.py", "tls_certificate.py", "service_probe.py", "endpoint_batch.py", "wifi_quality.py", "wifi_channel.py", "wifi_connection_history.py", "proxy_status.py", "vpn_route.py", "network_traffic.py", "latency_series.py", "packet_loss_history.py", "jitter_measurement.py", "network_throughput.py", "network_link_speed.py", "route_lookup.py"} else "XGENT-MCS"
                 bundle.writestr(f"XIDER/{component}/{name}", "# selected\n")
+            bundle.writestr("XIDER/XGENT-WDS/dnssec_check.py", "# selected\n")
         return "v4.2.0"
     monkeypatch.setattr(wds, "download_verified_source_archive", download)
     monkeypatch.setattr(wds.threading, "Thread", DeferredThread)
     client._do_agent_update(dict(update=True, manifest_digest="a" * 64, release_tag="v4.2.0", id="old-install-update"))
     assert sent[-1][1]["state"] == "restarting"
     assert (install / "location_adapter.py").read_bytes() == b"# selected\n"
+    assert (install / "media_temp.py").read_bytes() == b"# selected\n"
+    assert (install / "media_history.py").read_bytes() == b"# selected\n"
+    assert (install / "display_contact_sheet.py").read_bytes() == b"# selected\n"
+    assert (install / "window_capture.py").read_bytes() == b"# selected\n"
+    assert (install / "wifi_connection_history.py").read_bytes() == b"# selected\n"
     result = package.rollback_unhealthy_agent(tmp_path / package.UPDATE_STATE_NAME, install)
     assert "location_adapter.py" in result["removed"]
     assert not (install / "location_adapter.py").exists()
+    assert "display_contact_sheet.py" in result["removed"]
+    assert not (install / "display_contact_sheet.py").exists()
+    assert "window_capture.py" in result["removed"]
+    assert not (install / "window_capture.py").exists()
+    assert "wifi_connection_history.py" in result["removed"]
+    assert not (install / "wifi_connection_history.py").exists()
     assert (install / "xgent_wds.py").read_bytes() == b"# previous\n"
 
 
@@ -193,7 +227,7 @@ def test_source_update_validates_and_installs_only_windows_allowlist(monkeypatch
     assert installed[0]["files"] == (
         "xgent_wds.py", "config.py", "crypto.py", "xgencrypto.py",
         "release_signature.py", "update_package.py",
-        "command_module_loader.py", "command_signing.py", "command_replay.py", "shell_execution.py", "location_adapter.py",
+        "command_module_loader.py", "command_signing.py", "command_replay.py", "shell_execution.py", "location_adapter.py", "camera_devices.py", "camera_series.py", "microphone_devices.py", "microphone_level.py", "audio_output_control.py", "media_temp.py", "media_history.py", "media_request_control.py", "display_contact_sheet.py", "window_capture.py", "dns_diagnostics.py", "dns_settings.py", "dns_comparison.py", "dnssec_check.py", "gateway_probe.py", "route_trace.py", "path_mtu.py", "captive_portal.py", "ipv6_connectivity.py", "tls_certificate.py", "service_probe.py", "latency_series.py", "packet_loss_history.py", "jitter_measurement.py", "network_throughput.py", "network_link_speed.py", "route_lookup.py", "endpoint_batch.py", "wifi_quality.py", "wifi_channel.py", "wifi_connection_history.py", "proxy_status.py", "vpn_route.py", "network_traffic.py", "network_traffic_schedule.py", "interface_status_history.py",
     )
     assert installed[0]["install_dir"] == Path(wds.__file__).resolve().parent
     assert installed[0]["transaction_path"] == tmp_path / wds.UPDATE_STATE_NAME
@@ -265,7 +299,7 @@ def test_windows_install_failure_reports_actual_matching_rollback_receipt(monkey
     install.mkdir()
     files = ("xgent_wds.py", "config.py", "crypto.py", "xgencrypto.py",
              "release_signature.py", "update_package.py", "command_module_loader.py",
-             "command_signing.py", "command_replay.py", "shell_execution.py", "location_adapter.py")
+             "command_signing.py", "command_replay.py", "shell_execution.py", "location_adapter.py", "camera_devices.py", "camera_series.py", "microphone_devices.py", "microphone_level.py", "audio_output_control.py", "media_temp.py", "media_history.py", "media_request_control.py", "display_contact_sheet.py", "window_capture.py", "dns_diagnostics.py", "dns_settings.py", "dns_comparison.py", "gateway_probe.py", "route_trace.py", "path_mtu.py", "captive_portal.py", "ipv6_connectivity.py", "tls_certificate.py", "service_probe.py", "latency_series.py", "packet_loss_history.py", "jitter_measurement.py", "network_throughput.py", "network_link_speed.py", "route_lookup.py", "endpoint_batch.py", "wifi_quality.py", "wifi_channel.py", "wifi_connection_history.py", "proxy_status.py", "vpn_route.py", "network_traffic.py", "network_traffic_schedule.py", "interface_status_history.py")
     for name in files:
         (install / name).write_text("# previous\n", encoding="utf-8")
     (install / ".env").write_text("private fixture", encoding="utf-8")
@@ -273,8 +307,9 @@ def test_windows_install_failure_reports_actual_matching_rollback_receipt(monkey
         Path(manifest).write_text("fixture", encoding="utf-8")
         with zipfile.ZipFile(archive, "w") as bundle:
             for name in files:
-                component = "XGENT-WDS" if name in files[:4] or name == "location_adapter.py" else "XGENT-MCS"
+                component = "XGENT-WDS" if name in files[:4] or name in {"location_adapter.py", "camera_devices.py", "camera_series.py", "microphone_devices.py", "microphone_level.py", "audio_output_control.py", "media_temp.py", "media_history.py", "media_request_control.py", "display_contact_sheet.py", "window_capture.py", "dns_diagnostics.py", "dns_settings.py", "dns_comparison.py", "gateway_probe.py", "route_trace.py", "path_mtu.py", "captive_portal.py", "ipv6_connectivity.py", "tls_certificate.py", "service_probe.py", "wifi_quality.py", "wifi_channel.py", "wifi_connection_history.py", "proxy_status.py", "network_traffic.py", "latency_series.py", "packet_loss_history.py", "jitter_measurement.py", "network_throughput.py", "network_link_speed.py", "route_lookup.py"} else "XGENT-MCS"
                 bundle.writestr(f"XIDER/{component}/{name}", "# replacement\n")
+            bundle.writestr("XIDER/XGENT-WDS/dnssec_check.py", "# replacement\n")
         return "v4.2.0"
     client, sent = _update_client()
     monkeypatch.setattr(wds, "__file__", str(install / "xgent_wds.py"))

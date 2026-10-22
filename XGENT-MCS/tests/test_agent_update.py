@@ -10,6 +10,155 @@ import pytest
 
 import xgent_mcs as mcs
 import update_package as package
+from guardian_recovery import RECOVERY_FILES
+
+
+def test_camera_quality_helper_is_in_agent_update_and_recovery_allowlists():
+    assert "dns_diagnostics.py" in package.AGENT_UPDATE_FILES
+    assert "dns_diagnostics.py" in RECOVERY_FILES
+    assert "dns_settings.py" in package.AGENT_UPDATE_FILES
+    assert "dns_settings.py" in RECOVERY_FILES
+    assert "dns_comparison.py" in package.AGENT_UPDATE_FILES
+    assert "dns_comparison.py" in RECOVERY_FILES
+    assert "gateway_probe.py" in package.AGENT_UPDATE_FILES
+    assert "gateway_probe.py" in RECOVERY_FILES
+    assert "route_trace.py" in package.AGENT_UPDATE_FILES
+    assert "route_trace.py" in RECOVERY_FILES
+    assert "path_mtu.py" in package.AGENT_UPDATE_FILES
+    assert "path_mtu.py" in RECOVERY_FILES
+    assert "route_trace.py" in package.AGENT_UPDATE_FILES
+    assert "route_trace.py" in RECOVERY_FILES
+    assert "media_history.py" in package.AGENT_UPDATE_FILES
+    assert "media_history.py" in RECOVERY_FILES
+    assert "microphone_devices.py" in package.AGENT_UPDATE_FILES
+    assert "microphone_devices.py" in RECOVERY_FILES
+    assert "microphone_level.py" in package.AGENT_UPDATE_FILES
+    assert "microphone_level.py" in RECOVERY_FILES
+    assert "camera_quality.py" in package.AGENT_UPDATE_FILES
+    assert "camera_quality.py" in RECOVERY_FILES
+    assert "media_temp.py" in package.AGENT_UPDATE_FILES
+    assert "media_temp.py" in RECOVERY_FILES
+    assert "display_contact_sheet.py" in package.AGENT_UPDATE_FILES
+    assert "window_capture.py" in package.AGENT_UPDATE_FILES
+    assert "captive_portal.py" in package.AGENT_UPDATE_FILES
+    assert "captive_portal.py" in RECOVERY_FILES
+    assert "captive_portal.py" in package._WINDOWS_SHARED_UPDATE_FILES
+    assert "wifi_connection_history.py" in package.AGENT_UPDATE_FILES
+    assert "proxy_status.py" in package.AGENT_UPDATE_FILES
+    assert "wifi_connection_history.py" in RECOVERY_FILES
+    assert "proxy_status.py" in RECOVERY_FILES
+    assert "interface_status_history.py" in package.AGENT_UPDATE_FILES
+    assert "interface_status_history.py" in RECOVERY_FILES
+    assert "wifi_connection_history.py" in package._WINDOWS_SHARED_UPDATE_FILES
+    assert "proxy_status.py" in package._WINDOWS_SHARED_UPDATE_FILES
+    assert "network_traffic.py" in package.AGENT_UPDATE_FILES
+    assert "network_traffic.py" in RECOVERY_FILES
+    assert "network_traffic.py" in package._WINDOWS_SHARED_UPDATE_FILES
+    assert "camera_devices.py" in package.AGENT_UPDATE_FILES
+    assert "display_contact_sheet.py" in RECOVERY_FILES
+    assert "window_capture.py" in RECOVERY_FILES
+    assert "camera_devices.py" in RECOVERY_FILES
+    assert "camera_series.py" in package.AGENT_UPDATE_FILES
+    assert "camera_series.py" in RECOVERY_FILES
+    assert "media_request_control.py" in package.AGENT_UPDATE_FILES
+    assert "media_request_control.py" in RECOVERY_FILES
+
+
+def test_captive_portal_helper_is_in_both_packaged_agent_specs():
+    root = Path(__file__).resolve().parents[2]
+    assert "captive_portal" in (root / "XGENT-WDS" / "XGENT-WDS.spec").read_text(encoding="utf-8")
+    assert "captive_portal" in (root / "XGENT-MCS" / "XGENT-MCS.spec").read_text(encoding="utf-8")
+    assert "ipv6_connectivity" in (root / "XGENT-WDS" / "XGENT-WDS.spec").read_text(encoding="utf-8")
+    assert "ipv6_connectivity" in (root / "XGENT-MCS" / "XGENT-MCS.spec").read_text(encoding="utf-8")
+    assert "ipv6_connectivity.py" in package.AGENT_UPDATE_FILES
+    assert "ipv6_connectivity.py" in RECOVERY_FILES
+    assert "ipv6_connectivity.py" in package._WINDOWS_SHARED_UPDATE_FILES
+    assert "tls_certificate" in (root / "XGENT-WDS" / "XGENT-WDS.spec").read_text(encoding="utf-8")
+    assert "tls_certificate" in (root / "XGENT-MCS" / "XGENT-MCS.spec").read_text(encoding="utf-8")
+    assert "tls_certificate.py" in package.AGENT_UPDATE_FILES
+    assert "tls_certificate.py" in RECOVERY_FILES
+    assert "tls_certificate.py" in package._WINDOWS_SHARED_UPDATE_FILES
+    assert "service_probe" in (root / "XGENT-WDS" / "XGENT-WDS.spec").read_text(encoding="utf-8")
+    assert "service_probe" in (root / "XGENT-MCS" / "XGENT-MCS.spec").read_text(encoding="utf-8")
+    assert "service_probe.py" in package.AGENT_UPDATE_FILES
+    assert "service_probe.py" in RECOVERY_FILES
+    assert "service_probe.py" in package._WINDOWS_SHARED_UPDATE_FILES
+    assert "latency_series" in (root / "XGENT-WDS" / "XGENT-WDS.spec").read_text(encoding="utf-8")
+    assert "latency_series" in (root / "XGENT-MCS" / "XGENT-MCS.spec").read_text(encoding="utf-8")
+    assert "latency_series.py" in package.AGENT_UPDATE_FILES
+    assert "latency_series.py" in RECOVERY_FILES
+    assert "latency_series.py" in package._WINDOWS_SHARED_UPDATE_FILES
+    assert "packet_loss_history.py" in package.AGENT_UPDATE_FILES
+    assert "packet_loss_history.py" in RECOVERY_FILES
+    assert "packet_loss_history.py" in package._WINDOWS_SHARED_UPDATE_FILES
+    assert "jitter_measurement.py" in package.AGENT_UPDATE_FILES
+    assert "jitter_measurement.py" in RECOVERY_FILES
+    assert "jitter_measurement.py" in package._WINDOWS_SHARED_UPDATE_FILES
+    assert "network_throughput.py" in package.AGENT_UPDATE_FILES
+    assert "network_throughput.py" in RECOVERY_FILES
+    assert "network_throughput.py" in package._WINDOWS_SHARED_UPDATE_FILES
+    assert "network_link_speed.py" in package.AGENT_UPDATE_FILES
+    assert "network_link_speed.py" in RECOVERY_FILES
+    assert "network_link_speed.py" in package._WINDOWS_SHARED_UPDATE_FILES
+    assert "route_lookup.py" in package.AGENT_UPDATE_FILES
+    assert "route_lookup.py" in RECOVERY_FILES
+    assert "route_lookup.py" in package._WINDOWS_SHARED_UPDATE_FILES
+    assert "route_lookup" in (root / "XGENT-WDS" / "XGENT-WDS.spec").read_text(encoding="utf-8")
+    assert "route_lookup" in (root / "XGENT-MCS" / "XGENT-MCS.spec").read_text(encoding="utf-8")
+    assert "route_lookup.py" in package.AGENT_UPDATE_FILES
+    assert "route_lookup.py" in RECOVERY_FILES
+    assert "route_lookup.py" in package._WINDOWS_SHARED_UPDATE_FILES
+    assert "route_lookup" in (root / "XGENT-WDS" / "XGENT-WDS.spec").read_text(encoding="utf-8")
+    assert "route_lookup" in (root / "XGENT-MCS" / "XGENT-MCS.spec").read_text(encoding="utf-8")
+    assert "packet_loss_history" in (root / "XGENT-WDS" / "XGENT-WDS.spec").read_text(encoding="utf-8")
+    assert "packet_loss_history" in (root / "XGENT-MCS" / "XGENT-MCS.spec").read_text(encoding="utf-8")
+    assert "jitter_measurement" in (root / "XGENT-WDS" / "XGENT-WDS.spec").read_text(encoding="utf-8")
+    assert "jitter_measurement" in (root / "XGENT-MCS" / "XGENT-MCS.spec").read_text(encoding="utf-8")
+    assert "network_throughput" in (root / "XGENT-WDS" / "XGENT-WDS.spec").read_text(encoding="utf-8")
+    assert "network_throughput" in (root / "XGENT-MCS" / "XGENT-MCS.spec").read_text(encoding="utf-8")
+    assert "network_link_speed" in (root / "XGENT-WDS" / "XGENT-WDS.spec").read_text(encoding="utf-8")
+    assert "network_link_speed" in (root / "XGENT-MCS" / "XGENT-MCS.spec").read_text(encoding="utf-8")
+    assert "wifi_quality" in (root / "XGENT-WDS" / "XGENT-WDS.spec").read_text(encoding="utf-8")
+    assert "wifi_quality" in (root / "XGENT-MCS" / "XGENT-MCS.spec").read_text(encoding="utf-8")
+    assert "wifi_quality.py" in package.AGENT_UPDATE_FILES
+    assert "wifi_quality.py" in RECOVERY_FILES
+    assert "wifi_quality.py" in package._WINDOWS_SHARED_UPDATE_FILES
+    assert "wifi_channel" in (root / "XGENT-WDS" / "XGENT-WDS.spec").read_text(encoding="utf-8")
+    assert "wifi_channel" in (root / "XGENT-MCS" / "XGENT-MCS.spec").read_text(encoding="utf-8")
+    assert "wifi_channel.py" in package.AGENT_UPDATE_FILES
+    assert "wifi_channel.py" in RECOVERY_FILES
+    assert "wifi_channel.py" in package._WINDOWS_SHARED_UPDATE_FILES
+    assert "wifi_connection_history.py" in package.AGENT_UPDATE_FILES
+    assert "proxy_status.py" in package.AGENT_UPDATE_FILES
+    assert "wifi_connection_history.py" in RECOVERY_FILES
+    assert "proxy_status.py" in RECOVERY_FILES
+    assert "wifi_connection_history.py" in package._WINDOWS_SHARED_UPDATE_FILES
+    assert "proxy_status.py" in package._WINDOWS_SHARED_UPDATE_FILES
+
+
+def test_vpn_route_helper_is_in_macos_update_recovery_and_frozen_build():
+    root = Path(__file__).resolve().parents[2]
+    assert "vpn_route" in (root / "XGENT-MCS" / "XGENT-MCS.spec").read_text(encoding="utf-8")
+    assert "vpn_route.py" in package.AGENT_UPDATE_FILES
+    assert "vpn_route.py" in RECOVERY_FILES
+    assert "vpn_route.py" in package._WINDOWS_SHARED_UPDATE_FILES
+
+
+def test_endpoint_batch_helper_is_in_macos_update_recovery_and_frozen_build():
+    root = Path(__file__).resolve().parents[2]
+    assert "endpoint_batch" in (root / "XGENT-MCS" / "XGENT-MCS.spec").read_text(encoding="utf-8")
+    assert "endpoint_batch.py" in package.AGENT_UPDATE_FILES
+    assert "endpoint_batch.py" in RECOVERY_FILES
+    assert "endpoint_batch.py" in package._WINDOWS_SHARED_UPDATE_FILES
+
+
+def test_dnssec_check_helper_is_in_agent_update_recovery_and_frozen_build():
+    root = Path(__file__).resolve().parents[2]
+    assert "dnssec_check" in (root / "XGENT-WDS" / "XGENT-WDS.spec").read_text(encoding="utf-8")
+    assert "dnssec_check" in (root / "XGENT-MCS" / "XGENT-MCS.spec").read_text(encoding="utf-8")
+    assert "dnssec_check.py" in package.AGENT_UPDATE_FILES
+    assert "dnssec_check.py" in RECOVERY_FILES
+    assert "dnssec_check.py" in package._WINDOWS_SHARED_UPDATE_FILES
 
 
 def test_macos_app_builder_uses_the_current_agent_release_version():
@@ -38,6 +187,7 @@ def _make_client():
     client = object.__new__(mcs.XgentClient)
     client._running = threading.Event()
     client._running.set()
+    client._sysinfo_schedule_wake = threading.Event()
     client._update_health = threading.Event()
     client._update_lock = threading.Lock()
     client._lifecycle_lock = threading.RLock()
@@ -294,7 +444,7 @@ def source_update(monkeypatch, tmp_path):
         "release_signature.py", "update_package.py", "guardian_recovery.py", "start_agent.sh",
         "command_module_loader.py", "command_signing.py", "command_replay.py", "shell_execution.py",
         "xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py",
-        "fake_update_screen.py", "location_adapter.py",
+        "fake_update_screen.py", "location_adapter.py", "media_history.py", "media_request_control.py", "camera_quality.py", "camera_devices.py", "camera_series.py", "media_temp.py", "display_contact_sheet.py", "window_capture.py", "dns_diagnostics.py",
         "xider_guardian.py", "requirements.txt", "setup_mac.py",
         "stop_agent.sh", "start_guardian.sh",
     )
@@ -351,6 +501,7 @@ def test_source_update_serializes_until_exec_and_does_not_spawn_guardian(source_
     state = json.loads((state_root / package.UPDATE_STATE_NAME).read_text(encoding="utf-8"))
     assert state["recovery_slot"] == "v4.2.0-" + "a" * 64
     assert (install / "guardian_recovery.py").read_bytes() == b"# new signed source\n"
+    assert (install / "media_history.py").read_bytes() == b"# new signed source\n"
     assert len(restarts) == 1
     restarts[0]()
     assert execs == [(mcs.sys.executable, [mcs.sys.executable, str(install / "xgent_mcs.py"), "--example"])]
@@ -368,6 +519,20 @@ def test_old_source_update_installs_missing_location_adapter_and_rollback_remove
     restarts[0]()
     assert sent[-1][1]["state"] == "restart_failed"
     assert not adapter.exists()
+    assert not (state_root / package.UPDATE_STATE_NAME).exists()
+
+
+def test_old_source_update_installs_missing_media_history_and_rollback_removes_it(source_update, monkeypatch):
+    client, install, state_root, _, sent, _, restarts = source_update
+    media_helper = install / "media_history.py"
+    media_helper.unlink()
+    monkeypatch.setattr(mcs.os, "execv", lambda *_args: (_ for _ in ()).throw(OSError("restart failed")))
+    client._do_agent_update({"manifest_digest": "a" * 64, "release_tag": "v4.2.0"})
+    assert sent[-1][1]["state"] == "restarting"
+    assert media_helper.read_bytes() == b"# new signed source\n"
+    restarts[0]()
+    assert sent[-1][1]["state"] == "restart_failed"
+    assert not media_helper.exists()
     assert not (state_root / package.UPDATE_STATE_NAME).exists()
 
 
@@ -411,6 +576,7 @@ def test_explicit_stop_rolls_back_and_cancels_scheduled_restart(source_update, m
 
     assert saved == [False]
     assert not client._running.is_set()
+    assert client._sysinfo_schedule_wake.is_set()
     assert (install / "xgent_mcs.py").read_bytes() == b"# previous source\n"
     assert not (state_root / package.UPDATE_STATE_NAME).exists()
     assert not client._update_lock.locked()
@@ -608,6 +774,7 @@ def test_stop_intent_precedes_launchd_unload_and_process_exit(monkeypatch, tmp_p
 
     assert commands == [["launchctl", "bootout", "gui/501/com.xgent.agent"]]
     assert not client._running.is_set()
+    assert client._sysinfo_schedule_wake.is_set()
 
 
 def test_failed_launchd_stop_keeps_agent_reachable(monkeypatch, tmp_path):
@@ -892,6 +1059,7 @@ def test_explicit_stop_during_suback_wait_prevents_commit(source_update, monkeyp
 
     new._on_connect(mqtt_client, None, None, 0)
     new.request_stop()
+    assert new._sysinfo_schedule_wake.is_set()
     new._on_subscribe(mqtt_client, None, 41, [0])
     new._on_subscribe(mqtt_client, None, 42, [0])
 

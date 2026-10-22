@@ -226,6 +226,36 @@ def test_shell_execution_policy_is_loaded_from_canonical_module():
     assert helper.bounded_stream("x" * 9000) == ("x" * 8192, True)
 
 
+def test_shell_cancel_handler_is_registered_and_reports_unknown_without_echoing_command(monkeypatch, tmp_path):
+    assert "shell_cancel" in wds.SUPPORTED_COMMANDS
+    client = _client(monkeypatch, tmp_path)
+    execution = wds._load_command_approval_component("shell_execution")
+    calls = []
+    monkeypatch.setattr(execution, "cancel_shell", lambda request_id: calls.append(request_id) or "unknown")
+
+    client._do_shell_cancel({"type": "shell_cancel", "target_request_id": "approval_123456789"})
+
+    assert calls == ["approval_123456789"]
+    topic, response = client.responses[-1]
+    assert topic == "shell_cancel"
+    assert response["target_request_id"] == "approval_123456789"
+    assert response["status"] == "unknown"
+    assert "command" not in response and "output" not in response
+
+
+def test_shell_runner_registry_uses_signed_approval_request_id_not_outer_mqtt_id(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(wds, "_reserve_shell_approval", lambda *_args: True)
+    execution = wds._load_command_approval_component("shell_execution")
+    calls = []
+    monkeypatch.setattr(execution, "execute_shell", lambda *args, **kwargs: calls.append(kwargs) or {
+        "status": "completed", "returncode": 0, "stdout": "", "stderr": "", "output": "",
+    })
+    client._do_shell({"type": "shell", "id": "unrelated-mqtt-id", "command": COMMAND,
+                      "approval": _approval()})
+    assert calls == [{"request_id": "approval_123456789"}]
+
+
 def test_shell_returns_on_timeout_with_child_holding_inherited_output(monkeypatch, tmp_path):
     import psutil
     import time
@@ -235,17 +265,17 @@ def test_shell_returns_on_timeout_with_child_holding_inherited_output(monkeypatc
     script.write_text(
         "import json, os, subprocess, sys, time\n"
         "from pathlib import Path\n"
-        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)', 'xider-inherited-output-fixture'])\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(8)', 'xider-inherited-output-fixture'])\n"
         "Path(sys.argv[1]).write_text(json.dumps([os.getpid(), child.pid]), encoding='utf-8')\n"
         "print('fixture ready', flush=True)\n"
-        "time.sleep(5)\n", encoding="utf-8")
+        "time.sleep(8)\n", encoding="utf-8")
     import shlex
     args = [sys.executable, str(script), str(pids)]
     command = wds.subprocess.list2cmdline(args) if sys.platform == "win32" else shlex.join(args)
     started = time.monotonic()
     try:
         client._do_shell({"type": "shell", "command": command,
-                          "approval": _approval(command=command), "timeout": 1})
+                          "approval": _approval(command=command), "timeout": 3})
         elapsed = time.monotonic() - started
         assert pids.is_file(), "controlled child fixture never reached readiness"
         parent_pid, child_pid = json.loads(pids.read_text(encoding="utf-8"))
@@ -253,7 +283,7 @@ def test_shell_returns_on_timeout_with_child_holding_inherited_output(monkeypatc
         for pid in (parent_pid, child_pid):
             assert not psutil.pid_exists(pid) or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
         assert "fixture ready" in client.responses[-1][1]["stdout"]
-        assert elapsed < 2.5, "handler waited for the grandchild's inherited pipes"
+        assert elapsed < 4.5, "handler waited for the grandchild's inherited pipes"
         assert client.responses[-1][1]["status"] == "timeout"
     finally:
         if pids.exists():

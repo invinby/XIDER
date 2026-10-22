@@ -19,7 +19,7 @@ def test_capture_uses_system_binary_when_missing_from_path(monkeypatch, tmp_path
     monkeypatch.setattr(Path, "is_file", lambda path: path.as_posix() == "/usr/sbin/screencapture" or original_is_file(path))
     assert agent._command_available("screencapture", ("/usr/sbin/screencapture",))
     original_temp = agent.tempfile.NamedTemporaryFile
-    monkeypatch.setattr(agent.tempfile, "NamedTemporaryFile", lambda **kwargs: original_temp(dir=tmp_path, **kwargs))
+    monkeypatch.setattr(agent.media_temp, "create_media_temp_file", lambda suffix: original_temp(dir=tmp_path, prefix="xider-media-", suffix=suffix, delete=False))
     def capture(args, **kwargs):
         invoked.append(args)
         Image.new("RGB", (10, 10), "red").save(args[-1])
@@ -60,7 +60,7 @@ def test_capture_diagnostics_and_cleanup(monkeypatch, tmp_path, case, state):
         file = original_temp(dir=tmp_path, **kwargs)
         paths.append(Path(file.name))
         return file
-    monkeypatch.setattr(agent.tempfile, "NamedTemporaryFile", temporary)
+    monkeypatch.setattr(agent.media_temp, "create_media_temp_file", lambda suffix: temporary(prefix="xider-media-", suffix=suffix, delete=False))
     def capture(args, **kwargs):
         path = Path(args[-1])
         if case == "disappeared_tool":

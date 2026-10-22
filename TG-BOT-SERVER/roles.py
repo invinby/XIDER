@@ -40,6 +40,32 @@ def is_owner(user_id: int) -> bool:
     return int(user_id) == int(ADMIN_ID)
 
 
+_ACCESS_DENIAL_MESSAGES = {
+    "account_blocked": "Доступ закрыт: аккаунт заблокирован.",
+    "guest_role": "Для этой функции нужна роль «пользователь» или grant владельца.",
+    "owner_only": "Это действие доступно только владельцу.",
+    "device_required": "Сначала выбери одно конкретное устройство.",
+    "device_grant_required": "Нет активного доступа к выбранному устройству.",
+    "shell_request_required": "Для терминала нужен отдельный grant на запрос команды.",
+    "action_not_allowlisted": "Это действие не открыто для пользовательской роли.",
+    "action_grant_required": "На это действие нет активного разрешения.",
+    "invalid_device": "Нельзя выбрать устройство «все» или пустую цель.",
+}
+
+
+async def _answer_access_denial(obj: CallbackQuery, user_id: int, selected_device: str | None) -> None:
+    answer = getattr(obj, "answer", None)
+    if not callable(answer):
+        return
+    decision = access_store.explain_callback_access(
+        user_id, obj.data, ADMIN_ID, selected_device,
+    )
+    message = _ACCESS_DENIAL_MESSAGES.get(
+        decision.get("reason"), "Действие недоступно по текущей политике доступа.",
+    )
+    await answer(message, show_alert=True)
+
+
 class OwnerFilter(BaseFilter):
     """Only the protected .env owner may open administration."""
 
@@ -64,6 +90,13 @@ class AdminFilter(BaseFilter):
         if role != Role.USER:
             if isinstance(obj, Message) and state is not None:
                 await state.clear()
+            elif isinstance(obj, CallbackQuery):
+                try:
+                    from bot import SESSION
+                    selected_device = SESSION.get("target")
+                except Exception:
+                    selected_device = None
+                await _answer_access_denial(obj, user_id, selected_device)
             return False
         if isinstance(obj, Message):
             # A callback can start an input flow, but the user may lose their
@@ -96,6 +129,7 @@ class AdminFilter(BaseFilter):
             if not devices or devices.get(target) is None:
                 await state.clear()
                 return False
+            access_store.record_grant_use(user_id, callback, ADMIN_ID, target)
             return True
         callback = obj.data or ""
         try:
@@ -105,15 +139,22 @@ class AdminFilter(BaseFilter):
             devices = None
             selected_device = None
         if not access_store.can_use_callback(user_id, callback, ADMIN_ID, selected_device):
+            await _answer_access_denial(obj, user_id, selected_device)
             return False
         if callback in access_store.USER_NAVIGATION_CALLBACKS:
             return True
         if callback.startswith("dev:"):
             device_id = callback.split(":", 1)[1]
-            return bool(device_id and devices and devices.get(device_id) is not None)
+            if not device_id or not devices or devices.get(device_id) is None:
+                return False
+            access_store.record_grant_use(user_id, callback, ADMIN_ID, device_id)
+            return True
         # A grant must still refer to a device that exists. This closes stale
         # grants left behind by old databases or a concurrent remove/block.
-        return bool(selected_device and devices and devices.get(selected_device) is not None)
+        if not selected_device or not devices or devices.get(selected_device) is None:
+            return False
+        access_store.record_grant_use(user_id, callback, ADMIN_ID, selected_device)
+        return True
 
 
 def _device_store():

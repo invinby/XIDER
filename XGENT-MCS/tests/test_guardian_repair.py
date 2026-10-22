@@ -324,12 +324,14 @@ def test_explicit_worker_stop_persists_guardian_intent(guardian_module, monkeypa
     client = object.__new__(mcs.XgentClient)
     client._running = threading.Event()
     client._running.set()
+    client._sysinfo_schedule_wake = threading.Event()
     client.on_stop_requested = None
 
     client.request_stop()
 
     assert saved == [False]
     assert not client._running.is_set()
+    assert client._sysinfo_schedule_wake.is_set()
 
 
 def test_uninstall_unloads_guardian_before_removing_worker_and_config(

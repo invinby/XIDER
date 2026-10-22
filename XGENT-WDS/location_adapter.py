@@ -78,12 +78,32 @@ def location_capability():
 
 
 def location_text(value):
+    if value.get("source") == "comparison":
+        system = value.get("system_location", {})
+        estimate = value.get("ip_estimate", {})
+        system_text = location_text(system) if isinstance(system, dict) else "Системная локация: неизвестно"
+        estimate_text = location_text(estimate) if isinstance(estimate, dict) else "IP estimate: недоступно"
+        return "Сравнение источников (разовый запрос; координаты не сохраняются):\n" + system_text + "\n" + estimate_text
     if value["source"] == "ip_estimate":
         return "Приблизительная оценка города/региона по IP, не GPS; точность неизвестна.\n" + value["label"]
     if value["state"] == "granted":
         return (value["label"] + "\n" + str(value["latitude"]) + ", " + str(value["longitude"])
                 + "\nПогрешность: " + str(value["accuracy_m"]) + " м")
     return value["label"]
+
+def compare_location_results(system_value, ip_value):
+    """Build a transient, source-labelled comparison with no provider IP/coordinates."""
+    system_keys = ("source", "state", "latitude", "longitude", "accuracy_m", "label", "checked_at")
+    ip_keys = ("source", "state", "label", "checked_at")
+    system = {key: system_value.get(key) for key in system_keys if key in system_value}
+    estimate = {key: ip_value.get(key) for key in ip_keys if key in ip_value}
+    estimate.update(latitude=None, longitude=None, accuracy_m=None)
+    state = system.get("state")
+    if state not in {"granted", "denied", "not_determined", "unavailable", "needs_live_test", "unknown"}:
+        state = "unknown"
+    comparison = result(state, "Сравнение системного источника и оценки города по IP.", source="comparison")
+    comparison.update(system_location=system, ip_estimate=estimate)
+    return comparison
 
 SETTINGS = "ms-settings:privacy-location"
 

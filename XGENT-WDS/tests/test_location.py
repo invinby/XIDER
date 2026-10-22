@@ -93,6 +93,34 @@ def test_string_truthy_value_is_not_ip_opt_in(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", forbidden)
     assert client_result({"ip_fallback": "true"}).get("source") == "system"
 
+def test_owner_compare_opt_in_returns_distinct_system_and_ip_sources_without_persisting(monkeypatch):
+    import location_adapter
+    monkeypatch.setattr(location_adapter, "read_system_location", lambda: {
+        "source": "system", "state": "granted", "latitude": 41.3, "longitude": 69.2,
+        "accuracy_m": 90, "label": "OS fix", "checked_at": "2026-10-15T10:00:00+00:00",
+    })
+    monkeypatch.setattr(location_adapter, "read_ip_estimate", lambda: {
+        "source": "ip_estimate", "state": "granted", "latitude": 41.31, "longitude": 69.27,
+        "accuracy_m": 1, "ip": "203.0.113.9", "label": "Tashkent",
+        "checked_at": "2026-10-15T10:00:01+00:00",
+    })
+
+    result = client_result({"compare_sources": True})
+
+    assert result["source"] == "comparison"
+    assert result["system_location"]["latitude"] == 41.3
+    assert result["ip_estimate"]["label"] == "Tashkent"
+    assert result["ip_estimate"]["latitude"] is None
+    assert result["ip_estimate"]["longitude"] is None
+    assert "ip" not in result["ip_estimate"]
+
+def test_compare_requires_exact_boolean_opt_in(monkeypatch):
+    import location_adapter
+    monkeypatch.setattr(location_adapter, "read_ip_estimate",
+                        lambda: pytest.fail("comparison must require boolean opt-in"))
+
+    assert client_result({"compare_sources": "true"}).get("source") == "system"
+
 def test_windows_native_diagnostic_requires_explicit_os_grant():
     import location_adapter as adapter
     backend = object.__new__(adapter.WindowsLocationBackend)

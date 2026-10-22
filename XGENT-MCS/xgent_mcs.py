@@ -5,11 +5,16 @@
 """
 import base64
 import binascii
+import datetime
+import hashlib
+import ipaddress
 import io
 import importlib.machinery
 import importlib.util
 import json
 import logging
+import locale
+import math
 import os
 import plistlib
 import platform
@@ -27,12 +32,497 @@ import webbrowser
 from urllib.parse import urlsplit
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
+from sleep_wake_history import parse_pmset_sleep_wake_log
+from sysinfo_schedule import load_schedule, save_schedule
+import camera_quality
+import camera_devices
+import media_temp
+import display_contact_sheet
+import window_capture
+import dns_diagnostics
+import dns_settings
+import dns_comparison
+import dnssec_check
+import gateway_probe
+import route_trace
+import path_mtu
+import captive_portal
+import ipv6_connectivity
+import tls_certificate
+import service_probe
+import latency_series
+import packet_loss_history
+import jitter_measurement
+import network_throughput
+import network_link_speed
+import route_lookup
+import endpoint_batch
+import wifi_quality
+import wifi_channel
+import wifi_connection_history
+import proxy_status
+import vpn_route
+import network_traffic
+import interface_status_history
+from network_traffic_schedule import load_schedule as load_network_traffic_schedule, save_schedule as save_network_traffic_schedule
+from media_request_control import MEDIA_REQUEST_ACTIONS, MediaRequestRegistry
 
 MAX_FILE_PUT_BYTES = 30 * 1024 * 1024
 MAX_FILE_PUT_B64_CHARS = 4 * ((MAX_FILE_PUT_BYTES + 2) // 3)
 MAX_SCREENSHOT_BYTES = 30 * 1024 * 1024
 _OPEN_URL_OPERATION_TTL_SEC = 600.0
 _OPEN_URL_OPERATION_LIMIT = 256
+_VOLUME_HISTORY_MIN_SPAN_SECONDS = 6 * 60 * 60
+_VOLUME_HISTORY_RETENTION_SECONDS = 90 * 24 * 60 * 60
+_VOLUME_HISTORY: dict[str, list[dict[str, float | int]]] = {}
+_VOLUME_HISTORY_LOCK = threading.Lock()
+_MEMORY_PRESSURE_SOURCE = "macos_memory_pressure_utility_free_percent"
+_THERMAL_SOURCE = "macos_public_temperature_sensor_api_unavailable"
+_BATTERY_HEALTH_SOURCE = "macos_system_profiler_battery_capacity"
+_BATTERY_CYCLE_SOURCE = "macos_system_profiler_battery_cycle_count"
+_SLEEP_WAKE_SOURCE = "macos_pmset_log"
+_STARTUP_DURATION_SOURCE = "macos_boot_duration_api_unavailable"
+_PENDING_RESTART_SOURCE = "macos_pending_restart_flag_unavailable"
+APPLICATIONS_PATH = "/Applications"
+
+
+def _read_startup_duration_snapshot() -> dict:
+    """Fail explicitly when macOS exposes no reliable public boot-duration metric."""
+    return {"state": "unsupported", "source": _STARTUP_DURATION_SOURCE, "duration_ms": None, "completed_at": None}
+
+
+def _read_pending_restart_snapshot() -> dict:
+    """Do not equate available macOS updates with a pending reboot requirement."""
+    return {"state": "unsupported", "source": _PENDING_RESTART_SOURCE, "pending": None, "reasons": [], "completeness": "unknown"}
+
+
+def _read_os_support_identity() -> dict:
+    """Read only macOS version; Apple publishes update history, not fixed end dates."""
+    try:
+        release = platform.mac_ver()[0]
+    except Exception:
+        release = ""
+    if isinstance(release, str) and re.fullmatch(r"\d{1,2}\.\d{1,2}(?:\.\d{1,2})?", release):
+        return {"state": "supported", "family": "macos", "release": release, "edition": None}
+    return {"state": "unknown", "family": "macos", "release": None, "edition": None}
+
+
+def _read_hardware_inventory_snapshot() -> dict:
+    """Read only public sysctl model/size keys; never query serials or UUIDs."""
+    unknown = {
+        "state": "unknown", "manufacturer": None, "model": None, "cpu": None,
+        "architecture": None, "memory_gib": None, "graphics": [],
+    }
+    sysctl = shutil.which("sysctl")
+    if not sysctl:
+        return {**unknown, "state": "unsupported"}
+
+    def read_value(key: str) -> str | None:
+        try:
+            result = subprocess.run(
+                [sysctl, "-n", key], capture_output=True, text=True, timeout=5, check=False,
+            )
+            if result.returncode != 0 or not isinstance(result.stdout, str) or len(result.stdout) > 256:
+                return None
+            value = result.stdout.strip()
+            return value if value and not any(ord(char) < 32 for char in value) else None
+        except Exception:
+            return None
+
+    model = read_value("hw.model")
+    raw_memory = read_value("hw.memsize")
+    raw_cpu = read_value("machdep.cpu.brand_string")
+    memory_bytes = int(raw_memory) if raw_memory and raw_memory.isdigit() else None
+    memory_gib = (memory_bytes + 2**29) // 2**30 if memory_bytes and memory_bytes > 0 else None
+    cpu = raw_cpu[:120] if raw_cpu and len(raw_cpu) <= 120 else None
+    architecture = platform.machine()
+    if not isinstance(architecture, str) or not re.fullmatch(r"[A-Za-z0-9_]{1,24}", architecture):
+        architecture = None
+    result = {
+        "state": "supported", "manufacturer": "Apple", "model": model[:120] if model and len(model) <= 120 else None,
+        "cpu": cpu, "architecture": architecture, "memory_gib": memory_gib, "graphics": [],
+    }
+    if not any(value is not None for key, value in result.items() if key not in {"state", "graphics"}):
+        return unknown
+    return result
+
+
+def _read_driver_inventory_snapshot() -> dict:
+    """macOS has no stable public inventory equivalent to signed Windows drivers."""
+    return {"state": "unsupported", "drivers": []}
+
+
+def _read_installed_app_inventory_snapshot() -> dict:
+    """Read bounded top-level app bundle names/versions, not IDs, paths, or executables."""
+    unknown = {"state": "unknown", "apps": []}
+    try:
+        with os.scandir(APPLICATIONS_PATH) as iterator:
+            entries = sorted(iterator, key=lambda item: item.name.casefold())
+        bundles = [entry for entry in entries if entry.name.endswith(".app") and entry.is_dir(follow_symlinks=False)]
+        if len(bundles) > 500:
+            return unknown
+        apps = []
+        for entry in bundles:
+            name, version = entry.name[:-4], None
+            try:
+                info_path = Path(entry.path) / "Contents" / "Info.plist"
+                with info_path.open("rb") as handle:
+                    info = plistlib.load(handle)
+                candidate = info.get("CFBundleName")
+                if isinstance(candidate, str) and 0 < len(candidate) <= 160 and not any(ord(char) < 32 for char in candidate):
+                    name = candidate.strip() or name
+                candidate = info.get("CFBundleShortVersionString") or info.get("CFBundleVersion")
+                if isinstance(candidate, str) and len(candidate) <= 160 and not any(ord(char) < 32 for char in candidate):
+                    version = candidate.strip() or None
+            except (OSError, TypeError, ValueError, plistlib.InvalidFileException):
+                # Unreadable bundle metadata is represented by its visible bundle name only.
+                pass
+            if not name or len(name) > 160 or any(ord(char) < 32 for char in name):
+                return unknown
+            apps.append({"name": name, "publisher": None, "version": version})
+        return {"state": "supported", "apps": apps}
+    except OSError:
+        return {"state": "unsupported", "apps": []}
+
+
+def _read_startup_inventory_snapshot() -> dict:
+    """macOS login-item enumeration has no stable supported public source here."""
+    return {"state": "unsupported", "entries": []}
+
+
+def _read_service_inventory_snapshot() -> dict:
+    """Do not infer a comparable service inventory from unstable macOS launchctl output."""
+    return {"state": "unsupported", "services": []}
+
+
+def _read_crash_summary_snapshot() -> dict:
+    """Do not export private unified-log records without a stable safe aggregate source."""
+    return {"state": "unsupported", "events": []}
+
+
+def _read_smart_trend_snapshot() -> dict:
+    """macOS diskutil exposes no stable SMART counter history interface."""
+    return {"state": "unsupported", "disks": []}
+
+
+def _volume_topology_device(mountpoint: str) -> int:
+    """Return the local filesystem device number for one mounted path."""
+    return os.stat(mountpoint).st_dev
+
+
+def _read_volume_topology_snapshot() -> dict:
+    """Group macOS mount aliases by st_dev without exporting /dev identifiers."""
+    source = "macos_psutil_partitions_and_stat_device"
+    unknown = {"state": "unknown", "source": source, "volumes": []}
+    try:
+        partitions = list(psutil.disk_partitions(all=False))[:64]
+        grouped: dict[str, set[str]] = {}
+        for part in partitions:
+            mountpoint = getattr(part, "mountpoint", None)
+            if not isinstance(mountpoint, str) or not mountpoint or len(mountpoint) > 512:
+                continue
+            try:
+                device_number = _volume_topology_device(mountpoint)
+            except Exception:
+                continue
+            if type(device_number) is not int or device_number < 0:
+                continue
+            volume_key = "vol-" + hashlib.sha256(str(device_number).encode("ascii")).hexdigest()[:16]
+            grouped.setdefault(volume_key, set()).add(mountpoint)
+        volumes = [
+            {"volume_key": key, "mount_paths": sorted(paths)[:16], "state": "supported"}
+            for key, paths in sorted(grouped.items()) if paths
+        ][:64]
+        return {**unknown, "state": "supported" if volumes else "unknown", "volumes": volumes}
+    except Exception:
+        log.info("macOS volume topology unavailable", exc_info=True)
+        return unknown
+
+
+def _read_clock_drift_snapshot() -> dict:
+    """Estimate wall-clock steps against monotonic elapsed time over one second."""
+    source = "wall_vs_monotonic_elapsed"
+    try:
+        wall_start = time.time_ns()
+        monotonic_start = time.perf_counter_ns()
+        time.sleep(1.0)
+        wall_end = time.time_ns()
+        monotonic_end = time.perf_counter_ns()
+        wall_elapsed = wall_end - wall_start
+        monotonic_elapsed = monotonic_end - monotonic_start
+        sample_ms = round(monotonic_elapsed / 1_000_000)
+        if (wall_elapsed <= 0 or monotonic_elapsed <= 0
+                or not 500 <= sample_ms <= 5000):
+            return {"state": "unknown", "source": source, "drift_ms": None, "sample_ms": None}
+        drift_ms = round((wall_elapsed - monotonic_elapsed) / 1_000_000)
+        return {"state": "supported", "source": source,
+                "drift_ms": drift_ms, "sample_ms": sample_ms}
+    except Exception:
+        log.info("macOS local clock comparison unavailable", exc_info=True)
+        return {"state": "unknown", "source": source, "drift_ms": None, "sample_ms": None}
+
+
+def _read_sleep_wake_history_snapshot() -> dict:
+    """Read a bounded pmset history and discard all non-event log details."""
+    command = shutil.which("pmset")
+    if not command:
+        return {"state": "unsupported", "source": _SLEEP_WAKE_SOURCE, "history_days": 7, "events": []}
+    try:
+        completed = subprocess.run(
+            [command, "-g", "log"], capture_output=True, text=True,
+            timeout=12, check=False,
+        )
+        if (completed.returncode != 0 or not isinstance(completed.stdout, str)
+                or len(completed.stdout) > 1024 * 1024):
+            return {"state": "unknown", "source": _SLEEP_WAKE_SOURCE, "history_days": 7, "events": []}
+        return parse_pmset_sleep_wake_log(completed.stdout)
+    except Exception:
+        log.info("macOS sleep/wake telemetry unavailable", exc_info=True)
+        return {"state": "unknown", "source": _SLEEP_WAKE_SOURCE, "history_days": 7, "events": []}
+
+
+def _read_battery_health_snapshot() -> dict:
+    """Read design/full capacity only when the native structured report exposes both."""
+    command = shutil.which("system_profiler")
+    if not command:
+        return {"state": "unsupported", "source": _BATTERY_HEALTH_SOURCE, "batteries": []}
+    try:
+        completed = subprocess.run(
+            [command, "SPPowerDataType", "-json"], capture_output=True, text=True,
+            timeout=20, check=False,
+        )
+        if completed.returncode != 0:
+            return {"state": "unknown", "source": _BATTERY_HEALTH_SOURCE, "batteries": []}
+        payload = json.loads(completed.stdout or "null")
+        if not isinstance(payload, dict):
+            return {"state": "unknown", "source": _BATTERY_HEALTH_SOURCE, "batteries": []}
+
+        def capacity(row, *keys):
+            for key in keys:
+                value = row.get(key)
+                if isinstance(value, int) and not isinstance(value, bool):
+                    number = value
+                elif isinstance(value, str):
+                    cleaned = value.replace(",", "")
+                    match = re.fullmatch(r"\s*(\d+)\s*(?:mAh)?\s*", cleaned, re.IGNORECASE)
+                    number = int(match.group(1)) if match else None
+                else:
+                    number = None
+                if number is not None and 0 < number < 1_000_000:
+                    return number
+            return None
+
+        rows = []
+        sections = payload.get("SPPowerDataType")
+        if isinstance(sections, list):
+            for section in sections:
+                if not isinstance(section, dict):
+                    continue
+                records = section.get("SPBatteryData")
+                if isinstance(records, list):
+                    rows.extend(row for row in records if isinstance(row, dict))
+                elif isinstance(records, dict):
+                    rows.append(records)
+        batteries = []
+        found_battery = bool(rows)
+        for row in rows:
+            capacity_row = row.get("sppower_battery_health_data")
+            if not isinstance(capacity_row, dict):
+                capacity_row = row
+                has_direct_capacity = any(key in row for key in (
+                    "design_capacity_milliamp_hours", "sppower_battery_health_design_capacity",
+                    "full_charge_capacity_milliamp_hours", "sppower_battery_health_full_charge_capacity",
+                ))
+                if not has_direct_capacity:
+                    continue
+            design = capacity(capacity_row, "design_capacity_milliamp_hours", "sppower_battery_health_design_capacity")
+            full = capacity(capacity_row, "full_charge_capacity_milliamp_hours", "sppower_battery_health_full_charge_capacity")
+            if design is None and full is None:
+                continue
+            found_battery = True
+            if design is None or full is None:
+                continue
+            health = full * 100.0 / design
+            if not math.isfinite(health) or not 1.0 <= health <= 150.0:
+                continue
+            health_info = row.get("sppower_battery_health")
+            if not isinstance(health_info, dict):
+                health_info = capacity_row.get("sppower_battery_health")
+            condition = health_info.get("sppower_battery_health_condition") if isinstance(health_info, dict) else None
+            if condition not in {"Normal", "Service Recommended", "Replace Soon", "Replace Now", "Fair", "Poor"}:
+                condition = "Unknown"
+            batteries.append({
+                "label": "Internal battery",
+                "design_capacity_mah": design,
+                "full_charge_capacity_mah": full,
+                "health_percent": round(health, 1),
+                "condition": condition,
+                "quality": "system_profiler",
+            })
+        if batteries:
+            state = "supported"
+        else:
+            state = "unknown" if found_battery else "unsupported"
+        return {"state": state, "source": _BATTERY_HEALTH_SOURCE, "batteries": batteries}
+    except Exception:
+        return {"state": "unknown", "source": _BATTERY_HEALTH_SOURCE, "batteries": []}
+
+
+def _read_battery_cycle_snapshot() -> dict:
+    """Read the cycle count only from macOS's structured System Information data."""
+    command = shutil.which("system_profiler")
+    if not command:
+        return {"state": "unsupported", "source": _BATTERY_CYCLE_SOURCE, "batteries": []}
+    try:
+        completed = subprocess.run(
+            [command, "SPPowerDataType", "-json"], capture_output=True, text=True,
+            timeout=20, check=False,
+        )
+        if completed.returncode != 0:
+            return {"state": "unknown", "source": _BATTERY_CYCLE_SOURCE, "batteries": []}
+        payload = json.loads(completed.stdout or "null")
+        if not isinstance(payload, dict):
+            return {"state": "unknown", "source": _BATTERY_CYCLE_SOURCE, "batteries": []}
+        sections = payload.get("SPPowerDataType")
+        if not isinstance(sections, list):
+            return {"state": "unsupported", "source": _BATTERY_CYCLE_SOURCE, "batteries": []}
+        rows = []
+        for section in sections:
+            if not isinstance(section, dict):
+                continue
+            records = section.get("SPBatteryData")
+            if isinstance(records, list):
+                rows.extend(row for row in records if isinstance(row, dict))
+            elif isinstance(records, dict):
+                rows.append(records)
+        if not rows:
+            return {"state": "unsupported", "source": _BATTERY_CYCLE_SOURCE, "batteries": []}
+        batteries = []
+        saw_cycle_field = False
+        for row in rows[:8]:
+            health_data = row.get("sppower_battery_health_data")
+            if not isinstance(health_data, dict) or "sppower_battery_cycle_count" not in health_data:
+                continue
+            saw_cycle_field = True
+            value = health_data.get("sppower_battery_cycle_count")
+            if isinstance(value, int) and not isinstance(value, bool):
+                count = value
+            elif isinstance(value, str) and re.fullmatch(r"\s*\d+\s*", value):
+                count = int(value.strip())
+            else:
+                continue
+            if not 0 <= count <= 1_000_000:
+                continue
+            batteries.append({
+                "label": "Internal battery", "cycle_count": count, "quality": "system_profiler",
+            })
+        state = "supported" if batteries else "unknown"
+        return {"state": state, "source": _BATTERY_CYCLE_SOURCE, "batteries": batteries}
+    except Exception:
+        return {"state": "unknown", "source": _BATTERY_CYCLE_SOURCE, "batteries": []}
+
+
+def _read_thermal_snapshot() -> dict:
+    """Do not invent sensor values where macOS exposes no supported public adapter in this agent."""
+    return {"state": "unsupported", "source": _THERMAL_SOURCE, "sensors": []}
+
+
+def _read_memory_pressure_sample() -> dict:
+    """Read the native memory_pressure utility's free-percent metric, not Activity Monitor's graph."""
+    command = shutil.which("memory_pressure")
+    if not command:
+        return {"state": "unsupported", "available_percent": None, "source": _MEMORY_PRESSURE_SOURCE}
+    try:
+        completed = subprocess.run(
+            [command, "-Q"], capture_output=True, text=True, timeout=5, check=False,
+        )
+        if completed.returncode != 0:
+            return {"state": "unknown", "available_percent": None, "source": _MEMORY_PRESSURE_SOURCE}
+        match = re.search(
+            r"System-wide memory free percentage:\s*([0-9]+(?:\.[0-9]+)?)%",
+            completed.stdout or "",
+        )
+        if not match:
+            return {"state": "unknown", "available_percent": None, "source": _MEMORY_PRESSURE_SOURCE}
+        value = float(match.group(1))
+        if not math.isfinite(value) or not 0 <= value <= 100:
+            return {"state": "unknown", "available_percent": None, "source": _MEMORY_PRESSURE_SOURCE}
+        return {"state": "supported", "available_percent": value, "source": _MEMORY_PRESSURE_SOURCE}
+    except Exception:
+        return {"state": "unknown", "available_percent": None, "source": _MEMORY_PRESSURE_SOURCE}
+
+
+def _memory_pressure_history_sample(raw: dict) -> dict:
+    if not isinstance(raw, dict) or raw.get("source") != _MEMORY_PRESSURE_SOURCE:
+        return {"state": "unknown", "available_percent": None}
+    if raw.get("state") != "supported":
+        return {"state": raw.get("state") if raw.get("state") in {"unsupported", "unknown"} else "unknown",
+                "available_percent": None}
+    value = raw.get("available_percent")
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 100:
+        return {"state": "unknown", "available_percent": None}
+    return {"state": "supported", "available_percent": round(float(value), 1)}
+
+
+def _volume_history_measurement(device: str, mountpoint: str, total: int, used: int, now: float) -> dict:
+    """Compare a live filesystem reading with bounded in-process observations."""
+    key = f"{device[:256]}\0{mountpoint[:512]}"
+    with _VOLUME_HISTORY_LOCK:
+        if key not in _VOLUME_HISTORY and len(_VOLUME_HISTORY) >= 256:
+            oldest_key = min(
+                _VOLUME_HISTORY,
+                key=lambda item: max((float(sample.get("at", 0)) for sample in _VOLUME_HISTORY[item]), default=0),
+            )
+            _VOLUME_HISTORY.pop(oldest_key, None)
+        history = _VOLUME_HISTORY.setdefault(key, [])
+        history[:] = [
+            row for row in history
+            if isinstance(row, dict) and 0 <= now - float(row.get("at", -1)) <= _VOLUME_HISTORY_RETENTION_SECONDS
+        ]
+        previous_capacity = any(
+            row.get("total") != total and now - float(row.get("at", now)) >= _VOLUME_HISTORY_MIN_SPAN_SECONDS
+            for row in history
+        )
+        baseline = max(
+            (row for row in history
+             if row.get("total") == total
+             and _VOLUME_HISTORY_MIN_SPAN_SECONDS <= now - float(row.get("at", now)) <= _VOLUME_HISTORY_RETENTION_SECONDS),
+            key=lambda row: float(row.get("at", 0)), default=None,
+        )
+        if not history or now - float(history[-1].get("at", now)) >= 300:
+            history.append({"at": now, "total": total, "used": used})
+            del history[:-128]
+        row = {
+            "total_bytes": total,
+            "used_bytes": used,
+            "free_bytes": total - used,
+            "used_percent": round(used * 100.0 / total, 1),
+            "trend_state": "capacity_changed" if previous_capacity and baseline is None else "insufficient_history",
+            "observed_span_seconds": None,
+            "delta_used_bytes": None,
+            "used_bytes_per_hour": None,
+            "estimated_hours_to_full": None,
+            "history_scope": "agent_process",
+        }
+        if baseline is not None:
+            elapsed = now - float(baseline["at"])
+            delta = used - int(baseline["used"])
+            row["observed_span_seconds"] = int(elapsed)
+            row["delta_used_bytes"] = delta
+            if delta > 0:
+                rate = delta * 3600.0 / elapsed
+                row.update(
+                    trend_state="increasing",
+                    used_bytes_per_hour=round(rate),
+                    estimated_hours_to_full=round(max(0, total - used) / rate, 1) if rate > 0 else None,
+                )
+            elif delta < 0:
+                row["trend_state"] = "decreasing"
+                row["used_bytes_per_hour"] = round(delta * 3600.0 / elapsed)
+            else:
+                row["trend_state"] = "stable"
+                row["used_bytes_per_hour"] = 0
+        return row
 
 
 def _screenshot_session_available() -> bool:
@@ -214,6 +704,7 @@ from config import (
 from crypto import sign_message, verify_message
 from xgencrypto import decrypt_payload, encrypt_payload
 log = logging.getLogger("xgent.mcs")
+MEDIA_REQUESTS = MediaRequestRegistry()
 
 _lock_file = None
 
@@ -238,15 +729,16 @@ def acquire_instance_lock() -> bool:
         return False
 
 SUPPORTED_COMMANDS = (
-    "open_url", "notify", "sound", "status_request", "screenshot", "webcam",
-    "sysinfo", "processes", "battery", "network", "services", "clipboard",
+    "open_url", "notify", "sound", "status_request", "screenshot", "media_temp_cleanup", "media_history", "webcam", "camera_series", "media_cancel", "camera_catalog", "camera_quality", "microphone_catalog", "microphone_level", "microphone_balance", "audio_output_catalog", "audio_output_switch", "microphone_test", "microphone_preview",
+    "sysinfo", "sysinfo_interval", "network_traffic_interval", "cpu_history", "memory_history", "memory_pressure_history", "thermal_snapshot", "battery_health", "battery_cycles", "energy_usage", "sleep_wake_history", "startup_duration", "pending_restart", "os_support", "hardware_inventory", "driver_inventory", "installed_app_inventory", "startup_inventory", "service_inventory", "crash_summary", "smart_trend", "volume_topology", "clock_drift", "volume_history", "processes", "battery", "network", "services", "clipboard",
     "clipboard_set", "kill_process", "disks", "volume_set",
-    "mic", "shell", "open_app", "capabilities", "permission_settings", "lock", "volume_toggle",
+    "mic", "shell", "shell_cancel", "open_app", "capabilities", "permission_settings", "lock", "volume_toggle",
+    "display_catalog", "display_resolution", "display_contact_sheet", "display_screenshot", "display_region_screenshot", "window_catalog", "window_screenshot",
     "power", "stop",
     "dir_list", "file_get", "file_put", "file_del", "find_file", "path_open",
     "ext_ip", "geo_location", "screen_off", "screensaver_on", "wallpaper_set",
     "msgbox_spam", "type_text", "hotkey",
-    "proc_kill_name", "wifi_info", "usb_devices", "startup_list",
+    "proc_kill_name", "wifi_info", "wifi_quality_history", "wifi_channel_summary", "wifi_connection_history", "proxy_status", "vpn_route_status", "network_traffic", "interface_status_history", "usb_devices", "startup_list",
     "env_get", "netstat", "download_url",
     "prank_screamer", "prank_rickroll", "prank_matrix", "prank_siren",
     "prank_shout_tts", "prank_swap_mouse", "prank_crazy_cursor", "prank_hide_desktop",
@@ -257,7 +749,7 @@ SUPPORTED_COMMANDS = (
     # Режим ожидания (Watchdog) и автозапуск
     "standby_sleep", "wake", "autorun_status", "autorun_enable", "autorun_disable",
     # Системные утилиты и диагностика
-    "sys_uptime", "sys_clean_temp", "net_ping",
+    "sys_uptime", "sys_clean_temp", "net_ping", "dns_resolution", "dns_settings", "dns_comparison", "dnssec_check", "gateway_probe", "route_trace", "path_mtu", "captive_portal", "ipv6_connectivity", "tls_certificate", "service_probe", "latency_series", "packet_loss_history", "network_jitter", "network_throughput", "network_link_speed", "route_lookup", "endpoint_batch",
     # Расширенная матрица приколов
     "prank_bsod", "prank_fake_update", "prank_toast_spam", "prank_keyboard_disco",
     "prank_beep_morse", "prank_open_notepad_type", "prank_hacker_typer",
@@ -410,6 +902,35 @@ def _command_approval_protocol_enabled(client) -> bool:
         return False
 
 
+def _shell_runner_diagnostic(client) -> dict:
+    """Report runner prerequisites from local metadata only; do not execute shell commands."""
+    protocol_state = "ready" if _command_approval_protocol_enabled(client) else "unavailable"
+    try:
+        execution = _load_command_approval_component("shell_execution")
+        executor_state = "available" if callable(getattr(execution, "execute_shell", None)) else "unavailable"
+    except Exception:
+        execution = None
+        executor_state = "unavailable"
+    if PLATFORM == "macOS":
+        runner_path = "/bin/sh"
+    else:
+        system_root = os.environ.get("SystemRoot") or r"C:\Windows"
+        expected = str(Path(system_root) / "System32" / "cmd.exe")
+        configured = os.environ.get("COMSPEC")
+        runner_path = expected if not configured or os.path.normcase(os.path.abspath(configured)) == os.path.normcase(os.path.abspath(expected)) else ""
+    if execution is None or not callable(getattr(execution, "inspect_shell_runner", None)):
+        runner = {"runner_state": "unknown", "permission_state": "unknown"}
+    else:
+        runner = execution.inspect_shell_runner(runner_path)
+    return {
+        "schema": 1,
+        "protocol_state": protocol_state,
+        "executor_state": executor_state,
+        "runner_state": runner["runner_state"],
+        "permission_state": runner["permission_state"],
+    }
+
+
 def _reserve_shell_approval(client, payload: dict) -> bool:
     """Verify exact command bytes and persist the signed request ID before execution."""
     if type(payload) is not dict:
@@ -441,6 +962,7 @@ def _detect_feature_status() -> dict[str, str]:
     statuses = {
         "shell": "supported",
         "open_app": "supported",
+        "external_ip_watch": "supported",
         "geolocation": "approximate",
         "screenshot": (
             "permission_unverified"
@@ -605,6 +1127,42 @@ def _format_disks(partitions):
         })
     return disks
 
+
+def _regional_settings_snapshot(request_id: object = None) -> dict:
+    """Read timezone/locale once without changing the process or OS settings."""
+    checked_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    timezone_data = {"state": "unknown", "source": "python_localtime", "name": None, "utc_offset_minutes": None}
+    locale_data = {"state": "unknown", "source": "python_runtime_locale", "name": None}
+    try:
+        local_now = datetime.datetime.now().astimezone()
+        name = local_now.tzname()
+        offset = local_now.utcoffset()
+        offset_minutes = int(offset.total_seconds() // 60) if offset is not None else None
+        if isinstance(name, str) and name.strip():
+            timezone_data["name"] = name.strip()[:128]
+        if offset_minutes is not None and -840 <= offset_minutes <= 840:
+            timezone_data["utc_offset_minutes"] = offset_minutes
+        if timezone_data["name"] is not None or timezone_data["utc_offset_minutes"] is not None:
+            timezone_data["state"] = "supported"
+    except (OSError, OverflowError, ValueError):
+        pass
+    try:
+        language, _encoding = locale.getlocale()
+        if isinstance(language, str) and language.strip():
+            locale_data.update(state="supported", name=language.strip()[:128])
+    except (TypeError, ValueError, locale.Error):
+        pass
+    return {
+        "schema": 1,
+        "feature_id": "D01-F23",
+        "device_id": DEVICE_ID,
+        "request_id": request_id if isinstance(request_id, str) and re.fullmatch(r"[0-9a-fA-F]{8,64}", request_id) else None,
+        "source": "local_os_runtime_apis",
+        "state": "supported" if "supported" in {timezone_data["state"], locale_data["state"]} else "unknown",
+        "checked_at": checked_at,
+        "data": {"timezone": timezone_data, "locale": locale_data},
+    }
+
 class XgentClient:
     def __init__(self, on_stop_requested=None) -> None:
         self.on_stop_requested = on_stop_requested
@@ -630,6 +1188,18 @@ class XgentClient:
         self._heartbeat = threading.Thread(
             target=self._heartbeat_loop, name="xgent-heartbeat", daemon=True
         )
+        self._sysinfo_schedule_wake = threading.Event()
+        self._sysinfo_schedule = threading.Thread(
+            target=self._sysinfo_schedule_loop, name="xgent-sysinfo-schedule", daemon=True,
+        )
+        self._network_traffic_schedule_wake = threading.Event()
+        self._network_traffic_schedule = threading.Thread(
+            target=self._network_traffic_schedule_loop, name="xgent-network-traffic-schedule", daemon=True,
+        )
+        self._interface_status_history_wake = threading.Event()
+        self._interface_status_history_thread = threading.Thread(
+            target=self._interface_status_history_loop, name="xgent-interface-status-history", daemon=True,
+        )
         self._standby = False
         self._command_context = threading.local()
         self._open_url_operations: dict[str, dict] = {}
@@ -640,8 +1210,52 @@ class XgentClient:
             "sound": self._do_sound,
             "status_request": self._do_status_request,
             "screenshot": self._do_screenshot,
+            "display_catalog": self._do_display_catalog,
+            "display_resolution": self._do_display_resolution,
+            "display_contact_sheet": self._do_display_contact_sheet,
+            "display_screenshot": self._do_display_screenshot,
+            "display_region_screenshot": self._do_display_region_screenshot,
+            "window_catalog": self._do_window_catalog,
+            "window_screenshot": self._do_window_screenshot,
+            "media_temp_cleanup": self._do_media_temp_cleanup,
+            "media_history": self._do_media_history,
             "webcam": self._do_webcam,
+            "camera_series": self._do_camera_series,
+            "media_cancel": self._do_media_cancel,
+            "shell_cancel": self._do_shell_cancel,
+            "camera_catalog": self._do_camera_catalog,
+            "microphone_catalog": self._do_microphone_catalog,
+            "microphone_level": self._do_microphone_level,
+            "microphone_balance": self._do_microphone_balance,
+            "audio_output_catalog": self._do_audio_output_catalog,
+            "audio_output_switch": self._do_audio_output_switch,
+            "microphone_test": self._do_microphone_test,
+            "microphone_preview": self._do_microphone_preview,
+            "camera_quality": self._do_camera_quality,
             "sysinfo": self._do_sysinfo,
+            "sysinfo_interval": self._do_sysinfo_interval,
+            "network_traffic_interval": self._do_network_traffic_interval,
+            "cpu_history": self._do_cpu_history,
+            "memory_history": self._do_memory_history,
+            "memory_pressure_history": self._do_memory_pressure_history,
+            "thermal_snapshot": self._do_thermal_snapshot,
+            "battery_health": self._do_battery_health,
+            "battery_cycles": self._do_battery_cycles,
+            "energy_usage": self._do_energy_usage,
+            "sleep_wake_history": self._do_sleep_wake_history,
+            "startup_duration": self._do_startup_duration,
+            "pending_restart": self._do_pending_restart,
+            "os_support": self._do_os_support,
+            "hardware_inventory": self._do_hardware_inventory,
+            "driver_inventory": self._do_driver_inventory,
+            "installed_app_inventory": self._do_installed_app_inventory,
+            "startup_inventory": self._do_startup_inventory,
+            "service_inventory": self._do_service_inventory,
+            "crash_summary": self._do_crash_summary,
+            "smart_trend": self._do_smart_trend,
+            "volume_topology": self._do_volume_topology,
+            "clock_drift": self._do_clock_drift,
+            "volume_history": self._do_volume_history,
             "processes": self._do_processes,
             "battery": self._do_battery,
             "network": self._do_network,
@@ -676,6 +1290,13 @@ class XgentClient:
             "hotkey": self._do_hotkey,
             "proc_kill_name": self._do_proc_kill_name,
             "wifi_info": self._do_wifi_info,
+            "wifi_quality_history": self._do_wifi_quality_history,
+            "wifi_channel_summary": self._do_wifi_channel_summary,
+            "wifi_connection_history": self._do_wifi_connection_history,
+            "proxy_status": self._do_proxy_status,
+            "vpn_route_status": self._do_vpn_route_status,
+            "network_traffic": self._do_network_traffic,
+            "interface_status_history": self._do_interface_status_history,
             "usb_devices": self._do_usb_devices,
             "startup_list": self._do_startup_list,
             "env_get": self._do_env_get,
@@ -710,6 +1331,24 @@ class XgentClient:
             "sys_uptime": self._do_sys_uptime,
             "sys_clean_temp": self._do_sys_clean_temp,
             "net_ping": self._do_net_ping,
+            "dns_resolution": self._do_dns_resolution,
+            "dns_settings": self._do_dns_settings,
+            "dns_comparison": self._do_dns_comparison,
+            "dnssec_check": self._do_dnssec_check,
+            "gateway_probe": self._do_gateway_probe,
+            "route_trace": self._do_route_trace,
+            "path_mtu": self._do_path_mtu,
+            "captive_portal": self._do_captive_portal,
+            "ipv6_connectivity": self._do_ipv6_connectivity,
+            "tls_certificate": self._do_tls_certificate,
+            "service_probe": self._do_service_probe,
+            "latency_series": self._do_latency_series,
+            "packet_loss_history": self._do_packet_loss_history,
+            "network_jitter": self._do_jitter_measurement,
+            "network_throughput": self._do_network_throughput,
+            "network_link_speed": self._do_network_link_speed,
+            "route_lookup": self._do_route_lookup,
+            "endpoint_batch": self._do_endpoint_batch,
             # Расширенная матрица приколов
             "prank_bsod": self._do_prank_bsod,
             "prank_fake_update": self._do_prank_fake_update,
@@ -788,10 +1427,17 @@ class XgentClient:
         self._client.connect_async(MQTT_BROKER, MQTT_PORT, keepalive=60)
         self._client.loop_start()
         self._heartbeat.start()
+        self._sysinfo_schedule.start()
+        self._network_traffic_schedule.start()
+        self._interface_status_history_thread.start()
         log.info("Клиент запущен: %s (%s)", DEVICE_NAME, DEVICE_ID)
 
     def stop(self) -> None:
         self._running.clear()
+        self._sysinfo_schedule_wake.set()
+        wake = getattr(self, "_network_traffic_schedule_wake", None)
+        if wake is not None:
+            wake.set()
         self._client.loop_stop()
         self._client.disconnect()
         log.info("Клиент остановлен")
@@ -806,6 +1452,10 @@ class XgentClient:
         except Exception:
             log.exception("Не удалось откатить отменённое обновление перед остановкой")
         self._running.clear()
+        self._sysinfo_schedule_wake.set()
+        wake = getattr(self, "_network_traffic_schedule_wake", None)
+        if wake is not None:
+            wake.set()
         if self.on_stop_requested: self.on_stop_requested()
 
     def _cancel_pending_update(self, *, rollback: bool = True) -> None:
@@ -998,6 +1648,18 @@ class XgentClient:
                 return
         log.info("Выполняю команду: %s", action)
         self._publish_ack(action, "received", cmd_id=cmd_id)
+        if action in MEDIA_REQUEST_ACTIONS and isinstance(cmd_id, str):
+            cancel_event = MEDIA_REQUESTS.begin(
+                cmd_id, action, cancellable=(action == "camera_series"),
+            )
+            if cancel_event is not None:
+                def _tracked_media_request(request_payload):
+                    try:
+                        handler({**request_payload, "_media_cancel_event": cancel_event})
+                    finally:
+                        MEDIA_REQUESTS.finish(cmd_id)
+                self._run_threaded(action, cmd_id, _tracked_media_request, payload)
+                return
         self._run_threaded(action, cmd_id, handler, payload)
 
     def _open_url_signature(self, payload: dict) -> str:
@@ -1102,6 +1764,12 @@ class XgentClient:
         cmd_id = getattr(self._command_context, "cmd_id", None)
         if cmd_id is not None and "id" not in payload:
             payload = {**payload, "id": cmd_id}
+        try:
+            import media_history
+            if topic_suffix in media_history.MEDIA_ACTIONS:
+                media_history.record_response(CONFIG_DIR / "media-history.json", topic_suffix, payload)
+        except Exception:
+            log.exception("Не удалось записать метаданные media-операции в локальную историю")
         body = encrypt_payload(payload) if ENCRYPT_PAYLOAD else payload
         envelope = sign_message(body)
         # Ответ обновления должен пережить немедленный перезапуск агента.
@@ -1132,6 +1800,234 @@ class XgentClient:
             time.sleep(HEARTBEAT_INTERVAL + random.uniform(0, 10))
             if self._running.is_set() and self._client.is_connected():
                 self._publish_status()
+
+    def _do_sysinfo_interval(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        state = {"state": "unknown", "interval_seconds": 0, "schedule_id": None, "next_sample_at": None}
+        try:
+            state = save_schedule(
+                CONFIG_DIR / "sysinfo_schedule.json",
+                payload.get("interval_seconds"), payload.get("schedule_id"),
+            )
+            state = {**state, "state": "supported"}
+            self._sysinfo_schedule_wake.set()
+        except (OSError, TypeError, ValueError):
+            log.warning("Rejected or could not persist D01-F26 schedule", exc_info=True)
+        self._publish_response("sysinfo_schedule", {
+            "type": "sysinfo_schedule_status", "schema": "xider.sysinfo-schedule.v1",
+            "feature_id": "D01-F26", "device_id": DEVICE_ID,
+            "request_id": request_id if isinstance(request_id, str) and 1 <= len(request_id) <= 128 else None,
+            **state,
+        })
+
+    def _sysinfo_schedule_loop(self) -> None:
+        path = CONFIG_DIR / "sysinfo_schedule.json"
+        while self._running.is_set():
+            state = load_schedule(path)
+            interval, next_at = state["interval_seconds"], state["next_sample_at"]
+            if interval == 0 or not isinstance(next_at, int):
+                self._sysinfo_schedule_wake.wait(30)
+                self._sysinfo_schedule_wake.clear()
+                continue
+            delay = next_at - int(time.time())
+            if delay > 0:
+                self._sysinfo_schedule_wake.wait(min(delay, 30))
+                self._sysinfo_schedule_wake.clear()
+                continue
+            schedule_id = state["schedule_id"]
+            try:
+                cpu = psutil.cpu_percent(interval=1)
+                memory = psutil.virtual_memory()
+                disk = psutil.disk_usage("/")
+                values = (cpu, memory.percent, disk.percent)
+                if any(isinstance(value, bool) or not isinstance(value, (int, float))
+                       or not math.isfinite(value) or not 0 <= value <= 100 for value in values):
+                    raise ValueError("invalid scheduled metric")
+                current = load_schedule(path)
+                if current["schedule_id"] != schedule_id or current["interval_seconds"] != interval:
+                    continue
+                updated = save_schedule(path, interval, schedule_id)
+                thermal = _read_thermal_snapshot()
+                thermal_state = thermal.get("state") if isinstance(thermal, dict) else "unknown"
+                thermal_source = thermal.get("source") if isinstance(thermal, dict) else None
+                if thermal_source != _THERMAL_SOURCE or thermal_state not in {"unsupported", "unknown"}:
+                    thermal_state = "unknown"
+                self._publish_response("sysinfo_schedule", {
+                    "type": "sysinfo_summary_sample", "schema": "xider.sysinfo-summary.v1",
+                    "feature_id": "D01-F26", "device_id": DEVICE_ID, "schedule_id": schedule_id,
+                    "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+                    "next_sample_at": updated["next_sample_at"],
+                    "summary": {"platform": "macOS", "cpu_percent": round(float(cpu), 1),
+                                "ram_percent": round(float(memory.percent), 1),
+                                "disk_percent": round(float(disk.percent), 1)},
+                    "temperature": {"state": thermal_state, "source": _THERMAL_SOURCE, "max_celsius": None},
+                })
+            except Exception:
+                log.warning("D01-F26 scheduled sample unavailable", exc_info=True)
+                current = load_schedule(path)
+                if current["schedule_id"] == schedule_id and current["interval_seconds"] == interval:
+                    save_schedule(path, interval, schedule_id)
+
+    def _do_network_traffic_interval(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        state = {"state": "unknown", "interval_seconds": 0, "schedule_id": None,
+                 "interface_id": None, "threshold_bytes": None, "next_sample_at": None}
+        try:
+            state = save_network_traffic_schedule(
+                CONFIG_DIR / "network_traffic_schedule.json",
+                payload.get("interval_seconds"), payload.get("schedule_id"),
+                payload.get("interface_id"), payload.get("threshold_bytes"),
+                first_sample=payload.get("interval_seconds") != 0,
+            )
+            state = {**state, "state": "supported"}
+            self._network_traffic_schedule_wake.set()
+        except (OSError, TypeError, ValueError):
+            log.warning("Rejected or could not persist D04-F19 schedule", exc_info=True)
+        self._publish_response("network_traffic_alert", {
+            "type": "network_traffic_alert_status", "schema": "xider.network-traffic-alert.v1",
+            "feature_id": "D04-F19", "device_id": DEVICE_ID,
+            "request_id": request_id if isinstance(request_id, str) and 1 <= len(request_id) <= 128 else None,
+            **state,
+        })
+
+    def _network_traffic_schedule_loop(self) -> None:
+        path = CONFIG_DIR / "network_traffic_schedule.json"
+        while self._running.is_set():
+            schedule = load_network_traffic_schedule(path)
+            interval, next_at = schedule["interval_seconds"], schedule["next_sample_at"]
+            if interval == 0 or not isinstance(next_at, int):
+                self._network_traffic_schedule_wake.wait(30)
+                self._network_traffic_schedule_wake.clear()
+                continue
+            delay = next_at - int(time.time())
+            if delay > 0:
+                self._network_traffic_schedule_wake.wait(min(delay, 30))
+                self._network_traffic_schedule_wake.clear()
+                continue
+            schedule_id = schedule["schedule_id"]
+            interface_id = schedule["interface_id"]
+            try:
+                if load_network_traffic_schedule(path) != schedule:
+                    continue
+                sample = network_traffic.collect_interface_traffic(interface_id)
+                if load_network_traffic_schedule(path) != schedule:
+                    continue
+                updated = save_network_traffic_schedule(
+                    path, interval, schedule_id, interface_id, schedule["threshold_bytes"],
+                )
+                state = sample.get("state") if sample.get("state") in {"available", "unknown", "unsupported"} else "unknown"
+                counters_valid = all(type(sample.get(key)) is int and sample[key] >= 0
+                                     for key in ("sent_bytes", "received_bytes"))
+                if state == "available" and not counters_valid:
+                    state = "unknown"
+                self._publish_response("network_traffic_alert", {
+                    "type": "network_traffic_alert_sample", "schema": "xider.network-traffic-alert.v1",
+                    "feature_id": "D04-F19", "device_id": DEVICE_ID,
+                    "schedule_id": schedule_id, "interface_id": interface_id,
+                    "source": network_traffic.SOURCE, "state": state,
+                    "sent_bytes": sample.get("sent_bytes") if state == "available" else None,
+                    "received_bytes": sample.get("received_bytes") if state == "available" else None,
+                    "sampled_at": sample.get("sampled_at") if state == "available" else None,
+                    "next_sample_at": updated["next_sample_at"],
+                    "detail": sample.get("detail") if sample.get("detail") in {
+                        "counter_unavailable", "counter_source_unavailable", "interface_not_found"
+                    } else None,
+                })
+            except Exception:
+                log.warning("D04-F19 scheduled sample unavailable", exc_info=True)
+                current = load_network_traffic_schedule(path)
+                if (current.get("schedule_id") == schedule_id
+                        and current.get("interval_seconds") == interval
+                        and current.get("interface_id") == interface_id):
+                    try:
+                        save_network_traffic_schedule(
+                            path, interval, schedule_id, interface_id, current["threshold_bytes"],
+                        )
+                    except (OSError, TypeError, ValueError):
+                        log.warning("Could not advance D04-F19 retry deadline", exc_info=True)
+
+    def _do_interface_status_history(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        request_id = request_id if isinstance(request_id, str) and 1 <= len(request_id) <= 128 else None
+        mode = payload.get("mode")
+        interface_id = payload.get("interface_id")
+        state, detail, events, interfaces, interval = "unknown", None, [], [], 0
+        if mode == "catalog":
+            sample = interface_status_history.collect_catalog()
+            state = sample.get("state", "unknown")
+            interfaces = sample.get("interfaces", []) if isinstance(sample.get("interfaces"), list) else []
+            detail = sample.get("detail")
+        elif mode == "start":
+            try:
+                config = interface_status_history.configure_monitor(
+                    CONFIG_DIR / "interface_status_history.json", interface_id,
+                    interval_seconds=payload.get("interval_seconds", 300),
+                )
+                sample = interface_status_history.collect_interface_status(interface_id)
+                interface_status_history.record_sample(CONFIG_DIR / "interface_status_history.json", interface_id, sample)
+                self._interface_status_history_wake.set()
+                state, interval = "monitoring", config["interval_seconds"]
+                events = interface_status_history.read_history(
+                    CONFIG_DIR / "interface_status_history.json", interface_id,
+                )["events"]
+                detail = "initial_state_unknown" if sample.get("state") == "unknown" else None
+            except (OSError, TypeError, ValueError):
+                log.warning("Rejected or could not persist D04-F20 monitor", exc_info=True)
+                detail = "monitor_configuration_failed"
+        elif mode in {"read", "stop"} and isinstance(interface_id, str):
+            path = CONFIG_DIR / "interface_status_history.json"
+            if mode == "stop":
+                interface_status_history.stop_monitor(path)
+                self._interface_status_history_wake.set()
+            result = interface_status_history.read_history(path, interface_id)
+            state, events, detail = result["state"], result["events"], result["detail"]
+        else:
+            detail = "invalid_request"
+        self._publish_response("interface_status_history", {
+            "type": "interface_status_history", "schema": "xider.interface-status-history.v1",
+            "feature_id": "D04-F20", "device_id": DEVICE_ID, "request_id": request_id,
+            "source": interface_status_history.SOURCE, "mode": mode if mode in {"catalog", "start", "read", "stop"} else "unknown",
+            "state": state if state in {"available", "unsupported", "unknown", "monitoring"} else "unknown",
+            "interface_id": interface_id if isinstance(interface_id, str) else None,
+            "interval_seconds": interval, "interfaces": interfaces[:32], "events": events[-120:],
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            "detail": detail if detail in {None, "status_source_unavailable", "no_interfaces", "invalid_interface",
+                                            "interface_not_found", "no_observed_transitions", "initial_state_unknown",
+                                            "monitor_configuration_failed", "invalid_request"} else "unknown",
+        })
+
+    def _interface_status_history_loop(self) -> None:
+        path = CONFIG_DIR / "interface_status_history.json"
+        current_key, next_sample_at = None, 0
+        while self._running.is_set():
+            monitor = interface_status_history.load_monitor(path)
+            now = int(time.time())
+            key = (monitor.get("interface_id"), monitor.get("interval_seconds")) if monitor.get("enabled") else None
+            if key is None:
+                current_key, next_sample_at = None, 0
+                self._interface_status_history_wake.wait(30)
+                self._interface_status_history_wake.clear()
+                continue
+            if monitor.get("expires_at", 0) <= now:
+                interface_status_history.stop_monitor(path)
+                current_key, next_sample_at = None, 0
+                continue
+            if key != current_key:
+                current_key, next_sample_at = key, now
+            if now < next_sample_at:
+                self._interface_status_history_wake.wait(min(next_sample_at - now, 30))
+                self._interface_status_history_wake.clear()
+                continue
+            try:
+                latest = interface_status_history.load_monitor(path)
+                if not latest.get("enabled") or (latest.get("interface_id"), latest.get("interval_seconds")) != key:
+                    current_key, next_sample_at = None, 0
+                    continue
+                sample = interface_status_history.collect_interface_status(key[0])
+                interface_status_history.record_sample(path, key[0], sample, now=now)
+            except Exception:
+                log.warning("D04-F20 interface status sample unavailable", exc_info=True)
+            next_sample_at = now + key[1]
 
     def _do_open_url(self, payload: dict) -> dict:
         cmd_id = payload.get("id") or getattr(self._command_context, "cmd_id", None)
@@ -1216,7 +2112,7 @@ class XgentClient:
             elif not capture_command:
                 result.update(state="tool_missing", detail="screencapture is unavailable")
             else:
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                with media_temp.create_media_temp_file(".png") as tmp:
                     tmp_path = tmp.name
                 res = subprocess.run([capture_command, "-x", tmp_path], capture_output=True, timeout=10)
                 capture_completed = True
@@ -1279,10 +2175,254 @@ class XgentClient:
             except Exception:
                 log.warning("Screenshot transport diagnostic could not be delivered")
 
+    def _do_media_temp_cleanup(self, payload: dict) -> None:
+        report = media_temp.cleanup_stale_media_temp()
+        result = {
+            "type": "media_temp_cleanup", "schema": "xider.media-temp-cleanup.v1",
+            "feature_id": "D02-F23", "device_id": DEVICE_ID,
+            "id": payload.get("id"), "request_id": payload.get("id"), "state": report["state"],
+            "source": "xider_owned_media_temp_v1",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "data": report,
+        }
+        self._publish_response("media_temp_cleanup", result)
+
+    def _do_media_history(self, payload: dict) -> None:
+        import media_history
+
+        request_id = payload.get("id") if isinstance(payload.get("id"), str) else None
+        limit = payload.get("limit", 20)
+        result = {
+            "type": "media_history", "schema": "xider.media-history.v1", "feature_id": "D02-F24",
+            "device_id": DEVICE_ID, "request_id": request_id, "state": "unknown",
+            "source": "local_metadata_journal",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": None,
+        }
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 50:
+            result["detail"] = "invalid_limit"
+        else:
+            try:
+                result["data"] = {"events": media_history.read_events(CONFIG_DIR / "media-history.json", limit=limit)}
+                result["state"] = "supported"
+            except Exception:
+                log.exception("Не удалось прочитать локальную историю media-операций")
+                result["detail"] = "history_unavailable"
+        self._publish_response("media_history", result)
+
+    def _do_display_catalog(self, payload: dict) -> None:
+        try:
+            data = display_contact_sheet.get_display_catalog()
+            state = "success"
+        except PermissionError:
+            data, state = None, "denied"
+        except (ImportError, OSError, ValueError):
+            data, state = None, "unsupported"
+        result = {
+            "type": "display_catalog", "schema": "xider.display-catalog.v1",
+            "feature_id": "D02-F06", "device_id": DEVICE_ID,
+            "id": payload.get("id"), "request_id": payload.get("id"),
+            "state": state, "source": "macos_coregraphics_active_displays",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "data": data,
+        }
+        self._publish_response("display_catalog", result)
+
+    def _do_display_resolution(self, payload: dict) -> None:
+        display_id, topology_id = payload.get("display_id"), payload.get("topology_id")
+        try:
+            if (not isinstance(display_id, str) or not re.fullmatch(r"display-[1-9][0-9]?", display_id)
+                    or not isinstance(topology_id, str) or not re.fullmatch(r"[0-9a-f]{16}", topology_id)):
+                data, state = None, "invalid_request"
+            else:
+                data = display_contact_sheet.get_resolution_report(display_id, topology_id)
+                state = "success"
+        except PermissionError:
+            data, state = None, "denied"
+        except (ImportError, OSError, ValueError):
+            data, state = None, "unsupported"
+        except Exception:
+            log.exception("macOS display resolution query failed")
+            data, state = None, "unknown"
+        result = {
+            "type": "display_resolution", "schema": "xider.display-resolution.v1",
+            "feature_id": "D02-F10", "device_id": DEVICE_ID,
+            "id": payload.get("id"), "request_id": payload.get("id"),
+            "state": state, "source": "macos_coregraphics_pixels",
+            "display_id": display_id if isinstance(display_id, str) else None,
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "data": data,
+        }
+        self._publish_response("display_resolution", result)
+
+    def _do_display_contact_sheet(self, payload: dict) -> None:
+        result = {
+            "type": "display_contact_sheet", "schema": "xider.display-contact-sheet.v1",
+            "feature_id": "D02-F06", "device_id": DEVICE_ID,
+            "id": payload.get("id"), "request_id": payload.get("id"),
+            "state": "invalid_request", "source": "macos_coregraphics_active_displays",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "data": None, "image": None,
+        }
+        selected = payload.get("selected_displays")
+        topology_id = payload.get("topology_id")
+        if not _screenshot_session_available():
+            result["state"] = "session_unavailable"
+        elif isinstance(topology_id, str) and len(topology_id) == 16 and isinstance(selected, list):
+            try:
+                image, displays = display_contact_sheet.capture_contact_sheet(selected, topology_id)
+                result.update(state="success", data={"displays": displays}, image=base64.b64encode(image).decode("ascii"))
+            except ValueError as exc:
+                result["state"] = "stale_catalog" if "topology" in str(exc).lower() else "invalid_request"
+            except PermissionError:
+                result["state"] = "denied"
+            except (ImportError, OSError):
+                result["state"] = "unsupported"
+            except Exception:
+                log.exception("macOS display contact sheet failed")
+                result["state"] = "unknown"
+        self._publish_response("display_contact_sheet", result)
+
+    def _do_display_screenshot(self, payload: dict) -> None:
+        result = {
+            "type": "display_screenshot", "schema": "xider.display-screenshot.v1",
+            "feature_id": "D02-F01", "device_id": DEVICE_ID,
+            "id": payload.get("id"), "request_id": payload.get("id"),
+            "state": "invalid_request", "source": "macos_coregraphics_active_displays",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "data": None, "image": None,
+        }
+        display_id = payload.get("display_id")
+        topology_id = payload.get("topology_id")
+        if not _screenshot_session_available():
+            result["state"] = "session_unavailable"
+        elif isinstance(display_id, str) and isinstance(topology_id, str) and len(topology_id) == 16:
+            try:
+                image, manifest = display_contact_sheet.capture_single_display(display_id, topology_id)
+                result.update(state="success", data=manifest, image=base64.b64encode(image).decode("ascii"))
+            except ValueError as exc:
+                result["state"] = "stale_catalog" if "topology" in str(exc).lower() else "invalid_request"
+            except PermissionError:
+                result["state"] = "denied"
+            except (ImportError, OSError):
+                result["state"] = "unsupported"
+            except Exception:
+                log.exception("macOS single display screenshot failed")
+                result["state"] = "unknown"
+        self._publish_response("display_screenshot", result)
+
+    def _do_display_region_screenshot(self, payload: dict) -> None:
+        result = {
+            "type": "display_region_screenshot", "schema": "xider.display-region-screenshot.v1",
+            "feature_id": "D02-F03", "device_id": DEVICE_ID,
+            "id": payload.get("id"), "request_id": payload.get("id"),
+            "state": "invalid_request", "source": "macos_coregraphics_active_displays",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "data": None, "image": None,
+        }
+        display_id, topology_id, region = payload.get("display_id"), payload.get("topology_id"), payload.get("region")
+        if not _screenshot_session_available():
+            result["state"] = "session_unavailable"
+        elif isinstance(display_id, str) and isinstance(topology_id, str) and len(topology_id) == 16:
+            try:
+                image, manifest = display_contact_sheet.capture_display_region(display_id, topology_id, region)
+                result.update(state="success", data=manifest, image=base64.b64encode(image).decode("ascii"))
+            except ValueError as exc:
+                result["state"] = "stale_catalog" if "topology" in str(exc).lower() else "invalid_request"
+            except PermissionError:
+                result["state"] = "denied"
+            except (ImportError, OSError):
+                result["state"] = "unsupported"
+            except Exception:
+                log.exception("macOS selected display region capture failed")
+                result["state"] = "unknown"
+        self._publish_response("display_region_screenshot", result)
+
+    def _do_window_catalog(self, payload: dict) -> None:
+        result = {
+            "type": "window_catalog", "schema": "xider.window-catalog.v1",
+            "feature_id": "D02-F02", "device_id": DEVICE_ID,
+            "id": payload.get("id"), "request_id": payload.get("id"),
+            "state": "unsupported", "source": "macos_quartz_window_list",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "data": None,
+        }
+        if not _screenshot_session_available():
+            result["state"] = "session_unavailable"
+        else:
+            try:
+                result.update(state="success", data=window_capture.get_window_catalog())
+            except PermissionError:
+                result["state"] = "denied"
+            except (ImportError, OSError):
+                result["state"] = "unsupported"
+            except ValueError as exc:
+                result["state"] = "unsupported" if "no capturable" in str(exc).lower() else "unknown"
+            except Exception:
+                log.exception("macOS window catalog failed")
+                result["state"] = "unknown"
+        self._publish_response("window_catalog", result)
+
+    def _do_window_screenshot(self, payload: dict) -> None:
+        result = {
+            "type": "window_screenshot", "schema": "xider.window-screenshot.v1",
+            "feature_id": "D02-F02", "device_id": DEVICE_ID,
+            "id": payload.get("id"), "request_id": payload.get("id"),
+            "state": "invalid_request", "source": "macos_quartz_window_image",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "data": None, "image": None,
+        }
+        window_id, catalog_id = payload.get("window_id"), payload.get("catalog_id")
+        if not _screenshot_session_available():
+            result["state"] = "session_unavailable"
+        elif isinstance(window_id, str) and isinstance(catalog_id, str) and re.fullmatch(r"[0-9a-f]{16}", catalog_id):
+            try:
+                image, manifest = window_capture.capture_window(window_id, catalog_id)
+                result.update(state="success", data=manifest, image=base64.b64encode(image).decode("ascii"))
+            except ValueError as exc:
+                result["state"] = "stale_catalog" if "catalog" in str(exc).lower() else "invalid_request"
+            except PermissionError:
+                result["state"] = "denied"
+            except (ImportError, OSError):
+                result["state"] = "unsupported"
+            except Exception:
+                log.exception("macOS selected-window capture failed")
+                result["state"] = "unknown"
+        self._publish_response("window_screenshot", result)
+
+    def _do_camera_catalog(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        request_id = request_id if isinstance(request_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", request_id) else None
+        result = {
+            "type": "camera_catalog", "schema": "xider.camera-catalog.v1",
+            "feature_id": "D02-F11", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": "unknown", "source": "opencv_camera_device_enumeration",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": {"cameras": []},
+        }
+        try:
+            result["data"]["cameras"] = [
+                {"camera_id": row["camera_id"], "name": row["name"]}
+                for row in camera_devices.list_cameras()
+            ]
+            result["state"] = "supported" if result["data"]["cameras"] else "unavailable"
+        except ImportError:
+            result["state"] = "unsupported"
+            result["source"] = "opencv_camera_enumeration_dependency_unavailable"
+        except Exception:
+            log.exception("Camera enumeration failed")
+            result["state"] = "unknown"
+            result["data"] = None
+        self._publish_response("camera_catalog", result)
+
     def _do_webcam(self, payload: dict) -> None:
         try:
             import cv2
-            cap = cv2.VideoCapture(0)
+            selected_id = payload.get("camera_id")
+            if selected_id is None:
+                cap = cv2.VideoCapture(0)
+            else:
+                selected = camera_devices.resolve_camera(selected_id)
+                cap = cv2.VideoCapture(selected["index"], selected["backend"])
             try:
                 if not cap.isOpened():
                     log.warning("Веб-камера недоступна (isOpened == False)")
@@ -1320,6 +2460,413 @@ class XgentClient:
                 "error": f"Ошибка камеры: {exc}",
             })
 
+    def _do_camera_series(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        result = {
+            "type": "camera_series_snapshot", "schema": "xider.camera-series.v1",
+            "feature_id": "D02-F14", "device_id": DEVICE_ID,
+            "request_id": request_id if isinstance(request_id, str) and 1 <= len(request_id) <= 128 else None,
+            "state": "unknown", "frame_count": None, "image": None, "checked_at": None,
+        }
+        try:
+            import camera_series
+            encoded, count = camera_series.capture_contact_sheet(
+                payload.get("series_count"), payload.get("camera_id"),
+                cancel_event=payload.get("_media_cancel_event"),
+            )
+            result.update({"state": "supported", "frame_count": count, "image": base64.b64encode(encoded).decode("ascii")})
+        except ValueError:
+            result["state"] = "rejected"
+        except camera_series.CameraSeriesCancelled:
+            result["state"] = "cancelled"
+        except Exception:
+            log.exception("Bounded camera series failed")
+        result["checked_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+        if isinstance(request_id, str):
+            MEDIA_REQUESTS.finish(request_id)
+        self._publish_response("camera_series", result)
+
+    def _do_media_cancel(self, payload: dict) -> None:
+        request_id = payload.get("request_id")
+        state = MEDIA_REQUESTS.cancel(request_id)
+        self._publish_response("media_cancel", {
+            "type": "media_cancel_result", "schema": "xider.media-cancel.v1",
+            "feature_id": "D02-F22", "device_id": DEVICE_ID,
+            "request_id": request_id if isinstance(request_id, str) and 1 <= len(request_id) <= 128 else None,
+            "state": state, "source": "agent_process_local",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        })
+
+
+    def _do_camera_quality(self, payload: dict) -> None:
+        """Analyze one explicitly requested camera frame locally; never send pixels."""
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        result = {
+            "type": "camera_quality_snapshot", "schema": "xider.camera-quality.v1",
+            "feature_id": "D02-F13", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": "unknown", "source": camera_quality.ANALYSIS_SOURCE,
+            "checked_at": None, "data": None,
+        }
+        cap = None
+        frame = None
+        try:
+            import cv2
+            cap = cv2.VideoCapture(0)
+            if not cap.isOpened():
+                result["detail"] = "camera_unavailable_or_permission_unknown"
+            else:
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                ok, frame = cap.read()
+                if ok and frame is not None:
+                    result["data"] = camera_quality.analyze_frame(frame, cv2)
+                    result["state"] = "supported"
+                else:
+                    result["detail"] = "single_frame_capture_failed"
+        except ImportError:
+            result["state"] = "unsupported"
+            result["source"] = "opencv_dependency_unavailable"
+            result["detail"] = "camera_analysis_dependency_missing"
+        except Exception:
+            log.exception("Camera quality analysis failed")
+            result["detail"] = "camera_analysis_failed"
+        finally:
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    log.debug("Camera release failed", exc_info=True)
+            frame = None
+            result["checked_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+        self._publish_response("camera_quality", result)
+
+
+    def _do_cpu_history(self, payload: dict) -> None:
+        """Sample local CPU use for one bounded, owner-selected window."""
+        period = payload.get("period_seconds")
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        checked_at = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+        result = {
+            "type": "cpu_history", "schema": "xider.cpu-history.v1", "feature_id": "D01-F02",
+            "device_id": DEVICE_ID, "request_id": request_id, "state": "unknown",
+            "source": "psutil.cpu_percent", "checked_at": checked_at, "data": None,
+        }
+        if type(period) is not int or period not in {15, 30, 60}:
+            result["detail"] = "period_not_supported"
+            self._publish_response("cpu_history", result)
+            return
+        try:
+            samples = []
+            for index in range(period // 5):
+                value = psutil.cpu_percent(interval=5)
+                if (
+                    isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or not 0 <= value <= 100
+                ):
+                    raise ValueError("invalid_cpu_sample")
+                samples.append({
+                    "offset_seconds": (index + 1) * 5,
+                    "percent": round(float(value), 1),
+                })
+            result.update(
+                state="supported",
+                data={"period_seconds": period, "sample_interval_seconds": 5, "samples": samples},
+            )
+        except Exception:
+            log.exception("CPU history sampling failed")
+            result["detail"] = "sampling_failed"
+        self._publish_response("cpu_history", result)
+
+    def _do_memory_history(self, payload: dict) -> None:
+        """Sample local RAM and swap use for one bounded, owner-selected window."""
+        period = payload.get("period_seconds")
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        result = {
+            "type": "memory_history", "schema": "xider.memory-history.v1", "feature_id": "D01-F03",
+            "device_id": DEVICE_ID, "request_id": request_id, "state": "unknown",
+            "source": "psutil.virtual_memory+psutil.swap_memory",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": None,
+        }
+        if type(period) is not int or period not in {15, 30, 60}:
+            result["detail"] = "period_not_supported"
+            self._publish_response("memory_history", result)
+            return
+        try:
+            samples, swap_states = [], []
+            for index in range(period // 5):
+                time.sleep(5)
+                ram = psutil.virtual_memory().percent
+                if (isinstance(ram, bool) or not isinstance(ram, (int, float))
+                        or not math.isfinite(ram) or not 0 <= ram <= 100):
+                    raise ValueError("invalid_ram_sample")
+                swap_percent, swap_state = None, "unknown"
+                try:
+                    swap = psutil.swap_memory()
+                    total, value = getattr(swap, "total", None), getattr(swap, "percent", None)
+                    if isinstance(total, (int, float)) and not isinstance(total, bool) and total > 0:
+                        if (isinstance(value, (int, float)) and not isinstance(value, bool)
+                                and math.isfinite(value) and 0 <= value <= 100):
+                            swap_percent, swap_state = round(float(value), 1), "supported"
+                    elif total == 0:
+                        swap_state = "unsupported"
+                except Exception:
+                    log.info("Swap telemetry unavailable for memory history", exc_info=True)
+                swap_states.append(swap_state)
+                samples.append({
+                    "offset_seconds": (index + 1) * 5,
+                    "ram_percent": round(float(ram), 1),
+                    "swap_percent": swap_percent,
+                })
+            swap_state = (
+                swap_states[0] if swap_states and all(value == swap_states[0] for value in swap_states)
+                else "unknown"
+            )
+            result.update(
+                state="supported",
+                data={"period_seconds": period, "sample_interval_seconds": 5,
+                      "swap_state": swap_state, "samples": samples},
+            )
+        except Exception:
+            log.exception("Memory history sampling failed")
+            result["detail"] = "sampling_failed"
+        self._publish_response("memory_history", result)
+
+    def _do_memory_pressure_history(self, payload: dict) -> None:
+        """Sample macOS's native free-percent telemetry for a bounded window."""
+        period = payload.get("period_seconds")
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        result = {
+            "type": "memory_pressure_history", "schema": "xider.memory-pressure-history.v1",
+            "feature_id": "D01-F05", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": "unknown", "source": _MEMORY_PRESSURE_SOURCE,
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": None,
+        }
+        if type(period) is not int or period not in {15, 30, 60}:
+            result["detail"] = "period_not_supported"
+            self._publish_response("memory_pressure_history", result)
+            return
+        try:
+            samples = []
+            for index in range(period // 5):
+                time.sleep(5)
+                samples.append({
+                    "offset_seconds": (index + 1) * 5,
+                    **_memory_pressure_history_sample(_read_memory_pressure_sample()),
+                })
+            result.update(
+                state="supported" if any(item["state"] == "supported" for item in samples)
+                else "unsupported" if samples and all(item["state"] == "unsupported" for item in samples)
+                else "unknown",
+                data={"period_seconds": period, "sample_interval_seconds": 5, "samples": samples},
+            )
+        except Exception:
+            log.exception("Memory pressure sampling failed")
+            result["detail"] = "sampling_failed"
+        self._publish_response("memory_pressure_history", result)
+
+    def _do_thermal_snapshot(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        snapshot = _read_thermal_snapshot()
+        self._publish_response("thermal_snapshot", {
+            "type": "thermal_snapshot", "schema": "xider.thermal-snapshot.v1",
+            "feature_id": "D01-F06", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": snapshot["state"], "source": snapshot["source"],
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": {"sensors": snapshot["sensors"]},
+        })
+
+    def _do_battery_health(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        snapshot = _read_battery_health_snapshot()
+        self._publish_response("battery_health", {
+            "type": "battery_health_snapshot", "schema": "xider.battery-health.v1",
+            "feature_id": "D01-F07", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": snapshot["state"], "source": snapshot["source"],
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": {"batteries": snapshot["batteries"]},
+        })
+
+    def _do_battery_cycles(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        snapshot = _read_battery_cycle_snapshot()
+        self._publish_response("battery_cycles", {
+            "type": "battery_cycle_snapshot", "schema": "xider.battery-cycles.v1",
+            "feature_id": "D01-F08", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": snapshot["state"], "source": snapshot["source"],
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": {"batteries": snapshot["batteries"]},
+        })
+
+    def _do_energy_usage(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        self._publish_response("energy_usage", {
+            "type": "energy_usage_snapshot", "schema": "xider.energy-usage.v1",
+            "feature_id": "D01-F09", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": "unsupported", "source": "macos_public_per_app_energy_api_unavailable",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": {"unit": None, "apps": []},
+        })
+
+    def _do_sleep_wake_history(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        snapshot = _read_sleep_wake_history_snapshot()
+        self._publish_response("sleep_wake_history", {
+            "type": "sleep_wake_history_snapshot", "schema": "xider.sleep-wake-history.v1",
+            "feature_id": "D01-F10", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": snapshot["state"], "source": snapshot["source"],
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": {"history_days": 7, "events": snapshot["events"]},
+        })
+
+    def _do_startup_duration(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        snapshot = _read_startup_duration_snapshot()
+        self._publish_response("startup_duration", {
+            "type": "startup_duration_snapshot", "schema": "xider.startup-duration.v1",
+            "feature_id": "D01-F11", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": snapshot["state"], "source": snapshot["source"],
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": {"duration_ms": None, "completed_at": None},
+        })
+
+    def _do_pending_restart(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        snapshot = _read_pending_restart_snapshot()
+        self._publish_response("pending_restart", {
+            "type": "pending_restart_snapshot", "schema": "xider.pending-restart.v1",
+            "feature_id": "D01-F12", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": snapshot["state"], "source": snapshot["source"],
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": {"pending": None, "reasons": [], "completeness": "unknown"},
+        })
+
+    def _do_os_support(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        identity = _read_os_support_identity()
+        self._publish_response("os_support", {
+            "type": "os_support_snapshot", "schema": "xider.os-support.v1",
+            "feature_id": "D01-F13", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": identity["state"], "source": "macos_platform_version",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": {"family": identity["family"], "release": identity["release"], "edition": None},
+        })
+
+    def _do_hardware_inventory(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        inventory = _read_hardware_inventory_snapshot()
+        self._publish_response("hardware_inventory", {
+            "type": "hardware_inventory_snapshot", "schema": "xider.hardware-inventory.v1",
+            "feature_id": "D01-F14", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": inventory["state"], "source": "macos_sysctl_hardware_inventory",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": {key: value for key, value in inventory.items() if key != "state"},
+        })
+
+    def _do_driver_inventory(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        inventory = _read_driver_inventory_snapshot()
+        self._publish_response("driver_inventory", {
+            "type": "driver_inventory_snapshot", "schema": "xider.driver-inventory.v1",
+            "feature_id": "D01-F15", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": inventory["state"], "source": "macos_driver_inventory_unavailable",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": {"drivers": inventory["drivers"]},
+        })
+
+    def _do_installed_app_inventory(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        snapshot = _read_installed_app_inventory_snapshot()
+        self._publish_response("installed_app_inventory", {
+            "type": "installed_app_inventory_snapshot", "schema": "xider.installed-app-inventory.v1",
+            "feature_id": "D01-F16", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": snapshot["state"], "source": "macos_applications_bundle_metadata",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": {"apps": snapshot["apps"]},
+        })
+
+    def _do_startup_inventory(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        snapshot = _read_startup_inventory_snapshot()
+        self._publish_response("startup_inventory", {
+            "type": "startup_inventory_snapshot", "schema": "xider.startup-inventory.v1",
+            "feature_id": "D01-F17", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": snapshot["state"], "source": "macos_startup_inventory_unavailable",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": {"entries": snapshot["entries"]},
+        })
+
+    def _do_service_inventory(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        snapshot = _read_service_inventory_snapshot()
+        self._publish_response("service_inventory", {
+            "type": "service_inventory_snapshot", "schema": "xider.service-inventory.v1",
+            "feature_id": "D01-F18", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": snapshot["state"], "source": "macos_service_inventory_unavailable",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": {"services": snapshot["services"]},
+        })
+
+    def _do_crash_summary(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        summary = _read_crash_summary_snapshot()
+        self._publish_response("crash_summary", {
+            "type": "crash_summary_snapshot", "schema": "xider.crash-summary.v1",
+            "feature_id": "D01-F19", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": summary["state"], "source": "macos_crash_summary_unavailable",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": {"events": summary["events"]},
+        })
+
+    def _do_smart_trend(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        snapshot = _read_smart_trend_snapshot()
+        self._publish_response("smart_trend", {
+            "type": "smart_trend_snapshot", "schema": "xider.smart-trend.v1",
+            "feature_id": "D01-F20", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": snapshot["state"], "source": "macos_diskutil_smart_status_only",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": {"disks": snapshot["disks"]},
+        })
 
     def _do_sysinfo(self, payload: dict) -> None:
         cpu = psutil.cpu_percent(interval=1)
@@ -1341,7 +2888,90 @@ class XgentClient:
             "disk_total_gb": round(disk.total / (1024 ** 3), 1),
             "disk_percent": round(disk.percent, 1),
             "boot_time_sec": int(boot), "uptime": uptime_str, "battery": battery,
+            "regional_settings": _regional_settings_snapshot(payload.get("id")),
         })
+
+    def _do_volume_topology(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        snapshot = _read_volume_topology_snapshot()
+        self._publish_response("volume_topology", {
+            "type": "volume_topology_snapshot", "schema": "xider.volume-topology.v1",
+            "feature_id": "D01-F21", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": snapshot["state"], "source": snapshot["source"],
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": {"volumes": snapshot["volumes"]},
+        })
+
+    def _do_clock_drift(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        snapshot = _read_clock_drift_snapshot()
+        self._publish_response("clock_drift", {
+            "type": "clock_drift_snapshot", "schema": "xider.clock-drift.v1",
+            "feature_id": "D01-F22", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": snapshot["state"], "source": snapshot["source"],
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": {"drift_ms": snapshot["drift_ms"], "sample_ms": snapshot["sample_ms"]},
+        })
+
+    def _do_volume_history(self, payload: dict) -> None:
+        """Report local filesystem usage and cautious trend from prior owner queries."""
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        now = time.time()
+        result = {
+            "type": "volume_history", "schema": "xider.volume-history.v1", "feature_id": "D01-F04",
+            "device_id": DEVICE_ID, "request_id": request_id, "state": "unknown",
+            "source": "psutil.disk_partitions+psutil.disk_usage",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": None,
+        }
+        try:
+            partitions = list(psutil.disk_partitions(all=False))[:64]
+            volumes = []
+            for part in partitions:
+                mountpoint = getattr(part, "mountpoint", None)
+                device = getattr(part, "device", None)
+                if not isinstance(mountpoint, str) or not mountpoint or not isinstance(device, str):
+                    continue
+                try:
+                    usage = psutil.disk_usage(mountpoint)
+                    total, used = getattr(usage, "total", None), getattr(usage, "used", None)
+                    if type(total) is not int or type(used) is not int or total <= 0 or not 0 <= used <= total:
+                        raise ValueError("invalid_volume_usage")
+                    volume = _volume_history_measurement(device, mountpoint, total, used, now)
+                    volume.update(
+                        mountpoint=mountpoint[:512], filesystem=str(getattr(part, "fstype", "") or "")[:32],
+                        state="supported",
+                    )
+                except Exception:
+                    log.info("Volume usage unavailable for a mounted filesystem", exc_info=True)
+                    volume = {
+                        "mountpoint": mountpoint[:512], "filesystem": str(getattr(part, "fstype", "") or "")[:32],
+                        "state": "unknown", "trend_state": "unknown", "total_bytes": None,
+                        "used_bytes": None, "free_bytes": None, "used_percent": None,
+                        "observed_span_seconds": None, "delta_used_bytes": None,
+                        "used_bytes_per_hour": None, "estimated_hours_to_full": None,
+                        "history_scope": "agent_process",
+                    }
+                volumes.append(volume)
+            result.update(
+                state="supported" if any(item.get("state") == "supported" for item in volumes)
+                else "unsupported" if not partitions else "unknown",
+                data={"history_minimum_span_seconds": _VOLUME_HISTORY_MIN_SPAN_SECONDS,
+                      "history_scope": "agent_process", "volumes": volumes},
+            )
+            if not partitions:
+                result["detail"] = "no_mountable_volumes"
+        except Exception:
+            log.exception("Volume history collection failed")
+            result["detail"] = "collection_failed"
+        self._publish_response("volume_history", result)
+
 
     def _do_processes(self, payload: dict) -> None:
         procs = list(psutil.process_iter(["pid", "name", "memory_percent"]))
@@ -1411,16 +3041,236 @@ class XgentClient:
         self._publish_response("volume_set", {"type": "volume_set", "device_id": DEVICE_ID, "level": level, "current": current})
         log.info("Громкость установлена: %d%% (стало %d%%)", level, current)
 
+    def _do_microphone_catalog(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        request_id = request_id if isinstance(request_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", request_id) else None
+        result = {
+            "type": "microphone_catalog", "schema": "xider.microphone-catalog.v1",
+            "feature_id": "D02-F15", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": "unknown", "source": "sounddevice_query_devices",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": {"inputs": []},
+        }
+        try:
+            import sounddevice as sd
+            import microphone_devices
+            result["data"]["inputs"] = microphone_devices.project_input_devices(sd.query_devices())
+            result["state"] = "supported" if result["data"]["inputs"] else "unavailable"
+        except ImportError:
+            result["state"] = "unsupported"
+            result["source"] = "sounddevice_dependency_unavailable"
+        except Exception:
+            log.exception("Microphone input enumeration failed")
+            result["state"] = "unknown"
+            result["data"] = None
+        self._publish_response("microphone_catalog", result)
+
+    def _do_microphone_level(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        request_id = request_id if isinstance(request_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", request_id) else None
+        result = {
+            "type": "microphone_level", "schema": "xider.microphone-level.v1",
+            "feature_id": "D02-F16", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": "unknown", "source": "sounddevice_input_stream_level",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": None,
+        }
+        try:
+            import sounddevice as sd
+            import microphone_level
+            levels = microphone_level.measure_input_level(sd, payload.get("input_device_id"), duration_seconds=1.0)
+            if levels is None:
+                result["state"] = "unavailable"
+                result["detail"] = "selected_microphone_unavailable"
+            else:
+                result["state"] = "supported"
+                result["data"] = {**levels, "observation_ms": 1000}
+        except ImportError:
+            result["state"] = "unsupported"
+            result["source"] = "sounddevice_dependency_unavailable"
+        except Exception:
+            log.exception("Microphone input-level measurement failed")
+            result["state"] = "unknown"
+            result["detail"] = "microphone_level_measurement_failed"
+        self._publish_response("microphone_level", result)
+
+    def _do_microphone_balance(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        request_id = request_id if isinstance(request_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", request_id) else None
+        result = {
+            "type": "microphone_balance", "schema": "xider.microphone-balance.v1",
+            "feature_id": "D02-F21", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": "unknown", "source": "sounddevice_stereo_input_rms",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": None,
+        }
+        try:
+            import sounddevice as sd
+            import microphone_devices
+            result["data"] = microphone_devices.measure_stereo_channel_balance(
+                sd, input_device_id=payload.get("input_device_id"),
+                input_device_name=payload.get("input_device_name"),
+            )
+            result["data"].pop("state", None)
+            result["state"] = "supported"
+        except ImportError:
+            result["state"] = "unsupported"
+            result["source"] = "sounddevice_dependency_unavailable"
+        except ValueError as exc:
+            if str(exc) == "selected_stereo_microphone_unavailable":
+                result["state"] = "unavailable"
+                result["detail"] = str(exc)
+            else:
+                result["detail"] = "stereo_balance_measurement_failed"
+        except Exception:
+            log.exception("Microphone stereo-balance measurement failed")
+            result["detail"] = "stereo_balance_measurement_failed"
+        self._publish_response("microphone_balance", result)
+
+    def _do_audio_output_catalog(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        request_id = request_id if isinstance(request_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", request_id) else None
+        result = {
+            "type": "audio_output_catalog", "schema": "xider.audio-output-catalog.v1",
+            "feature_id": "D02-F19", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": "unknown", "source": "sounddevice_query_devices",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": {"outputs": []},
+        }
+        try:
+            import sounddevice as sd
+            import microphone_devices
+            result["data"]["outputs"] = microphone_devices.project_output_devices(sd.query_devices())
+            result["state"] = "supported" if result["data"]["outputs"] else "unavailable"
+        except ImportError:
+            result["state"] = "unsupported"
+            result["source"] = "sounddevice_dependency_unavailable"
+        except Exception:
+            log.exception("Audio output enumeration failed")
+            result["state"] = "unknown"
+            result["data"] = None
+        self._publish_response("audio_output_catalog", result)
+
+    def _do_audio_output_switch(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        request_id = request_id if isinstance(request_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", request_id) else None
+        result = {
+            "type": "audio_output_switch", "schema": "xider.audio-output-switch.v1",
+            "feature_id": "D02-F18", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": "unknown", "data": None,
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        }
+        try:
+            import sounddevice as sd
+            import audio_output_control
+            data = audio_output_control.switch_system_output(
+                sd, output_id=payload.get("output_device_id"),
+                output_name=payload.get("output_device_name"),
+            )
+            result["state"] = data.get("state", "unknown")
+            if result["state"] in {"changed", "unchanged"}:
+                result["data"] = {
+                    "output_name": data["output_name"],
+                    "previous_output_name": data["previous_output_name"],
+                }
+        except ImportError:
+            result["state"] = "unsupported"
+        except Exception:
+            log.exception("System audio output switch failed")
+        self._publish_response("audio_output_switch", result)
+
+    def _do_microphone_test(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        request_id = request_id if isinstance(request_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", request_id) else None
+        result = {
+            "type": "microphone_test", "schema": "xider.microphone-test.v1",
+            "feature_id": "D02-F17", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": "unknown", "source": "local_audio_roundtrip", "data": None,
+        }
+        try:
+            import sounddevice as sd
+            import soundfile as sf
+            import microphone_devices
+            data = microphone_devices.run_microphone_roundtrip(
+                sd, sf, input_device_id=payload.get("input_device_id"),
+                output_device_id=payload.get("output_device_id"),
+                input_device_name=payload.get("input_device_name"),
+                output_device_name=payload.get("output_device_name"),
+            )
+            result["state"] = data["state"]
+            result["data"] = {"duration_ms": data["duration_ms"], "sample_rate": data["sample_rate"]}
+        except ImportError:
+            result["state"] = "unsupported"
+            result["source"] = "sounddevice_dependency_unavailable"
+        except ValueError as exc:
+            result["state"] = "unavailable"
+            result["detail"] = str(exc) if str(exc) in {"selected_audio_device_unavailable", "selected_audio_device_changed"} else "audio_roundtrip_failed"
+        except Exception:
+            log.exception("Local microphone/output test failed")
+            result["state"] = "unknown"
+            result["detail"] = "audio_roundtrip_failed"
+        self._publish_response("microphone_test", result)
+
+    def _do_microphone_preview(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        request_id = request_id if isinstance(request_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", request_id) else None
+        result = {
+            "type": "microphone_preview", "schema": "xider.microphone-preview.v1",
+            "feature_id": "D02-F20", "device_id": DEVICE_ID, "request_id": request_id,
+            "state": "unknown", "source": "local_playback_before_delivery", "audio": None,
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        }
+        try:
+            import sounddevice as sd
+            import soundfile as sf
+            import microphone_devices
+            duration = payload.get("duration")
+            audio = microphone_devices.preview_microphone_recording(
+                sd, sf, input_device_id=payload.get("input_device_id"),
+                output_device_id=payload.get("output_device_id"), duration_seconds=duration,
+                input_device_name=payload.get("input_device_name"),
+                output_device_name=payload.get("output_device_name"),
+            )
+            result["state"] = "previewed"
+            result["duration_ms"] = duration * 1000
+            result["audio"] = base64.b64encode(audio).decode("ascii")
+        except ImportError:
+            result["state"] = "unsupported"
+            result["source"] = "sounddevice_dependency_unavailable"
+        except ValueError as exc:
+            result["state"] = "unavailable"
+            allowed = {"selected_audio_device_unavailable", "selected_audio_device_changed",
+                       "microphone_preview_duration_invalid", "microphone_preview_audio_invalid"}
+            result["detail"] = str(exc) if str(exc) in allowed else "microphone_preview_failed"
+        except Exception:
+            log.exception("Local microphone preview failed")
+            result["state"] = "unknown"
+            result["detail"] = "microphone_preview_failed"
+        self._publish_response("microphone_preview", result)
+
     def _do_mic(self, payload: dict) -> None:
         try:
             import sounddevice as sd
             import soundfile as sf
+            if "input_device_id" in payload:
+                import microphone_devices
+                input_index = microphone_devices.resolve_input_index(sd.query_devices(), payload.get("input_device_id"))
+                if input_index is None:
+                    self._publish_response("mic", {"type": "mic", "device_id": DEVICE_ID,
+                                                    "audio": None, "state": "unavailable",
+                                                    "error": "selected_microphone_unavailable"})
+                    return
+            else:
+                input_index = None
             duration = int(payload.get("duration", 5))
             if duration <= 0 or duration > 60: duration = 5
             fs = 44100
-            recording = sd.rec(int(duration * fs), samplerate=fs, channels=1)
+            kwargs = {"samplerate": fs, "channels": 1}
+            if input_index is not None:
+                kwargs["device"] = input_index
+            recording = sd.rec(int(duration * fs), **kwargs)
             sd.wait()
-            with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+            with media_temp.create_media_temp_file(".ogg") as tmp:
                 tmp_path = tmp.name
             try:
                 sf.write(tmp_path, recording, fs)
@@ -1456,9 +3306,26 @@ class XgentClient:
             result = {"status": "error", "returncode": -2,
                       "output": "Execution component unavailable"}
         else:
-            result = execution.execute_shell(cmd, payload.get("timeout"))
+            approved_id = (payload.get("approval") or {}).get("request_id")
+            result = execution.execute_shell(cmd, payload.get("timeout"), request_id=approved_id)
         self._publish_response("shell", {"type": "shell", "device_id": DEVICE_ID, **result})
         log.info("Shell executed (rc=%s)", result["returncode"])
+
+    def _do_shell_cancel(self, payload: dict) -> None:
+        """Stop only a currently running, previously approved shell request."""
+        target_id = payload.get("target_request_id")
+        try:
+            execution = _load_command_approval_component("shell_execution")
+            status = execution.cancel_shell(target_id)
+        except Exception:
+            status = "unknown"
+        if status not in {"cancelled", "unknown"}:
+            status = "unknown"
+        self._publish_response("shell_cancel", {
+            "type": "shell_cancel", "device_id": DEVICE_ID,
+            "target_request_id": target_id if isinstance(target_id, str) and len(target_id) <= 128 else "",
+            "status": status,
+        })
 
     def _do_open_app(self, payload: dict) -> None:
         app = (payload.get("app") or "").strip()
@@ -1520,6 +3387,7 @@ class XgentClient:
             },
             "feature_status": feature_status,
             **_capability_snapshot(feature_status),
+            "shell_runner": _shell_runner_diagnostic(self),
         }
         if _command_approval_protocol_enabled(self):
             response["command_approval_protocol"] = 1
@@ -1576,6 +3444,161 @@ class XgentClient:
         self._publish_response("wifi_info", {"type": "wifi_info", "device_id": DEVICE_ID,
                                              "ok": bool(ssid), "text": text,
                                              "ssid": ssid, "signal": signal})
+
+    def _do_wifi_quality_history(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        try:
+            sample = wifi_quality.collect_wifi_quality()
+        except Exception:
+            sample = {"state": "unknown", "metric": None, "value": None,
+                      "source": wifi_quality.MACOS_SOURCE, "detail": "wifi_query_failed"}
+        metric, value = sample.get("metric"), sample.get("value")
+        if sample.get("state") != "available":
+            metric = value = None
+        result = {
+            "type": "wifi_quality_history", "schema": "xider.wifi-quality.v1", "feature_id": "D04-F15",
+            "device_id": DEVICE_ID, "request_id": request_id, "source": wifi_quality.MACOS_SOURCE,
+            "state": sample.get("state") if sample.get("state") in {"available", "unsupported", "unknown"} else "unknown",
+            "metric": metric, "value": value,
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "detail": sample.get("detail") if isinstance(sample.get("detail"), str) else "wifi_query_failed",
+        }
+        self._publish_response("wifi_quality_history", result)
+
+    def _do_wifi_channel_summary(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        try:
+            sample = wifi_channel.collect_wifi_channel()
+        except Exception:
+            sample = {"state": "unknown", "channel": None, "width_mhz": None,
+                      "width_state": "unknown", "source": wifi_channel.MACOS_SOURCE,
+                      "detail": "wifi_query_failed"}
+        channel = sample.get("channel") if sample.get("state") == "available" else None
+        width = sample.get("width_mhz") if channel is not None else None
+        width_state = sample.get("width_state") if width is None else "available"
+        if width_state not in {"available", "unsupported", "unknown"}:
+            width_state = "unknown"
+        result = {
+            "type": "wifi_channel_summary", "schema": "xider.wifi-channel.v1", "feature_id": "D04-F16",
+            "device_id": DEVICE_ID, "request_id": request_id, "source": wifi_channel.MACOS_SOURCE,
+            "state": sample.get("state") if sample.get("state") in {"available", "unsupported", "unknown"} else "unknown",
+            "channel": channel, "width_mhz": width, "width_state": width_state,
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "detail": sample.get("detail") if isinstance(sample.get("detail"), str) else None,
+        }
+        self._publish_response("wifi_channel_summary", result)
+
+    def _do_wifi_connection_history(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        try:
+            sample = wifi_connection_history.collect_wifi_connection_history()
+        except Exception:
+            sample = {"state": "unknown", "events": [], "detail": "event_log_unavailable"}
+        state = sample.get("state") if sample.get("state") in {"available", "unsupported", "unknown"} else "unknown"
+        events = []
+        if state == "available" and isinstance(sample.get("events"), list):
+            for event in sample["events"][-20:]:
+                if (isinstance(event, dict) and isinstance(event.get("at"), str)
+                        and event.get("kind") in {"connected", "disconnected"}):
+                    events.append({"at": event["at"], "kind": event["kind"]})
+        if state == "available" and not events:
+            state = "unknown"
+        detail = sample.get("detail")
+        allowed_details = {"no_connection_events", "event_log_unavailable", "invalid_event_log"}
+        result = {
+            "type": "wifi_connection_history", "schema": "xider.wifi-connection-history.v1",
+            "feature_id": "D04-F17", "device_id": DEVICE_ID, "request_id": request_id,
+            "source": wifi_connection_history.MACOS_SOURCE, "state": state, "events": events,
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "detail": detail if detail in allowed_details else ("invalid_event_log" if state == "unknown" else None),
+        }
+        self._publish_response("wifi_connection_history", result)
+
+    def _do_proxy_status(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        try:
+            sample = proxy_status.collect_proxy_status()
+        except Exception:
+            sample = {"state": "unknown", "sources": []}
+        state = sample.get("state") if sample.get("state") in {"available", "unknown"} else "unknown"
+        sources = sample.get("sources") if state == "available" else []
+        allowed = {"http", "https", "socks", "pac", "auto_detect"}
+        if not isinstance(sources, list) or any(item not in allowed for item in sources) or len(set(sources)) != len(sources):
+            state, sources = "unknown", []
+        result = {
+            "type": "proxy_status", "schema": "xider.proxy-status.v1", "feature_id": "D04-F23",
+            "device_id": DEVICE_ID, "request_id": request_id, "source": proxy_status.MACOS_SOURCE,
+            "state": state, "sources": sources,
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "detail": sample.get("detail") if sample.get("detail") in {"scutil_unavailable", "scutil_query_failed"} else None,
+        }
+        self._publish_response("proxy_status", result)
+
+    def _do_vpn_route_status(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        try:
+            sample = vpn_route.collect_vpn_summary()
+        except Exception:
+            sample = {"state": "unknown", "up_tunnel_candidates": 0,
+                      "down_tunnel_candidates": 0, "route_assessment": "not_verified"}
+        state = sample.get("state") if sample.get("state") in {"available", "unknown"} else "unknown"
+        up = sample.get("up_tunnel_candidates", 0)
+        down = sample.get("down_tunnel_candidates", 0)
+        if (not isinstance(up, int) or isinstance(up, bool) or not 0 <= up <= 128
+                or not isinstance(down, int) or isinstance(down, bool) or not 0 <= down <= 128
+                or sample.get("route_assessment") != "not_verified"):
+            state, up, down = "unknown", 0, 0
+        if state == "unknown":
+            up, down = 0, 0
+        result = {
+            "type": "vpn_route_status", "schema": "xider.vpn-route.v1", "feature_id": "D04-F24",
+            "device_id": DEVICE_ID, "request_id": request_id, "source": vpn_route.MACOS_SOURCE,
+            "state": state, "up_tunnel_candidates": up, "down_tunnel_candidates": down,
+            "route_assessment": "not_verified",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "detail": sample.get("detail") if sample.get("detail") in {"psutil_unavailable", "interface_query_failed"} else None,
+        }
+        self._publish_response("vpn_route_status", result)
+
+    def _do_network_traffic(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        interface_id = payload.get("interface_id")
+        if interface_id is None:
+            sample = network_traffic.collect_catalog()
+            result = {
+                "type": "network_traffic", "schema": "xider.network-traffic.v1",
+                "feature_id": "D04-F18", "device_id": DEVICE_ID, "request_id": request_id,
+                "source": network_traffic.SOURCE, "mode": "catalog",
+                "state": sample.get("state") if sample.get("state") in {"available", "unsupported", "unknown"} else "unknown",
+                "interfaces": sample.get("interfaces", []) if isinstance(sample.get("interfaces"), list) else [],
+                "detail": sample.get("detail") if sample.get("detail") in {"counter_source_unavailable", "no_interfaces"} else None,
+            }
+        else:
+            sample = network_traffic.collect_interface_traffic(interface_id)
+            result = {
+                "type": "network_traffic", "schema": "xider.network-traffic.v1",
+                "feature_id": "D04-F18", "device_id": DEVICE_ID, "request_id": request_id,
+                "source": network_traffic.SOURCE, "mode": "sample",
+                "state": sample.get("state") if sample.get("state") in {"available", "unknown", "unsupported"} else "unknown",
+                "interface_id": sample.get("interface_id"), "label": sample.get("label"),
+                "sent_bytes": sample.get("sent_bytes"), "received_bytes": sample.get("received_bytes"),
+                "sampled_at": sample.get("sampled_at"),
+                "detail": sample.get("detail") if sample.get("detail") in {"counter_unavailable", "counter_source_unavailable", "interface_not_found"} else None,
+            }
+        result["checked_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        self._publish_response("network_traffic", result)
 
     def _do_usb_devices(self, payload: dict) -> None:
         try:
@@ -1781,23 +3804,42 @@ class XgentClient:
             self._publish_response("path_open", {"type": "path_open", "device_id": DEVICE_ID, "ok": True, "path": path})
 
     def _do_ext_ip(self, payload: dict) -> None:
-        ip = None
-        for url in ("https://api.ipify.org", "https://ifconfig.me/ip"):
+        request_id = payload.get("id")
+        request_id = request_id if isinstance(request_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", request_id) else None
+        result = {
+            "type": "ext_ip", "schema": "xider.external-ip.v1", "feature_id": "D04-F30",
+            "device_id": DEVICE_ID, "request_id": request_id, "state": "unknown",
+            "source": "ipify", "ip": "",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        }
+        for source, url in (("ipify", "https://api.ipify.org"), ("ifconfig_me", "https://ifconfig.me/ip")):
             try:
                 with urllib.request.urlopen(url, timeout=6) as resp:
-                    ip = resp.read().decode("ascii").strip()
-                    if ip:
+                    candidate = resp.read(65).decode("ascii", "ignore").strip()
+                    address = ipaddress.ip_address(candidate)
+                    if address.is_global and str(address) == candidate:
+                        result.update(state="available", source=source, ip=candidate)
                         break
             except Exception:
                 continue
-        self._publish_response("ext_ip", {"type": "ext_ip", "device_id": DEVICE_ID,
-                                          "ok": bool(ip), "ip": ip or "",
-                                          "text": ip or "Не удалось определить внешний IP"})
+        result["ok"] = result["state"] == "available"
+        result["text"] = result["ip"] if result["ok"] else "Не удалось подтвердить внешний IP"
+        self._publish_response("ext_ip", result)
 
     def _do_geo_location(self, payload: dict) -> None:
         """One explicit request; IP estimation requires the exact boolean opt-in."""
-        from location_adapter import read_system_location, read_ip_estimate, location_text
+        from location_adapter import read_system_location, read_ip_estimate, location_text, compare_location_results
         value = read_system_location()
+        if payload.get("compare_sources") is True:
+            comparison = compare_location_results(value, read_ip_estimate())
+            comparison.update(
+                type="geo_location", device_id=DEVICE_ID, feature_id="P01-F25",
+                schema="xider.location-comparison.v1", request_id=payload.get("id"),
+                ok=(value.get("state") == "granted" or comparison["ip_estimate"].get("state") == "granted"),
+                text=location_text(comparison),
+            )
+            self._publish_response("geo_location", comparison)
+            return
         if value["state"] != "granted" and payload.get("ip_fallback") is True:
             system_state = value["state"]
             value = read_ip_estimate()
@@ -2258,6 +4300,445 @@ class XgentClient:
             ok = False
         self._publish_response("output", {"type": "net_ping", "device_id": DEVICE_ID, "ok": ok, "text": text})
 
+    def _do_dns_resolution(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        result = {
+            "type": "dns_resolution",
+            "schema": "xider.dns-resolution.v1",
+            "feature_id": "D04-F05",
+            "device_id": DEVICE_ID,
+            "request_id": request_id,
+            "state": "supported",
+            "source": "system_getaddrinfo",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "data": None,
+            "detail": None,
+        }
+        try:
+            result["data"] = dns_diagnostics.resolve_dns(
+                payload.get("hostname"), payload.get("expected_addresses"),
+            )
+        except ValueError:
+            result.update(state="invalid_request", detail="invalid_dns_request")
+        except TimeoutError:
+            result.update(state="unknown", detail="dns_lookup_timeout_or_busy")
+        except (LookupError, socket.gaierror):
+            result.update(state="unavailable", detail="dns_name_unavailable")
+        except OSError:
+            result.update(state="unavailable", detail="system_resolver_unavailable")
+        self._publish_response("dns_resolution", result)
+
+    def _do_dns_settings(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        try:
+            snapshot = dns_settings.read_dns_settings()
+            resolvers = snapshot.get("resolvers", [])
+            state = snapshot.get("state", "supported" if resolvers else "unknown")
+            if state not in {"supported", "unknown", "unsupported", "unavailable"}:
+                state, resolvers = "unknown", []
+            if not isinstance(resolvers, list):
+                state, resolvers = "unknown", []
+        except Exception:
+            snapshot = {"source": dns_settings.SOURCE}
+            state, resolvers = "unknown", []
+        result = {
+            "type": "dns_settings",
+            "schema": "xider.dns-settings.v1",
+            "feature_id": "D04-F06",
+            "device_id": DEVICE_ID,
+            "request_id": request_id,
+            "state": state,
+            "source": snapshot.get("source", dns_settings.SOURCE),
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "data": {"resolvers": resolvers},
+        }
+        self._publish_response("dns_settings", result)
+
+    def _do_dns_comparison(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        result = {
+            "type": "dns_comparison", "schema": "xider.dns-comparison.v1", "feature_id": "D04-F07",
+            "device_id": DEVICE_ID, "request_id": request_id, "state": "supported",
+            "source": dns_comparison.SOURCE,
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "data": None, "detail": None,
+        }
+        try:
+            result["data"] = dns_comparison.compare_resolvers(payload.get("hostname"), payload.get("resolvers"))
+            if result["data"].get("comparison") == "unknown":
+                result["state"] = "unknown"
+        except ValueError:
+            result.update(state="invalid_request", detail="invalid_dns_comparison_request")
+        except (OSError, TimeoutError):
+            result.update(state="unknown", detail="dns_resolver_unavailable")
+        self._publish_response("dns_comparison", result)
+
+    def _do_dnssec_check(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        result = {
+            "type": "dnssec_check", "schema": "xider.dnssec-check.v1", "feature_id": "D04-F26",
+            "device_id": DEVICE_ID, "request_id": request_id, "state": "unknown",
+            "source": dnssec_check.SOURCE,
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "hostname": None, "resolver": None, "ad_bit": None, "rcode": None,
+        }
+        try:
+            checked = dnssec_check.check_domain(payload.get("hostname"), payload.get("resolver"))
+            result.update(hostname=checked["hostname"], resolver=checked["resolver"],
+                          state=checked["assessment"], ad_bit=checked["ad_bit"], rcode=checked["rcode"])
+        except ValueError:
+            result.update(state="invalid_request")
+        except (OSError, TimeoutError):
+            result.update(state="unknown")
+        self._publish_response("dnssec_check", result)
+
+    def _do_route_trace(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        result = {
+            "type": "route_trace", "schema": "xider.route-trace.v1", "feature_id": "D04-F09",
+            "device_id": DEVICE_ID, "request_id": request_id, "state": "unknown",
+            "source": route_trace.MACOS_SOURCE,
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "data": None, "detail": None,
+        }
+        try:
+            traced = route_trace.trace_route(payload.get("target"), platform="macos")
+            result["data"] = {key: traced[key] for key in ("target", "reached", "hops") if key in traced}
+            result["source"] = traced.get("source", route_trace.MACOS_SOURCE)
+            result["state"] = traced.get("state", "unknown")
+            result["detail"] = traced.get("detail")
+        except ValueError:
+            result.update(state="invalid_request", detail="invalid_route_trace_target")
+        except Exception:
+            result.update(state="unknown", detail="route_trace_failed")
+        self._publish_response("route_trace", result)
+
+    def _do_path_mtu(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        result = {"type": "path_mtu", "schema": "xider.path-mtu.v1", "feature_id": "D04-F10",
+                  "device_id": DEVICE_ID, "request_id": request_id, "state": "unknown",
+                  "source": path_mtu.MACOS_SOURCE,
+                  "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+                  "data": None, "detail": None}
+        try:
+            snapshot = path_mtu.diagnose_path_mtu(payload.get("target"), platform="macos")
+            result["source"], result["state"] = snapshot.get("source", path_mtu.MACOS_SOURCE), snapshot.get("state", "unknown")
+            if result["state"] == "supported":
+                result["data"] = {key: snapshot[key] for key in ("target", "mtu", "max_tested") if key in snapshot}
+            else:
+                result["data"] = None
+                result["detail"] = snapshot.get("detail") or (
+                    "ping_unavailable" if result["state"] == "unsupported" else "probe_no_confirmed_reply"
+                )
+        except ValueError:
+            result.update(state="invalid_request", detail="invalid_path_mtu_target")
+        except Exception:
+            result.update(state="unknown", detail="path_mtu_probe_failed")
+        self._publish_response("path_mtu", result)
+
+    def _do_captive_portal(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        result = {
+            "type": "captive_portal", "schema": "xider.captive-portal.v1", "feature_id": "D04-F11",
+            "device_id": DEVICE_ID, "request_id": request_id, "state": "unknown",
+            "source": captive_portal.SOURCE,
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "data": None, "detail": "probe_failed",
+        }
+        try:
+            snapshot = captive_portal.detect_captive_portal()
+            result["state"] = snapshot.get("state", "unknown")
+            result["source"] = snapshot.get("source", captive_portal.SOURCE)
+            origin = snapshot.get("portal_origin")
+            result["data"] = {"portal_origin": origin} if origin is not None else None
+            result["detail"] = snapshot.get("detail")
+        except Exception:
+            pass
+        self._publish_response("captive_portal", result)
+
+    def _do_ipv6_connectivity(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        result = {
+            "type": "ipv6_connectivity", "schema": "xider.ipv6-connectivity.v1", "feature_id": "D04-F12",
+            "device_id": DEVICE_ID, "request_id": request_id, "state": "unknown",
+            "source": ipv6_connectivity.SOURCE,
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "data": None, "detail": "probe_failed",
+        }
+        try:
+            snapshot = ipv6_connectivity.probe_ipv6()
+            state = snapshot.get("state")
+            result["state"] = state if state in {"reachable", "no_route", "unknown", "unsupported"} else "unknown"
+            result["source"] = snapshot.get("source", ipv6_connectivity.SOURCE)
+            result["detail"] = snapshot.get("detail")
+        except Exception:
+            pass
+        self._publish_response("ipv6_connectivity", result)
+
+    def _do_tls_certificate(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        raw_host = payload.get("host")
+        parsed = tls_certificate.parse_target(
+            f"[{raw_host}]:{payload.get('port')}" if isinstance(raw_host, str) and ":" in raw_host
+            else f"{raw_host}:{payload.get('port')}"
+        )
+        host, port = (parsed["host"], parsed["port"]) if parsed else (None, None)
+        result = {
+            "type": "tls_certificate", "schema": "xider.tls-certificate.v1", "feature_id": "D04-F13",
+            "device_id": DEVICE_ID, "request_id": request_id, "host": host, "port": port,
+            "source": tls_certificate.SOURCE, "state": "invalid_request" if not parsed else "unknown",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "detail": "invalid_endpoint" if not parsed else "tls_probe_failed", "data": None,
+        }
+        if parsed:
+            try:
+                snapshot = tls_certificate.probe_certificate(host, port)
+                if snapshot.get("state") in {"valid", "expired", "not_yet_valid", "chain_invalid", "unknown"}:
+                    result.update(state=snapshot["state"], detail=snapshot.get("detail"), data=snapshot.get("data"))
+            except Exception:
+                pass
+        self._publish_response("tls_certificate", result)
+
+    def _do_service_probe(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        raw_host = payload.get("host")
+        parsed = tls_certificate.parse_target(
+            f"[{raw_host}]:{payload.get('port')}" if isinstance(raw_host, str) and ":" in raw_host
+            else f"{raw_host}:{payload.get('port')}"
+        )
+        protocol = payload.get("protocol")
+        valid = parsed is not None and protocol in {"tcp", "tls"}
+        host, port = (parsed["host"], parsed["port"]) if parsed else (None, None)
+        result = {
+            "type": "service_probe", "schema": "xider.service-probe.v1", "feature_id": "D04-F14",
+            "device_id": DEVICE_ID, "request_id": request_id, "host": host, "port": port,
+            "protocol": protocol if protocol in {"tcp", "tls"} else None,
+            "source": service_probe.SOURCE, "state": "unknown" if valid else "invalid_request",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "detail": "probe_failed" if valid else "invalid_endpoint_or_protocol",
+        }
+        if valid:
+            try:
+                snapshot = service_probe.probe_service(host, port, protocol)
+                if snapshot.get("state") in {"reachable", "reachable_untrusted", "unreachable", "unknown"}:
+                    result.update(state=snapshot["state"], detail=snapshot.get("detail"))
+            except Exception:
+                pass
+        self._publish_response("service_probe", result)
+
+    def _do_latency_series(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        host, port = payload.get("host"), payload.get("port")
+        valid = latency_series._valid_endpoint(host, port)
+        result = {
+            "type": "latency_series", "schema": "xider.latency-series.v1", "feature_id": "D04-F01",
+            "device_id": DEVICE_ID, "request_id": request_id,
+            "host": host if valid else None, "port": port if valid else None,
+            "source": latency_series.SOURCE, "state": "unknown" if valid else "invalid_request",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "samples": [], "summary": None,
+            "detail": "probe_failed" if valid else "invalid_endpoint",
+        }
+        if valid:
+            try:
+                snapshot = latency_series.measure_latency_series(host, port)
+                if snapshot.get("source") == latency_series.SOURCE and snapshot.get("state") in {"available", "partial", "unknown"}:
+                    result.update(state=snapshot["state"], samples=snapshot["samples"],
+                                  summary=snapshot["summary"], detail=snapshot["detail"])
+            except Exception:
+                pass
+        self._publish_response("latency_series", result)
+
+    def _do_packet_loss_history(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        address = payload.get("address")
+        valid = packet_loss_history._literal_address(address)
+        snapshot = None
+        if valid:
+            try:
+                snapshot = packet_loss_history.measure_packet_loss(address=valid)
+            except Exception:
+                pass
+        result = {
+            "type": "packet_loss_history", "schema": "xider.packet-loss-history.v1", "feature_id": "D04-F02",
+            "device_id": DEVICE_ID, "request_id": request_id,
+            "address": valid, "source": packet_loss_history.SOURCE,
+            "state": snapshot.get("state") if snapshot and snapshot.get("state") in {"complete", "partial", "unknown"} else "invalid_request" if not valid else "unknown",
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "data": snapshot if snapshot and snapshot.get("source") == packet_loss_history.SOURCE else {
+                "address": valid, "state": "unknown", "source": packet_loss_history.SOURCE,
+                "detail": "probe_failed" if valid else "invalid_literal_address", "sent": 10,
+                "observed": 0, "received": 0, "lost": 0, "loss_percent": None, "samples": [],
+            },
+        }
+        self._publish_response("packet_loss_history", result)
+
+    def _do_jitter_measurement(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        valid = packet_loss_history._literal_address(payload.get("address"))
+        snapshot = None
+        if valid:
+            try:
+                snapshot = jitter_measurement.measure_jitter(address=valid)
+            except Exception:
+                pass
+        state = snapshot.get("state") if snapshot else "unknown"
+        if state not in {"available", "partial", "unknown"}:
+            state = "invalid_request" if not valid else "unknown"
+        data = snapshot if snapshot and snapshot.get("source") == jitter_measurement.SOURCE else {
+            "address": valid, "state": "unknown", "source": jitter_measurement.SOURCE,
+            "detail": "probe_failed" if valid else "invalid_literal_address",
+            "attempted": 10, "received": 0, "lost": 0, "unknown": 10,
+            "pairs": 0, "jitter_ms": None, "samples": [],
+        }
+        self._publish_response("network_jitter", {
+            "type": "network_jitter", "schema": "xider.network-jitter.v1", "feature_id": "D04-F03",
+            "device_id": DEVICE_ID, "request_id": request_id, "address": valid,
+            "source": jitter_measurement.SOURCE, "state": state,
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "data": data,
+        })
+
+    def _do_network_throughput(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        endpoint = network_throughput.parse_endpoint(payload.get("endpoint"))
+        result = network_throughput.measure_throughput(endpoint["url"]) if endpoint else {
+            "state": "invalid_request", "source": network_throughput.SOURCE,
+            "detail": "invalid_test_endpoint",
+        }
+        state = result.get("state") if result.get("state") in {"available", "unknown", "limit_exceeded", "invalid_request"} else "unknown"
+        self._publish_response("network_throughput", {
+            "type": "network_throughput", "schema": "xider.network-throughput.v1", "feature_id": "D04-F04",
+            "device_id": DEVICE_ID, "request_id": request_id,
+            "endpoint": endpoint["url"] if endpoint else None,
+            "source": network_throughput.SOURCE, "state": state,
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "data": result,
+        })
+
+    def _do_network_link_speed(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        interface_id = payload.get("interface_id")
+        catalog = network_link_speed.collect_catalog()
+        if interface_id is None:
+            data = {"state": catalog["state"], "interfaces": catalog["interfaces"], "detail": catalog["detail"]}
+            mode = "catalog"
+        else:
+            data = network_link_speed.collect_link_speed(interface_id)
+            mode = "measure"
+        state = data.get("state") if data.get("state") in {"available", "unsupported", "unknown"} else "unknown"
+        self._publish_response("network_link_speed", {
+            "type": "network_link_speed", "schema": "xider.network-link-speed.v1", "feature_id": "D04-F21",
+            "device_id": DEVICE_ID, "request_id": request_id, "mode": mode,
+            "source": network_link_speed.SOURCE, "state": state,
+            "interface_id": interface_id if isinstance(interface_id, str) else None,
+            "data": data,
+        })
+
+    def _do_route_lookup(self, payload: dict) -> None:
+        request_id = str(payload.get("id", ""))[:128]
+        destination = payload.get("destination")
+        try:
+            normalized = route_lookup.normalize_destination(destination)
+            data = route_lookup.lookup_route(normalized)
+        except (ValueError, TypeError):
+            data = {"state": "invalid_request"}
+        self._publish_response("route_lookup", {
+            "type": "route_lookup", "schema": "xider.route-lookup.v1", "feature_id": "D04-F22",
+            "request_id": request_id, "device_id": DEVICE_ID,
+            "source": route_lookup.MACOS_SOURCE, "state": data.get("state", "unknown"),
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"), "data": data,
+        })
+
+    def _do_endpoint_batch(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        ids = ("example", "cloudflare", "github")
+        try:
+            sample = endpoint_batch.check_public_set()
+        except Exception:
+            sample = {"preset": endpoint_batch.PRESET_ID, "state": "unknown", "results": []}
+        state = sample.get("state") if sample.get("state") in {"available", "unknown"} else "unknown"
+        rows = sample.get("results")
+        results = []
+        if (sample.get("preset") != endpoint_batch.PRESET_ID or not isinstance(rows, list)
+                or len(rows) != len(ids)):
+            state, rows = "unknown", []
+        for index, target_id in enumerate(ids):
+            row = rows[index] if index < len(rows) and isinstance(rows[index], dict) else {}
+            item_state, detail = row.get("state"), row.get("detail")
+            if row.get("target_id") != target_id or item_state not in {"reachable", "unreachable", "unknown"}:
+                item_state, detail = "unknown", "probe_failed"
+                state = "unknown"
+            if detail not in {None, "probe_timeout", "connection_refused", "probe_failed"}:
+                item_state, detail, state = "unknown", "probe_failed", "unknown"
+            results.append({"target_id": target_id, "state": item_state, "detail": detail})
+        result = {
+            "type": "endpoint_batch", "schema": "xider.endpoint-batch.v1", "feature_id": "D04-F25",
+            "device_id": DEVICE_ID, "request_id": request_id, "source": endpoint_batch.MACOS_SOURCE,
+            "preset": endpoint_batch.PRESET_ID, "state": state, "results": results,
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+        }
+        self._publish_response("endpoint_batch", result)
+
+    def _do_gateway_probe(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        try:
+            snapshot = gateway_probe.probe_gateway()
+        except Exception:
+            snapshot = {"state": "unknown", "gateway": None,
+                        "source": gateway_probe.SOURCE, "detail": "gateway_probe_failed"}
+        state = snapshot.get("state")
+        if state not in {"reachable", "unknown", "no_gateway", "unsupported"}:
+            state = "unknown"
+        gateway = snapshot.get("gateway")
+        try:
+            gateway = str(ipaddress.IPv4Address(gateway)) if gateway is not None else None
+        except (ipaddress.AddressValueError, TypeError):
+            gateway, state = None, "unknown"
+        result = {
+            "type": "gateway_probe", "schema": "xider.gateway-probe.v1", "feature_id": "D04-F08",
+            "device_id": DEVICE_ID, "request_id": request_id, "state": state,
+            "source": gateway_probe.SOURCE,
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "data": {"gateway": gateway} if gateway else None,
+            "detail": snapshot.get("detail") if isinstance(snapshot.get("detail"), str) else None,
+        }
+        self._publish_response("gateway_probe", result)
+
     # ---------- Расширенная матрица приколов ----------
 
     def _do_prank_bsod(self, payload: dict) -> None:
@@ -2698,7 +5179,7 @@ end tell'''
             "release_signature.py", "update_package.py", "guardian_recovery.py", "start_agent.sh",
             "command_module_loader.py", "command_signing.py", "command_replay.py", "shell_execution.py",
             "xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py",
-            "fake_update_screen.py", "location_adapter.py",
+            "fake_update_screen.py", "location_adapter.py", "media_history.py", "media_request_control.py",
             "xider_guardian.py", "requirements.txt", "setup_mac.py",
             "stop_agent.sh", "start_guardian.sh",
         )

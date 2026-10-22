@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$ServerIp = '141.145.152.174',
+    [string]$ServerIp = '16.16.200.207',
     [string]$KeyPath,
     [string]$KnownHostsPath,
     [string]$SigningKeyPath,

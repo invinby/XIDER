@@ -54,6 +54,7 @@ class MQTTTransport:
             client.subscribe(f"{MQTT_PREFIX}/+/sysinfo", qos=0)
             client.subscribe(f"{MQTT_PREFIX}/+/mic", qos=0)
             client.subscribe(f"{MQTT_PREFIX}/+/shell", qos=0)
+            client.subscribe(f"{MQTT_PREFIX}/+/shell_cancel", qos=0)
             client.subscribe(f"{MQTT_PREFIX}/+/processes", qos=0)
             client.subscribe(f"{MQTT_PREFIX}/+/clipboard", qos=0)
             client.subscribe(f"{MQTT_PREFIX}/+/battery", qos=0)

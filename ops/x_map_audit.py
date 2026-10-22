@@ -169,7 +169,7 @@ _APP_AUTOMATION_COMMANDS = {
     "prank_change_wallpaper", "prank_restore_wallpaper",
 }
 _AUDIO_OUTPUT_COMMANDS = {
-    "sound", "volume_set", "volume_toggle", "prank_beep_morse",
+    "sound", "volume_set", "volume_toggle", "audio_output_switch", "prank_beep_morse",
     "prank_laugh_track", "prank_random_beeps",
     "prank_say_whisper", "prank_screamer", "prank_shout_tts", "prank_siren",
     "prank_sound_fart", "prank_sound_spooky", "prank_speak_time",
@@ -363,9 +363,9 @@ def _permission_profile_ids(command: str, *, guardian: bool = False) -> list[str
     profiles = {"agent_account"}
     if command == "permission_settings":
         profiles.add("permission_settings_ui")
-    if command in {"screenshot", "webcam", "mic", "clipboard", "clipboard_set"}:
+    if command in {"screenshot", "display_contact_sheet", "display_screenshot", "display_region_screenshot", "display_resolution", "window_catalog", "window_screenshot", "webcam", "mic", "clipboard", "clipboard_set"}:
         profiles.add("interactive_session")
-    if command == "screenshot":
+    if command in {"screenshot", "display_contact_sheet", "display_screenshot", "display_region_screenshot", "window_catalog", "window_screenshot"}:
         profiles.add("screen_capture")
     if command == "webcam":
         profiles.add("camera")

@@ -69,11 +69,11 @@ def build_pages_launchers() -> dict[str, str]:
         "$d=Join-Path $env:TEMP ('xider-launch-'+[guid]::NewGuid().ToString('N'))\n"
         "New-Item -ItemType Directory -Path $d|Out-Null\ntry {\n"
         "  $p=Join-Path $d 'install.ps1'; $s=Join-Path $d 'install.sig'; $a=Join-Path $d 'allowed_signers'; $m=Join-Path $d 'message'\n"
-        "  Write-Host '[1/4] Checking OpenSSH signature verifier...'\n"
+        "  Write-Host 'XIDER: checking the signature verifier...'\n"
         "  $sshCommand=Get-Command ssh-keygen.exe -ErrorAction SilentlyContinue\n"
         "  if(-not $sshCommand){\n"
-        "    $answer=Read-Host 'OpenSSH Client is needed to verify the signed installer. Install the Windows optional feature now? [Y/N]'\n"
-        "    if($answer -notmatch '^(?i:y|yes)$'){throw 'OpenSSH Client was not installed; no XIDER files were changed.'}\n"
+        "    $answer=Read-Host 'Install OpenSSH Client optional feature now? [Y/N]'\n"
+        "    if($answer -notmatch '^(?i:y|yes)$'){throw 'OpenSSH Client is required to verify the signed installer.'}\n"
         "    $featureScript=Join-Path $d 'install-openssh.ps1'\n"
         "    $featureBody=\"`$ErrorActionPreference='Stop'`nAdd-WindowsCapability -Online -Name 'OpenSSH.Client~~~~0.0.1.0' | Out-Null`nif((Get-WindowsCapability -Online -Name 'OpenSSH.Client~~~~0.0.1.0').State -ne 'Installed'){exit 1}`n\"\n"
         "    [IO.File]::WriteAllText($featureScript,$featureBody,[Text.UTF8Encoding]::new($false))\n"
@@ -89,9 +89,8 @@ def build_pages_launchers() -> dict[str, str]:
         "    if(-not $sshCommand){throw 'OpenSSH Client is still unavailable. Restart PowerShell and retry the XIDER command.'}\n"
         "  }\n"
         "  $ssh=$sshCommand.Source\n"
-        "  Write-Host '[2/4] Downloading signed installer (up to 90 seconds)...'\n"
+        "  Write-Host 'XIDER: downloading the latest signed Windows installer...'\n"
         f"  iwr -UseBasicParsing -TimeoutSec 90 -Uri '{base}/{INSTALLERS['windows']}' -OutFile $p\n"
-        "  Write-Host '[3/4] Downloading signature and verifying publisher...'\n"
         f"  iwr -UseBasicParsing -TimeoutSec 90 -Uri '{base}/{INSTALLERS['windows']}.sig' -OutFile $s\n"
         f"  [IO.File]::WriteAllBytes($a,[Convert]::FromBase64String('{allowed_b64}'))\n"
         "  $f=[IO.File]::OpenRead($p); $sha=[Security.Cryptography.SHA256]::Create()\n"
@@ -103,15 +102,15 @@ def build_pages_launchers() -> dict[str, str]:
         "  $psi=New-Object Diagnostics.ProcessStartInfo; $psi.FileName=$env:ComSpec; $psi.Arguments='/d /s /c \"\"'+$c+'\"\"'; $psi.UseShellExecute=$false\n"
         "  $v=New-Object Diagnostics.Process; $v.StartInfo=$psi; [void]$v.Start(); $v.WaitForExit()\n"
         "  if($v.ExitCode -ne 0){throw 'XIDER installer signature verification failed'}\n"
-        "  Write-Host '[4/4] Requesting administrator approval (UAC)...'\n"
+        "  Write-Host 'XIDER: requesting administrator approval (UAC)...'\n"
         "  $args=@('-NoProfile','-ExecutionPolicy','Bypass','-File',\"`\"$p`\"\")\n"
         "  $installer=Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ArgumentList $args\n"
         "  if($installer.ExitCode -ne 0){throw ('XIDER Windows installer failed with exit code '+$installer.ExitCode)}\n"
         "} catch { Write-Host ('XIDER launcher failed: '+$_.Exception.Message) -ForegroundColor Red; throw } finally { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue }\n"
     )
-    # Keep the legacy .ps1 URL for users who download it as a file, and publish
-    # identical bytes as .txt so PowerShell `irm ... | iex` receives text rather
-    # than a byte[] (GitHub Pages serves unknown .ps1 MIME as octet-stream).
+    # Keep the bot's one-line `irm .../win.txt | iex` route as well as the
+    # downloadable .ps1. GitHub Pages serves .ps1 as application/octet-stream,
+    # which PowerShell reads as byte[] instead of executable script text.
     return {"mac": mac, "win.ps1": windows, "win.txt": windows, ".nojekyll": ""}
 
 

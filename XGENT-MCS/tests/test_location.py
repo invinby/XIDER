@@ -91,6 +91,34 @@ def test_string_truthy_value_is_not_ip_opt_in(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", forbidden)
     assert client_result({"ip_fallback": "true"}).get("source") == "system"
 
+def test_owner_compare_opt_in_returns_distinct_system_and_ip_sources_without_persisting(monkeypatch):
+    import location_adapter
+    monkeypatch.setattr(location_adapter, "read_system_location", lambda: {
+        "source": "system", "state": "granted", "latitude": 41.3, "longitude": 69.2,
+        "accuracy_m": 90, "label": "OS fix", "checked_at": "2026-10-15T10:00:00+00:00",
+    })
+    monkeypatch.setattr(location_adapter, "read_ip_estimate", lambda: {
+        "source": "ip_estimate", "state": "granted", "latitude": 41.31, "longitude": 69.27,
+        "accuracy_m": 1, "ip": "203.0.113.9", "label": "Tashkent",
+        "checked_at": "2026-10-15T10:00:01+00:00",
+    })
+
+    result = client_result({"compare_sources": True})
+
+    assert result["source"] == "comparison"
+    assert result["system_location"]["latitude"] == 41.3
+    assert result["ip_estimate"]["label"] == "Tashkent"
+    assert result["ip_estimate"]["latitude"] is None
+    assert result["ip_estimate"]["longitude"] is None
+    assert "ip" not in result["ip_estimate"]
+
+def test_compare_requires_exact_boolean_opt_in(monkeypatch):
+    import location_adapter
+    monkeypatch.setattr(location_adapter, "read_ip_estimate",
+                        lambda: pytest.fail("comparison must require boolean opt-in"))
+
+    assert client_result({"compare_sources": "true"}).get("source") == "system"
+
 @pytest.mark.parametrize("native_error", [False, True])
 def test_mac_runloop_dispatch_returns_one_native_fix_or_failure(monkeypatch, native_error):
     import location_adapter as adapter
@@ -141,6 +169,43 @@ def test_mac_runloop_dispatch_returns_one_native_fix_or_failure(monkeypatch, nat
     worker.join(1)
     assert result == (["unavailable"] if native_error else [(41.311, 69.279, 80.0)])
     assert not runtime.active
+
+
+def test_mac_location_unknown_is_transient_not_service_unavailable(monkeypatch):
+    import location_adapter as adapter
+    import sys
+    import threading
+    from types import ModuleType
+
+    class NSObject:
+        @classmethod
+        def alloc(cls):
+            return cls()
+        def init(self):
+            return self
+
+    core = ModuleType("CoreLocation")
+    foundation = ModuleType("Foundation")
+    class RunLoop:
+        @staticmethod
+        def currentRunLoop():
+            return object()
+    foundation.NSObject = NSObject
+    foundation.NSRunLoop = RunLoop
+    foundation.NSDate = object
+    monkeypatch.setitem(sys.modules, "CoreLocation", core)
+    monkeypatch.setitem(sys.modules, "Foundation", foundation)
+    runtime = adapter.MacLocationRuntime()
+    delegate = runtime.delegate_class.alloc().init()
+    job = {"cancelled": False, "done": threading.Event()}
+    delegate.job = job
+    manager = SimpleNamespace(stopUpdatingLocation=lambda: None)
+    transient = SimpleNamespace(code=lambda: 0)
+
+    delegate.locationManager_didFailWithError_(manager, transient)
+
+    assert isinstance(job.get("error"), TimeoutError)
+    assert job["done"].is_set()
 
 def test_mac_expired_job_cannot_later_read_location():
     import location_adapter as adapter

@@ -11,6 +11,160 @@ from PIL import Image
 import bot
 
 
+def test_masked_screenshot_covers_normalized_rectangle_without_mutating_source():
+    source = io.BytesIO()
+    Image.new("RGB", (20, 10), (240, 30, 20)).save(source, format="PNG")
+    original = source.getvalue()
+
+    masked = bot._mask_screenshot_regions(original, [(0.25, 0.2, 0.75, 0.8)])
+
+    with Image.open(io.BytesIO(masked)) as result:
+        assert result.size == (20, 10)
+        assert result.convert("RGB").getpixel((5, 2)) == (0, 0, 0)
+        assert result.convert("RGB").getpixel((14, 7)) == (0, 0, 0)
+        assert result.convert("RGB").getpixel((4, 2)) == (240, 30, 20)
+        assert result.convert("RGB").getpixel((15, 2)) == (240, 30, 20)
+    assert source.getvalue() == original
+
+
+def test_mask_coordinate_parser_accepts_bounded_normalized_rectangles():
+    assert bot._parse_screenshot_mask_regions("0.1,0.2,0.4,0.6; 0.55,0.1,0.9,0.3") == [
+        (0.1, 0.2, 0.4, 0.6), (0.55, 0.1, 0.9, 0.3),
+    ]
+
+
+@pytest.mark.parametrize("value", [
+    "", "0.1,0.2,0.3", "0.1,0.2,0.4,0.3;", "0,0,1,1;0,0,1,1;0,0,1,1;0,0,1,1;0,0,1,1;0,0,1,1;0,0,1,1;0,0,1,1;0,0,1,1",
+    "-0.1,0.2,0.4,0.6", "0.1,0.2,1.01,0.6", "NaN,0.2,0.4,0.6",
+])
+def test_mask_coordinate_parser_rejects_malformed_or_unbounded_regions(value):
+    with pytest.raises(ValueError):
+        bot._parse_screenshot_mask_regions(value)
+
+
+@pytest.mark.parametrize("regions", [
+    [],
+    [(0.4, 0.2, 0.3, 0.8)],
+    [(-0.1, 0.2, 0.3, 0.8)],
+    [(0.1, 0.2, 1.1, 0.8)],
+    [(0.1, 0.2, float("nan"), 0.8)],
+    [(0.1, 0.2, 0.8, 0.9)] * 9,
+])
+def test_masked_screenshot_rejects_empty_invalid_or_excessive_regions(regions):
+    source = io.BytesIO()
+    Image.new("RGB", (20, 10), (240, 30, 20)).save(source, format="PNG")
+
+    with pytest.raises(ValueError):
+        bot._mask_screenshot_regions(source.getvalue(), regions)
+
+
+def test_masked_screenshot_rejects_oversized_input_before_image_decode():
+    with pytest.raises(ValueError, match="size limit"):
+        bot._mask_screenshot_regions(b"x" * (30 * 1024 * 1024 + 1), [(0.1, 0.1, 0.2, 0.2)])
+
+
+def test_mask_cache_is_owner_token_phase_bound_and_expires(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(bot.time, "time", lambda: now[0])
+    bot._clear_screenshot_mask_cache(123)
+    bot._store_screenshot_mask_cache(123, "device-a", "token-a", b"masked", phase="preview")
+
+    assert bot._get_screenshot_mask_cache(123, "token-a", phase="preview")["image"] == b"masked"
+    assert bot._get_screenshot_mask_cache(124, "token-a", phase="preview") is None
+    assert bot._get_screenshot_mask_cache(123, "wrong", phase="preview") is None
+    assert bot._get_screenshot_mask_cache(123, "token-a", phase="raw") is None
+    now[0] += bot._SCREENSHOT_MASK_TTL_SECONDS + 1
+    assert bot._get_screenshot_mask_cache(123, "token-a", phase="preview") is None
+
+
+def test_owner_mask_flow_keeps_raw_image_out_of_telegram_and_previews_only_masked_copy(monkeypatch):
+    source = io.BytesIO()
+    Image.new("RGB", (20, 10), (220, 10, 10)).save(source, format="PNG")
+    raw = source.getvalue()
+    encoded = base64.b64encode(raw).decode("ascii")
+
+    class State:
+        data = {}
+        current = None
+        async def clear(self):
+            self.data = {}
+            self.current = None
+        async def set_state(self, value):
+            self.current = value.state
+        async def update_data(self, **values):
+            self.data.update(values)
+        async def get_data(self):
+            return dict(self.data)
+        async def get_state(self):
+            return self.current
+
+    class Collector:
+        async def wait_for(self, *_args):
+            return {"state": "success", "image": encoded}
+
+    state = State()
+    rendered, previews = [], []
+    async def answer(*_args, **_kwargs): pass
+    async def allowed(*_args, **_kwargs): return True
+    async def render(_cq, text, **kwargs): rendered.append((text, kwargs))
+    async def replace_photo(_message, image_bytes, **kwargs):
+        previews.append((image_bytes, kwargs))
+        return 99
+    monkeypatch.setattr(bot, "SESSION", {"target": "device-a"})
+    monkeypatch.setattr(bot, "publish_tracked", lambda *_args, **_kwargs: (True, "request-a"))
+    monkeypatch.setattr(bot, "screenshot_collector", Collector())
+    monkeypatch.setattr(bot, "_callback_result_access_or_report", allowed)
+    monkeypatch.setattr(bot, "_replace_callback_message", render)
+    monkeypatch.setattr(bot, "_pending_device_input_still_allowed", lambda *_args: True)
+    monkeypatch.setattr(bot, "_replace_user_card_with_photo", replace_photo)
+    monkeypatch.setattr(bot.devices, "get", lambda _target: {"os": "Windows"})
+    monkeypatch.setattr(bot.bot, "send_photo", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("raw screenshot must not be sent")))
+    bot._clear_screenshot_mask_cache(bot.ADMIN_ID)
+
+    callback = SimpleNamespace(
+        answer=answer, from_user=SimpleNamespace(id=bot.ADMIN_ID), data="screenshot:mask",
+        message=SimpleNamespace(chat=SimpleNamespace(id=77)),
+    )
+    asyncio.run(bot.on_screenshot_mask_start(callback, state))
+    token = state.data["mask_token"]
+    assert bot._get_screenshot_mask_cache(bot.ADMIN_ID, token, phase="raw")["image"] == raw
+    assert not previews
+
+    message = SimpleNamespace(from_user=SimpleNamespace(id=bot.ADMIN_ID), text="0.25,0.2,0.75,0.8", chat=SimpleNamespace(id=77))
+    asyncio.run(bot.on_screenshot_mask_input(message, state))
+
+    assert state.current == bot.Form.wait_screenshot_mask_confirm.state
+    assert len(previews) == 1
+    with Image.open(io.BytesIO(previews[0][0])) as preview:
+        assert preview.size == (20, 10)
+        assert preview.convert("RGB").getpixel((5, 2)) == (0, 0, 0)
+        assert preview.convert("RGB").getpixel((1, 1)) != (0, 0, 0)
+    entry = bot._get_screenshot_mask_cache(bot.ADMIN_ID, token, phase="preview")
+    assert entry and entry["final_image"] and "исходник" not in str(entry["image"]).lower()
+    assert "не отправлен" in rendered[0][0]
+    callbacks = {button.callback_data for row in previews[0][1]["reply_markup"].inline_keyboard for button in row}
+    assert f"screenshot:mask:send:{token}" in callbacks
+    assert "screenshot:mask:cancel" in callbacks
+
+    delivered = []
+    async def edit_media(**kwargs): delivered.append(kwargs)
+    monkeypatch.setattr(bot, "_simple_command_still_allowed", lambda *_args: True)
+    monkeypatch.setattr(bot.bot, "edit_message_media", edit_media)
+    monkeypatch.setattr(bot.ui_cards, "set_card", lambda *_args: None)
+    confirm = SimpleNamespace(
+        answer=answer, from_user=SimpleNamespace(id=bot.ADMIN_ID),
+        data=f"screenshot:mask:send:{token}",
+        message=SimpleNamespace(chat=SimpleNamespace(id=77), message_id=99),
+    )
+    asyncio.run(bot.on_screenshot_mask_send(confirm, state))
+    assert len(delivered) == 1
+    final_bytes = delivered[0]["media"].media.data
+    with Image.open(io.BytesIO(final_bytes)) as final_image:
+        assert final_image.convert("RGB").getpixel((5, 2)) == (0, 0, 0)
+        assert final_image.convert("RGB").getpixel((1, 1)) == (220, 10, 10)
+    assert bot._get_screenshot_mask_cache(bot.ADMIN_ID, token, phase="preview") is None
+
+
 @pytest.mark.parametrize("state,instruction", [
     ("permission_denied", "Запись экрана"), ("session_unavailable", "сеанс"),
     ("tool_missing", "компонент"), ("command_failed", "команда"),
@@ -19,10 +173,12 @@ import bot
     ("transport_failed", "достав"), ("unknown", "неизвест"),
 ])
 def test_handler_maps_failure_to_safe_help(monkeypatch, state, instruction):
-    shown = []
+    shown, rendered = [], []
     async def answer(*args, **kwargs): pass
     async def allowed(*args, **kwargs): return True
-    async def render(cq, text, **kwargs): shown.append(text)
+    async def render(cq, text, **kwargs):
+        shown.append(text)
+        rendered.append(kwargs)
     class Collector:
         async def wait_for(self, *args):
             return {"state": state, "detail": "<diagnostic>", "platform": "macOS", "image": None}
@@ -31,6 +187,11 @@ def test_handler_maps_failure_to_safe_help(monkeypatch, state, instruction):
     monkeypatch.setattr(bot, "screenshot_collector", Collector())
     monkeypatch.setattr(bot, "_callback_result_access_or_report", allowed)
     monkeypatch.setattr(bot, "_replace_callback_message", render)
+    monkeypatch.setattr(bot, "get_user_role", lambda _user: bot.Role.OWNER)
+    monkeypatch.setattr(
+        bot.devices, "get",
+        lambda _target: {"os": "macOS 27", "capabilities": {"commands": ["permission_settings"]}},
+    )
     asyncio.run(bot.on_cmd_screenshot(SimpleNamespace(answer=answer, from_user=SimpleNamespace(id=bot.ADMIN_ID), data="cmd:screenshot")))
     assert instruction in shown[0]
     assert "&lt;diagnostic&gt;" in shown[0]
@@ -39,6 +200,12 @@ def test_handler_maps_failure_to_safe_help(monkeypatch, state, instruction):
         assert "Конфиденциальность и безопасность" in shown[0]
         assert "могут отличаться" in shown[0]
         assert "на самом устройстве" in shown[0]
+        callbacks = [
+            button.callback_data
+            for row in rendered[0]["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        assert "permsettings:screen_recording" in callbacks
 
 
 def test_response_timeout_does_not_assert_device_offline(monkeypatch):
@@ -111,6 +278,32 @@ def test_bulk_failures_are_owner_visible(monkeypatch):
     assert "mac" in shown[0]
     assert "Запись экрана" in shown[0]
     assert "могут отличаться" in shown[0]
+
+
+@pytest.mark.parametrize("role,os_name,state,commands,expected", [
+    ("owner", "macOS 27", "permission_denied", ["permission_settings"], True),
+    ("owner", "macOS 27", "file_empty", ["permission_settings"], True),
+    ("owner", "macOS 27", "permission_denied", [], False),
+    ("owner", "Windows 11", "permission_denied", ["permission_settings"], False),
+    ("user", "macOS 27", "permission_denied", ["permission_settings"], False),
+    ("owner", "macOS 27", "timeout", ["permission_settings"], False),
+])
+def test_mac_capture_failures_offer_owner_only_screen_recording_settings(
+    monkeypatch, role, os_name, state, commands, expected,
+):
+    monkeypatch.setattr(bot, "get_user_role", lambda _user: getattr(bot.Role, role.upper()))
+    monkeypatch.setattr(
+        bot.devices, "get",
+        lambda _target: {"os": os_name, "capabilities": {"commands": commands}},
+    )
+
+    markup = bot._screenshot_failure_keyboard(
+        {"state": state}, target="mac-a", user_id=100,
+    )
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+
+    assert ("permsettings:screen_recording" in callbacks) is expected
+    assert callbacks[-1] == "back:device"
 
 
 def screenshot_bytes(case):

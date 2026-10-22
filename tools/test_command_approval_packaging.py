@@ -29,6 +29,11 @@ def test_specs_feed_command_gate_and_probe_to_pyinstaller(component, monkeypatch
     })
     assert MODULES <= set(captured["hiddenimports"])
     assert "cryptography.hazmat.primitives.asymmetric.ed25519" in captured["hiddenimports"]
+    if component in {"XGENT-WDS", "XGENT-MCS"}:
+        assert "media_history" in captured["hiddenimports"]
+        assert "media_request_control" in captured["hiddenimports"]
+        assert "dns_settings" in captured["hiddenimports"]
+        assert "dns_comparison" in captured["hiddenimports"]
     assert captured["runtime_hooks"] == [str(ROOT / "tools" / "command_approval_bundle_smoke.py")]
 
 

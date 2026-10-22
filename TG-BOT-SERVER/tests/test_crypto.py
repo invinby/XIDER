@@ -89,3 +89,11 @@ def test_multiple_unique_nonces_accepted():
     for _ in range(10):
         env = m.sign_message({"type": "status"})
         assert m.verify_message(env) is not None
+
+
+def test_timestamp_delta_diagnostic_is_signed_and_rejects_invalid_values():
+    assert m.timestamp_delta_seconds({"payload": {"ts": 700}}, now=1000) == 300
+    assert m.timestamp_delta_seconds({"payload": {"ts": 1060}}, now=1000) == -60
+    assert m.timestamp_delta_seconds({"payload": {"ts": True}}, now=1000) is None
+    assert m.timestamp_delta_seconds({"payload": {"ts": float("nan")}}, now=1000) is None
+    assert m.timestamp_delta_seconds({"payload": []}, now=1000) is None

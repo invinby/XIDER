@@ -18,7 +18,7 @@ def coordinator(monkeypatch, tmp_path):
     monkeypatch.setattr(bot.bot_settings, 'is_blocked', lambda device: False)
     state = {'mac1': {'os': 'macOS 27', 'online': True, 'last_seen': 1010}}
     monkeypatch.setattr(bot, 'devices', SimpleNamespace(get=lambda device: state.get(device), all=lambda: state,
-                     upsert=lambda device, info: state.setdefault(device, {}).update(info)))
+                     upsert=lambda device, info, **_kwargs: state.setdefault(device, {}).update(info)))
     op = c.start_batch(['mac1'], 'v4.2.0', 'mac_agent', manifest_digest='a' * 64, now=1000)[0]
     c.dispatch_ready(op.batch_id, lambda op: True, now=1000)
     return c, op

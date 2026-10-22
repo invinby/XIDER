@@ -32,10 +32,17 @@ wheels/
 *.pfx
 _secrets_embed.py
 
+# Local development/runtime state and generated verification artifacts
+**/node_modules/
+.superpowers/
+outputs/
+TG-BOT-SERVER/device_catalog.json
+
 # Runtime logs and local state
 *.log
 audit.log
 known_devices.json
+TG-BOT-SERVER/file_inbox_data/
 update_operations.json
 update_operations.json.*.tmp
 bot_settings.json

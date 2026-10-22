@@ -172,6 +172,7 @@ def test_current_repo_has_no_declared_worker_action_gaps():
     ]
     assert report["feature_status"]["expected_features"] == sorted({
         "screenshot", "webcam", "microphone", "geolocation", "battery", "clipboard", "shell", "open_app",
+        "external_ip_watch",
     })
     for platform in ("windows", "macos"):
         assert report["feature_status"]["platforms"][platform]["keys"] == report["feature_status"]["expected_features"]
@@ -211,6 +212,13 @@ def test_command_matrix_records_source_support_permissions_and_stability_for_eve
             assert platform_row["stability"]["evidence"]
 
     assert "screen_capture" in rows["screenshot"]["platforms"]["macos"]["permission_profile_ids"]
+    assert {"screen_capture", "interactive_session"} <= set(rows["display_contact_sheet"]["platforms"]["macos"]["permission_profile_ids"])
+    assert {"screen_capture", "interactive_session"} <= set(rows["display_screenshot"]["platforms"]["windows"]["permission_profile_ids"])
+    assert {"screen_capture", "interactive_session"} <= set(rows["display_region_screenshot"]["platforms"]["windows"]["permission_profile_ids"])
+    assert {"screen_capture", "interactive_session"} <= set(rows["display_region_screenshot"]["platforms"]["macos"]["permission_profile_ids"])
+    assert {"screen_capture", "interactive_session"} <= set(rows["window_catalog"]["platforms"]["macos"]["permission_profile_ids"])
+    assert {"screen_capture", "interactive_session"} <= set(rows["window_screenshot"]["platforms"]["windows"]["permission_profile_ids"])
+    assert rows["display_resolution"]["platforms"]["windows"]["permission_profile_ids"] == ["agent_account", "interactive_session"]
     assert "filesystem_delete" in rows["file_del"]["platforms"]["windows"]["permission_profile_ids"]
     assert "command_execution" in rows["shell"]["platforms"]["macos"]["permission_profile_ids"]
     assert "accessibility_input" in rows["type_text"]["platforms"]["macos"]["permission_profile_ids"]

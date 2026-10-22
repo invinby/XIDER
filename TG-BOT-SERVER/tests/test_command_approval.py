@@ -127,6 +127,32 @@ def test_only_owner_captured_at_creation_can_consume():
     ) is pending
 
 
+def test_pending_inbox_lists_only_fresh_requests_for_the_captured_owner():
+    first = create_request(now=1_800_000_000)
+    other_owner = approval.create_pending(REQUESTER_ID, OWNER_ID + 1, "device-18", "id", 1_800_000_001)
+    second = approval.create_pending(REQUESTER_ID + 1, OWNER_ID, "device-19", "whoami", 1_800_000_002)
+    expired = approval.create_pending(REQUESTER_ID, OWNER_ID, "device-20", "pwd", 1_799_999_000)
+
+    rows = approval.list_pending(OWNER_ID, now=expired.expires_at, limit=10)
+
+    assert rows == (second, first)
+    assert other_owner.request_id not in {row.request_id for row in rows}
+    assert expired.request_id not in {row.request_id for row in rows}
+    assert approval.get_pending(expired.request_id) is None
+    assert approval.list_pending(OWNER_ID + 2, now=1_800_000_010) == ()
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"owner_id": True, "now": 1},
+    {"owner_id": OWNER_ID, "now": True},
+    {"owner_id": OWNER_ID, "now": 1, "limit": 0},
+    {"owner_id": OWNER_ID, "now": 1, "limit": 51},
+])
+def test_pending_inbox_rejects_invalid_query_parameters(kwargs):
+    with pytest.raises(ValueError):
+        approval.list_pending(**kwargs)
+
+
 def test_consume_expires_at_120_seconds_with_inclusive_boundary():
     before_boundary = create_request(now=1_800_000_000)
     assert approval.consume_pending(
@@ -169,6 +195,29 @@ def test_cancel_allows_requester_or_captured_owner_only():
 
     owner_cancellable = create_request(now=1_800_000_010)
     assert approval.cancel_pending(owner_cancellable.request_id, OWNER_ID) is True
+
+
+def test_dry_run_replacement_invalidates_original_and_keeps_original_expiry():
+    original = create_request("git clean -fd", now=1_800_000_000)
+
+    replacement = approval.replace_pending_command(
+        original.request_id,
+        owner_id=OWNER_ID,
+        original_command_hash=original.command_hash,
+        new_command="git clean -n -fd",
+        now=1_800_000_030,
+    )
+
+    assert replacement is not None
+    assert replacement.request_id != original.request_id
+    assert replacement.command_text == "git clean -n -fd"
+    assert replacement.requester_id == original.requester_id
+    assert replacement.owner_id == original.owner_id
+    assert replacement.device_id == original.device_id
+    assert replacement.created_at == 1_800_000_030
+    assert replacement.expires_at == original.expires_at
+    assert approval.get_pending(original.request_id) is None
+    assert approval.get_pending(replacement.request_id) is replacement
 
 
 def test_restart_invalidates_pending_request():

@@ -78,7 +78,7 @@ publication. Signing still fails closed if the configured secret is missing
 or does not match the pinned public key. A release is installable only after
 its tagged workflow publishes the assets, signatures, and manifest.
 
-The short `mac` and `win.txt` GitHub Pages entry points additionally authenticate
+The short `mac` and `win.ps1` GitHub Pages entry points additionally authenticate
 the SHA-256 of a standalone installer with the same pinned publisher key.
 That installer then authenticates the exact bootstrap/tag/commit tuple.
 Initial trust in the short entry point is HTTPS and control of the Pages

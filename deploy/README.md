@@ -60,7 +60,7 @@ Agent и Guardian должны подтвердить MQTT-подключени�
 Для обновления уже установленного бота из checkout:
 
 ```powershell
-cd C:\Users\rog\Desktop\XIDER\git-ver
+cd "$env:USERPROFILE\XIDER\git-ver"
 powershell -ExecutionPolicy Bypass -File .\deploy\upload-and-install.ps1
 ```
 
@@ -172,7 +172,7 @@ TCC prompts, sleep/wake, and actual LaunchAgent behavior.
 
 The macOS bootstrap downloads the repository and starts the agent. If a local
 sidecar `.env` is absent, it connects to the configured XIDER VPS
-(`XIDER_SERVER_HOST`, default `141.145.152.174`) over SSH. OpenSSH tries its
+(`XIDER_SERVER_HOST`, default `16.16.200.207`) over SSH. OpenSSH tries its
 normal key/agent authentication first and keeps interactive password fallback;
 the bootstrap also recognizes `~/.ssh/xider`, or an explicit `XIDER_SSH_KEY`.
 It retrieves only the agent configuration keys from

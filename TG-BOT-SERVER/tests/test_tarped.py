@@ -818,7 +818,7 @@ def test_device_action_menus_follow_all_six_voices_without_changing_callbacks(mo
         },
         "media": {
             "cmd:screenshot": "media_screenshot_button",
-            "cmd:webcam": "media_webcam_button",
+            "camera:catalog": "media_webcam_button",
             "mic:opts": "media_mic_button",
             "cmd:sound": "media_speak_button",
             "vol:opts": "media_volume_button",

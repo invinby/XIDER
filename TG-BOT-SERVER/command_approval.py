@@ -223,6 +223,81 @@ def get_pending(request_id: str) -> PendingCommand | None:
         return _PENDING_COMMANDS.get(request_id)
 
 
+def list_pending(owner_id: int, *, now: int, limit: int = 20) -> tuple[PendingCommand, ...]:
+    """Return a bounded newest-first inbox for one captured owner.
+
+    Expired requests are pruned before listing. This is a read-only view: callers
+    must use the existing one-time approve/cancel callbacks to mutate a request.
+    """
+    if not _is_plain_int(owner_id, minimum=1):
+        raise ValueError("owner_id must be a positive integer")
+    if not _is_plain_int(now):
+        raise ValueError("now must be a non-negative integer timestamp")
+    if type(limit) is not int or not 1 <= limit <= 50:
+        raise ValueError("limit must be between 1 and 50")
+
+    with _LOCK:
+        _prune_expired(now)
+        rows = (
+            pending for pending in _PENDING_COMMANDS.values()
+            if pending.owner_id == owner_id and now < pending.expires_at
+        )
+        return tuple(sorted(rows, key=lambda pending: (pending.created_at, pending.request_id), reverse=True)[:limit])
+
+
+def replace_pending_command(
+    request_id: str,
+    *,
+    owner_id: int,
+    original_command_hash: str,
+    new_command: str,
+    now: int,
+) -> PendingCommand | None:
+    """Atomically replace an exact pending request while preserving its expiry."""
+    if (
+        not isinstance(request_id, str) or not request_id or len(request_id) > MAX_REQUEST_ID_CHARS
+        or not _is_plain_int(owner_id, minimum=1)
+        or not isinstance(original_command_hash, str) or len(original_command_hash) != 64
+        or not original_command_hash.isascii()
+        or any(char not in "0123456789abcdef" for char in original_command_hash)
+        or not isinstance(new_command, str) or not new_command.strip()
+        or not _is_plain_int(now)
+    ):
+        return None
+    try:
+        _utf8_size(new_command, "command", limit=MAX_COMMAND_BYTES)
+    except ValueError:
+        return None
+
+    new_hash = hashlib.sha256(new_command.encode("utf-8")).hexdigest()
+    new_nonce = secrets.token_urlsafe(32)
+    new_request_id = secrets.token_urlsafe(16)
+    with _LOCK:
+        pending = _PENDING_COMMANDS.get(request_id)
+        if (
+            pending is None or pending.owner_id != owner_id or now >= pending.expires_at
+            or not hmac.compare_digest(pending.command_hash, original_command_hash)
+            or new_hash == pending.command_hash
+        ):
+            return None
+        while new_request_id in _PENDING_COMMANDS:
+            new_request_id = secrets.token_urlsafe(16)
+        replacement = PendingCommand(
+            request_id=new_request_id,
+            requester_id=pending.requester_id,
+            owner_id=pending.owner_id,
+            device_id=pending.device_id,
+            command_text=new_command,
+            command_hash=new_hash,
+            created_at=now,
+            expires_at=pending.expires_at,
+            nonce=new_nonce,
+        )
+        del _PENDING_COMMANDS[request_id]
+        _PENDING_COMMANDS[new_request_id] = replacement
+        return replacement
+
+
 def cancel_pending(request_id: str, actor_id: int) -> bool:
     """Cancel a pending request only for its requester or captured owner."""
 

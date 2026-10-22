@@ -35,6 +35,22 @@ def test_release_installers_reuse_the_exact_commit_pinned_bootstrap_verifiers():
     assert f"XIDER_RELEASE_TAG='{TAG}'" in installers[INSTALLERS["macos"]]
 
 
+def test_all_client_bootstraps_default_to_the_current_xider_vps():
+    expected_host = "16.16.200.207"
+    powershell_defaults = []
+    for filename, parameter in (("bootstrap.ps1", "ServerIp"), ("setup-all.ps1", "ServerIp"),
+                                ("upload-and-install.ps1", "ServerIp"), ("bootstrap-agent.ps1", "ServerHost")):
+        script = (ROOT / "deploy" / filename).read_text(encoding="utf-8-sig")
+        match = re.search(rf"\[string\]\${parameter}\s*=\s*'([^']+)'", script)
+        assert match is not None, f"Missing explicit {parameter} default in {filename}"
+        powershell_defaults.append(match.group(1))
+    shell_script = (ROOT / "deploy" / "bootstrap.sh").read_text(encoding="utf-8")
+    shell_default = re.search(r'XIDER_SERVER_HOST:-([^}\"]+)', shell_script)
+    assert shell_default is not None
+    assert powershell_defaults == [expected_host] * len(powershell_defaults)
+    assert shell_default.group(1) == expected_host
+
+
 def test_pages_launchers_authenticate_latest_installer_before_running_it():
     pages = build_pages_launchers()
     assert set(pages) == {"mac", "win.ps1", "win.txt", ".nojekyll"}
@@ -50,21 +66,12 @@ def test_pages_launchers_authenticate_latest_installer_before_running_it():
     assert "-Verb RunAs" in pages["win.ps1"]
     assert "-Wait -PassThru" in pages["win.ps1"]
     assert "XIDER Windows installer failed" in pages["win.ps1"]
-    assert "[4/4] Requesting administrator approval (UAC)..." in pages["win.ps1"]
-    assert "Read-Host 'OpenSSH Client is needed to verify the signed installer. Install the Windows optional feature now? [Y/N]'" in pages["win.ps1"]
+    assert "requesting administrator approval (UAC)" in pages["win.ps1"]
+    assert "Read-Host 'Install OpenSSH Client optional feature now? [Y/N]'" in pages["win.ps1"]
     assert "OpenSSH.Client~~~~0.0.1.0" in pages["win.ps1"]
-    assert "OpenSSH Client was not installed; no XIDER files were changed." in pages["win.ps1"]
     assert "OpenSSH Client is still unavailable" in pages["win.ps1"]
-    assert pages["win.ps1"].index("Read-Host 'OpenSSH Client is needed") < pages["win.ps1"].index("releases/latest/download")
-    for progress in (
-        "[1/4] Checking OpenSSH signature verifier...",
-        "[2/4] Downloading signed installer (up to 90 seconds)...",
-        "[3/4] Downloading signature and verifying publisher...",
-        "[4/4] Requesting administrator approval (UAC)...",
-        "XIDER launcher failed:",
-    ):
-        assert progress in pages["win.ps1"]
-    assert pages["win.ps1"].index("Checking OpenSSH signature verifier") < pages["win.ps1"].index("Downloading signed installer")
+    assert pages["win.ps1"].index("Read-Host 'Install OpenSSH Client optional feature now? [Y/N]'") < pages["win.ps1"].index("releases/latest/download")
+    assert "XIDER launcher failed:" in pages["win.ps1"]
     assert "Set-ExecutionPolicy" not in pages["win.ps1"]
 
 

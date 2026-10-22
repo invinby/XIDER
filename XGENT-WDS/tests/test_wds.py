@@ -5,6 +5,7 @@
 """
 
 import collections
+import datetime
 import json
 import os
 import re
@@ -68,6 +69,395 @@ def test_agent_mqtt_callbacks_write_connected_and_disconnected_health(client, mo
     client._on_disconnect(client._client, None, None, 7)
 
     assert written == [("agent", True), ("agent", False)]
+
+
+def test_windows_sleep_wake_snapshot_is_bounded_redacted_and_registered(client, monkeypatch):
+    now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+    sleep_at = (now - datetime.timedelta(hours=2)).isoformat()
+    wake_at = (now - datetime.timedelta(hours=1)).isoformat()
+
+    class Result:
+        returncode = 0
+        stdout = json.dumps([
+            {"Id": 42, "ProviderName": "Microsoft-Windows-Kernel-Power",
+             "TimeCreated": sleep_at, "Message": "private machine detail"},
+            {"Id": 107, "ProviderName": "Microsoft-Windows-Kernel-Power",
+             "TimeCreated": wake_at, "Message": "private machine detail"},
+        ])
+        stderr = ""
+
+    calls = []
+    monkeypatch.setattr(wds.shutil, "which", lambda name: "powershell.exe" if name == "powershell.exe" else None)
+    monkeypatch.setattr(wds.subprocess, "run", lambda args, **kwargs: calls.append((args, kwargs)) or Result())
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, payload))
+
+    assert "sleep_wake_history" in wds.SUPPORTED_COMMANDS
+    snapshot = wds._read_sleep_wake_history_snapshot()
+    client._do_sleep_wake_history({"id": "sleep-ticket"})
+
+    assert len(calls) == 2
+    assert all(call[1]["timeout"] <= 15 for call in calls)
+    assert all("Get-WinEvent" in call[0][-1] for call in calls)
+    assert all("Microsoft-Windows-Kernel-Power" in call[0][-1] for call in calls)
+    assert all("Microsoft-Windows-Power-Troubleshooter" in call[0][-1] for call in calls)
+    assert all("Select-Object -Property Id,ProviderName" in call[0][-1] for call in calls)
+    assert all("Message" not in call[0][-1] for call in calls)
+    assert snapshot["state"] == "supported" and len(snapshot["events"]) == 2
+    assert "private machine detail" not in repr(snapshot)
+    assert published[0][0] == "sleep_wake_history"
+    assert published[0][1]["feature_id"] == "D01-F10"
+    assert published[0][1]["request_id"] == "sleep-ticket"
+    assert published[0][1]["data"]["events"] == snapshot["events"]
+
+
+def test_windows_startup_duration_uses_diagnostics_event_100_only(client, monkeypatch):
+    completed_at = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+
+    class Result:
+        returncode = 0
+        stdout = json.dumps({"duration_ms": 42_500, "completed_at": completed_at.isoformat(), "message": "private"})
+        stderr = ""
+
+    calls = []
+    monkeypatch.setattr(wds.shutil, "which", lambda name: "powershell.exe" if name == "powershell.exe" else None)
+    monkeypatch.setattr(wds.subprocess, "run", lambda args, **kwargs: calls.append((args, kwargs)) or Result())
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, payload))
+
+    assert "startup_duration" in wds.SUPPORTED_COMMANDS
+    snapshot = wds._read_startup_duration_snapshot()
+    client._do_startup_duration({"id": "boot-ticket"})
+
+    assert calls and all(call[1]["timeout"] <= 15 for call in calls)
+    script = calls[0][0][-1]
+    assert "Microsoft-Windows-Diagnostics-Performance/Operational" in script
+    assert "Id=100" in script and "BootTime" in script
+    assert "EventData.Data" in script and ".Message" not in script
+    assert snapshot["state"] == "supported" and snapshot["duration_ms"] == 42_500
+    assert published[0][0] == "startup_duration"
+    assert published[0][1]["feature_id"] == "D01-F11"
+    assert published[0][1]["request_id"] == "boot-ticket"
+    assert "private" not in repr(published[0][1])
+
+
+def test_windows_pending_restart_reads_only_fixed_markers_and_publishes_correlated_state(client, monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = json.dumps({"checks": {
+            "component_servicing": False, "windows_update": True,
+            "pending_file_operations": False, "update_exe_volatile": False,
+        }})
+        stderr = ""
+
+    calls = []
+    monkeypatch.setattr(wds.shutil, "which", lambda name: "powershell.exe" if name == "powershell.exe" else None)
+    monkeypatch.setattr(wds.subprocess, "run", lambda args, **kwargs: calls.append((args, kwargs)) or Result())
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, payload))
+
+    assert "pending_restart" in wds.SUPPORTED_COMMANDS
+    snapshot = wds._read_pending_restart_snapshot()
+    client._do_pending_restart({"id": "restart-ticket"})
+
+    assert len(calls) == 2
+    assert all(call[1]["timeout"] <= 12 for call in calls)
+    script = calls[0][0][-1]
+    assert "Component Based Servicing" in script and "RebootRequired" in script
+    assert "PendingFileRenameOperations" in script and "UpdateExeVolatile" in script
+    assert "GetValue" in script and "ConvertTo-Json" in script
+    assert snapshot["pending"] is True and snapshot["reasons"] == ["windows_update"]
+    assert published[0][0] == "pending_restart"
+    assert published[0][1]["feature_id"] == "D01-F12"
+    assert published[0][1]["request_id"] == "restart-ticket"
+
+
+def test_windows_os_support_identity_reads_release_and_edition_without_raw_registry(client, monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = json.dumps({"product_name": "Windows 11 Pro", "display_version": "26H2", "build": "26300", "edition": "Professional"})
+        stderr = ""
+
+    calls = []
+    monkeypatch.setattr(wds.shutil, "which", lambda name: "powershell.exe" if name == "powershell.exe" else None)
+    monkeypatch.setattr(wds.subprocess, "run", lambda args, **kwargs: calls.append((args, kwargs)) or Result())
+
+    assert "os_support" in wds.SUPPORTED_COMMANDS
+    identity = wds._read_os_support_identity()
+
+    assert identity == {"state": "supported", "family": "windows", "release": "11|26H2", "edition": "Pro"}
+    assert calls and calls[0][1]["timeout"] <= 12
+    assert "DisplayVersion" in calls[0][0][-1] and "CurrentBuild" in calls[0][0][-1]
+    assert "ProductName" in calls[0][0][-1]
+    assert "ConvertTo-Json" in calls[0][0][-1]
+    assert "Windows 11 Pro" not in repr(identity)
+
+
+def test_windows_hardware_inventory_projects_model_fields_without_serials(client, monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = json.dumps({
+            "manufacturer": "Example Inc", "model": "Board A", "cpu": "CPU Model",
+            "memory_bytes": "17179869184", "graphics": ["GPU One", "GPU Two"],
+            "serial_number": "MUST_NOT_ESCAPE",
+        })
+        stderr = ""
+
+    calls = []
+    monkeypatch.setattr(wds.shutil, "which", lambda name: "powershell.exe" if name == "powershell.exe" else None)
+    monkeypatch.setattr(wds.subprocess, "run", lambda args, **kwargs: calls.append((args, kwargs)) or Result())
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, payload))
+
+    inventory = wds._read_hardware_inventory_snapshot()
+    client._do_hardware_inventory({"id": "hardware-ticket"})
+
+    assert inventory == {
+        "state": "supported", "manufacturer": "Example Inc", "model": "Board A",
+        "cpu": "CPU Model", "architecture": None, "memory_gib": 16,
+        "graphics": ["GPU One", "GPU Two"],
+    }
+    assert "serial_number" not in inventory and "MUST_NOT_ESCAPE" not in json.dumps(published)
+    assert "SerialNumber" not in calls[0][0][-1]
+    assert published[0][0] == "hardware_inventory"
+    assert published[0][1]["feature_id"] == "D01-F14"
+    assert published[0][1]["request_id"] == "hardware-ticket"
+
+
+def test_windows_driver_inventory_projects_only_names_providers_and_versions(client, monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = json.dumps([
+            {"device_name": "Display Adapter", "provider": "Vendor A", "version": "1.2.3", "driver_date": "2026-04-01"},
+        ])
+        stderr = ""
+
+    calls = []
+    monkeypatch.setattr(wds.shutil, "which", lambda name: "powershell.exe" if name == "powershell.exe" else None)
+    monkeypatch.setattr(wds.subprocess, "run", lambda args, **kwargs: calls.append((args, kwargs)) or Result())
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, payload))
+
+    rows = wds._read_driver_inventory_snapshot()
+    client._do_driver_inventory({"id": "driver-ticket"})
+
+    assert rows == {"state": "supported", "drivers": [
+        {"device_name": "Display Adapter", "provider": "Vendor A", "version": "1.2.3", "driver_date": "2026-04-01"},
+    ]}
+    script = calls[0][0][-1]
+    assert "Win32_PnPSignedDriver" in script and "ConvertTo-Json" in script
+    assert all(term not in script for term in ("HardwareID", "DeviceID", "SerialNumber", "InfName"))
+    assert calls[0][1]["timeout"] <= 20
+    assert published[0][0] == "driver_inventory"
+    assert published[0][1]["feature_id"] == "D01-F15"
+    assert published[0][1]["request_id"] == "driver-ticket"
+
+
+def test_windows_installed_app_inventory_projects_only_name_publisher_and_version(client, monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = json.dumps([{"name": "Example App", "publisher": "Vendor", "version": "2.1"}])
+        stderr = ""
+
+    calls = []
+    monkeypatch.setattr(wds.shutil, "which", lambda name: "powershell.exe" if name == "powershell.exe" else None)
+    monkeypatch.setattr(wds.subprocess, "run", lambda args, **kwargs: calls.append((args, kwargs)) or Result())
+    snapshot = wds._read_installed_app_inventory_snapshot()
+    assert snapshot == {"state": "supported", "apps": [{"name": "Example App", "publisher": "Vendor", "version": "2.1"}]}
+    script = calls[0][0][-1]
+    assert "DisplayName" in script and "DisplayVersion" in script and "Publisher" in script
+    assert all(term not in script for term in ("InstallLocation", "UninstallString", "InstallSource"))
+    assert calls[0][1]["timeout"] <= 20
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, payload))
+    client._do_installed_app_inventory({"id": "apps-ticket"})
+    assert published[0][0] == "installed_app_inventory"
+    assert published[0][1]["feature_id"] == "D01-F16"
+    assert published[0][1]["request_id"] == "apps-ticket"
+
+
+def test_windows_startup_inventory_exports_entry_labels_and_scopes_not_commands(client, monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = json.dumps([{"name": "Updater", "scope": "user_run"}])
+        stderr = ""
+
+    calls = []
+    monkeypatch.setattr(wds.shutil, "which", lambda name: "powershell.exe" if name == "powershell.exe" else None)
+    monkeypatch.setattr(wds.subprocess, "run", lambda args, **kwargs: calls.append((args, kwargs)) or Result())
+    snapshot = wds._read_startup_inventory_snapshot()
+    assert snapshot == {"state": "supported", "entries": [{"name": "Updater", "scope": "user_run"}]}
+    script = calls[0][0][-1]
+    assert all(scope in script for scope in ("user_run", "machine_run", "user_folder", "machine_folder"))
+    assert "UninstallString" not in script
+    assert calls[0][1]["timeout"] <= 20
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, payload))
+    client._do_startup_inventory({"id": "startup-ticket"})
+    assert published[0][0] == "startup_inventory"
+    assert published[0][1]["feature_id"] == "D01-F17"
+    assert published[0][1]["request_id"] == "startup-ticket"
+
+
+def test_windows_service_inventory_projects_names_states_and_start_types_only(client, monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = json.dumps([{"name": "ExampleSvc", "state": "Running", "start_type": "Auto"}])
+        stderr = ""
+
+    calls = []
+    monkeypatch.setattr(wds.shutil, "which", lambda name: "powershell.exe" if name == "powershell.exe" else None)
+    monkeypatch.setattr(wds.subprocess, "run", lambda args, **kwargs: calls.append((args, kwargs)) or Result())
+    snapshot = wds._read_service_inventory_snapshot()
+    assert snapshot == {"state": "supported", "services": [{"name": "ExampleSvc", "state": "Running", "start_type": "Auto"}]}
+    script = calls[0][0][-1]
+    assert "Win32_Service" in script and all(field in script for field in ("Name", "State", "StartMode"))
+    assert all(field not in script for field in ("PathName", "StartName", "ProcessId"))
+    assert calls[0][1]["timeout"] <= 20
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, payload))
+    client._do_service_inventory({"id": "service-ticket"})
+    assert published[0][0] == "service_inventory"
+    assert published[0][1]["feature_id"] == "D01-F18"
+    assert published[0][1]["request_id"] == "service-ticket"
+
+
+def test_windows_crash_summary_aggregates_only_provider_event_level_and_count(client, monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = json.dumps([{"provider": "Application Error", "event_id": 1000, "level": 2, "count": 3}])
+        stderr = ""
+
+    calls = []
+    monkeypatch.setattr(wds.shutil, "which", lambda name: "powershell.exe" if name == "powershell.exe" else None)
+    monkeypatch.setattr(wds.subprocess, "run", lambda args, **kwargs: calls.append((args, kwargs)) or Result())
+    summary = wds._read_crash_summary_snapshot()
+    assert summary == {"state": "supported", "events": [{"provider": "Application Error", "event_id": 1000, "level": 2, "count": 3}]}
+    script = calls[0][0][-1]
+    assert "Get-WinEvent" in script and "Message" not in script
+    assert calls[0][1]["timeout"] <= 20
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, payload))
+    client._do_crash_summary({"id": "crash-ticket"})
+    assert published[0][0] == "crash_summary"
+    assert published[0][1]["feature_id"] == "D01-F19"
+    assert published[0][1]["request_id"] == "crash-ticket"
+
+
+def test_windows_smart_trend_snapshot_projects_only_supported_numeric_counters(client, monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = json.dumps([
+            {"FriendlyName": "Model A", "MediaType": "SSD", "Temperature": 38,
+             "Wear": 7, "PowerOnHours": 1200, "ReadErrorsTotal": 3,
+             "SerialNumber": "MUST_NOT_LEAVE_DEVICE"},
+            {"FriendlyName": "Model B", "MediaType": "HDD", "Temperature": None,
+             "Wear": "bad", "PowerOnHours": -1, "SerialNumber": "ALSO_PRIVATE"},
+        ])
+        stderr = ""
+
+    monkeypatch.setattr(wds.shutil, "which", lambda name: "powershell.exe" if name == "powershell.exe" else None)
+    monkeypatch.setattr(wds.subprocess, "run", lambda *a, **k: Result())
+
+    snapshot = wds._read_smart_trend_snapshot()
+
+    assert snapshot["state"] == "supported"
+    assert snapshot["source"] == "windows_storage_reliability_counters"
+    assert snapshot["disks"] == [
+        {"label": "Model A [SSD]", "counters": {
+            "temperature_c": 38.0, "wear_percent": 7.0,
+            "power_on_hours": 1200.0, "read_errors_total": 3.0,
+        }},
+    ]
+    assert "MUST_NOT_LEAVE_DEVICE" not in json.dumps(snapshot)
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, payload))
+    client._do_smart_trend({"id": "smart-ticket"})
+    topic, payload = published[-1]
+    assert topic == "smart_trend"
+    assert payload["feature_id"] == "D01-F20"
+    assert payload["request_id"] == "smart-ticket"
+    assert payload["data"] == {"disks": snapshot["disks"]}
+
+
+def test_windows_volume_topology_hashes_volume_ids_and_keeps_mount_aliases(client, monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = json.dumps([
+            {"UniqueId": "\\\\?\\Volume{private-guid-a}\\", "AccessPaths": ["C:\\\\", "C:\\\\Mounts\\\\Data", "\\\\?\\Volume{private-guid-a}\\"]},
+            {"UniqueId": "\\\\?\\Volume{private-guid-b}\\", "AccessPaths": ["D:\\\\"]},
+        ])
+        stderr = ""
+
+    calls = []
+    monkeypatch.setattr(wds.shutil, "which", lambda name: "powershell.exe" if name == "powershell.exe" else None)
+    monkeypatch.setattr(wds.subprocess, "run", lambda args, **kwargs: calls.append((args, kwargs)) or Result())
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, payload))
+
+    snapshot = wds._read_volume_topology_snapshot()
+    client._do_volume_topology({"id": "topology-ticket"})
+
+    assert snapshot["state"] == "supported"
+    assert len(snapshot["volumes"]) == 2
+    assert snapshot["volumes"][0]["mount_paths"] == ["C:\\\\", "C:\\\\Mounts\\\\Data"]
+    assert snapshot["volumes"][0]["volume_key"].startswith("vol-")
+    assert "private-guid" not in json.dumps(snapshot)
+    assert "Get-Partition" in calls[0][0][-1]
+    assert "UniqueId" in calls[0][0][-1]
+    assert "FileSystemLabel" not in calls[0][0][-1]
+    topic, result = published[0]
+    assert topic == "volume_topology"
+    assert result["feature_id"] == "D01-F21"
+    assert result["request_id"] == "topology-ticket"
+
+
+def test_windows_clock_drift_compares_wall_and_monotonic_elapsed_without_setting_time(monkeypatch):
+    wall = iter([10_000_000_000, 12_123_000_000])
+    monotonic = iter([50_000, 2_000_050_000])
+    monkeypatch.setattr(wds.time, "time_ns", lambda: next(wall))
+    monkeypatch.setattr(wds.time, "perf_counter_ns", lambda: next(monotonic))
+    monkeypatch.setattr(wds.time, "sleep", lambda _seconds: None)
+
+    result = wds._read_clock_drift_snapshot()
+
+    assert result["state"] == "supported"
+    assert result["source"] == "wall_vs_monotonic_elapsed"
+    assert result["drift_ms"] == 123
+    assert result["sample_ms"] == 2000
+    assert "clock_drift" in wds.SUPPORTED_COMMANDS
+
+
+def test_windows_clock_drift_command_envelope_is_correlated(client, monkeypatch):
+    monkeypatch.setattr(wds, "_read_clock_drift_snapshot", lambda: {
+        "state": "supported", "source": "wall_vs_monotonic_elapsed", "drift_ms": 123, "sample_ms": 2000,
+    })
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, payload))
+
+    client._do_clock_drift({"id": "clock-ticket"})
+
+    topic, payload = published[0]
+    assert topic == "clock_drift"
+    assert payload["feature_id"] == "D01-F22"
+    assert payload["schema"] == "xider.clock-drift.v1"
+    assert payload["device_id"] == "win-1"
+    assert payload["request_id"] == "clock-ticket"
+    assert payload["checked_at"].endswith("+00:00")
+    assert payload["data"] == {"drift_ms": 123, "sample_ms": 2000}
+
 
 def test_humanize_seconds():
     assert wds._humanize_seconds(0) == "0мин"
@@ -225,6 +615,26 @@ def client(monkeypatch):
     mock.publish.return_value.rc = 0
     monkeypatch.setattr(c, "_client", mock)
     return c
+
+
+def test_publish_response_journals_only_media_metadata_locally(client, monkeypatch, tmp_path):
+    import media_history
+
+    monkeypatch.setattr(wds, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(wds, "sign_message", lambda value: value)
+    monkeypatch.setattr(wds, "ENCRYPT_PAYLOAD", False)
+    client._client.publish.return_value.is_published.return_value = True
+
+    assert client._publish_response("mic", {
+        "type": "mic", "device_id": "device-secret-id", "id": "request-secret-id",
+        "audio": "private-audio-content",
+    }) is True
+
+    path = tmp_path / "media-history.json"
+    assert media_history.read_events(path)[0]["action"] == "mic"
+    saved = path.read_text(encoding="utf-8")
+    assert "private-audio-content" not in saved
+    assert "device-secret-id" not in saved and "request-secret-id" not in saved
 
 
 def test_windows_remote_update_does_not_claim_success_without_signed_release(client, monkeypatch, tmp_path):
@@ -618,6 +1028,7 @@ def test_capabilities_does_not_leak_secret(client):
     assert "mic" in payload["commands"]
     assert "shell" in payload["commands"]
     assert "open_app" in payload["commands"]
+    assert "cpu_history" in payload["commands"]
     assert payload["feature_status"]["geolocation"] == "approximate"
     assert payload["feature_status"]["screenshot"] in {
         "device_unverified", "dependency_missing",
@@ -637,6 +1048,7 @@ def test_feature_status_does_not_claim_camera_permission(monkeypatch):
     assert status["screenshot"] == "device_unverified"
     assert status["geolocation"] == "approximate"
     assert status["battery"] == "supported"
+    assert status["external_ip_watch"] == "supported"
 
 
 def test_x_lock_rejects_second_windows_agent(tmp_path, monkeypatch):
@@ -789,3 +1201,27 @@ def test_config_ok_with_strong_key(tmp_path):
         env=env,
     )
     assert result.returncode == 0, (result.stdout, result.stderr)
+
+
+def test_external_ip_response_is_correlated_and_rejects_non_public_ip(client, monkeypatch):
+    import io
+    import urllib.request
+
+    publications = []
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: io.BytesIO(b"8.8.8.8"))
+    monkeypatch.setattr(client, "_publish_response", lambda topic, payload: publications.append((topic, dict(payload))))
+    client._do_ext_ip({"id": "ip-check-1"})
+
+    payload = publications[0][1]
+    assert publications[0][0] == "ext_ip"
+    assert payload["schema"] == "xider.external-ip.v1"
+    assert payload["feature_id"] == "D04-F30"
+    assert payload["request_id"] == "ip-check-1"
+    assert payload["state"] == "available" and payload["ip"] == "8.8.8.8"
+    assert payload["source"] == "ipify" and payload["checked_at"]
+
+    publications.clear()
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: io.BytesIO(b"192.168.1.2"))
+    client._do_ext_ip({"id": "ip-check-2"})
+    assert publications[0][1]["state"] == "unknown"
+    assert publications[0][1]["ip"] == ""

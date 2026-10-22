@@ -4,6 +4,7 @@ import collections
 import hashlib
 import hmac
 import json
+import math
 import threading
 import time
 import uuid
@@ -13,6 +14,7 @@ from config import SHARED_KEY
 
 MAX_AGE = 120  # секунд (anti-replay одно окно: сообщения старше этого окна считаются недействительными
 _SEEN_NONCES_MAX = 2048  # максимум запомненных nonce (кольцевой буфер)
+_MAX_DIAGNOSTIC_DELTA_SECONDS = 10 * 365 * 24 * 60 * 60
 
 _seen = collections.deque(maxlen=_SEEN_NONCES_MAX)
 _seen_set = set()
@@ -43,6 +45,27 @@ def sign_message(payload: Dict[str, Any]) -> Dict[str, Any]:
     body = _canonical(payload)
     signature = hmac.new(SHARED_KEY.encode("utf-8"), body, hashlib.sha256).hexdigest()
     return {"sig": signature, "payload": payload}
+
+
+def timestamp_delta_seconds(envelope: Dict[str, Any], *, now: float | None = None) -> int | None:
+    """Return bounded receive-time minus signed-time seconds for safe diagnostics.
+
+    Positive means the signed timestamp is older than the receiver clock; negative
+    means it is ahead. This diagnostic does not affect signature/freshness policy.
+    """
+    payload = envelope.get("payload") if isinstance(envelope, dict) else None
+    ts = payload.get("ts") if isinstance(payload, dict) else None
+    if type(ts) not in (int, float):
+        return None
+    try:
+        signed_time = float(ts)
+        received_time = time.time() if now is None else float(now)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    if not math.isfinite(signed_time) or not math.isfinite(received_time):
+        return None
+    delta = int(round(received_time - signed_time))
+    return max(-_MAX_DIAGNOSTIC_DELTA_SECONDS, min(_MAX_DIAGNOSTIC_DELTA_SECONDS, delta))
 
 
 def verify_message(envelope: Dict[str, Any]) -> Optional[Dict[str, Any]]:

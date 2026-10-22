@@ -1,5 +1,7 @@
 """Lifecycle notices keep partial results and escape device-provided details."""
 
+import hashlib
+from pathlib import Path
 from string import Formatter
 import asyncio
 from types import SimpleNamespace
@@ -8,6 +10,26 @@ import pytest
 
 import bot
 import xlex
+
+
+def test_xlex_bytes_remain_equal_to_the_approved_main_baseline():
+    source = Path(__file__).resolve().parents[1] / "xlex.py"
+    canonical_source = source.read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(canonical_source).hexdigest() == (
+        "f89314d1930cd6fedf6b29c6c13be718a888bf2c24ed48397837a8d2c1fb0d02"
+    )
+
+
+def test_camera_action_button_copy_does_not_extend_xlex(monkeypatch):
+    labels = {
+        "camera_preview_keep_button": "✅ Оставить кадр в чате",
+        "camera_preview_discard_button": "🗑 Удалить кадр из чата",
+        "camera_capture_button": "📷 Сделать один кадр",
+    }
+    assert set(labels).isdisjoint(xlex.COPY)
+    for key, expected in labels.items():
+        assert bot._camera_action_button_label(key) == expected
+    assert bot._camera_action_button_label("camera_series_button", count="3") == "🎞 Серия · 3 кадра"
 
 
 def test_lifecycle_failure_notice_has_six_distinct_voices_and_required_values():
@@ -90,7 +112,7 @@ def test_new_device_approval_uses_owner_card_and_keeps_action_keyboard(monkeypat
     items = {}
     monkeypatch.setattr(bot, "devices", SimpleNamespace(
         all=lambda: items.copy(), get=lambda key: items.get(key),
-        upsert=lambda key, value: items.update({key: value}),
+        upsert=lambda key, value, **_kwargs: items.update({key: value}),
     ))
     edits = []
     class Telegram:
