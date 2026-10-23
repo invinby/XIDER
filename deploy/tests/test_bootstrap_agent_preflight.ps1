@@ -276,6 +276,9 @@ try {
         $global:XiderBootstrapSshArgs -notcontains 'IdentitiesOnly=yes') {
         throw 'Windows bootstrap did not pass XIDER_SSH_KEY to OpenSSH.'
     }
+    if ($global:XiderBootstrapSshArgs -notcontains 'BatchMode=yes') {
+        throw 'Windows bootstrap must not prompt for an SSH password when no local .env exists.'
+    }
     if ($global:XiderBootstrapSshArgs -contains 'PubkeyAuthentication=no' -or
         $global:XiderBootstrapSshArgs -contains 'PreferredAuthentications=password,keyboard-interactive') {
         throw 'Windows bootstrap disabled normal SSH public-key authentication.'

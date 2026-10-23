@@ -127,6 +127,9 @@ The agent-only Windows bootstrap installs its downloaded Python source explicitl
 even when an older `XGENT-WDS.exe` remains in the existing checkout. A direct
 `install_agent.ps1` run keeps its existing executable-first behavior unless
 `-PreferPython` is specified.
+On a fresh Windows device, bootstrap never prompts for an SSH password. It uses
+an available local `.env` or a pre-authorized SSH key/agent to fetch configuration;
+if neither is available, it stops before changing the active installation.
 It now prepares the downloaded source, `.env` copy, virtual environment, and
 dependencies in a separate directory. Only after those checks does it stop
 the old Scheduled Tasks, switch the checkout, register the new tasks, and

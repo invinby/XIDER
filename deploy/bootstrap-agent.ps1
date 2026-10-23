@@ -423,10 +423,11 @@ try {
     $envSource = $envCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 
     if (-not $envSource) {
-        Write-Host "Локальный .env не найден. Пробую SSH-ключ/ssh-agent, затем пароль VPS при запросе: $ServerUser@$ServerHost."
+        Write-Host "Локальный .env не найден. Ищу настройки без запроса пароля: SSH-ключ/ssh-agent для $ServerUser@$ServerHost."
         $fetched = Join-Path $extract 'agent.env'
         $remoteCommand = "sudo -n sh -c 'grep -E `"^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD|XIDER_COMMAND_VERIFY_KEYSET_B64)=`" /etc/xider/bot.env'"
         $sshArguments = @(
+            '-o', 'BatchMode=yes',
             '-o', 'StrictHostKeyChecking=accept-new',
             '-o', 'ConnectTimeout=15',
             '-o', 'ServerAliveInterval=10',
@@ -448,7 +449,9 @@ try {
                 $_ -match '^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD|XIDER_COMMAND_VERIFY_KEYSET_B64)='
             } | Set-Content -LiteralPath $fetched -Encoding utf8
         $sshExit = $LASTEXITCODE
-        if ($sshExit -ne 0) { throw "SSH не смог получить настройки (код $sshExit). VPS и файлы агента не изменены." }
+        if ($sshExit -ne 0) {
+            throw "Не удалось получить настройки агента без пароля (SSH: $sshExit). Положи локальный .env или настрой ключ SSH; установка не продолжена."
+        }
         $allowed = Get-Content -LiteralPath $fetched | Where-Object {
             $_ -match '^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD|XIDER_COMMAND_VERIFY_KEYSET_B64)='
         }
