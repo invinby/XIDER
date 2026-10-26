@@ -74,3 +74,27 @@ def save_device_key(device_id: str, key: str) -> None:
     except Exception:
         path.unlink(missing_ok=True)
         raise
+
+
+def remove_device_key_if_matches(device_id: str, expected_key: str) -> bool:
+    """Clean up a failed enrollment without touching an older identity."""
+    root = os.environ.get("XIDER_DEVICE_KEYS_DIR", "").strip()
+    if not root or key_for_device(device_id) != expected_key:
+        return False
+    path = Path(root) / f"{device_id}.key"
+    path.unlink()
+    return True
+
+
+def enrolled_device_ids() -> list[str]:
+    """IDs whose commands must use the enrolled-device broker."""
+    root = os.environ.get("XIDER_DEVICE_KEYS_DIR", "").strip()
+    if not root:
+        return []
+    directory = Path(root)
+    if not directory.is_absolute() or not directory.is_dir():
+        raise ValueError("device key directory is unavailable")
+    return sorted(
+        path.name[:-4] for path in directory.glob("*.key")
+        if not path.is_symlink() and _ID.fullmatch(path.name[:-4])
+    )

@@ -96,6 +96,9 @@ from config import ADMIN_ID, BOT_TOKEN, ENCRYPT_PAYLOAD, MQTT_BROKER, MQTT_PORT,
 from roles import AdminFilter, AnyAccessFilter, OwnerFilter, ReadOnlyFilter, Role, get_user_role
 from crypto import timestamp_delta_seconds, verify_message_detailed
 from device_keys import key_for_device
+from enrollment_http import create_app as create_enrollment_app
+from enrollment_provisioner import EnrollmentProvisioner
+from enrollment_store import EnrollmentStore
 from device_store import DeviceStore
 from file_inbox import FileInbox
 from update_store import UpdateStore
@@ -10375,6 +10378,7 @@ async def _device_offline_watchdog() -> None:
             audit("device_offline_watchdog", device_id=device_id, name=info.get("name", device_id))
 
 transport = MQTTTransport(on_mqtt_message)
+_dock_store: EnrollmentStore | None = None
 
 
 def _server_mqtt_health_callback(callback):
@@ -30783,6 +30787,122 @@ async def on_cmd_geo_location_compare(cq: CallbackQuery):
     )
 
 
+def _dock_settings() -> dict[str, str | int]:
+    names = (
+        "XIDER_DOCK_BROKER_HOST", "XIDER_DOCK_BOT_USERNAME", "XIDER_DOCK_BOT_PASSWORD",
+        "XIDER_DOCK_ADMIN_USERNAME", "XIDER_DOCK_ADMIN_PASSWORD",
+        "XIDER_DOCK_DB", "XIDER_DEVICE_KEYS_DIR",
+    )
+    settings: dict[str, str | int] = {}
+    for name in names:
+        value = os.environ.get(name, "").strip()
+        if not value:
+            raise ValueError(f"X-DOCK requires {name}")
+        settings[name] = value
+    settings["XIDER_DOCK_BROKER_PORT"] = int(os.environ.get("XIDER_DOCK_BROKER_PORT", "8883"))
+    settings["XIDER_DOCK_HTTP_PORT"] = int(os.environ.get("XIDER_DOCK_HTTP_PORT", "8787"))
+    if not 1 <= settings["XIDER_DOCK_BROKER_PORT"] <= 65535 or not 1 <= settings["XIDER_DOCK_HTTP_PORT"] <= 65535:
+        raise ValueError("invalid X-DOCK port")
+    if not Path(str(settings["XIDER_DOCK_DB"])).is_absolute() or not Path(str(settings["XIDER_DEVICE_KEYS_DIR"])).is_absolute():
+        raise ValueError("X-DOCK state paths must be absolute")
+    return settings
+
+
+async def _dock_notify_pending(data: dict) -> None:
+    request_id = data["request_id"]
+    text = (
+        "🔗 <b>X-DOCK · новое устройство</b>\n"
+        f"{html.escape(str(data['label']))} · {html.escape(str(data['platform']))}\n"
+        f"ID: <code>{html.escape(str(data['device_id']))}</code>\n"
+        f"Ключ: <code>{html.escape(str(data['fingerprint']))}</code>\n"
+        "Подтверди только свою установку. Заявка истечёт через 10 минут."
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Подключить", callback_data=f"dock:approve:{request_id}"),
+        InlineKeyboardButton(text="❌ Отклонить", callback_data=f"dock:deny:{request_id}"),
+    ]])
+    await bot.send_message(ADMIN_ID, text, reply_markup=keyboard)
+
+
+def _dock_fulfill(request_id: str, settings: dict[str, str | int]) -> bool:
+    if _dock_store is None:
+        return False
+    # The broker adapter is a sibling of TG-BOT-SERVER in the deployed checkout.
+    repository_root = str(Path(__file__).resolve().parent.parent)
+    if repository_root not in sys.path:
+        sys.path.insert(0, repository_root)
+    from broker.dynsec_channel import DynSecChannel
+    from broker.dynsec_issuer import DynSecIssuer
+
+    with DynSecChannel(
+        str(settings["XIDER_DOCK_BROKER_HOST"]), int(settings["XIDER_DOCK_BROKER_PORT"]),
+        str(settings["XIDER_DOCK_ADMIN_USERNAME"]), str(settings["XIDER_DOCK_ADMIN_PASSWORD"]),
+    ) as channel:
+        issuer = DynSecIssuer(channel.request, prefix=MQTT_PREFIX)
+        return EnrollmentProvisioner(
+            _dock_store, issuer,
+            broker_host=str(settings["XIDER_DOCK_BROKER_HOST"]),
+            broker_port=int(settings["XIDER_DOCK_BROKER_PORT"]),
+            broker_prefix=MQTT_PREFIX,
+            command_verify_keyset=os.environ.get("XIDER_COMMAND_VERIFY_KEYSET_B64", ""),
+        ).fulfill(request_id)
+
+
+@router.message(OwnerFilter(), Command("pairings"))
+async def on_dock_pairings(message: Message):
+    if _dock_store is None:
+        await message.answer("X-DOCK пока не включён на сервере.")
+        return
+    rows = _dock_store.pending()
+    if not rows:
+        await message.answer("Новых заявок на подключение нет.")
+        return
+    for row in rows[:10]:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ Подключить", callback_data=f"dock:approve:{row['request_id']}"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"dock:deny:{row['request_id']}"),
+        ]])
+        await message.answer(
+            f"{html.escape(row['label'])} · {row['platform']}\n"
+            f"ID: <code>{row['device_id']}</code> · ключ: <code>{row['fingerprint']}</code>",
+            reply_markup=keyboard,
+        )
+
+
+@router.callback_query(OwnerFilter(), F.data.startswith("dock:"))
+async def on_dock_decision(cq: CallbackQuery):
+    parts = str(cq.data).split(":")
+    if len(parts) != 3 or parts[1] not in {"approve", "deny", "retry"} or not re.fullmatch(r"[0-9a-f]{32}", parts[2]):
+        await cq.answer("Некорректная заявка", show_alert=True)
+        return
+    if _dock_store is None:
+        await cq.answer("X-DOCK выключен", show_alert=True)
+        return
+    action, request_id = parts[1], parts[2]
+    if action != "retry":
+        if not _dock_store.decide(request_id, cq.from_user.id, ADMIN_ID, approve=action == "approve"):
+            await cq.answer("Заявка уже обработана или истекла", show_alert=True)
+            return
+    if action == "deny":
+        await cq.message.edit_text("X-DOCK: подключение отклонено.")
+        await cq.answer()
+        return
+    await cq.answer("Подготавливаю отдельный доступ")
+    try:
+        result = await asyncio.to_thread(_dock_fulfill, request_id, _dock_settings())
+    except Exception:
+        log.exception("X-DOCK provisioning failed for request %s", request_id)
+        retry = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🔄 Повторить", callback_data=f"dock:retry:{request_id}"),
+        ]])
+        await cq.message.edit_text("X-DOCK: выдача доступа не прошла. Заявка ещё действует; можно повторить.", reply_markup=retry)
+        return
+    await cq.message.edit_text(
+        "X-DOCK: доступ выдан устройству. Ожидаю подтверждения подключения."
+        if result else "X-DOCK: заявка уже закрыта или истекла."
+    )
+
+
 @router.message(F.from_user.id != ADMIN_ID)
 async def on_denied(message: Message):
     """Fallback must stay last so authorized FSM handlers get first refusal."""
@@ -30798,7 +30918,7 @@ async def on_denied(message: Message):
 # =====================================================================
 
 async def main() -> None:
-    global LOOP
+    global LOOP, _dock_store
     LOOP = asyncio.get_running_loop()
     print("\n" + "=" * 70)
     print("           ⚡ XIDER TELEGRAM CONTROL SERVER [ONLINE] ⚡")
@@ -30815,6 +30935,27 @@ async def main() -> None:
     print("=" * 70)
     print("  [*] Live server console active. Real-time events stream below:\n")
     log.info("Запуск бота XGENT и MQTT-транспорта...")
+    dock_runner = None
+    if os.environ.get("XIDER_DOCK_ENABLED", "").strip().lower() in {"1", "true", "yes"}:
+        from aiohttp import web
+
+        dock_settings = _dock_settings()
+        if not Path(str(dock_settings["XIDER_DEVICE_KEYS_DIR"])).is_dir():
+            raise RuntimeError("X-DOCK device key directory is missing")
+        _dock_store = EnrollmentStore(Path(str(dock_settings["XIDER_DOCK_DB"])))
+        transport.secondary = MQTTTransport(
+            on_mqtt_message,
+            host=str(dock_settings["XIDER_DOCK_BROKER_HOST"]),
+            port=int(dock_settings["XIDER_DOCK_BROKER_PORT"]),
+            username=str(dock_settings["XIDER_DOCK_BOT_USERNAME"]),
+            password=str(dock_settings["XIDER_DOCK_BOT_PASSWORD"]),
+            prefix=MQTT_PREFIX,
+            client_id="xgent-bot-dock",
+        )
+        dock_runner = web.AppRunner(create_enrollment_app(_dock_store, _dock_notify_pending, trust_loopback_proxy=True))
+        await dock_runner.setup()
+        await web.TCPSite(dock_runner, "127.0.0.1", int(dock_settings["XIDER_DOCK_HTTP_PORT"])).start()
+        log.info("X-DOCK enrollment listener started on loopback")
     transport.start()
     offline_watchdog = asyncio.create_task(_device_offline_watchdog())
     permission_reminders = asyncio.create_task(_permission_expiry_reminder_loop())
@@ -30838,6 +30979,9 @@ async def main() -> None:
         except asyncio.CancelledError:
             pass
         transport.stop()
+        if dock_runner is not None:
+            await dock_runner.cleanup()
+            _dock_store = None
 
 
 def create_image():

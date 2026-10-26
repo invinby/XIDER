@@ -67,3 +67,34 @@ def test_transport_signs_device_command_with_device_key(tmp_path, monkeypatch):
     topic, body, qos = sent[0]
     assert topic == f"{bot.MQTT_PREFIX}/macbook1/cmd" and qos == 1
     assert crypto.verify_message_detailed(json.loads(body), key="d" * 64)[1] == "ok"
+
+
+def test_transport_routes_enrolled_device_to_secondary_broker(tmp_path, monkeypatch):
+    monkeypatch.setenv("XIDER_DEVICE_KEYS_DIR", str(tmp_path))
+    device_keys.save_device_key("macbook1", "d" * 64)
+    legacy_sent = []
+    enrolled_sent = []
+    conn = transport.MQTTTransport(lambda *_args: None)
+    conn.connected.set()
+    conn._client = SimpleNamespace(publish=lambda topic, body, qos: legacy_sent.append(topic) or SimpleNamespace(rc=0))
+    conn.secondary = SimpleNamespace(publish_command=lambda *args, **kwargs: enrolled_sent.append((args, kwargs)) or True)
+    assert conn.publish_command("macbook1", "sysinfo") is True
+    assert not legacy_sent
+    assert enrolled_sent[0][0] == ("macbook1", "sysinfo")
+    assert conn.publish_command("legacy1", "sysinfo") is True
+    assert legacy_sent == [f"{bot.MQTT_PREFIX}/legacy1/cmd"]
+
+
+def test_transport_reports_partial_broadcast_as_ambiguous(tmp_path, monkeypatch):
+    monkeypatch.setenv("XIDER_DEVICE_KEYS_DIR", str(tmp_path))
+    device_keys.save_device_key("macbook1", "d" * 64)
+    conn = transport.MQTTTransport(lambda *_args: None)
+    conn.connected.set()
+    conn._client = SimpleNamespace(
+        publish=lambda *_args, **_kwargs: SimpleNamespace(rc=0),
+    )
+    conn.secondary = SimpleNamespace(
+        publish_command=lambda *_args, **_kwargs: True,
+    )
+    conn.connected.clear()
+    assert conn.publish_command("all", "sysinfo") is None

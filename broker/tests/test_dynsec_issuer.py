@@ -53,7 +53,7 @@ def test_issue_uses_unique_password_and_deny_defaults():
     assert all(entry["allow"] is False for entry in commands[0]["acls"])
 
 
-def test_client_failure_disables_before_role_cleanup():
+def test_legacy_identity_collision_is_never_disabled_or_deleted():
     commands = []
 
     def request(command):
@@ -64,11 +64,39 @@ def test_client_failure_disables_before_role_cleanup():
 
     with pytest.raises(ProvisionError):
         DynSecIssuer(request).issue("macbook_123")
-    assert commands == [
-        "setDefaultACLAccess", "createRole", "createClient", "disableClient", "deleteRole",
+    assert commands == ["setDefaultACLAccess", "createRole", "createClient"]
+
+
+def test_request_scoped_identity_can_be_safely_cleaned_after_ambiguous_failure():
+    commands = []
+    request_id = "a" * 32
+
+    def request(command):
+        commands.append(command)
+        if command["command"] == "createClient":
+            return {"command": "createClient", "error": "timeout"}
+        return {"command": command["command"]}
+
+    with pytest.raises(ProvisionError):
+        DynSecIssuer(request).issue("macbook_123", request_id)
+    assert commands[-3:] == [
+        {"command": "disableClient", "username": f"xider-device-macbook_123-{request_id}"},
+        {"command": "deleteClient", "username": f"xider-device-macbook_123-{request_id}"},
+        {"command": "deleteRole", "rolename": f"xider-device-macbook_123-{request_id}"},
     ]
 
 
 def test_missing_response_fails_closed():
     with pytest.raises(ProvisionError, match="missing or mismatched"):
         DynSecIssuer(lambda command: {}).issue("macbook_123")
+
+
+def test_revoke_disables_before_deleting_identity_and_role():
+    commands = []
+
+    def request(command):
+        commands.append(command)
+        return {"command": command["command"]}
+
+    DynSecIssuer(request).revoke("macbook_123")
+    assert [item["command"] for item in commands] == ["disableClient", "deleteClient", "deleteRole"]

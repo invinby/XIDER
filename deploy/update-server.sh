@@ -241,6 +241,7 @@ do_update() {
   MUTATING=1
   systemctl stop "${SERVICE}"
   overlay_contents "${source_dir}"
+  install -d -o xider -g xider -m 0700 /var/lib/xider /etc/xider/device-keys
   install -m 0644 "${APP_DIR}/deploy/xider-bot.service" "${UNIT_FILE}"
   chown -R xider:xider "${APP_DIR}/TG-BOT-SERVER" "${APP_DIR}/XGENT-WDS" "${APP_DIR}/XGENT-MCS" "${APP_DIR}/deploy"
   systemctl daemon-reload

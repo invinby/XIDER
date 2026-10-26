@@ -124,7 +124,7 @@ References checked 2026-10-26:
 - Live rollout is staged only after stable-IP, port reachability, TLS renewal,
   broker ACL, Telegram approval, and backup/recovery have all been verified.
 
-## Broker issuer implementation (2026-10-27)
+## Backend progress (2026-10-27; not a releasable installer)
 
 `broker/dynsec_issuer.py` now builds a separate Dynamic Security role and
 credential for an approved device. It denies unmatched publish, subscribe, and
@@ -139,17 +139,34 @@ ASCII key and must be readable only by the bot user (mode 0600 on Linux).
 Devices without a file retain the legacy shared key. A malformed or unreadable
 file rejects the message/command rather than downgrading to that shared key.
 
-The issuer is not called by an enrollment endpoint yet, and no device key file
-is created by the installer. The existing `broker/`
-Compose example remains a static shared-account broker and must not be used as
-proof of per-device ACL enforcement. Before rollout, deploy a dedicated Dynamic
-Security broker, exercise real cross-device ACL tests, then wire owner approval,
-device-key creation, and short-command installers.
+The current working branch now contains a loopback HTTP enrollment endpoint,
+one-use SQLite request store, owner-only Telegram approve/deny/retry handlers,
+and a provisioner that seals settings to the requesting device. Provisioning
+claims an approval atomically and uses a request-scoped broker identity so a
+duplicate callback cannot revoke an existing device's MQTT user. The Telegram
+bot can route enrolled devices through a separate MQTT transport and uses the
+matching per-device message key. These are source changes with focused offline
+tests; they are not a live deployment.
+
+The endpoint is still not reachable from a first-install client: Windows and
+macOS bootstraps do not create enrollment keys, submit/poll requests, or decrypt
+the sealed response. The current `broker/docker-compose.yml` still uses a static
+shared account and does not enable Dynamic Security. There is no bot MQTT role
+bootstrap, HTTPS reverse proxy, publicly trusted certificate, or automatic
+certificate-renewal/reload job. `XIDER_DOCK_ENABLED` therefore stays off. No
+new-device pairing or one-command no-SSH install is ready to publish.
+
+Next required sequence: add a reproducible Dynamic Security broker setup with
+separate bot/admin roles; provision HTTPS and verify renewal; implement the
+client half in both installers using OS-protected private-key storage; install
+Agent and Guard Keeper transactionally; then verify cross-device ACLs, replay,
+denial, enrollment, restart, and rollback before enabling it on a server.
 
 ## Current evidence and non-claims
 
 The last recorded live server snapshot said only SSH was listening. That snapshot
-is historical and was not rechecked for this design decision. No HTTPS endpoint,
-ACME certificate, enrollment API, per-device broker credential, or live pairing
-has been created or tested. The design removes a domain purchase as a hard
-prerequisite, not the need to verify VPS networking and automate six-day renewal.
+is historical and was not rechecked for this design decision. Local source now
+has the enrollment API and credential issuer, but there is no HTTPS endpoint,
+ACME certificate, configured Dynamic Security broker, installer client, or live
+pairing. The design removes a domain purchase as a hard prerequisite, not the
+need to verify VPS networking and automate six-day renewal.

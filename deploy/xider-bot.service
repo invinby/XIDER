@@ -17,7 +17,7 @@ UMask=0077
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/opt/xider/TG-BOT-SERVER
+ReadWritePaths=/opt/xider/TG-BOT-SERVER /var/lib/xider /etc/xider/device-keys
 
 [Install]
 WantedBy=multi-user.target

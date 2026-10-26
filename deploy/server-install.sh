@@ -48,6 +48,7 @@ install -d -m 0750 /etc/xider
 if ! id -u xider >/dev/null 2>&1; then
   useradd --system --home-dir "${APP_DIR}" --create-home --shell /usr/sbin/nologin xider
 fi
+install -d -o xider -g xider -m 0700 /var/lib/xider /etc/xider/device-keys
 
 if [[ "${SKIP_REPO_SYNC:-0}" != "1" ]]; then
   if [[ ! -d "${APP_DIR}/.git" ]]; then

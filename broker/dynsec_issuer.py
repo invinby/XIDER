@@ -28,21 +28,27 @@ class DeviceCredential:
     password: str
 
 
-def _names(device_id: str, prefix: str) -> tuple[str, str, str]:
+def _names(device_id: str, prefix: str, issuance_id: str | None = None) -> tuple[str, str, str]:
     if not _DEVICE_ID.fullmatch(device_id):
         raise ValueError("invalid device ID")
     if not _PREFIX.fullmatch(prefix):
         raise ValueError("invalid MQTT prefix")
-    return f"xider-device-{device_id}", f"xider-device-{device_id}", prefix
+    suffix = ""
+    if issuance_id is not None:
+        if not re.fullmatch(r"[0-9a-f]{32}", issuance_id):
+            raise ValueError("invalid issuance ID")
+        suffix = f"-{issuance_id}"
+    name = f"xider-device-{device_id}{suffix}"
+    return name, name, prefix
 
 
-def device_role(device_id: str, prefix: str) -> dict:
+def device_role(device_id: str, prefix: str, issuance_id: str | None = None) -> dict:
     """Build the exact topic policy used by the agent and its Guardian.
 
     Dynamic Security's defaults must deny publish and subscribe. The issuing
     channel applies those defaults before creating any device identity.
     """
-    _, role, prefix = _names(device_id, prefix)
+    _, role, prefix = _names(device_id, prefix, issuance_id)
     own = f"{prefix}/{device_id}"
     commands = (f"{own}/cmd", f"{prefix}/all/cmd")
     acls = [
@@ -94,12 +100,12 @@ class DynSecIssuer:
             }
         )
 
-    def issue(self, device_id: str) -> DeviceCredential:
-        username, role, _ = _names(device_id, self.prefix)
+    def issue(self, device_id: str, issuance_id: str | None = None) -> DeviceCredential:
+        username, role, _ = _names(device_id, self.prefix, issuance_id)
         password = secrets.token_urlsafe(48)
         self._deny_defaults()
-        self._send(device_role(device_id, self.prefix))
         try:
+            self._send(device_role(device_id, self.prefix, issuance_id))
             self._send(
                 {
                     "command": "createClient",
@@ -109,22 +115,31 @@ class DynSecIssuer:
                 }
             )
         except Exception:
-            # A lost createClient response is ambiguous: the client may exist.
-            # Disable it before removing its role, or leave the restrictive
-            # role in place. A pre-existing username is treated as a collision
-            # and disabled rather than accidentally granted access.
+            # Revoke only a per-request identity whose name is guaranteed unique.
+            # A legacy device-wide name may already belong to a live installation;
+            # never disable or delete it after an ambiguous broker response.
+            if issuance_id is None:
+                raise
             try:
                 self._send({"command": "disableClient", "username": username})
-            except Exception:
-                pass
-            else:
+                self._send({"command": "deleteClient", "username": username})
                 try:
                     self._send({"command": "deleteRole", "rolename": role})
                 except Exception:
                     pass
+            except Exception:
+                # Do not remove a role while a possibly-created client remains.
+                pass
             raise
         return DeviceCredential(device_id=device_id, username=username, password=password)
 
     def disable(self, device_id: str) -> None:
         username, _, _ = _names(device_id, self.prefix)
         self._send({"command": "disableClient", "username": username})
+
+    def revoke(self, device_id: str, issuance_id: str | None = None) -> None:
+        """Remove a newly created identity and its role after failed pairing."""
+        username, role, _ = _names(device_id, self.prefix, issuance_id)
+        self._send({"command": "disableClient", "username": username})
+        self._send({"command": "deleteClient", "username": username})
+        self._send({"command": "deleteRole", "rolename": role})
