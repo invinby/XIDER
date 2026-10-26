@@ -1,0 +1,33 @@
+name: "Mirror source to the private XIDER backup"
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: private-source-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: "Pull public source into this private repository"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout the private backup"
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: "Fast-forward main and mirror release tags"
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add xider-source https://github.com/invinby/XIDER.git
+          git fetch --no-tags xider-source main
+          git fetch --no-tags xider-source 'refs/tags/v*:refs/tags/v*'
+          git push origin refs/remotes/xider-source/main:refs/heads/main
+          git push origin 'refs/tags/v*'
