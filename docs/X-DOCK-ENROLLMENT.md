@@ -60,6 +60,43 @@ The broker must support per-device identities/ACLs (or a controlled credential
 issuer that provisions them) before step 5 can be considered implemented. The
 current shared MQTT credential is not an acceptable X-DOCK target.
 
+## Broker compatibility gate
+
+The current project configuration uses EMQX Cloud Serverless. Its current
+official feature matrix lists built-in password and X.509 authentication, but
+does not support extended password authentication, JWT authentication,
+extended authorization, or HTTP authorization on Serverless deployments. The
+EMQX Cloud API overview describes platform and deployment APIs, but the
+documented deployment API does not expose CRUD for built-in MQTT authentication
+users. Therefore the proposed HTTPS enrollment service cannot safely create
+and revoke Serverless MQTT users through an assumed API, and the shared
+credential must not be copied to newly installed devices as a shortcut.
+
+For X-DOCK, select one broker path before implementing credential issuance:
+
+1. Keep the managed broker only if its supported API can create, scope, and
+   revoke per-device identities and ACLs for the actual deployment. Confirm
+   this against the account's plan and the current API before coding the
+   adapter.
+2. Move to a broker deployment that supports a controlled credential issuer
+   and per-device ACLs, such as a self-hosted broker with an owner-controlled
+   provisioning interface. The checked-in Mosquitto example is not sufficient
+   as-is: it currently defines one shared account and a static ACL.
+
+This is a release blocker for password-free first install, not a reason to
+fall back to SSH, share the bot `.env`, or weaken TLS. The one-command
+installer can only become end-to-end after this gate, the HTTPS endpoint, and
+owner approval flow are deployed together.
+
+References checked 2026-10-26:
+
+- [EMQX Cloud authentication support by deployment](https://docs.emqx.com/en/cloud/latest/deployments/auth_overview.html)
+- [EMQX Cloud HTTP authentication](https://docs.emqx.com/en/cloud/latest/deployments/http_auth.html)
+- [EMQX Cloud JWT authentication](https://docs.emqx.com/en/cloud/latest/deployments/jwt_auth.html)
+- [EMQX Cloud HTTP authorization](https://docs.emqx.com/en/cloud/latest/deployments/http_authz.html)
+- [EMQX Cloud API overview](https://docs.emqx.com/en/cloud/latest/api/api_overview.html)
+- [EMQX Cloud deployment management API](https://docs.emqx.com/en/cloud/latest/api/deployment_manage.html)
+
 ## Required failure and security tests
 
 - Expired, replayed, malformed, rate-limited, denied, and duplicate requests
