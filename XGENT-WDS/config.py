@@ -18,10 +18,14 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+# PyInstaller exposes sys.frozen. Nuitka exposes a per-module __compiled__
+# record instead; recognize both for packaged executables.
+BUNDLED_RUNTIME = bool(getattr(sys, "frozen", False) or globals().get("__compiled__"))
+
 # Каталог для поиска .env: рядом с exe (PyInstaller) или рядом со скриптом.
 # В onefile-exe __file__ указывает во временную папку распаковки, поэтому
 # ориентируемся на расположение самого исполняемого файла.
-if getattr(sys, "frozen", False):
+if BUNDLED_RUNTIME:
     _BASE_DIR = Path(sys.executable).resolve().parent
 else:
     _BASE_DIR = Path(__file__).resolve().parent

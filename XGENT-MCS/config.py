@@ -18,9 +18,14 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+# PyInstaller exposes sys.frozen. Nuitka exposes a per-module __compiled__
+# record instead; recognize both so a compiled app can still find its
+# adjacent owner-controlled .env file.
+BUNDLED_RUNTIME = bool(getattr(sys, "frozen", False) or globals().get("__compiled__"))
+
 # Загружаем .env из каталога скрипта (с поддержкой UTF-8 BOM).
 _ENV_FILE = Path(__file__).resolve().parent / ".env"
-if getattr(sys, "frozen", False):
+if BUNDLED_RUNTIME:
     _bundle = next((path for path in Path(sys.executable).resolve().parents if path.suffix == ".app"), None)
     if _bundle is not None:
         _ENV_FILE = _bundle.parent / ".env"
