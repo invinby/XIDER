@@ -28,7 +28,7 @@ _CTX = b"xgent-payload-v1"
 _IV_LEN = 12
 
 
-def _key() -> bytes:
+def _key(secret: str | None = None) -> bytes:
     """32-байтовый ключ AES-GCM, производный от SHARED_KEY через HKDF-SHA256."""
     hkdf = HKDF(
         algorithm=hashes.SHA256(),
@@ -36,20 +36,20 @@ def _key() -> bytes:
         salt=None,
         info=_CTX,
     )
-    return hkdf.derive(SHARED_KEY.encode("utf-8"))
+    return hkdf.derive((SHARED_KEY if secret is None else secret).encode("utf-8"))
 
 
-def encrypt_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+def encrypt_payload(payload: Dict[str, Any], *, key: str | None = None) -> Dict[str, Any]:
     """Шифрует словарь в {"enc": base64(iv + ct + tag)}."""
     raw = json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")
     iv = os.urandom(_IV_LEN)
-    ct = AESGCM(_key()).encrypt(iv, raw, None)
+    ct = AESGCM(_key(key)).encrypt(iv, raw, None)
     return {"enc": base64.b64encode(iv + ct).decode("ascii")}
 
 
-def decrypt_payload(envelope: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def decrypt_payload(envelope: Dict[str, Any], *, key: str | None = None) -> Optional[Dict[str, Any]]:
     """Расшифровывает {"enc": ...} обратно в словарь.
 
     Возвращает None, если шифротекст повреждён, подделан или ключ не подходит.
@@ -60,7 +60,7 @@ def decrypt_payload(envelope: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
         blob = base64.b64decode(enc)
         iv, ct = blob[:_IV_LEN], blob[_IV_LEN:]
-        raw = AESGCM(_key()).decrypt(iv, ct, None)
+        raw = AESGCM(_key(key)).decrypt(iv, ct, None)
         data = json.loads(raw.decode("utf-8"))
         return data if isinstance(data, dict) else None
     except Exception:

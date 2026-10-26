@@ -37,13 +37,13 @@ def _mark_seen(nonce: str, ts: float) -> bool:
         return True
 
 
-def sign_message(payload: Dict[str, Any]) -> Dict[str, Any]:
+def sign_message(payload: Dict[str, Any], *, key: str | None = None) -> Dict[str, Any]:
     """Возвращает конверт {"sig": ..., "payload": {...}} с меткой времени ts."""
     payload = dict(payload)
     payload["ts"] = int(time.time())
     payload["nonce"] = uuid.uuid4().hex
     body = _canonical(payload)
-    signature = hmac.new(SHARED_KEY.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    signature = hmac.new((SHARED_KEY if key is None else key).encode("utf-8"), body, hashlib.sha256).hexdigest()
     return {"sig": signature, "payload": payload}
 
 
@@ -68,17 +68,19 @@ def timestamp_delta_seconds(envelope: Dict[str, Any], *, now: float | None = Non
     return max(-_MAX_DIAGNOSTIC_DELTA_SECONDS, min(_MAX_DIAGNOSTIC_DELTA_SECONDS, delta))
 
 
-def verify_message(envelope: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def verify_message(envelope: Dict[str, Any], *, key: str | None = None) -> Optional[Dict[str, Any]]:
     """Проверяет подпись и свежесть сообщения.
 
     Возвращает payload при успешной проверке, иначе None.
     """
-    payload, _reason = verify_message_detailed(envelope)
+    payload, _reason = verify_message_detailed(envelope, key=key)
     return payload
 
 
 def verify_message_detailed(
     envelope: Dict[str, Any],
+    *,
+    key: str | None = None,
 ) -> tuple[Optional[Dict[str, Any]], str]:
     """Validate an MQTT envelope and return a safe diagnostic reason.
 
@@ -91,7 +93,7 @@ def verify_message_detailed(
     payload = envelope.get("payload")
     if not isinstance(signature, str) or not isinstance(payload, dict):
         return None, "invalid_envelope"
-    expected = hmac.new(SHARED_KEY.encode("utf-8"), _canonical(payload), hashlib.sha256).hexdigest()
+    expected = hmac.new((SHARED_KEY if key is None else key).encode("utf-8"), _canonical(payload), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected, signature):
         return None, "bad_hmac"
     ts = payload.get("ts")

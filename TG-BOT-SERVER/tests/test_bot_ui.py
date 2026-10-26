@@ -950,7 +950,7 @@ def test_signed_status_preserves_protocol_and_legacy_report_revokes_it(monkeypat
     from device_store import DeviceStore
     monkeypatch.setattr(DeviceStore, "FILE", tmp_path / "devices.json")
     monkeypatch.setattr(bot, "devices", DeviceStore())
-    monkeypatch.setattr(bot, "verify_message_detailed", lambda data: (data, "ok"))
+    monkeypatch.setattr(bot, "verify_message_detailed", lambda data, **_kwargs: (data, "ok"))
     monkeypatch.setattr(bot, "ENCRYPT_PAYLOAD", False)
     monkeypatch.setattr(bot.bot_settings, "is_blocked", lambda _id: False)
     topic = f"{bot.MQTT_PREFIX}/a/status"
@@ -964,7 +964,7 @@ def test_stale_mqtt_rejection_logs_signed_timestamp_delta_without_payload(monkey
     import logging
 
     monkeypatch.setattr(bot.server_ops, "observe", lambda *_args: None)
-    monkeypatch.setattr(bot, "verify_message_detailed", lambda _data: (None, "stale_timestamp"))
+    monkeypatch.setattr(bot, "verify_message_detailed", lambda _data, **_kwargs: (None, "stale_timestamp"))
     monkeypatch.setattr(bot.time, "time", lambda: 1000.0)
     caplog.set_level(logging.WARNING, logger="xgent.bot")
 
@@ -11327,7 +11327,7 @@ def test_device_status_notices_confirm_transitions_without_heartbeat_starvation(
         monkeypatch.setattr(bot, "_STATUS_NOTICE_PENDING", {})
         monkeypatch.setattr(bot, "_STATUS_NOTICE_DELAY_SEC", 0.02)
         monkeypatch.setattr(bot, "ENCRYPT_PAYLOAD", False)
-        monkeypatch.setattr(bot, "verify_message_detailed", lambda payload: (payload, "ok"))
+        monkeypatch.setattr(bot, "verify_message_detailed", lambda payload, **_kwargs: (payload, "ok"))
         monkeypatch.setattr(bot, "audit", lambda *args, **kwargs: None)
         monkeypatch.setattr(bot, "_schedule_admin_notice", lambda text, **kwargs: notices.append(text))
         monkeypatch.setattr(bot.bot_settings, "is_blocked", lambda _device_id: False)
@@ -12145,7 +12145,7 @@ def test_successful_file_put_ack_is_routed_to_text_collector(monkeypatch):
             received.append((device_id, payload))
 
     monkeypatch.setattr(bot, "ENCRYPT_PAYLOAD", False)
-    monkeypatch.setattr(bot, "verify_message_detailed", lambda payload: (payload, "ok"))
+    monkeypatch.setattr(bot, "verify_message_detailed", lambda payload, **_kwargs: (payload, "ok"))
     monkeypatch.setattr(bot.bot_settings, "is_blocked", lambda _device_id: False)
     monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
 
@@ -12251,7 +12251,7 @@ def test_invalid_mqtt_envelope_logs_reason_without_payload(monkeypatch, caplog):
     monkeypatch.setattr(
         bot,
         "verify_message_detailed",
-        lambda _data: (None, "bad_hmac"),
+        lambda _data, **_kwargs: (None, "bad_hmac"),
     )
 
     with caplog.at_level("WARNING", logger="xgent.bot"):
@@ -12275,7 +12275,7 @@ def test_screenshot_mqtt_response_logs_status_without_image_payload(monkeypatch,
         "image": encoded_image,
     }
     submitted = []
-    monkeypatch.setattr(bot, "verify_message_detailed", lambda data: (data, None))
+    monkeypatch.setattr(bot, "verify_message_detailed", lambda data, **_kwargs: (data, None))
     monkeypatch.setattr(bot.server_ops, "observe", lambda *args: None)
     monkeypatch.setattr(bot.screenshot_collector, "submit", lambda *args: submitted.append(("single", args)))
     monkeypatch.setattr(bot.multi_screenshot, "submit", lambda *args: submitted.append(("multi", args)))
@@ -15435,7 +15435,7 @@ def test_scheduled_threshold_notice_requires_two_samples_and_valid_sensor_proven
     store.set_system_summary_threshold("device-1", "temperature_celsius", 70)
     monkeypatch.setattr(bot, "devices", store)
     monkeypatch.setattr(bot, "ENCRYPT_PAYLOAD", False)
-    monkeypatch.setattr(bot, "verify_message_detailed", lambda payload: (payload, "ok"))
+    monkeypatch.setattr(bot, "verify_message_detailed", lambda payload, **_kwargs: (payload, "ok"))
     monkeypatch.setattr(bot.bot_settings, "is_blocked", lambda _device_id: False)
     monkeypatch.setattr(bot, "target_label", lambda _device_id: "Laptop")
     notices = []
@@ -15478,7 +15478,7 @@ def test_scheduled_thresholds_ignore_samples_older_than_active_schedule_window(m
     store.set_system_summary_threshold("device-1", "cpu_percent", 80)
     monkeypatch.setattr(bot, "devices", store)
     monkeypatch.setattr(bot, "ENCRYPT_PAYLOAD", False)
-    monkeypatch.setattr(bot, "verify_message_detailed", lambda payload: (payload, "ok"))
+    monkeypatch.setattr(bot, "verify_message_detailed", lambda payload, **_kwargs: (payload, "ok"))
     monkeypatch.setattr(bot.bot_settings, "is_blocked", lambda _device_id: False)
     notices = []
     monkeypatch.setattr(bot, "_schedule_owner_notice", lambda text, **_kwargs: notices.append(text) or True)

@@ -104,7 +104,7 @@ def test_new_device_approval_uses_owner_card_and_keeps_action_keyboard(monkeypat
     monkeypatch.setattr(bot.ui_cards, "FILE", tmp_path / "cards.json")
     bot.ui_cards.set_card(100, 100, 42)
     monkeypatch.setattr(bot, "ENCRYPT_PAYLOAD", False)
-    monkeypatch.setattr(bot, "verify_message_detailed", lambda payload: (payload, "ok"))
+    monkeypatch.setattr(bot, "verify_message_detailed", lambda payload, **_kwargs: (payload, "ok"))
     monkeypatch.setattr(bot, "audit", lambda *args, **kwargs: None)
     monkeypatch.setattr(bot, "_STATUS_NOTICE_STATE", {})
     monkeypatch.setattr(bot.bot_settings, "get", lambda _key, default=None: default)

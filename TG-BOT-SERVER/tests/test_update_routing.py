@@ -13,7 +13,7 @@ def coordinator(monkeypatch, tmp_path):
     c = Coordinator(UpdateStore(tmp_path / 'updates.json'))
     monkeypatch.setattr(bot, 'update_coordinator', c, raising=False)
     monkeypatch.setattr(bot.time, 'time', lambda: 1010)
-    monkeypatch.setattr(bot, 'verify_message_detailed', lambda payload: (payload, 'ok'))
+    monkeypatch.setattr(bot, 'verify_message_detailed', lambda payload, **_kwargs: (payload, 'ok'))
     monkeypatch.setattr(bot, 'ENCRYPT_PAYLOAD', False)
     monkeypatch.setattr(bot.bot_settings, 'is_blocked', lambda device: False)
     state = {'mac1': {'os': 'macOS 27', 'online': True, 'last_seen': 1010}}
@@ -98,7 +98,7 @@ def test_untrusted_progress_cannot_advance(coordinator, monkeypatch, failure):
     topic = f'{bot.MQTT_PREFIX}/mac1/update_progress'
     payload = {'type': 'agent_update_progress', 'device_id': 'mac1', 'operation_id': op.operation_id, 'update_state': 'downloading'}
     if failure == 'signature':
-        monkeypatch.setattr(bot, 'verify_message_detailed', lambda payload: (None, 'bad'))
+        monkeypatch.setattr(bot, 'verify_message_detailed', lambda payload, **_kwargs: (None, 'bad'))
     elif failure == 'topic':
         topic = 'wrong/prefix/mac1/update_progress'
     elif failure == 'device':

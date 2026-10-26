@@ -124,7 +124,7 @@ def test_keeper_context_never_uses_stale_or_missing_version(ui, guardian, seen):
 
 def test_guardian_packet_never_falls_back_to_agent_version(ui, monkeypatch):
     bot, records, _, _ = ui
-    monkeypatch.setattr(bot, "verify_message_detailed", lambda payload: (payload, "ok"))
+    monkeypatch.setattr(bot, "verify_message_detailed", lambda payload, **_kwargs: (payload, "ok"))
     monkeypatch.setattr(bot.fun_text_collector, "submit", lambda *args: None)
     bot.on_mqtt_message(f"{bot.MQTT_PREFIX}/fixture/guardian", {"type": "guardian", "device_id": "fixture", "ok": True, "version": "88.77.66"})
     assert records["guardian"]["version"] is None
@@ -144,7 +144,7 @@ def test_legacy_guardian_cache_with_unproven_version_remains_unknown(ui, monkeyp
 def test_fresh_guardian_packet_proves_own_version_even_when_worker_offline(ui, monkeypatch):
     bot, records, _, _ = ui
     records.update(os="macOS 27", version="88.77.66", online=False, last_seen=100)
-    monkeypatch.setattr(bot, "verify_message_detailed", lambda payload: (payload, "ok"))
+    monkeypatch.setattr(bot, "verify_message_detailed", lambda payload, **_kwargs: (payload, "ok"))
     monkeypatch.setattr(bot.fun_text_collector, "submit", lambda *args: None)
     bot.on_mqtt_message(f"{bot.MQTT_PREFIX}/fixture/guardian", {"type": "guardian", "device_id": "fixture", "ok": True, "version": "88.77.66", "guardian": "1.0", "guardian_task_registered": False, "desired_running": False})
     assert records["guardian"]["version_source"] == "guardian"

@@ -95,6 +95,7 @@ import ui_cards
 from config import ADMIN_ID, BOT_TOKEN, ENCRYPT_PAYLOAD, MQTT_BROKER, MQTT_PORT, MQTT_PREFIX
 from roles import AdminFilter, AnyAccessFilter, OwnerFilter, ReadOnlyFilter, Role, get_user_role
 from crypto import timestamp_delta_seconds, verify_message_detailed
+from device_keys import key_for_device
 from device_store import DeviceStore
 from file_inbox import FileInbox
 from update_store import UpdateStore
@@ -9715,7 +9716,18 @@ def _notify_confirmed_resource_thresholds(device_id: str, alerts: list[dict]) ->
 def on_mqtt_message(topic: str, data: dict) -> None:
     """Вызывается из потока MQTT при получении сообщения от клиента."""
     server_ops.observe("broker", "message_received")
-    payload, verification_reason = verify_message_detailed(data)
+    parts = topic.split("/")
+    prefix_len = len(MQTT_PREFIX.split("/"))
+    if len(parts) != prefix_len + 2 or parts[:prefix_len] != MQTT_PREFIX.split("/"):
+        return
+    device_id = parts[prefix_len]
+    msg_type = parts[-1]
+    try:
+        message_key = key_for_device(device_id)
+    except (OSError, ValueError):
+        log.warning("Ключ устройства %s недоступен; сообщение отклонено", device_id)
+        return
+    payload, verification_reason = verify_message_detailed(data, key=message_key)
     if payload is None:
         timestamp_delta = (
             timestamp_delta_seconds(data)
@@ -9737,17 +9749,11 @@ def on_mqtt_message(topic: str, data: dict) -> None:
         return
     # ENCRYPT_PAYLOAD: содержимое лежит внутри enc, расшифровываем до маршрутизации.
     if ENCRYPT_PAYLOAD or ("enc" in payload):
-        inner = decrypt_payload(payload)
+        inner = decrypt_payload(payload, key=message_key)
         if inner is None:
             log.warning("Не удалось расшифровать payload из %s", topic)
             return
         payload = inner
-    parts = topic.split("/")
-    prefix_len = len(MQTT_PREFIX.split("/"))
-    if len(parts) != prefix_len + 2 or parts[:prefix_len] != MQTT_PREFIX.split("/"):
-        return
-    device_id = parts[prefix_len]
-    msg_type = parts[-1]
     # A broker identity is bound to one device topic. Never let a signed
     # response on that topic claim a different device in its payload.
     if payload.get("device_id", device_id) != device_id:

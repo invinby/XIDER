@@ -133,12 +133,18 @@ subscriptions used by Agent and Guardian, and can disable the identity.
 `broker/dynsec_channel.py` provides a TLS-validated MQTT admin channel with
 correlated control replies. Admin credentials must be supplied by the server,
 not by the installer. The focused policy/channel tests run without a live broker.
+The bot now accepts optional device-specific HMAC/AES keys from the absolute
+`XIDER_DEVICE_KEYS_DIR` directory. A file named `<device-id>.key` contains one
+ASCII key and must be readable only by the bot user (mode 0600 on Linux).
+Devices without a file retain the legacy shared key. A malformed or unreadable
+file rejects the message/command rather than downgrading to that shared key.
 
-The issuer is not called by an enrollment endpoint yet. The existing `broker/`
+The issuer is not called by an enrollment endpoint yet, and no device key file
+is created by the installer. The existing `broker/`
 Compose example remains a static shared-account broker and must not be used as
 proof of per-device ACL enforcement. Before rollout, deploy a dedicated Dynamic
-Security broker, exercise real cross-device ACL tests, add bot-side per-device
-message keys, then wire owner approval and short-command installers.
+Security broker, exercise real cross-device ACL tests, then wire owner approval,
+device-key creation, and short-command installers.
 
 ## Current evidence and non-claims
 

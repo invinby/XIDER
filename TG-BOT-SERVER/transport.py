@@ -15,6 +15,7 @@ import paho.mqtt.client as mqtt
 
 from config import ENCRYPT_PAYLOAD, MQTT_BROKER, MQTT_PASSWORD, MQTT_PORT, MQTT_PREFIX, MQTT_TLS, MQTT_USERNAME
 from crypto import sign_message
+from device_keys import key_for_device
 from xgencrypto import encrypt_payload
 from command_signing import verify_approved_command
 
@@ -219,11 +220,16 @@ class MQTTTransport:
             log.warning("Команда %s не отправлена: нет соединения с брокером", cmd_type)
             return False
         topic = f"{MQTT_PREFIX}/all/cmd" if device_id == "all" else f"{MQTT_PREFIX}/{device_id}/cmd"
+        try:
+            message_key = None if device_id == "all" else key_for_device(device_id)
+        except (OSError, ValueError):
+            log.warning("Команда %s не отправлена: ключ устройства недоступен", cmd_type)
+            return False
         if ENCRYPT_PAYLOAD:
-            body = encrypt_payload(payload)
+            body = encrypt_payload(payload, key=message_key)
         else:
             body = payload
-        message = sign_message(body)
+        message = sign_message(body, key=message_key)
         info = self._client.publish(topic, json.dumps(message, ensure_ascii=False), qos=1)
         if info.rc == mqtt.MQTT_ERR_QUEUE_SIZE:
             log.warning("Команда %s не поставлена в очередь %s (rc=%s)", cmd_type, topic, info.rc)
