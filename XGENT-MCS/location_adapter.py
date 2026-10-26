@@ -197,10 +197,18 @@ def signed_bundle_available():
     import sys
     import subprocess
     from pathlib import Path
-    if sys.platform != "darwin" or not getattr(sys, "frozen", False):
+    if sys.platform != "darwin":
         return False
-    executable = Path(sys.executable).resolve()
-    app = next((p for p in executable.parents if p.suffix == ".app"), None)
+    candidates = []
+    if getattr(sys, "frozen", False):
+        candidates.extend(Path(sys.executable).resolve().parents)
+    compiled = globals().get("__compiled__")
+    containing_dir = getattr(compiled, "containing_dir", None)
+    if isinstance(containing_dir, (str, Path)) and str(containing_dir):
+        compiled_path = Path(containing_dir).resolve()
+        candidates.append(compiled_path)
+        candidates.extend(compiled_path.parents)
+    app = next((path for path in candidates if path.suffix == ".app"), None)
     if app is None:
         return False
     import plistlib

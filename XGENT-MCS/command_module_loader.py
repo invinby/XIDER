@@ -93,10 +93,39 @@ def _frozen_component_spec(module_name: str, *, runtime=None, meipass=None):
         raise ImportError("Bundled command approval module could not be resolved") from exc
 
 
+def _nuitka_component(module_name: str):
+    """Return a statically compiled helper from this exact Nuitka app bundle."""
+    if module_name == "command_signing":
+        import command_signing as component
+    elif module_name == "command_replay":
+        import command_replay as component
+    elif module_name == "shell_execution":
+        import shell_execution as component
+    else:
+        raise ImportError("Unexpected command approval module")
+
+    runtime_info = globals().get("__compiled__")
+    component_info = getattr(component, "__compiled__", None)
+    runtime_dir = getattr(runtime_info, "containing_dir", None)
+    component_dir = getattr(component_info, "containing_dir", None)
+    if (
+        runtime_info is None
+        or component_info is None
+        or component.__name__ != module_name
+        or not isinstance(runtime_dir, (str, os.PathLike))
+        or not isinstance(component_dir, (str, os.PathLike))
+        or not _same_absolute_path(runtime_dir, component_dir)
+    ):
+        raise ImportError("Command approval helper is not compiled into the active Nuitka bundle")
+    return component, ("nuitka", module_name, os.path.normcase(os.path.abspath(os.fspath(runtime_dir))))
+
+
 def load_component(module_name: str, *, source_root: str | os.PathLike, frozen: bool | None = None):
-    """Load an approval helper only from its trusted source sibling or active PYZ entry."""
+    """Load an approval helper from source, PyInstaller PYZ, or the same Nuitka bundle."""
     if module_name not in _MODULE_NAMES:
         raise ImportError("Unexpected command approval module")
+    if "__compiled__" in globals() and not getattr(sys, "frozen", False):
+        return _nuitka_component(module_name)[0]
     frozen = getattr(sys, "frozen", False) if frozen is None else frozen
     try:
         spec, cache_key = (

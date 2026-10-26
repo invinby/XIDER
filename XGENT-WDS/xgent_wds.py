@@ -78,6 +78,9 @@ from network_traffic_schedule import load_schedule as load_network_traffic_sched
 import window_capture
 from media_request_control import MEDIA_REQUEST_ACTIONS, MediaRequestRegistry
 
+_NUITKA_RUNTIME = bool("__compiled__" in globals() and not getattr(sys, "frozen", False))
+_BUNDLED_RUNTIME = bool(getattr(sys, "frozen", False) or _NUITKA_RUNTIME)
+
 MAX_FILE_PUT_BYTES = 30 * 1024 * 1024
 MAX_FILE_PUT_B64_CHARS = 4 * ((MAX_FILE_PUT_BYTES + 2) // 3)
 MAX_SCREENSHOT_BYTES = 30 * 1024 * 1024
@@ -1103,7 +1106,7 @@ def _claim_bootstrap_lock() -> bool:
     return True
 
 
-if __name__ == "__main__" and not getattr(sys, "frozen", False):
+if __name__ == "__main__" and not _BUNDLED_RUNTIME:
     if not _claim_bootstrap_lock():
         sys.stderr.write("FATAL: XGENT-WDS уже запущен; второй экземпляр остановлен.\n")
         raise SystemExit(1)
@@ -1115,14 +1118,14 @@ if __name__ == "__main__" and not getattr(sys, "frozen", False):
 import paho.mqtt.client as mqtt
 import psutil
 
-if not getattr(sys, "frozen", False):
+if not _BUNDLED_RUNTIME:
     _repo_root = Path(__file__).resolve().parent.parent
     _release_module_dir = str(_repo_root / "XGENT-MCS")
     if _release_module_dir not in sys.path:
         # Newer signed helpers staged beside this worker must take precedence.
         sys.path.append(_release_module_dir)
 from release_signature import trusted_release_keys_ready, verify_manifest_signature
-if not getattr(sys, "frozen", False):
+if not _BUNDLED_RUNTIME:
     from update_package import (
         UPDATE_STATE_NAME,
         download_verified_source_archive,
@@ -2303,7 +2306,7 @@ class XgentClient:
                 return
             try:
                 write_runtime_health("agent", True)
-                if not getattr(sys, "frozen", False) and mark_agent_update_healthy(
+                if not _BUNDLED_RUNTIME and mark_agent_update_healthy(
                     CONFIG_DIR / UPDATE_STATE_NAME, Path(__file__).resolve().parent,
                 ):
                     self._update_health.set()
@@ -2554,14 +2557,14 @@ class XgentClient:
             "name": DEVICE_NAME,
             "os": PLATFORM,
             "version": VERSION,
-            "update_mode": "frozen" if getattr(sys, "frozen", False) else "source",
-            "release_update_ready": trusted_release_keys_ready() and not getattr(sys, "frozen", False),
+            "update_mode": "frozen" if _BUNDLED_RUNTIME else "source",
+            "release_update_ready": trusted_release_keys_ready() and not _BUNDLED_RUNTIME,
             "update_manifest_binding_protocol": 1,
             "status": status,
         }
         if _command_approval_protocol_enabled(self):
             payload["command_approval_protocol"] = 1
-        if not getattr(sys, "frozen", False):
+        if not _BUNDLED_RUNTIME:
             receipt = read_agent_update_result(CONFIG_DIR / UPDATE_STATE_NAME)
             if receipt:
                 payload["agent_update"] = receipt
@@ -5222,7 +5225,7 @@ class XgentClient:
     def _do_autorun_enable(self, payload: dict) -> None:
         """Включить тот же Scheduled Task, который создаёт установщик."""
         try:
-            cur_dir = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
+            cur_dir = Path(sys.executable if _BUNDLED_RUNTIME else __file__).resolve().parent
             installer = cur_dir / "install_agent.ps1"
             if not installer.exists():
                 raise RuntimeError("install_agent.ps1 не найден рядом с агентом")
@@ -6917,7 +6920,7 @@ setTimeout(()=>window.close(),15000);
 
     def _do_agent_update(self, payload: dict) -> None:
         """Install a signed source release transactionally; frozen bundles fail closed."""
-        if payload.get("update") and getattr(sys, "frozen", False):
+        if payload.get("update") and _BUNDLED_RUNTIME:
             self._publish_response("output", {
                 "type": "agent_update",
                 "device_id": DEVICE_ID,
@@ -7267,7 +7270,22 @@ def _load_trusted_command_module_loader():
         return _COMMAND_MODULE_LOADER
     module_name = "command_module_loader"
     try:
-        if getattr(sys, "frozen", False):
+        if _NUITKA_RUNTIME:
+            import command_module_loader as module
+            runtime_info = globals().get("__compiled__")
+            loader_info = getattr(module, "__compiled__", None)
+            runtime_dir = getattr(runtime_info, "containing_dir", None)
+            loader_dir = getattr(loader_info, "containing_dir", None)
+            if (
+                loader_info is None
+                or not isinstance(runtime_dir, (str, os.PathLike))
+                or not isinstance(loader_dir, (str, os.PathLike))
+                or not _same_absolute_path(runtime_dir, loader_dir)
+            ):
+                raise ImportError("Shared command loader is not compiled into the active Nuitka bundle")
+            _COMMAND_MODULE_LOADER = module
+            return module
+        if _BUNDLED_RUNTIME:
             runtime = sys.modules.get("pyimod02_importers")
             finder_type = getattr(runtime, "PyiFrozenFinder", None)
             loader_type = getattr(runtime, "PyiFrozenLoader", None)
@@ -7338,7 +7356,7 @@ def _load_command_approval_component(module_name: str):
     return _load_trusted_command_module_loader().load_component(
         module_name,
         source_root=_command_approval_source_root(),
-        frozen=getattr(sys, "frozen", False),
+        frozen=_BUNDLED_RUNTIME,
     )
 
 

@@ -68,6 +68,9 @@ import interface_status_history
 from network_traffic_schedule import load_schedule as load_network_traffic_schedule, save_schedule as save_network_traffic_schedule
 from media_request_control import MEDIA_REQUEST_ACTIONS, MediaRequestRegistry
 
+_NUITKA_RUNTIME = bool("__compiled__" in globals() and not getattr(sys, "frozen", False))
+_BUNDLED_RUNTIME = bool(getattr(sys, "frozen", False) or _NUITKA_RUNTIME)
+
 MAX_FILE_PUT_BYTES = 30 * 1024 * 1024
 MAX_FILE_PUT_B64_CHARS = 4 * ((MAX_FILE_PUT_BYTES + 2) // 3)
 MAX_SCREENSHOT_BYTES = 30 * 1024 * 1024
@@ -732,7 +735,7 @@ from update_package import (
 from release_signature import trusted_release_keys_ready
 
 EARLY_UPDATE_STATE = "none"
-if __name__ == "__main__" and not getattr(sys, "frozen", False):
+if __name__ == "__main__" and not _BUNDLED_RUNTIME:
     EARLY_UPDATE_STATE = prepare_agent_update_start(
         Path.home() / ".xgent" / UPDATE_STATE_NAME,
         Path(__file__).resolve().parent,
@@ -867,7 +870,22 @@ def _load_trusted_command_module_loader():
         return _COMMAND_MODULE_LOADER
     module_name = "command_module_loader"
     try:
-        if getattr(sys, "frozen", False):
+        if _NUITKA_RUNTIME:
+            import command_module_loader as module
+            runtime_info = globals().get("__compiled__")
+            loader_info = getattr(module, "__compiled__", None)
+            runtime_dir = getattr(runtime_info, "containing_dir", None)
+            loader_dir = getattr(loader_info, "containing_dir", None)
+            if (
+                loader_info is None
+                or not isinstance(runtime_dir, (str, os.PathLike))
+                or not isinstance(loader_dir, (str, os.PathLike))
+                or not _same_absolute_path(runtime_dir, loader_dir)
+            ):
+                raise ImportError("Shared command loader is not compiled into the active Nuitka bundle")
+            _COMMAND_MODULE_LOADER = module
+            return module
+        if _BUNDLED_RUNTIME:
             runtime = sys.modules.get("pyimod02_importers")
             finder_type = getattr(runtime, "PyiFrozenFinder", None)
             loader_type = getattr(runtime, "PyiFrozenLoader", None)
@@ -939,7 +957,7 @@ def _load_command_approval_component(module_name: str):
     return _load_trusted_command_module_loader().load_component(
         module_name,
         source_root=Path(__file__).resolve().parent,
-        frozen=getattr(sys, "frozen", False),
+        frozen=_BUNDLED_RUNTIME,
     )
 
 
@@ -1819,8 +1837,8 @@ class XgentClient:
         payload = {
             "type": "status", "device_id": DEVICE_ID, "name": DEVICE_NAME,
             "os": PLATFORM, "version": VERSION,
-            "update_mode": "frozen" if getattr(sys, "frozen", False) else "source",
-            "release_update_ready": trusted_release_keys_ready() and not getattr(sys, "frozen", False),
+            "update_mode": "frozen" if _BUNDLED_RUNTIME else "source",
+            "release_update_ready": trusted_release_keys_ready() and not _BUNDLED_RUNTIME,
             "update_manifest_binding_protocol": 1,
             "status": status,
             "companions": _layer_health_snapshot(),
@@ -4952,7 +4970,7 @@ class XgentClient:
         scene_id = uuid.uuid4().hex
         try:
             command = [sys.executable]
-            if not getattr(sys, "frozen", False):
+            if not _BUNDLED_RUNTIME:
                 command.append(str(Path(__file__).resolve()))
             command.append("--xider-fake-update")
             child = subprocess.Popen(command, close_fds=True)
@@ -5396,7 +5414,7 @@ end tell'''
             self._publish_response("output", {"type": "agent_update", "device_id": DEVICE_ID, "ok": True, "text": text})
             return
 
-        if getattr(sys, "frozen", False):
+        if _BUNDLED_RUNTIME:
             self._publish_response("output", {
                 "type": "agent_update",
                 "device_id": DEVICE_ID,
@@ -5740,13 +5758,13 @@ def setup_logging() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", handlers=[handler])
 
 def _worker_launch_command() -> list[str]:
-    if getattr(sys, "frozen", False):
+    if _BUNDLED_RUNTIME:
         return [sys.executable]
     return [sys.executable, str(Path(__file__).resolve())]
 
 
 def _agent_install_dir() -> Path:
-    if getattr(sys, "frozen", False):
+    if _BUNDLED_RUNTIME:
         app = next((path for path in Path(sys.executable).resolve().parents if path.suffix == ".app"), None)
         if app is not None:
             return app.parent
