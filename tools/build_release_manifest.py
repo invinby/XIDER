@@ -20,6 +20,7 @@ from pathlib import Path
 COMPONENTS = {
     "XIDER-source.zip": ("source", "all"),
     "XGENT-WDS.exe": ("windows_agent", "windows"),
+    "XGENT-WDS-Windows.zip": ("windows_agent", "windows"),
     "XGENT-MCS-macos-bundle.zip": ("mac_agent", "macos"),
     "Guard-Keeper-Windows.zip": ("windows_keeper", "windows"),
     "Guard-Keeper-macOS.zip": ("mac_keeper", "macos"),
