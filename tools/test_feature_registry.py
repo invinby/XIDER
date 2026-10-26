@@ -112,6 +112,20 @@ def test_feature_registry_validator_is_available_as_a_standalone_tool() -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_d03_f27_staged_inbox_is_linked_to_its_owner_scoped_implementation() -> None:
+    registry = json.loads((ROOT / "docs/features/feature-registry.json").read_text(encoding="utf-8"))
+    feature = next(row for row in registry["features"] if row["feature_id"] == "D03-F27")
+
+    assert feature["support_state"] == "needs_device_test"
+    assert feature["handler_id"] == "d03.f27.files.owner_staged_inbox"
+    assert {
+        "TG-BOT-SERVER/tests/test_file_inbox.py::test_staged_file_is_owner_only_and_returns_metadata_not_storage_path",
+        "TG-BOT-SERVER/tests/test_file_inbox.py::test_staged_file_limits_expiry_and_owner_scoped_delete",
+        "TG-BOT-SERVER/tests/test_bot_ui.py::test_file_inbox_is_owner_only_and_uses_registered_actions",
+        "TG-BOT-SERVER/tests/test_bot_ui.py::test_staged_file_placement_requires_preview_and_explicit_confirmation",
+    }.issubset(set(feature["test_refs"]))
+
+
 def test_feature_registry_accepts_optional_search_description(tmp_path: Path) -> None:
     data = valid_registry()
     data["features"][0]["description"] = "Indexed detail terms for the feature"
@@ -1050,6 +1064,7 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
         ("admin.permission_profiles.back", "admin.permission_profiles", "admin:user:*", ("owner",), "nav"),
     }
     implemented_ids = {"A01-F01", "A01-F03", "A01-F04", "A01-F05", "A01-F06", "A01-F07", "A01-F08", "A01-F09", "A01-F22", "A01-F23", "A01-F24", "A01-F25", "A01-F26", "A01-F27", "A01-F28", "A01-F29", "A01-F30", "B01-F01", "B01-F02", "B01-F03", "B01-F04", "B01-F05", "B01-F06", "B01-F07", "B01-F08", "B01-F18", "B02-F01", "B02-F02", "B02-F03", "B02-F04", "B02-F05", "B02-F06", "B02-F07", "D01-F01", "D01-F02", "D01-F03", "D01-F04", "D01-F05", "D01-F06", "D01-F07", "D01-F08", "D01-F09", "D01-F10", "D01-F11", "D01-F12", "D01-F13", "D01-F14", "D01-F15", "D01-F16", "D01-F17", "D01-F18", "D01-F19", "D01-F20", "D01-F21", "D01-F22", "D01-F23", "D01-F24", "D01-F25", "D01-F26", "D01-F27", "D01-F28", "D01-F29", "D01-F30", "D02-F01", "D02-F02", "D02-F03", "D02-F04", "D02-F05", "D02-F06", "D02-F07", "D02-F08", "D02-F10", "D02-F13", "D02-F23", "P01-F09", "P01-F25"}
+    implemented_ids.add("D03-F27")
     owner_invariant = next(feature for feature in features if feature["feature_id"] == "A01-F27")
     assert owner_invariant["support_state"] == "implemented"
     assert owner_invariant["handler_id"] == "a01.f27.admin.owner_invariant"

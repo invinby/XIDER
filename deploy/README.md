@@ -33,8 +33,12 @@ Bootstrap не переносит `TG-BOT-SERVER\.env` и BOT_TOKEN на Windows
 используется `StrictHostKeyChecking=yes` (`-KnownHostsPath` или
 `$env:XIDER_SSH_KNOWN_HOSTS` задаёт другой файл). Первое автоматическое
 подтверждение неизвестного SSH-хоста отключено. Отдельный
-`bootstrap-agent.ps1` для установки только агента использует штатный порядок
-OpenSSH с ключом/agent и интерактивным fallback.
+`bootstrap-agent.ps1` для установки только агента использует OpenSSH только в
+безынтерактивном режиме: парольный fallback отключён. Для первой установки
+без локального `.env` нужен заранее настроенный SSH-ключ/agent. Отдельный
+X-DOCK enrollment через одноразовое owner approval пока не реализован, поэтому
+эта команда пока не может безопасно получить конфигурацию без локального секрета
+или SSH-ключа.
 Настройки остаются в защищённом sidecar `.env`; секреты не печатаются и не
 включаются в EXE. Перед SSH-записью локальный preflight требует MQTT TLS,
 шифрование payload и непустые broker credentials, затем собирает EXE. Если
@@ -175,10 +179,12 @@ TCC prompts, sleep/wake, and actual LaunchAgent behavior.
 
 The macOS bootstrap downloads the repository and starts the agent. If a local
 sidecar `.env` is absent, it connects to the configured XIDER VPS
-(`XIDER_SERVER_HOST`, default `16.16.200.207`) over SSH. OpenSSH tries its
-normal key/agent authentication first and keeps interactive password fallback;
-the bootstrap also recognizes `~/.ssh/xider`, or an explicit `XIDER_SSH_KEY`.
-It retrieves only the agent configuration keys from
+(`XIDER_SERVER_HOST`, default `16.16.200.207`) over SSH using a pre-authorized
+key/agent only. Password and keyboard-interactive authentication are disabled;
+the bootstrap recognizes `~/.ssh/xider`, or an explicit `XIDER_SSH_KEY`.
+Without a local `.env` or an already authorized key, it stops before installation.
+The one-time Telegram-approved X-DOCK enrollment design is documented separately
+but has no deployed endpoint yet. The bootstrap retrieves only the agent configuration keys from
 `/etc/xider/bot.env`; `BOT_TOKEN` is never copied. The generated local file is
 mode `0600`. Set `XIDER_ENV_ROOT` to use an existing local `.env`, or set
 `XIDER_SERVER_HOST`/`XIDER_SERVER_USER` for another VPS. This does not deploy

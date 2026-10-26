@@ -353,6 +353,14 @@ grep -Fx -- "$FIXTURE/home/.ssh/xider" "$FIXTURE/ssh-args.log" >/dev/null &&
 grep -Fx -- 'IdentitiesOnly=yes' "$FIXTURE/ssh-args.log" >/dev/null || {
   echo 'macOS bootstrap did not pass the configured SSH key to OpenSSH.' >&2; exit 1;
 }
+grep -Fx -- 'BatchMode=yes' "$FIXTURE/ssh-args.log" >/dev/null || {
+  echo 'macOS bootstrap must never prompt for a VPS password.' >&2; exit 1;
+}
+grep -Fx -- 'PreferredAuthentications=publickey' "$FIXTURE/ssh-args.log" >/dev/null &&
+grep -Fx -- 'PasswordAuthentication=no' "$FIXTURE/ssh-args.log" >/dev/null &&
+grep -Fx -- 'KbdInteractiveAuthentication=no' "$FIXTURE/ssh-args.log" >/dev/null || {
+  echo 'macOS bootstrap must allow only pre-authorized public-key authentication.' >&2; exit 1;
+}
 if grep -Eq '^(PubkeyAuthentication=no|PreferredAuthentications=password)$' "$FIXTURE/ssh-args.log"; then
   echo 'macOS bootstrap disabled SSH public-key authentication.' >&2; exit 1;
 fi

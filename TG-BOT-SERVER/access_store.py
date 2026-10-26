@@ -44,7 +44,7 @@ class Role:
     ALL = (OWNER, COOWNER, USER, GUEST, BLOCKED)
 
 
-OWNER_ONLY_CALLBACKS = frozenset({"menu:target", "cfm:stop_all", "cpu:history", "memory:history", "cmd:shell_approval_inbox", "cmd:shell_runbook_templates", "cmd:shell_metadata_export"})
+OWNER_ONLY_CALLBACKS = frozenset({"menu:target", "cfm:stop_all", "cpu:history", "memory:history", "filevault:status", "sip:status", "gatekeeper:status", "cmd:shell_approval_inbox", "cmd:shell_runbook_templates", "cmd:shell_metadata_export"})
 OWNER_ONLY_CALLBACK_PREFIXES = (
     "admin:", "devmg:", "server:", "versions:", "ev:", "adm:", "all:",
     "catalog:fields:",

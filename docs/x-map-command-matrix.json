@@ -1,6 +1,6 @@
 {
   "source_only": true,
-  "worker_command_count": 189,
+  "worker_command_count": 192,
   "guardian_command_count": 5,
   "permission_profile_gaps": [],
   "permission_profiles": {
@@ -1568,6 +1568,39 @@
       }
     },
     {
+      "command": "filevault_status",
+      "platforms": {
+        "windows": {
+          "source_support": "not_declared",
+          "source_behavior": {
+            "state": "source_gap",
+            "evidence": "Declared command and handler map do not both exist in this source tree."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_gap",
+            "evidence": "Declared command and handler map do not both exist in this source tree."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
       "command": "find_file",
       "platforms": {
         "windows": {
@@ -1594,6 +1627,39 @@
           "permission_profile_ids": [
             "agent_account",
             "filesystem_read"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "gatekeeper_status",
+      "platforms": {
+        "windows": {
+          "source_support": "not_declared",
+          "source_behavior": {
+            "state": "source_gap",
+            "evidence": "Declared command and handler map do not both exist in this source tree."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_gap",
+            "evidence": "Declared command and handler map do not both exist in this source tree."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
           ],
           "stability": {
             "state": "source_only_unverified",
@@ -5471,6 +5537,39 @@
           "stability": {
             "state": "source_only_unverified",
             "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "sip_status",
+      "platforms": {
+        "windows": {
+          "source_support": "not_declared",
+          "source_behavior": {
+            "state": "source_gap",
+            "evidence": "Declared command and handler map do not both exist in this source tree."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_gap",
+            "evidence": "Declared command and handler map do not both exist in this source tree."
           }
         },
         "macos": {

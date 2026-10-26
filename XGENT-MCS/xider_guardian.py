@@ -12,6 +12,7 @@ from contextlib import contextmanager
 import json
 import logging
 import os
+import plistlib
 import signal
 import subprocess
 import sys
@@ -53,6 +54,8 @@ log = logging.getLogger("xider.guardian")
 SCRIPT_DIR = Path(__file__).resolve().parent
 STATE_FILE = CONFIG_DIR / "guardian.json"
 AGENT_STABLE_SECONDS = 60.0
+MAX_LAUNCHAGENT_PLISTS = 512
+MAX_LAUNCHAGENT_PLIST_BYTES = 256 * 1024
 
 
 def _load_state() -> dict:
@@ -75,6 +78,40 @@ def _save_state(data: dict, *fields: str) -> None:
     )
     data.clear()
     data.update(merged)
+
+
+def count_launchagent_registrations(
+    label: str, *, directories: tuple[Path, ...] | None = None,
+) -> int:
+    """Count local plist declarations for one label without running shell tools."""
+    if not isinstance(label, str) or not label or len(label) > 256:
+        return 0
+    roots = directories or (
+        Path.home() / "Library" / "LaunchAgents",
+        Path("/Library/LaunchAgents"),
+    )
+    count = 0
+    inspected = 0
+    for root in roots:
+        try:
+            candidates = sorted(root.glob("*.plist"), key=lambda path: path.name)
+        except OSError:
+            continue
+        for path in candidates:
+            inspected += 1
+            if inspected > MAX_LAUNCHAGENT_PLISTS:
+                return count
+            try:
+                if path.is_symlink() or not path.is_file():
+                    continue
+                if path.stat().st_size > MAX_LAUNCHAGENT_PLIST_BYTES:
+                    continue
+                data = plistlib.loads(path.read_bytes())
+            except (OSError, ValueError, plistlib.InvalidFileException):
+                continue
+            if isinstance(data, dict) and data.get("Label") == label:
+                count += 1
+    return count
 
 
 class Guardian:
@@ -199,15 +236,31 @@ class Guardian:
         return None
 
     def launchd_loaded(self) -> bool:
+        """Whether the worker LaunchAgent is registered in this GUI session."""
         result = subprocess.run(
             ["launchctl", "print", f"gui/{os.getuid()}/com.xgent.agent"],
             capture_output=True, check=False,
         )
         return result.returncode == 0
 
+    def guardian_launchd_loaded(self) -> bool:
+        """Whether the separate Guardian supervisor is registered."""
+        result = subprocess.run(
+            ["launchctl", "print", f"gui/{os.getuid()}/com.xider.guardian"],
+            capture_output=True, check=False,
+        )
+        return result.returncode == 0
+
     def status_payload(self) -> dict:
         pid = self.agent_pid()
-        supervisor_loaded = self.launchd_loaded()
+        worker_launchd_loaded = self.launchd_loaded()
+        guardian_launchd_loaded = self.guardian_launchd_loaded()
+        worker_registration_count = count_launchagent_registrations("com.xgent.agent")
+        guardian_registration_count = count_launchagent_registrations("com.xider.guardian")
+        duplicate_summary = (
+            f"агент: {max(0, worker_registration_count - 1)}, "
+            f"Guardian: {max(0, guardian_registration_count - 1)}"
+        )
         return {
             "type": "guardian",
             "device_id": DEVICE_ID,
@@ -216,13 +269,22 @@ class Guardian:
             "guardian": "1.0",
             "agent_running": bool(pid),
             "agent_pid": pid,
-            "launchd_loaded": supervisor_loaded,
-            "guardian_task_registered": supervisor_loaded,
+            "launchd_loaded": worker_launchd_loaded,
+            "guardian_task_registered": guardian_launchd_loaded,
+            "launchagent_registration_counts": {
+                "agent": worker_registration_count,
+                "guardian": guardian_registration_count,
+            },
             "auto_restart": bool(self.state.get("auto_restart")),
             "desired_running": bool(self.state.get("desired_running")),
             "text": (
                 f"🛡 Guardian 1.0 · {DEVICE_NAME}\n"
-                f"Агент: {'онлайн' if pid else 'остановлен'}"
+                f"Агент: {'онлайн' if pid else 'остановлен'}\n"
+                f"LaunchAgent агента: {'зарегистрирован' if worker_launchd_loaded else 'не зарегистрирован'}\n"
+                f"LaunchAgent Guardian: {'зарегистрирован' if guardian_launchd_loaded else 'не зарегистрирован'}\n"
+                f"Дубликаты LaunchAgent: {duplicate_summary}\n"
+                f"Автовосстановление: {'включено' if self.state.get('auto_restart') else 'выключено'}\n"
+                f"Запуск агента: {'разрешён' if self.state.get('desired_running') else 'остановлен владельцем'}"
             ),
         }
 

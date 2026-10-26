@@ -46,6 +46,7 @@ STATE_FILE = CONFIG_DIR / "guardian.json"
 LEGACY_STATE_FILE = CONFIG_DIR / "guardian-windows.json"
 AGENT_TASK = "XIDER Agent"
 GUARDIAN_TASK = "XIDER Guardian"
+AGENT_STABLE_SECONDS = 60.0
 
 
 def _load_state() -> dict:
@@ -74,12 +75,29 @@ def _save_state(data: dict, *fields: str) -> None:
     data.update(merged)
 
 
-def _task_exists(task_name: str) -> bool:
-    result = subprocess.run(
-        ["schtasks.exe", "/Query", "/TN", task_name],
-        capture_output=True, text=True, check=False,
+def _task_exists(task_name: str) -> bool | None:
+    """Return None when Task Scheduler could not prove either state."""
+    try:
+        result = subprocess.run(
+            ["schtasks.exe", "/Query", "/TN", task_name],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode == 0:
+        return True
+    message = f"{result.stdout or ''}\n{result.stderr or ''}".casefold()
+    missing_markers = (
+        "cannot find the file specified",
+        "the system cannot find",
+        "не удается найти указанный файл",
+        "не удаётся найти указанный файл",
+        "системе не удается найти",
+        "системе не удаётся найти",
     )
-    return result.returncode == 0
+    if any(marker in message for marker in missing_markers):
+        return False
+    return None
 
 
 class Guardian:
@@ -114,8 +132,16 @@ class Guardian:
         )
         if changed_fields:
             _save_state(self.state, *changed_fields)
+        # Once initialized, a missing state file means the owner removed the
+        # Guardian installation. Do not infer permission to recreate the worker.
+        self._intent_file_required = True
         self.stop_event = threading.Event()
         self.lock = threading.RLock()
+        self._restart_backoff_seconds = 5.0
+        self._next_restart_at = 0.0
+        self._last_recovery_error: str | None = None
+        self._observed_agent_pid: int | None = None
+        self._observed_agent_since = 0.0
         self.client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
             client_id=f"xider-guardian-windows-{DEVICE_ID}",
@@ -207,7 +233,12 @@ class Guardian:
 
     def status_payload(self) -> dict:
         proc = self.agent_process()
-        task_loaded = _task_exists(GUARDIAN_TASK)
+        agent_task_loaded = _task_exists(AGENT_TASK)
+        guardian_task_loaded = _task_exists(GUARDIAN_TASK)
+        def task_label(value: bool | None) -> str:
+            if value is None:
+                return "статус неизвестен"
+            return "зарегистрирована" if value else "не зарегистрирована"
         return {
             "type": "guardian",
             "device_id": DEVICE_ID,
@@ -216,14 +247,17 @@ class Guardian:
             "guardian": "1.0-windows",
             "agent_running": bool(proc),
             "agent_pid": proc.pid if proc else None,
-            "launchd_loaded": task_loaded,
-            "guardian_task_registered": task_loaded,
+            "launchd_loaded": agent_task_loaded,
+            "guardian_task_registered": guardian_task_loaded,
             "auto_restart": bool(self.state.get("auto_restart")),
             "desired_running": bool(self.state.get("desired_running")),
             "text": (
                 f"🛡 Windows Guardian 1.0 · {DEVICE_NAME}\n"
                 f"Агент: {'онлайн' if proc else 'остановлен'}\n"
-                f"Задача Guardian: {'зарегистрирована' if task_loaded else 'не зарегистрирована'}"
+                f"Задача агента: {task_label(agent_task_loaded)}\n"
+                f"Задача Guardian: {task_label(guardian_task_loaded)}\n"
+                f"Автовосстановление: {'включено' if self.state.get('auto_restart') else 'выключено'}\n"
+                f"Запуск агента: {'разрешён' if self.state.get('desired_running') else 'остановлен владельцем'}"
             ),
         }
 
@@ -239,7 +273,16 @@ class Guardian:
             if key in external:
                 self.state[key] = bool(external[key])
 
+    def _require_running_intent(self) -> None:
+        """Recovery remains subordinate to the owner's persisted intent."""
+        if getattr(self, "_intent_file_required", False) and not STATE_FILE.is_file():
+            raise RuntimeError("Guardian state was removed; worker recovery is disabled.")
+        self._refresh_worker_intent()
+        if not getattr(self, "state", {}).get("desired_running", True):
+            raise RuntimeError("Agent was explicitly stopped; worker recovery is disabled.")
+
     def start_agent(self) -> int | None:
+        self._require_running_intent()
         proc = self.agent_process()
         if proc:
             return proc.pid
@@ -263,7 +306,7 @@ class Guardian:
         _save_state(self.state, "desired_running")
         # Stop the scheduled task first so its restart-on-failure policy does not
         # race the owner's explicit stop command.
-        if _task_exists(AGENT_TASK):
+        if _task_exists(AGENT_TASK) is True:
             subprocess.run(
                 ["schtasks.exe", "/End", "/TN", AGENT_TASK],
                 capture_output=True, text=True, check=False,
@@ -279,6 +322,43 @@ class Guardian:
             except psutil.NoSuchProcess:
                 pass
 
+    def _reset_recovery_backoff(self) -> None:
+        self._restart_backoff_seconds = 5.0
+        self._next_restart_at = 0.0
+        self._last_recovery_error = None
+
+    def _observe_agent_process(self, proc: psutil.Process | int | None, now: float) -> None:
+        previous_pid = getattr(self, "_observed_agent_pid", None)
+        started_at = getattr(self, "_observed_agent_since", 0.0)
+        pid = proc if isinstance(proc, int) else proc.pid if proc else None
+        if pid is None:
+            if previous_pid is None:
+                return
+            self._observed_agent_pid = None
+            self._observed_agent_since = 0.0
+            if now - started_at < AGENT_STABLE_SECONDS:
+                self._record_recovery_failure(
+                    RuntimeError(f"агент PID {previous_pid} завершился до стабильного запуска")
+                )
+            else:
+                self._reset_recovery_backoff()
+            return
+        if previous_pid != pid:
+            self._observed_agent_pid = pid
+            self._observed_agent_since = now
+        elif now - started_at >= AGENT_STABLE_SECONDS:
+            self._reset_recovery_backoff()
+
+    def _record_recovery_failure(self, exc: Exception) -> None:
+        message = str(exc)
+        delay = getattr(self, "_restart_backoff_seconds", 5.0)
+        self._next_restart_at = time.monotonic() + delay
+        self._restart_backoff_seconds = min(delay * 2, 300.0)
+        if message != getattr(self, "_last_recovery_error", None):
+            self._publish({"ok": False, "text": f"⚠️ Windows Guardian не смог стабильно запустить агент: {message}"})
+            self._last_recovery_error = message
+        log.warning("Windows Guardian restart failed; retry in %.0f seconds: %s", delay, message)
+
     def handle(self, payload: dict) -> None:
         lock = getattr(self, "lock", None)
         if lock is None:
@@ -292,6 +372,7 @@ class Guardian:
         if command == "status":
             result = self.status_payload()
         elif command == "start":
+            self._reset_recovery_backoff()
             self.state["desired_running"] = True
             _save_state(self.state, "desired_running")
             pid = self.start_agent()
@@ -302,6 +383,7 @@ class Guardian:
             result = self.status_payload()
             result["text"] = "⏹ Windows-агент остановлен. Guardian остаётся доступен."
         elif command == "restart":
+            self._reset_recovery_backoff()
             self.stop_agent()
             self.state["desired_running"] = True
             _save_state(self.state, "desired_running")
@@ -324,18 +406,22 @@ class Guardian:
         while not self.stop_event.wait(5):
             with self.lock:
                 self._refresh_worker_intent()
-                if not (
-                    self.state.get("auto_restart")
-                    and self.state.get("desired_running")
-                    and not self.agent_process()
-                ):
+                if not (self.state.get("auto_restart") and self.state.get("desired_running")):
+                    continue
+                now = time.monotonic()
+                proc = self.agent_process()
+                self._observe_agent_process(proc, now)
+                if proc or now < self._next_restart_at:
                     continue
                 try:
                     pid = self.start_agent()
-                    self._publish({"ok": True, "text": f"🛡 Windows Guardian восстановил агент (PID {pid or '?'})"})
+                    if not pid:
+                        raise RuntimeError("процесс агента не появился после команды запуска")
+                    self._observe_agent_process(pid, time.monotonic())
+                    self._publish({"ok": True, "text": f"🛡 Windows Guardian запустил агент (PID {pid}); проверяю стабильность."})
                 except Exception as exc:
                     log.exception("Windows Guardian restart failed")
-                    self._publish({"ok": False, "text": f"⚠️ Windows Guardian не смог запустить агент: {exc}"})
+                    self._record_recovery_failure(exc)
 
     def run(self) -> None:
         self.client.connect_async(MQTT_BROKER, MQTT_PORT, keepalive=60)

@@ -168,8 +168,11 @@ PY
 else
   fetched_env="$stage/fetched.env"
   echo "Локального .env нет; читаю только настройки агента с ${SERVER_USER}@${SERVER_HOST}."
-  echo "Сначала пробую SSH-ключ или ssh-agent; если их нет — введи пароль VPS при запросе."
-  ssh_args=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15)
+  echo "Читаю настройки только через готовый SSH-ключ/ssh-agent; парольный вход отключён."
+  ssh_args=(-o BatchMode=yes -o PreferredAuthentications=publickey
+    -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no
+    -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15
+    -o ServerAliveInterval=10 -o ServerAliveCountMax=2)
   ssh_key="${XIDER_SSH_KEY:-}"
   if [[ -z "$ssh_key" && -r "$HOME/.ssh/xider" ]]; then
     ssh_key="$HOME/.ssh/xider"
@@ -182,7 +185,7 @@ else
       "${SERVER_USER}@${SERVER_HOST}" \
       "sudo -n sh -c 'grep -E \"^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD|XIDER_COMMAND_VERIFY_KEYSET_B64)=\" /etc/xider/bot.env'" \
       2>"$stage/ssh.err" | tr -d '\r' | awk '/^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD|XIDER_COMMAND_VERIFY_KEYSET_B64)=/ { print }' > "$fetched_env"; then
-    echo "Не удалось получить параметры с VPS:" >&2
+    echo "Не удалось получить параметры с VPS без пароля. Нужен готовый локальный .env или настроенный SSH-ключ; парольный запрос отключён." >&2
     cat "$stage/ssh.err" >&2
     exit 4
   fi

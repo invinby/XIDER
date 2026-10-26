@@ -119,6 +119,72 @@ def test_guardian_does_not_recreate_env_when_required_settings_are_unavailable(
     assert not (tmp_path / ".env").exists()
 
 
+def test_guardian_status_reports_worker_and_guardian_launchd_jobs_separately(
+    guardian_module, monkeypatch
+):
+    module = guardian_module
+    guardian = object.__new__(module.Guardian)
+    guardian.state = {"auto_restart": True, "desired_running": True}
+    commands = []
+
+    def launchctl(args, **_kwargs):
+        commands.append(args)
+        label = args[-1]
+        return Mock(returncode=0 if label.endswith("com.xgent.agent") else 113)
+
+    monkeypatch.setattr(module.subprocess, "run", launchctl)
+    monkeypatch.setattr(module.os, "getuid", lambda: 501, raising=False)
+    monkeypatch.setattr(guardian, "agent_pid", lambda: None)
+
+    result = guardian.status_payload()
+
+    assert result["launchd_loaded"] is True
+    assert result["guardian_task_registered"] is False
+    assert "LaunchAgent агента: зарегистрирован" in result["text"]
+    assert "LaunchAgent Guardian: не зарегистрирован" in result["text"]
+    assert commands == [
+        ["launchctl", "print", f"gui/{module.os.getuid()}/com.xgent.agent"],
+        ["launchctl", "print", f"gui/{module.os.getuid()}/com.xider.guardian"],
+    ]
+
+
+def test_launchagent_duplicate_check_counts_only_matching_bounded_plist_labels(
+    guardian_module, tmp_path
+):
+    import plistlib
+
+    module = guardian_module
+    user_agents = tmp_path / "user" / "LaunchAgents"
+    system_agents = tmp_path / "system" / "LaunchAgents"
+    user_agents.mkdir(parents=True)
+    system_agents.mkdir(parents=True)
+    for directory in (user_agents, system_agents):
+        with (directory / "agent.plist").open("wb") as stream:
+            plistlib.dump({"Label": "com.xider.guardian"}, stream)
+    with (user_agents / "other.plist").open("wb") as stream:
+        plistlib.dump({"Label": "com.example.other"}, stream)
+    (system_agents / "bad.plist").write_text("not a plist", encoding="utf-8")
+
+    assert module.count_launchagent_registrations(
+        "com.xider.guardian", directories=(user_agents, system_agents),
+    ) == 2
+
+
+def test_guardian_status_displays_duplicate_registration_count(guardian_module, monkeypatch):
+    module = guardian_module
+    guardian = object.__new__(module.Guardian)
+    guardian.state = {"auto_restart": True, "desired_running": True}
+    monkeypatch.setattr(module, "count_launchagent_registrations", lambda label: 2 if label == "com.xider.guardian" else 1)
+    monkeypatch.setattr(guardian, "launchd_loaded", lambda: True)
+    monkeypatch.setattr(guardian, "guardian_launchd_loaded", lambda: True)
+    monkeypatch.setattr(guardian, "agent_pid", lambda: None)
+
+    result = guardian.status_payload()
+
+    assert result["launchagent_registration_counts"] == {"agent": 1, "guardian": 2}
+    assert "Дубликаты LaunchAgent: агент: 0, Guardian: 1" in result["text"]
+
+
 def test_guardian_reports_missing_agent_on_remote_start(guardian_module, monkeypatch, tmp_path):
     module = guardian_module
     monkeypatch.setattr(module, "SCRIPT_DIR", tmp_path)

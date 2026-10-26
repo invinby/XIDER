@@ -967,6 +967,166 @@ def test_clipboard_routing(client, monkeypatch):
     assert ack["action"] == "clipboard"
 
 
+def test_fake_update_is_labeled_demo_and_uses_a_visible_countdown():
+    from pathlib import Path
+    import xgent_wds as wds
+
+    source = Path(wds.__file__).read_text(encoding="utf-8")
+    start = source.index("    def _do_prank_fake_update(")
+    end = source.index("    def _do_prank_toast_spam(", start)
+    handler = source[start:end]
+
+    assert "ДЕМО" in handler
+    assert "Esc закрывает" in handler
+    assert "root.after(250, _countdown)" in handler
+    assert "завершено" not in handler
+    assert "Демо-экран запущен на 22 секунды" in handler
+    assert "Esc или двойной щелчок" in handler
+
+
+def test_prank_stop_all_does_not_force_generic_system_defaults(client, monkeypatch):
+    import xgent_wds as wds
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    user32 = SimpleNamespace(
+        SwapMouseButton=Mock(),
+        SystemParametersInfoW=Mock(),
+        FindWindowW=Mock(return_value=0),
+        FindWindowExW=Mock(return_value=0),
+    )
+    monkeypatch.setattr(wds.ctypes, "windll", SimpleNamespace(user32=user32), raising=False)
+    rotate = Mock()
+    night_light = Mock()
+    restore_wallpaper = Mock(return_value=(False, "no saved wallpaper"))
+    monkeypatch.setattr(wds, "_rotate_screen", rotate)
+    monkeypatch.setattr(client, "_do_display_night_light", night_light)
+    monkeypatch.setattr(client, "_restore_saved_prank_wallpaper", restore_wallpaper)
+
+    client._do_prank_stop_all({})
+
+    user32.SwapMouseButton.assert_not_called()
+    user32.SystemParametersInfoW.assert_not_called()
+    rotate.assert_not_called()
+    night_light.assert_not_called()
+    restore_wallpaper.assert_called_once_with()
+
+
+def test_prank_stop_all_publishes_one_truthful_partial_result(client, monkeypatch, tmp_path):
+    import xgent_wds as wds
+
+    monkeypatch.setattr(wds, "CONFIG_DIR", tmp_path)
+    publications = []
+    monkeypatch.setattr(
+        client, "_publish_response", lambda topic, payload: publications.append((topic, payload))
+    )
+
+    client._do_prank_stop_all({})
+
+    assert len(publications) == 1
+    assert publications[0][1]["type"] == "prank_stop_all"
+    assert publications[0][1]["ok"] is False
+    assert publications[0][1]["state"] == "partial"
+
+
+def test_prank_stop_all_runs_registered_scene_cancellation_once(client):
+    from unittest.mock import Mock
+
+    cancel = Mock()
+    client._register_prank_cancel("demo-scene", cancel)
+
+    cancelled = client._cancel_active_pranks()
+    again = client._cancel_active_pranks()
+
+    assert cancelled == ["demo-scene"]
+    assert again == []
+    cancel.assert_called_once_with()
+
+
+def test_invert_screen_cancel_restores_the_captured_orientation(client, monkeypatch):
+    import xgent_wds as wds
+
+    angles = []
+    callbacks = {}
+
+    class DeferredThread:
+        def __init__(self, *, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(wds, "_read_current_display_angle", lambda: 90)
+    monkeypatch.setattr(wds, "_rotate_screen", lambda angle: angles.append(angle) or (True, "ok"))
+    monkeypatch.setattr(client, "_register_prank_cancel", lambda name, callback: callbacks.setdefault(name, callback))
+    monkeypatch.setattr(wds.threading, "Thread", DeferredThread)
+    client._do_prank_invert_screen({})
+
+    assert angles == [180]
+    assert len(callbacks) == 1
+    next(iter(callbacks.values()))()
+    assert angles == [180, 90]
+
+
+def test_slow_mouse_cancel_restores_the_captured_speed(client, monkeypatch):
+    import ctypes
+    from types import SimpleNamespace
+    import xgent_wds as wds
+
+    speeds = []
+    callbacks = {}
+
+    def system_parameters(action, _param, value, _flags):
+        if action == 0x0070:
+            ctypes.cast(value, ctypes.POINTER(ctypes.c_uint)).contents.value = 17
+        else:
+            speeds.append(int(value))
+        return 1
+
+    class DeferredThread:
+        def __init__(self, *, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(wds.ctypes, "windll", SimpleNamespace(user32=SimpleNamespace(SystemParametersInfoW=system_parameters)), raising=False)
+    monkeypatch.setattr(client, "_register_prank_cancel", lambda name, callback: callbacks.setdefault(name, callback))
+    monkeypatch.setattr(wds.threading, "Thread", DeferredThread)
+    client._do_prank_slow_mouse({})
+
+    assert speeds == [1]
+    assert len(callbacks) == 1
+    next(iter(callbacks.values()))()
+    assert speeds == [1, 17]
+
+
+def test_fake_update_cancel_before_window_creation_prevents_demo_ui(client, monkeypatch):
+    import xgent_wds as wds
+
+    callbacks = {}
+    workers = []
+
+    class DeferredThread:
+        def __init__(self, *, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            workers.append(self.target)
+
+    finished = []
+    monkeypatch.setattr(client, "_register_prank_cancel", lambda name, callback: callbacks.setdefault(name, callback))
+    monkeypatch.setattr(client, "_finish_prank_cancel", lambda name: finished.append(name))
+    monkeypatch.setattr(wds.threading, "Thread", DeferredThread)
+
+    client._do_prank_fake_update({})
+    assert workers and len(callbacks) == 1
+    next(iter(callbacks.values()))()
+    workers[0]()
+
+    assert finished == list(callbacks)
+
+
 def test_shell_routing_uses_capture(client, monkeypatch):
     captured = {}
 
@@ -1083,19 +1243,26 @@ def test_geoip_uses_https_fallback_and_reports_approximation(client, monkeypatch
         calls.append(request.full_url)
         if "ipapi.co" in request.full_url:
             raise OSError("provider unavailable")
-        return Response(b'{"ip":"203.0.113.10","city":"Test","country":"XX","loc":"1.0,2.0"}')
+        return Response(b'{"ip":"203.0.113.10","city":"Test","country_name":"Example","loc":"1.0,2.0"}')
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    import location_adapter
+    monkeypatch.setattr(location_adapter, "read_system_location", lambda: {
+        "source": "system", "state": "needs_live_test", "label": "not checked",
+    })
     client._do_geo_location({"ip_fallback": True})
     results = [payload for topic, payload in _publish_calls(client) if topic.endswith("/geo_location")]
     assert results and results[-1]["ok"] is True
     assert "не GPS" in results[-1]["text"]
+    assert "Test, Example" in results[-1]["text"]
+    assert results[-1].get("latitude") is None and results[-1].get("longitude") is None
     assert calls == ["https://ipapi.co/json/", "https://ipinfo.io/json"]
     assert len([payload for topic, payload in _publish_calls(client) if topic.endswith("/output") and payload.get("type") == "geo_location"]) == 0
 
 
 def test_geoip_lookup_obeys_total_deadline_and_publishes_once(client, monkeypatch):
     import urllib.request
+    import location_adapter
 
     clock = [100.0]
     timeouts = []
@@ -1106,8 +1273,11 @@ def test_geoip_lookup_obeys_total_deadline_and_publishes_once(client, monkeypatc
         clock[0] += timeout
         raise TimeoutError("fixture timeout")
 
-    monkeypatch.setattr(wds.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(location_adapter.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(location_adapter, "read_system_location", lambda: {
+        "source": "system", "state": "needs_live_test", "label": "not checked",
+    })
     monkeypatch.setattr(client, "_publish_response", lambda topic, payload: publications.append((topic, payload)))
 
     client._do_geo_location({"id": "geo-456", "ip_fallback": True})

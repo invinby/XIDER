@@ -61,6 +61,54 @@ def test_expiring_grant_delivery_failure_releases_claim_for_retry(monkeypatch):
 import roles
 
 
+def test_prank_stop_all_ack_does_not_claim_effects_are_already_stopped(monkeypatch):
+    answers = []
+    commands = []
+    session_state = {}
+    original_session = dict(bot.SESSION)
+
+    class Callback:
+        data = "prank:stop_all"
+        from_user = SimpleNamespace(id=101)
+        message = SimpleNamespace(
+            text="Розыгрыши", chat=SimpleNamespace(id=10), message_id=20,
+            edit_reply_markup=_async_noop,
+        )
+
+        async def answer(self, text, **kwargs):
+            answers.append((text, kwargs))
+
+    async def scenario():
+        bot.SESSION["target"] = "device-1"
+        bot.SESSION["mouse_swapped_device-1"] = True
+        bot.SESSION["desktop_hidden_device-1"] = True
+        async def simple_command(callback, action, emoji, label, timeout=12.0, **kwargs):
+            commands.append((callback, action, emoji, label, timeout, kwargs))
+
+        monkeypatch.setattr(bot, "simple_command", simple_command)
+        await bot.on_prank_stop_all(Callback())
+        session_state["mouse_swapped"] = bot.SESSION["mouse_swapped_device-1"]
+        session_state["desktop_hidden"] = bot.SESSION["desktop_hidden_device-1"]
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        bot.SESSION.clear()
+        bot.SESSION.update(original_session)
+
+    assert len(commands) == 1
+    assert commands[0][1:] == (
+        "prank_stop_all", "🛑", "Остановить активные приколы", 12.0, {},
+    )
+    assert bot._simple_command_label("prank_stop_all", "fallback", {}) == bot._lex("prank_stop_all_button")
+    assert session_state == {"mouse_swapped": True, "desktop_hidden": True}
+    assert answers == []  # simple_command owns progress and final result on the same card.
+
+
+async def _async_noop(*args, **kwargs):
+    return None
+
+
 def _jpeg_test_image() -> bytes:
     import io
     from PIL import Image
@@ -5925,6 +5973,83 @@ def test_file_inbox_is_owner_only_and_uses_registered_actions(monkeypatch):
         "files:inbox:upload", f"files:inbox:view:{'a' * 32}", "cat:files", "menu:main",
     ]
     assert _callback_data(user_inbox) == []
+
+
+def test_staged_file_placement_requires_preview_and_explicit_confirmation(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from file_inbox import FileInbox
+
+    Callback, rendered = _admin_fixture(monkeypatch, tmp_path)
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "get_effective_grants", lambda _user: {"callbacks": []})
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(bot, "SESSION", {"target": "a"})
+    inbox = FileInbox(tmp_path / "staged-files")
+    item = inbox.stage(actor_id=100, owner_id=100, name="notes.txt", data=b"staged bytes")
+    monkeypatch.setattr(bot, "file_inbox", inbox)
+    published = []
+    monkeypatch.setattr(bot, "publish_tracked", lambda action, **payload: (
+        published.append((action, payload)) or (True, "request-1")
+    ))
+
+    async def wait_for(target, action, *, timeout, command_id):
+        assert (target, action, timeout, command_id) == ("a", "file_put", 25.0, "request-1")
+        return {"ok": True, "path": "/tmp/notes.txt"}
+
+    monkeypatch.setattr(bot.fun_text_collector, "wait_for", wait_for)
+
+    class State:
+        def __init__(self):
+            self.values = {}
+            self.current = None
+
+        async def clear(self):
+            self.values.clear()
+            self.current = None
+
+        async def set_state(self, value):
+            self.current = value
+
+        async def get_state(self):
+            return self.current
+
+        async def update_data(self, **values):
+            self.values.update(values)
+
+        async def get_data(self):
+            return dict(self.values)
+
+    class Message:
+        from_user = SimpleNamespace(id=100)
+        text = "/tmp/notes.txt"
+
+        async def delete(self):
+            pass
+
+    state = State()
+
+    async def scenario():
+        await bot.on_file_inbox_place_prompt(Callback(f"files:inbox:place:{item['item_id']}"), state)
+        assert published == []
+        await bot.on_file_inbox_path(Message(), state)
+        assert published == []
+        assert "Подтверди размещение" in rendered[-1][0]
+        assert "/tmp/notes.txt" in rendered[-1][0]
+        assert f"files:inbox:place:confirm:{item['item_id']}" in _callback_data(rendered[-1][1])
+        await bot.on_file_inbox_place_confirm(
+            Callback(f"files:inbox:place:confirm:{item['item_id']}"), state,
+        )
+
+    asyncio.run(scenario())
+
+    assert len(published) == 1
+    action, payload = published[0]
+    assert action == "file_put"
+    assert payload["_target"] == "a"
+    assert payload["name"] == "notes.txt"
+    assert payload["path"] == "/tmp/notes.txt"
+    assert payload["b64"] == "c3RhZ2VkIGJ5dGVz"
+    assert inbox.get(actor_id=100, owner_id=100, item_id=item["item_id"]) is not None
 
 
 def test_corrupt_staged_file_still_has_owner_delete_path(monkeypatch, tmp_path):
@@ -12833,7 +12958,8 @@ def test_screen_action_buttons_are_backed_by_declarative_navigation(monkeypatch)
 
 
 def test_system_action_buttons_are_backed_by_declarative_navigation(monkeypatch):
-    _setup(monkeypatch, {})
+    _setup(monkeypatch, {"device-1": {"name": "PC", "os": "Windows 11"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "device-1"})
     monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
     monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
     rows = bot.feature_catalog.visible_navigation_pages(
@@ -12847,6 +12973,162 @@ def test_system_action_buttons_are_backed_by_declarative_navigation(monkeypatch)
     rendered_callbacks = set(_callback_data(bot.system_menu(user_id=100)))
     rendered_actions = rendered_callbacks - {"back:device", "menu:main"}
     assert declared_callbacks == rendered_actions
+
+
+def test_filevault_status_is_mac_only_owner_only_and_registry_backed(monkeypatch):
+    _setup(monkeypatch, {"mac": {"name": "MacBook", "os": "macOS 27.0"},
+                        "win": {"name": "PC", "os": "Windows 11"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "mac"})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
+
+    mac_rows = bot.feature_catalog.visible_navigation_pages(
+        bot.feature_catalog.load_registry(), parent="system", role="owner",
+        grants=set(), platform="macos",
+    )
+    win_rows = bot.feature_catalog.visible_navigation_pages(
+        bot.feature_catalog.load_registry(), parent="system", role="owner",
+        grants=set(), platform="windows",
+    )
+    assert "filevault:status" in {str(row["callback"]) for row in mac_rows}
+    assert "filevault:status" in set(_callback_data(bot.system_menu(user_id=100)))
+    assert "filevault:status" not in {str(row["callback"]) for row in win_rows}
+
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.GUEST)
+    assert "filevault:status" not in set(_callback_data(bot.system_menu(user_id=300)))
+
+
+def test_filevault_status_dispatches_only_to_supported_macos_agent(monkeypatch, tmp_path):
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    _setup(monkeypatch, {"mac": {"name": "MacBook", "os": "macOS 27.0",
+                                "capabilities": {"commands": ["filevault_status"]}},
+                        "win": {"name": "PC", "os": "Windows 11",
+                                "capabilities": {"commands": ["filevault_status"]}},
+                        "oldmac": {"name": "Old Mac", "os": "macOS 13",
+                                   "capabilities": {"commands": ["sysinfo"]}}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "mac"})
+    monkeypatch.setattr(bot, "_callback_result_access_or_report",
+                        lambda *_args, **_kwargs: asyncio.sleep(0, result=True))
+    commands = []
+    monkeypatch.setattr(bot, "simple_command", lambda *args, **kwargs:
+                        asyncio.sleep(0, result=commands.append((args, kwargs))))
+
+    async def scenario():
+        await bot.on_filevault_status(telegram.callback("filevault:status"))
+        assert len(commands) == 1
+        assert commands[0][0][1:] == ("filevault_status", "🔐", "Статус FileVault")
+        bot.SESSION["target"] = "win"
+        await bot.on_filevault_status(telegram.callback("filevault:status"))
+        bot.SESSION["target"] = "oldmac"
+        await bot.on_filevault_status(telegram.callback("filevault:status"))
+
+    asyncio.run(scenario())
+    assert len(commands) == 1
+    assert "не объявляет поддержку filevault_status" in telegram.cards[30]["text"]
+
+
+def test_sip_status_is_mac_only_owner_only_and_registry_backed(monkeypatch):
+    _setup(monkeypatch, {"mac": {"name": "MacBook", "os": "macOS 27.0"},
+                        "win": {"name": "PC", "os": "Windows 11"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "mac"})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
+
+    mac_rows = bot.feature_catalog.visible_navigation_pages(
+        bot.feature_catalog.load_registry(), parent="system", role="owner",
+        grants=set(), platform="macos",
+    )
+    win_rows = bot.feature_catalog.visible_navigation_pages(
+        bot.feature_catalog.load_registry(), parent="system", role="owner",
+        grants=set(), platform="windows",
+    )
+    assert "sip:status" in {str(row["callback"]) for row in mac_rows}
+    assert "sip:status" in set(_callback_data(bot.system_menu(user_id=100)))
+    assert "sip:status" not in {str(row["callback"]) for row in win_rows}
+
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.GUEST)
+    assert "sip:status" not in set(_callback_data(bot.system_menu(user_id=300)))
+
+
+def test_sip_status_dispatches_only_to_supported_macos_agent(monkeypatch, tmp_path):
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    _setup(monkeypatch, {"mac": {"name": "MacBook", "os": "macOS 27.0",
+                                "capabilities": {"commands": ["sip_status"]}},
+                        "win": {"name": "PC", "os": "Windows 11",
+                                "capabilities": {"commands": ["sip_status"]}},
+                        "oldmac": {"name": "Old Mac", "os": "macOS 13",
+                                   "capabilities": {"commands": ["sysinfo"]}}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "mac"})
+    monkeypatch.setattr(bot, "_callback_result_access_or_report",
+                        lambda *_args, **_kwargs: asyncio.sleep(0, result=True))
+    commands = []
+    monkeypatch.setattr(bot, "simple_command", lambda *args, **kwargs:
+                        asyncio.sleep(0, result=commands.append((args, kwargs))))
+
+    async def scenario():
+        await bot.on_sip_status(telegram.callback("sip:status"))
+        assert len(commands) == 1
+        assert commands[0][0][1:] == ("sip_status", "🛡", "Статус SIP")
+        bot.SESSION["target"] = "win"
+        await bot.on_sip_status(telegram.callback("sip:status"))
+        bot.SESSION["target"] = "oldmac"
+        await bot.on_sip_status(telegram.callback("sip:status"))
+
+    asyncio.run(scenario())
+    assert len(commands) == 1
+    assert "не объявляет поддержку sip_status" in telegram.cards[30]["text"]
+
+
+def test_gatekeeper_status_is_mac_only_owner_only_and_registry_backed(monkeypatch):
+    _setup(monkeypatch, {"mac": {"name": "MacBook", "os": "macOS 27.0"},
+                        "win": {"name": "PC", "os": "Windows 11"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "mac"})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
+
+    mac_rows = bot.feature_catalog.visible_navigation_pages(
+        bot.feature_catalog.load_registry(), parent="system", role="owner",
+        grants=set(), platform="macos",
+    )
+    win_rows = bot.feature_catalog.visible_navigation_pages(
+        bot.feature_catalog.load_registry(), parent="system", role="owner",
+        grants=set(), platform="windows",
+    )
+    assert "gatekeeper:status" in {str(row["callback"]) for row in mac_rows}
+    assert "gatekeeper:status" in set(_callback_data(bot.system_menu(user_id=100)))
+    assert "gatekeeper:status" not in {str(row["callback"]) for row in win_rows}
+
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.GUEST)
+    assert "gatekeeper:status" not in set(_callback_data(bot.system_menu(user_id=300)))
+
+
+def test_gatekeeper_status_dispatches_only_to_supported_macos_agent(monkeypatch, tmp_path):
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    _setup(monkeypatch, {"mac": {"name": "MacBook", "os": "macOS 27.0",
+                                "capabilities": {"commands": ["gatekeeper_status"]}},
+                        "win": {"name": "PC", "os": "Windows 11",
+                                "capabilities": {"commands": ["gatekeeper_status"]}},
+                        "oldmac": {"name": "Old Mac", "os": "macOS 13",
+                                   "capabilities": {"commands": ["sysinfo"]}}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "mac"})
+    monkeypatch.setattr(bot, "_callback_result_access_or_report",
+                        lambda *_args, **_kwargs: asyncio.sleep(0, result=True))
+    commands = []
+    monkeypatch.setattr(bot, "simple_command", lambda *args, **kwargs:
+                        asyncio.sleep(0, result=commands.append((args, kwargs))))
+
+    async def scenario():
+        await bot.on_gatekeeper_status(telegram.callback("gatekeeper:status"))
+        assert len(commands) == 1
+        assert commands[0][0][1:] == ("gatekeeper_status", "🛡", "Статус Gatekeeper")
+        bot.SESSION["target"] = "win"
+        await bot.on_gatekeeper_status(telegram.callback("gatekeeper:status"))
+        bot.SESSION["target"] = "oldmac"
+        await bot.on_gatekeeper_status(telegram.callback("gatekeeper:status"))
+
+    asyncio.run(scenario())
+    assert len(commands) == 1
+    assert "не объявляет поддержку gatekeeper_status" in telegram.cards[30]["text"]
 
 
 def test_cpu_history_period_picker_is_owner_only_and_registry_backed(monkeypatch):

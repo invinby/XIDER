@@ -1935,6 +1935,18 @@ def _rotate_screen(angle: int) -> tuple[bool, str]:
         return False, f"Ошибка поворота экрана: {exc}"
 
 
+def _read_current_display_angle() -> int | None:
+    """Return the current primary-display orientation in degrees, if available."""
+    try:
+        dm = _DEVMODEW()
+        dm.dmSize = ctypes.sizeof(_DEVMODEW)
+        if not ctypes.windll.user32.EnumDisplaySettingsW(None, -1, ctypes.byref(dm)):
+            return None
+        return {0: 0, 1: 90, 2: 180, 3: 270}.get(int(dm.dmDisplayOrientation))
+    except Exception:
+        return None
+
+
 # =====================================================================
 #  Иконка трея и клиент
 # =====================================================================
@@ -1991,6 +2003,8 @@ class XgentClient:
         )
         self._standby = False
         self._command_context = threading.local()
+        self._active_prank_cancels: dict[str, object] = {}
+        self._active_prank_cancels_lock = threading.RLock()
         self._open_url_operations: dict[str, dict] = {}
         self._open_url_operations_lock = threading.Lock()
         self._handlers = {
@@ -5932,19 +5946,50 @@ class XgentClient:
         self._publish_response("output", {"type": "prank_bsod", "device_id": DEVICE_ID, "ok": True, "text": "💀 Полноэкранный BSOD (со скрытием мыши и блокировкой экрана) активирован!"})
 
     def _do_prank_fake_update(self, payload: dict) -> None:
-        """Полноэкранный фейковый экран обновления Windows 11 с анимированным спиннером."""
+        """Полноэкранная локальная демо-анимация с видимым выходом и таймером."""
+        cancel_event = threading.Event()
+        root_ref: dict[str, object] = {}
+
+        def request_close() -> None:
+            cancel_event.set()
+            root = root_ref.get("root")
+            if root is not None:
+                try:
+                    root.after(0, root.destroy)
+                except Exception:
+                    pass
+
+        scene_id = f"fake_update:{id(cancel_event)}"
+        self._register_prank_cancel(scene_id, request_close)
+
         def _update_screen():
             try:
                 import tkinter as tk
+                if cancel_event.is_set():
+                    return
                 root = tk.Tk()
-                root.title("Windows Update")
+                root_ref["root"] = root
+                root.title("XIDER demo")
                 root.attributes("-fullscreen", True)
                 root.attributes("-topmost", True)
-                root.config(cursor="none")
                 root.configure(bg="#000000")
+                closed = False
+                started = time.monotonic()
 
-                root.bind("<Escape>", lambda e: root.destroy())
-                root.bind("<Double-Button-1>", lambda e: root.destroy())
+                def _close(_event=None):
+                    nonlocal closed
+                    if closed:
+                        return
+                    closed = True
+                    cancel_event.set()
+                    try:
+                        root.destroy()
+                    except tk.TclError:
+                        pass
+
+                root.bind("<Escape>", _close)
+                root.bind("<Double-Button-1>", _close)
+                root.protocol("WM_DELETE_WINDOW", _close)
 
                 frame = tk.Frame(root, bg="#000000")
                 frame.place(relx=0.5, rely=0.5, anchor="center")
@@ -5955,15 +6000,20 @@ class XgentClient:
                 lbl_title = tk.Label(frame, text="Работа с обновлениями", font=("Segoe UI", 26), fg="white", bg="#000000")
                 lbl_title.pack(pady=(10, 5))
 
-                lbl_pct = tk.Label(frame, text="1% завершено", font=("Segoe UI", 20), fg="white", bg="#000000")
-                lbl_pct.pack(pady=5)
+                lbl_demo = tk.Label(
+                    frame, text="ДЕМО · Esc закрывает · 22с",
+                    font=("Segoe UI", 16, "bold"), fg="#70d6ff", bg="#000000",
+                )
+                lbl_demo.pack(pady=5)
 
-                lbl_sub = tk.Label(frame, text="Не выключайте компьютер. Это займет некоторое время.\nКомпьютер может перезагрузиться несколько раз.", font=("Segoe UI Light", 14), fg="#cccccc", bg="#000000", justify="center")
+                lbl_sub = tk.Label(frame, text="Это локальная сценка: обновление и перезагрузка системы не запускаются.\nЭкран закроется автоматически; выйти можно клавишей Esc.", font=("Segoe UI Light", 14), fg="#cccccc", bg="#000000", justify="center")
                 lbl_sub.pack(pady=(15, 0))
 
                 angle = 0
                 def _spin():
                     nonlocal angle
+                    if closed:
+                        return
                     spinner.delete("all")
                     import math
                     cx, cy, r = 40, 40, 25
@@ -5976,27 +6026,26 @@ class XgentClient:
                     angle = (angle + 18) % 360
                     root.after(40, _spin)
 
-                pct = 1
-                def _inc():
-                    nonlocal pct
-                    if pct < 100:
-                        pct += 3
-                        if pct > 100:
-                            pct = 100
-                        lbl_pct.config(text=f"{pct}% завершено")
-                        root.after(1000, _inc)
+                def _countdown():
+                    if closed:
+                        return
+                    remaining = max(0, 22 - int(time.monotonic() - started))
+                    lbl_demo.config(text=f"ДЕМО · Esc закрывает · {remaining}с")
+                    if remaining == 0:
+                        _close()
                     else:
-                        root.after(1500, root.destroy)
+                        root.after(250, _countdown)
 
                 _spin()
-                root.after(800, _inc)
-                root.after(22000, lambda: root.destroy())
+                _countdown()
                 root.mainloop()
             except Exception as e:
                 log.error("Fake update error: %s", e)
+            finally:
+                self._finish_prank_cancel(scene_id)
 
         threading.Thread(target=_update_screen, daemon=True, name="xgent-fakeupdate").start()
-        self._publish_response("output", {"type": "prank_fake_update", "device_id": DEVICE_ID, "ok": True, "text": "⏳ Полноэкранное обновление Windows 11 (со скрытием курсора) запущено!"})
+        self._publish_response("output", {"type": "prank_fake_update", "device_id": DEVICE_ID, "ok": True, "text": "⏳ Демо-экран запущен на 22 секунды. Закрыть сразу: Esc или двойной щелчок."})
 
     def _do_prank_toast_spam(self, payload: dict) -> None:
         """Спам 5 системными уведомлениями в трее."""
@@ -6122,24 +6171,99 @@ class XgentClient:
 
     def _do_prank_invert_screen(self, payload: dict) -> None:
         """Переворот экрана на 180° на 7 секунд с автовозвратом."""
+        original_angle = _read_current_display_angle()
+        if original_angle is None:
+            self._publish_response("output", {
+                "type": "prank_invert_screen", "device_id": DEVICE_ID, "ok": False,
+                "state": "unknown", "text": "⚠️ Не удалось прочитать исходный поворот экрана; сценка не запускалась.",
+            })
+            return
+        cancel_event = threading.Event()
+        scene_id = f"invert_screen:{time.time_ns()}"
+
+        def restore() -> None:
+            cancel_event.set()
+            _rotate_screen(original_angle)
+
+        self._register_prank_cancel(scene_id, restore)
+        rotated, detail = _rotate_screen(180)
+        if not rotated:
+            self._finish_prank_cancel(scene_id)
+            self._publish_response("output", {
+                "type": "prank_invert_screen", "device_id": DEVICE_ID, "ok": False,
+                "state": "failed", "text": f"⚠️ Экран не повёрнут: {detail}",
+            })
+            return
+        if cancel_event.is_set():
+            restore()
+
         def _flip():
-            _rotate_screen(180)
-            time.sleep(7)
-            _rotate_screen(0)
-        threading.Thread(target=_flip, daemon=True).start()
+            try:
+                if not cancel_event.wait(7):
+                    restore()
+            finally:
+                self._finish_prank_cancel(scene_id)
+
+        threading.Thread(target=_flip, daemon=True, name="xider-prank-invert").start()
         self._publish_response("output", {"type": "prank_invert_screen", "device_id": DEVICE_ID, "ok": True, "text": "🙃 Экран перевернут вверх дном на 7 секунд!"})
 
     def _do_prank_slow_mouse(self, payload: dict) -> None:
         """Замедление скорости указателя мыши на 8 секунд с восстановлением."""
-        def _slow():
+        try:
             user32 = ctypes.windll.user32
             cur_speed = ctypes.c_uint()
-            user32.SystemParametersInfoW(0x0070, 0, ctypes.byref(cur_speed), 0)
-            orig = cur_speed.value or 10
-            user32.SystemParametersInfoW(0x0071, 0, 1, 0)
-            time.sleep(8)
-            user32.SystemParametersInfoW(0x0071, 0, orig, 0)
-        threading.Thread(target=_slow, daemon=True).start()
+            if not user32.SystemParametersInfoW(0x0070, 0, ctypes.byref(cur_speed), 0):
+                raise RuntimeError("не удалось прочитать скорость указателя")
+            original_speed = int(cur_speed.value)
+            if not 1 <= original_speed <= 20:
+                raise RuntimeError("Windows вернула скорость указателя вне диапазона")
+        except Exception as exc:
+            self._publish_response("output", {
+                "type": "prank_slow_mouse", "device_id": DEVICE_ID, "ok": False,
+                "state": "unknown", "text": f"⚠️ Сценка не запущена: {type(exc).__name__}.",
+            })
+            return
+
+        cancel_event = threading.Event()
+        applied = threading.Event()
+        restore_lock = threading.Lock()
+        restored = False
+        scene_id = f"slow_mouse:{time.time_ns()}"
+
+        def restore() -> None:
+            nonlocal restored
+            cancel_event.set()
+            if not applied.is_set():
+                return
+            with restore_lock:
+                if restored:
+                    return
+                restored = True
+                user32.SystemParametersInfoW(0x0071, 0, original_speed, 0)
+
+        self._register_prank_cancel(scene_id, restore)
+        try:
+            if not user32.SystemParametersInfoW(0x0071, 0, 1, 0):
+                raise RuntimeError("Windows не применила временную скорость указателя")
+            applied.set()
+            if cancel_event.is_set():
+                restore()
+        except Exception as exc:
+            self._finish_prank_cancel(scene_id)
+            self._publish_response("output", {
+                "type": "prank_slow_mouse", "device_id": DEVICE_ID, "ok": False,
+                "state": "failed", "text": f"⚠️ Сценка не запущена: {type(exc).__name__}.",
+            })
+            return
+
+        def _slow():
+            try:
+                if not cancel_event.wait(8):
+                    restore()
+            finally:
+                self._finish_prank_cancel(scene_id)
+
+        threading.Thread(target=_slow, daemon=True, name="xider-prank-slow-mouse").start()
         self._publish_response("output", {"type": "prank_slow_mouse", "device_id": DEVICE_ID, "ok": True, "text": "🐌 Мышь замедлена до минимальной скорости на 8 секунд!"})
 
     def _do_prank_random_clicks(self, payload: dict) -> None:
@@ -6265,6 +6389,11 @@ class XgentClient:
 
     def _do_prank_restore_wallpaper(self, payload: dict) -> None:
         """Восстановление исходных обоев рабочего стола."""
+        ok, text = self._restore_saved_prank_wallpaper()
+        self._publish_response("output", {"type": "prank_restore_wallpaper", "device_id": DEVICE_ID, "ok": ok, "text": text})
+
+    def _restore_saved_prank_wallpaper(self) -> tuple[bool, str]:
+        """Restore the saved wallpaper without publishing a second command result."""
         try:
             bf_path = CONFIG_DIR / "backup_wallpaper.txt"
             if bf_path.exists():
@@ -6272,18 +6401,14 @@ class XgentClient:
                     orig_wall = bf.read().strip()
                 if orig_wall and os.path.exists(orig_wall):
                     ctypes.windll.user32.SystemParametersInfoW(20, 0, orig_wall, 3)
-                    text = f"✅ Исходные обои успешно восстановлены:\n{orig_wall}"
-                    ok = True
+                    return True, "✅ Исходные обои восстановлены."
                 else:
-                    text = "ℹ️ Исходный файл обоев не найден на диске."
-                    ok = False
+                    return False, "ℹ️ Исходный файл обоев не найден на диске."
             else:
-                text = "ℹ️ Резервная копия обоев не найдена."
-                ok = False
+                return False, "ℹ️ Резервная копия обоев не найдена."
         except Exception as exc:
-            text = f"⚠️ Ошибка восстановления обоев: {exc}"
-            ok = False
-        self._publish_response("output", {"type": "prank_restore_wallpaper", "device_id": DEVICE_ID, "ok": ok, "text": text})
+            log.exception("Не удалось восстановить сохранённые обои")
+            return False, f"⚠️ Ошибка восстановления обоев: {type(exc).__name__}."
 
     def _do_prank_speak_time(self, payload: dict) -> None:
         """Озвучивание точного времени говорящим синтезатором речи."""
@@ -6639,56 +6764,48 @@ setTimeout(()=>window.close(),15000);
         threading.Thread(target=_laugh, daemon=True).start()
         self._publish_response("output", {"type": "prank_laugh_track", "device_id": DEVICE_ID, "ok": True, "text": "😈 Зловещий смех запущен через динамики!"})
 
-    def _do_prank_stop_all(self, payload: dict) -> None:
-        """Экстренная остановка всех активных приколов и возврат системы в нормальный штатный режим."""
-        log.info("Экстренная остановка всех приколов (prank_stop_all)...")
-        results = []
-        # 1. Восстановить кнопки мыши
-        try:
-            ctypes.windll.user32.SwapMouseButton(0)
-            results.append("кнопки мыши (L/R норма)")
-        except Exception:
-            pass
-        # 2. Восстановить скорость мыши (стандарт 10)
-        try:
-            ctypes.windll.user32.SystemParametersInfoW(0x0071, 0, 10, 0)
-            results.append("скорость мыши")
-        except Exception:
-            pass
-        # 3. Вернуть иконки рабочего стола
-        try:
-            progman = ctypes.windll.user32.FindWindowW("Progman", None)
-            def_view = ctypes.windll.user32.FindWindowExW(progman, None, "SHELLDLL_DefView", None)
-            listview = ctypes.windll.user32.FindWindowExW(def_view, None, "SysListView32", None)
-            if listview:
-                ctypes.windll.user32.ShowWindow(listview, 5)  # SW_SHOW
-                results.append("иконки стола")
-        except Exception:
-            pass
-        # 4. Сбросить поворот экрана в 0°
-        try:
-            _rotate_screen(0)
-            results.append("поворот экрана (0°)")
-        except Exception:
-            pass
-        # 5. Восстановить обои если сохранены
-        try:
-            self._do_prank_restore_wallpaper({})
-            results.append("обои")
-        except Exception:
-            pass
-        # 6. Отключить ночной свет если был включен
-        try:
-            self._do_display_night_light({"enabled": False})
-        except Exception:
-            pass
+    def _register_prank_cancel(self, scene_id: str, callback) -> None:
+        if not isinstance(scene_id, str) or not scene_id or not callable(callback):
+            raise ValueError("prank cancellation registration is invalid")
+        with self._active_prank_cancels_lock:
+            self._active_prank_cancels[scene_id] = callback
 
-        restored_str = ", ".join(results) if results else "эффекты сброшены"
+    def _finish_prank_cancel(self, scene_id: str) -> None:
+        with self._active_prank_cancels_lock:
+            self._active_prank_cancels.pop(scene_id, None)
+
+    def _cancel_active_pranks(self) -> list[str]:
+        with self._active_prank_cancels_lock:
+            entries = list(self._active_prank_cancels.items())
+            self._active_prank_cancels.clear()
+        cancelled = []
+        for scene_id, callback in entries:
+            try:
+                callback()
+                cancelled.append(scene_id)
+            except Exception:
+                log.exception("Не удалось отменить прикол %s", scene_id)
+        return cancelled
+
+    def _do_prank_stop_all(self, payload: dict) -> None:
+        """Restore only prank state for which XIDER has an explicit saved original value."""
+        log.info("Экстренная остановка всех приколов (prank_stop_all)...")
+        cancel_requests = self._cancel_active_pranks()
+        # Wallpaper is the only prank here with an explicit persisted original.
+        # Never guess user defaults for mouse, display orientation, icons, or night light.
+        _wallpaper_restored, wallpaper = self._restore_saved_prank_wallpaper()
         self._publish_response("output", {
             "type": "prank_stop_all",
             "device_id": DEVICE_ID,
-            "ok": True,
-            "text": f"🛑 Все приколы принудительно остановлены!\nВосстановлено: {restored_str}",
+            "ok": False,
+            "state": "partial",
+            "text": (
+                f"🛑 Запрос отмены отправлен для сценок: {len(cancel_requests)}. {wallpaper} "
+                "Результат частичный: не все старые эффекты поддерживают отмену. "
+                "Остальные параметры системы не сбрасывал: "
+                "короткие эффекты завершаются по своим таймерам, "
+                "а для полной отмены каждой сцены нужен отдельный cancel-handler."
+            ),
         })
 
 

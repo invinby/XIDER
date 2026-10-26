@@ -26,6 +26,14 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_macos_bootstrap_never_prompts_for_vps_password():
+    source = (ROOT / "deploy" / "bootstrap.sh").read_text(encoding="utf-8")
+    assert "ssh_args=(-o BatchMode=yes" in source
+    assert "-o PasswordAuthentication=no" in source
+    assert "-o KbdInteractiveAuthentication=no" in source
+    assert "введи пароль VPS при запросе" not in source
+
+
 def _bash() -> str:
     if os.name == "nt":
         candidate = Path("C:/Program Files/Git/bin/bash.exe")

@@ -61,6 +61,66 @@ def test_guardian_mqtt_callbacks_write_connected_and_disconnected_health(
     assert written == [("guardian", True), ("guardian", False)]
 
 
+def test_guardian_status_reports_agent_and_guardian_tasks_separately(
+    guardian_module, monkeypatch
+):
+    module = guardian_module
+    guardian = object.__new__(module.Guardian)
+    guardian.state = {"auto_restart": True, "desired_running": True}
+    queried = []
+    monkeypatch.setattr(module, "_task_exists", lambda name: queried.append(name) or name == module.AGENT_TASK)
+    monkeypatch.setattr(guardian, "agent_process", lambda: None)
+
+    result = guardian.status_payload()
+
+    assert result["launchd_loaded"] is True
+    assert result["guardian_task_registered"] is False
+    assert "Задача агента: зарегистрирована" in result["text"]
+    assert "Задача Guardian: не зарегистрирована" in result["text"]
+    assert queried == [module.AGENT_TASK, module.GUARDIAN_TASK]
+
+
+def test_guardian_status_keeps_task_query_errors_unknown(guardian_module, monkeypatch):
+    module = guardian_module
+    guardian = object.__new__(module.Guardian)
+    guardian.state = {"auto_restart": True, "desired_running": True}
+    monkeypatch.setattr(module, "_task_exists", lambda _name: None)
+    monkeypatch.setattr(guardian, "agent_process", lambda: None)
+
+    result = guardian.status_payload()
+
+    assert result["launchd_loaded"] is None
+    assert result["guardian_task_registered"] is None
+    assert "Задача агента: статус неизвестен" in result["text"]
+    assert "Задача Guardian: статус неизвестен" in result["text"]
+
+
+def test_task_query_access_error_is_not_reported_as_missing(guardian_module, monkeypatch):
+    module = guardian_module
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: type(
+            "Result", (), {"returncode": 1, "stdout": "Access is denied.", "stderr": ""}
+        )(),
+    )
+
+    assert module._task_exists(module.AGENT_TASK) is None
+
+
+def test_task_query_recognizes_missing_task(guardian_module, monkeypatch):
+    module = guardian_module
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: type(
+            "Result", (), {"returncode": 1, "stdout": "ERROR: The system cannot find the file specified.", "stderr": ""}
+        )(),
+    )
+
+    assert module._task_exists(module.AGENT_TASK) is False
+
+
 def test_legacy_state_migrates_recovery_but_preserves_explicit_stop(
     guardian_module, monkeypatch, tmp_path
 ):
@@ -298,3 +358,51 @@ def test_stop_ends_agent_task_before_terminating_worker(
     assert guardian.state["desired_running"] is False
     assert run.call_args.args[0] == ["schtasks.exe", "/End", "/TN", module.AGENT_TASK]
     worker.terminate.assert_called_once_with()
+
+
+def test_removed_guardian_intent_blocks_windows_agent_recovery(
+    guardian_module, monkeypatch, tmp_path
+):
+    module = guardian_module
+    _use_temp_state(monkeypatch, module, tmp_path)
+    guardian = module.Guardian()
+    module.STATE_FILE.unlink()
+    monkeypatch.setattr(guardian, "agent_process", lambda: None)
+    popen = Mock(side_effect=AssertionError("worker must not be started"))
+    monkeypatch.setattr(module.subprocess, "Popen", popen)
+
+    with pytest.raises(RuntimeError, match="Guardian state was removed"):
+        guardian.start_agent()
+
+    popen.assert_not_called()
+
+
+def test_monitor_backs_off_when_recovered_agent_exits_immediately(
+    guardian_module, monkeypatch
+):
+    module = guardian_module
+    guardian = object.__new__(module.Guardian)
+    waits = iter((False, False, True))
+    guardian.stop_event = Mock()
+    guardian.stop_event.wait.side_effect = lambda _seconds: next(waits)
+    guardian.lock = threading.RLock()
+    guardian.state = {"auto_restart": True, "desired_running": True}
+    guardian._restart_backoff_seconds = 5.0
+    guardian._next_restart_at = 0.0
+    guardian._last_recovery_error = None
+    guardian._observed_agent_pid = None
+    guardian._observed_agent_since = 0.0
+    monkeypatch.setattr(guardian, "_refresh_worker_intent", Mock())
+    monkeypatch.setattr(guardian, "agent_process", Mock(return_value=None))
+    monkeypatch.setattr(guardian, "start_agent", Mock(return_value=4321))
+    published = []
+    monkeypatch.setattr(guardian, "_publish", lambda payload: published.append(payload))
+    ticks = iter((100.0, 100.0, 105.0, 105.0))
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(ticks))
+
+    guardian.monitor()
+
+    guardian.start_agent.assert_called_once_with()
+    assert guardian._next_restart_at == 110.0
+    assert guardian._restart_backoff_seconds == 10.0
+    assert [row["ok"] for row in published] == [True, False]

@@ -9,6 +9,11 @@ def test_snapshot_inventory_is_complete_and_never_assumes_permission(monkeypatch
     monkeypatch.setattr(agent, "_detect_features", lambda: {
         "screenshot": True, "clipboard": True, "battery": False,
     })
+    # Permission status is OS-dependent. Keep this inventory test deterministic;
+    # dedicated adapter tests cover the platform's passive permission report.
+    monkeypatch.setattr("location_adapter.location_capability", lambda: (
+        "needs_live_test", "source=system; optional source=ip_estimate; uncertainty=unknown"
+    ))
     client = object.__new__(agent.XgentClient)
     sent = []
     client._publish_response = lambda topic, payload: sent.append((topic, payload))

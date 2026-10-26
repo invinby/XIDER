@@ -17,6 +17,12 @@ from pathlib import Path
 CALLBACK_RE = re.compile(r"^cmd:([a-zA-Z0-9_]+)$")
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 CALLBACK_ALIASES = {"check_update": "agent_update"}
+# These commands intentionally exist only on macOS (Feature Registry M01).
+# A missing handler on the other platform is not an implementation gap.
+PLATFORM_ONLY_ACTIONS = {
+    "windows": frozenset(),
+    "macos": frozenset({"filevault_status", "sip_status", "gatekeeper_status"}),
+}
 DYNAMIC_ACTION_WRAPPERS = {
     ("publish_command", "publish"): "shared_publish_dispatch",
     ("publish_command", "on_repeat"): "history_replay",
@@ -629,8 +635,8 @@ def build_report(root: Path) -> dict:
         "dynamic_action_wrappers": sorted(dynamic_action_wrappers, key=lambda item: int(item["line"])),
         "action_agent_coverage": {
             "covered_on_both": sorted(worker_actions & windows & macos),
-            "missing_on_windows": sorted(worker_actions - windows),
-            "missing_on_macos": sorted(worker_actions - macos),
+            "missing_on_windows": sorted(worker_actions - windows - PLATFORM_ONLY_ACTIONS["macos"]),
+            "missing_on_macos": sorted(worker_actions - macos - PLATFORM_ONLY_ACTIONS["windows"]),
         },
         "guardian_commands": guardians,
         "command_matrix": _command_matrix(actions, platforms, guardians),

@@ -6962,6 +6962,24 @@ def system_menu(user_id: int | None = None):
                 grants=set(access_store.get_effective_grants(user_id)["callbacks"]),
             )
             text = _limit_button_label(str(feature.get("title") or "OS support status")) if feature else "OS support status"
+        elif page["presentation"] == "filevault_status":
+            feature = feature_catalog.find_visible_feature(
+                feature_catalog.load_registry(), "M01-F01", role=get_user_role(user_id),
+                grants=set(access_store.get_effective_grants(user_id)["callbacks"]),
+            )
+            text = _limit_button_label(str(feature.get("title") or "FileVault status")) if feature else "FileVault status"
+        elif page["presentation"] == "sip_status":
+            feature = feature_catalog.find_visible_feature(
+                feature_catalog.load_registry(), "M01-F02", role=get_user_role(user_id),
+                grants=set(access_store.get_effective_grants(user_id)["callbacks"]),
+            )
+            text = _limit_button_label(str(feature.get("title") or "SIP status")) if feature else "SIP status"
+        elif page["presentation"] == "gatekeeper_status":
+            feature = feature_catalog.find_visible_feature(
+                feature_catalog.load_registry(), "M01-F03", role=get_user_role(user_id),
+                grants=set(access_store.get_effective_grants(user_id)["callbacks"]),
+            )
+            text = _limit_button_label(str(feature.get("title") or "Gatekeeper status")) if feature else "Gatekeeper status"
         elif page["presentation"] == "hardware_inventory_history":
             feature = feature_catalog.find_visible_feature(
                 feature_catalog.load_registry(), "D01-F14", role=get_user_role(user_id),
@@ -9416,6 +9434,9 @@ FUN_RESPONSE_TYPES = {
     "standby_sleep", "wake", "autorun_status", "autorun_enable", "autorun_disable",
     # Системные утилиты и диагностика
     "sys_uptime", "sys_clean_temp", "net_ping",
+    "filevault_status",
+    "sip_status",
+    "gatekeeper_status",
     "latency_series",
     # Приколы и розыгрыши (40 приколов)
     "prank_screamer", "prank_rickroll", "prank_matrix", "prank_siren",
@@ -19594,6 +19615,87 @@ async def on_os_support(cq: CallbackQuery):
     await _replace_callback_message(cq, body, delivery_guard=guard, reply_markup=back_to_device_kb())
 
 
+@router.callback_query(OwnerFilter(), F.data == "filevault:status")
+async def on_filevault_status(cq: CallbackQuery):
+    target = SESSION.get("target")
+    if not target or target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    info = devices.get(target) or {}
+    os_name = str(info.get("os") or "").lower()
+    if "mac" not in os_name and "darwin" not in os_name:
+        await cq.answer("FileVault доступен только на macOS.", show_alert=True)
+        await _replace_callback_message(
+            cq, "🔐 Проверка FileVault предназначена только для агента macOS; команда не отправлялась.",
+            reply_markup=back_to_device_kb(),
+        )
+        return
+    if _device_declares_command(info, "filevault_status") is False:
+        await cq.answer("Обнови агент macOS перед этой проверкой.", show_alert=True)
+        await _replace_callback_message(
+            cq, "Агент macOS ещё не объявляет поддержку filevault_status; запрос не отправлялся.",
+            reply_markup=back_to_device_kb(),
+        )
+        return
+    await simple_command(cq, "filevault_status", "🔐", "Статус FileVault", timeout=12.0)
+
+
+@router.callback_query(OwnerFilter(), F.data == "sip:status")
+async def on_sip_status(cq: CallbackQuery):
+    target = SESSION.get("target")
+    if not target or target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    info = devices.get(target) or {}
+    os_name = str(info.get("os") or "").lower()
+    if "mac" not in os_name and "darwin" not in os_name:
+        await cq.answer("SIP доступен только на macOS.", show_alert=True)
+        await _replace_callback_message(
+            cq, "🛡 Проверка SIP предназначена только для агента macOS; команда не отправлялась.",
+            reply_markup=back_to_device_kb(),
+        )
+        return
+    if _device_declares_command(info, "sip_status") is False:
+        await cq.answer("Обнови агент macOS перед этой проверкой.", show_alert=True)
+        await _replace_callback_message(
+            cq, "Агент macOS ещё не объявляет поддержку sip_status; запрос не отправлялся.",
+            reply_markup=back_to_device_kb(),
+        )
+        return
+    await simple_command(cq, "sip_status", "🛡", "Статус SIP", timeout=12.0)
+
+
+@router.callback_query(OwnerFilter(), F.data == "gatekeeper:status")
+async def on_gatekeeper_status(cq: CallbackQuery):
+    target = SESSION.get("target")
+    if not target or target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    info = devices.get(target) or {}
+    os_name = str(info.get("os") or "").lower()
+    if "mac" not in os_name and "darwin" not in os_name:
+        await cq.answer("Gatekeeper доступен только на macOS.", show_alert=True)
+        await _replace_callback_message(
+            cq, "🛡 Проверка Gatekeeper предназначена только для агента macOS; команда не отправлялась.",
+            reply_markup=back_to_device_kb(),
+        )
+        return
+    if _device_declares_command(info, "gatekeeper_status") is False:
+        await cq.answer("Обнови агент macOS перед этой проверкой.", show_alert=True)
+        await _replace_callback_message(
+            cq, "Агент macOS ещё не объявляет поддержку gatekeeper_status; запрос не отправлялся.",
+            reply_markup=back_to_device_kb(),
+        )
+        return
+    await simple_command(cq, "gatekeeper_status", "🛡", "Статус Gatekeeper", timeout=12.0)
+
+
 @router.callback_query(OwnerFilter(), F.data == "hardware:history")
 async def on_hardware_inventory_history(cq: CallbackQuery):
     target = SESSION.get("target")
@@ -25359,25 +25461,7 @@ async def on_prank_stop_all(cq: CallbackQuery):
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
         return
-    if publish("prank_stop_all"):
-        SESSION[f"mouse_swapped_{target}"] = False
-        SESSION[f"desktop_hidden_{target}"] = False
-        SESSION[f"nightlight_{target}"] = False
-        page = 1
-        msg_text = cq.message.text or ""
-        for p in range(1, 6):
-            if f"({p})" in msg_text or f"Стр. {p}" in msg_text:
-                page = p
-                break
-        try:
-            await cq.message.edit_reply_markup(reply_markup=pranks_menu(
-                page=page, target=target, user_id=cq.from_user.id if cq.from_user else None,
-            ))
-        except Exception:
-            pass
-        await cq.answer("🛑 ВСЕ ПРИКОЛЫ ОСТАНОВЛЕНЫ! Мышь, экран и рабочий стол в норме.", show_alert=True)
-    else:
-        await cq.answer(_lex("mqtt_publish_failed"), show_alert=True)
+    await simple_command(cq, "prank_stop_all", "🛑", "Остановить активные приколы", timeout=12.0)
 
 
 @router.callback_query(AdminFilter(), F.data == "prank:dancewin")
@@ -25827,6 +25911,7 @@ def _simple_command_still_allowed(user_id: int, callback: str, target: str) -> b
 
 _SIMPLE_COMMAND_LABELS = {
     # Pranks: stateless actions share one correlated, editable Telegram card.
+    "prank_stop_all": ("prank_stop_all_button", None),
     "msgbox_spam": ("prank_spam_windows_button", None),
     "prank_alert_loop": ("prank_alert_loop_button", None),
     "prank_beep_morse": ("prank_morse_button", None),
