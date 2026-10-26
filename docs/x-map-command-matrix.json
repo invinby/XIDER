@@ -1,6 +1,6 @@
 {
   "source_only": true,
-  "worker_command_count": 192,
+  "worker_command_count": 193,
   "guardian_command_count": 5,
   "permission_profile_gaps": [],
   "permission_profiles": {
@@ -121,6 +121,39 @@
     }
   },
   "worker_commands": [
+    {
+      "command": "agent_logs",
+      "platforms": {
+        "windows": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "declared_and_handler",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "A handler is present; runtime outcomes may still depend on permissions, dependencies, device, and session."
+          },
+          "permission_profile_ids": [
+            "agent_account"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms command declaration and handler only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
     {
       "command": "agent_update",
       "platforms": {

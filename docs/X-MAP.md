@@ -42,7 +42,7 @@ py -3.12 ops/x_map_audit.py
 - `stability.state = source_gap` means the declared command and handler/branch
   are inconsistent or missing.
 
-The current snapshot records 120 worker commands and five Guard Keeper commands
+The current snapshot records 193 worker commands and five Guard Keeper commands
 for each platform. Mac screenshot and IP-geolocation rows retain the known
 unretested reports; the rest remain explicitly source-only until device tests
 are recorded. IP geolocation is approximate and is not GPS.
