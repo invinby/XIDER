@@ -26,6 +26,7 @@ from release_signature import verify_manifest_signature, manifest_signing_bytes
 
 
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
+MAX_RELEASE_ASSET_BYTES = 1024 * 1024 * 1024
 MAX_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
 MAX_AGENT_BYTES = 32 * 1024 * 1024
 MAX_MEMBER_COUNT = 20_000
@@ -35,6 +36,12 @@ RELEASE_API = "https://api.github.com/repos/invinby/XIDER/releases"
 RELEASE_BASE = "https://github.com/invinby/XIDER/releases/download"
 SOURCE_ASSET = "XIDER-source.zip"
 MANIFEST_ASSET = "release-manifest.json"
+SIGNED_INSTALL_ASSETS = {
+    "XGENT-WDS-Windows.zip": ("windows_agent", "windows"),
+    "XGENT-MCS-macos-bundle.zip": ("mac_agent", "macos"),
+    "Guard-Keeper-Windows.zip": ("windows_keeper", "windows"),
+    "Guard-Keeper-macOS.zip": ("mac_keeper", "macos"),
+}
 _RELEASE_TAG = re.compile(r"^v\d{1,6}\.\d{1,6}\.\d{1,6}$")
 _ALLOWED_RELEASE_HOSTS = frozenset({
     "github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com",
@@ -421,10 +428,97 @@ def _fetch_release(release_tag: str | None) -> tuple[str, frozenset[str]]:
 
 
 def _release_asset_url(tag: str, name: str) -> str:
-    if name not in {SOURCE_ASSET, MANIFEST_ASSET}:
+    if name not in {SOURCE_ASSET, MANIFEST_ASSET, *SIGNED_INSTALL_ASSETS}:
         raise ValueError("Запрошен неизвестный asset релиза XIDER.")
     tag = _release_tag(tag)
     return f"{RELEASE_BASE}/{urllib.parse.quote(tag, safe='')}/{name}"
+
+
+def download_verified_release_asset(
+    manifest_path: Path,
+    asset_path: Path,
+    asset_name: str,
+    *,
+    release_tag: str | None = None,
+    expected_manifest_digest: str | None = None,
+) -> str:
+    """Download one platform bundle only after verifying its signed inventory."""
+    expected = SIGNED_INSTALL_ASSETS.get(asset_name)
+    if expected is None:
+        raise ValueError("Запрошен неизвестный установочный пакет XIDER.")
+    tag, names = _fetch_release(release_tag)
+    if asset_name not in names:
+        raise ValueError(f"В релизе {tag} отсутствует пакет {asset_name}.")
+
+    manifest_path, asset_path = Path(manifest_path), Path(asset_path)
+    download_archive(
+        _release_asset_url(tag, MANIFEST_ASSET), manifest_path,
+        max_bytes=MAX_MANIFEST_BYTES,
+        allowed_redirect_hosts=_ALLOWED_RELEASE_HOSTS,
+    )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Файл release-manifest.json повреждён.") from exc
+    verify_manifest_signature(manifest)
+    if expected_manifest_digest is not None and (
+        not isinstance(expected_manifest_digest, str)
+        or not _SHA256.fullmatch(expected_manifest_digest)
+        or not hmac.compare_digest(
+            hashlib.sha256(manifest_signing_bytes(manifest)).hexdigest(),
+            expected_manifest_digest,
+        )
+    ):
+        raise ValueError("Signed manifest digest does not match the issued update operation.")
+    if (
+        not isinstance(manifest, dict)
+        or type(manifest.get("schema")) is not int
+        or manifest.get("schema") != 1
+        or manifest.get("release") != tag
+    ):
+        raise ValueError("Manifest не соответствует выбранному тегу релиза.")
+    assets = manifest.get("assets")
+    matches = [
+        item for item in assets
+        if isinstance(item, dict) and item.get("name") == asset_name
+    ] if isinstance(assets, list) else []
+    component, platform_name = expected
+    if len(matches) != 1:
+        raise ValueError(f"В manifest нет единственной записи {asset_name}.")
+    item = matches[0]
+    size, digest = item.get("size"), item.get("sha256")
+    if (
+        item.get("component") != component
+        or item.get("platform") != platform_name
+        or isinstance(size, bool)
+        or not isinstance(size, int)
+        or not 0 < size <= MAX_RELEASE_ASSET_BYTES
+        or not isinstance(digest, str)
+        or not _SHA256.fullmatch(digest)
+    ):
+        raise ValueError(f"Запись {asset_name} в manifest некорректна.")
+
+    created = False
+    try:
+        received_size = download_archive(
+            _release_asset_url(tag, asset_name), asset_path,
+            max_bytes=size,
+            allowed_redirect_hosts=_ALLOWED_RELEASE_HOSTS,
+        )
+        created = True
+        if received_size != size:
+            raise ValueError(f"Размер {asset_name} не совпадает с release manifest.")
+        hasher = hashlib.sha256()
+        with Path(asset_path).open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                hasher.update(block)
+        if not hmac.compare_digest(hasher.hexdigest(), digest):
+            raise ValueError(f"SHA-256 {asset_name} не совпадает с release manifest.")
+    except Exception:
+        if created:
+            Path(asset_path).unlink(missing_ok=True)
+        raise
+    return tag
 
 
 def download_archive(
