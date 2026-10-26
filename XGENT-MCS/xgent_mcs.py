@@ -3521,38 +3521,53 @@ class XgentClient:
         self._publish_response("capabilities", response)
 
     def _do_agent_logs(self, payload: dict) -> None:
-        """Return a bounded, redacted tail of the local agent log on owner request."""
+        """Return bounded tails of both macOS agent log streams on owner request."""
         result = {
             "type": "agent_logs", "device_id": DEVICE_ID, "ok": False,
             "state": "unavailable", "lines": 0, "text": "",
         }
-        try:
-            log_path = CONFIG_DIR / "xgent.log"
-            raw = log_path.read_bytes()
-            truncated = len(raw) > 32 * 1024
-            text = raw[-(32 * 1024):].decode("utf-8", errors="replace")
+        sources = (
+            ("xgent.log", CONFIG_DIR / "xgent.log"),
+            ("agent.log", _agent_install_dir() / "agent.log"),
+        )
+        secret_patterns = (
+            re.compile(r"(?i)\b(token|password|passwd|secret|api[_-]?key|authorization|private[_-]?key)\b(\s*[:=]\s*)([^\s,;]+)"),
+            re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"),
+        )
+        clean_rows = []
+        unavailable_sources = []
+        truncated = False
+        for label, log_path in sources:
+            try:
+                raw = log_path.read_bytes()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                unavailable_sources.append(label)
+                continue
+            truncated = truncated or len(raw) > 16 * 1024
+            text = raw[-(16 * 1024):].decode("utf-8", errors="replace")
             all_rows = text.splitlines()
-            truncated = truncated or len(all_rows) > 80
-            rows = all_rows[-80:]
-            secret_patterns = (
-                re.compile(r"(?i)\b(token|password|passwd|secret|api[_-]?key|authorization|private[_-]?key)\b(\s*[:=]\s*)([^\s,;]+)"),
-                re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"),
-            )
-            clean = []
-            for row in rows:
+            truncated = truncated or len(all_rows) > 40
+            for row in all_rows[-40:]:
                 for pattern in secret_patterns:
                     row = pattern.sub(lambda match: f"{match.group(1)}=[REDACTED]" if match.lastindex and match.lastindex >= 3 else "Bearer [REDACTED]", row)
-                clean.append(row[-500:])
-            joined = "\n".join(clean)
+                clean_rows.append(f"[{label}] {row[-480:]}")
+        if not clean_rows and unavailable_sources:
+            result.update(state="unavailable", text="Не удалось прочитать локальные журналы агента.")
+        elif not clean_rows:
+            result.update(state="missing", text="Файлы локальных журналов агента ещё не созданы.")
+        else:
+            truncated = truncated or len(clean_rows) > 80
+            selected = clean_rows[-80:]
+            joined = "\n".join(selected)
             truncated = truncated or len(joined) > 8000
+            if unavailable_sources:
+                truncated = True
             result.update(
-                ok=True, state="available", lines=len(clean), truncated=truncated,
-                text=joined[-8000:],
+                ok=True, state="available", lines=len(selected), truncated=truncated,
+                partial=bool(unavailable_sources), text=joined[-8000:],
             )
-        except FileNotFoundError:
-            result.update(state="missing", text="Локальный файл xgent.log ещё не создан.")
-        except OSError:
-            result.update(state="unavailable", text="Не удалось прочитать локальный журнал агента.")
         self._publish_response("output", result)
 
     def _do_lock_screen(self, payload: dict) -> None:

@@ -18501,7 +18501,9 @@ async def on_cmd_agent_logs(cq: CallbackQuery):
         if type(line_count) is not int or not 0 <= line_count <= 80:
             line_count = 0
         suffix = "\n🔎 Секреты замаскированы." if redaction.get("total", 0) else ""
-        if result.get("truncated") is True:
+        if result.get("partial") is True:
+            suffix += "\nЧасть файлов журнала недоступна для чтения."
+        elif result.get("truncated") is True:
             suffix += "\nПоказан хвост журнала: исходный файл больше лимита."
         body = (
             f"📄 <b>Логи агента · {title}</b>\n"
