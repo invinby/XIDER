@@ -6573,7 +6573,7 @@ def device_menu(device_id: str, user_id: int | None = None):
 
     if is_owner:
         kb.button(
-            text=_ui_phrase("📄 Agent logs", "📄 Логи агента", "📄 Логи агента"),
+            text=_ui_phrase("📄 Agent & Guardian logs", "📄 Логи агента и Guardian", "📄 Логи агента и Guardian"),
             callback_data="cmd:agent_logs", style="primary",
         )
 
@@ -18481,7 +18481,7 @@ async def on_cmd_agent_logs(cq: CallbackQuery):
     if _device_declares_command(devices.get(target) or {}, "agent_logs") is False:
         await cq.answer("Обнови агент: эта версия ещё не отдаёт журнал.", show_alert=True)
         return
-    await cq.answer("Читаю локальный журнал агента…")
+    await cq.answer("Читаю локальные журналы агента и Guardian…")
     sent, command_id = publish_tracked("agent_logs", _target=target)
     if not sent:
         await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
@@ -18493,7 +18493,7 @@ async def on_cmd_agent_logs(cq: CallbackQuery):
     title = html.escape(str(device.get("name") or target))
     if (not isinstance(result, dict) or result.get("device_id") != target
             or str(result.get("id") or "") != command_id):
-        body = f"📄 <b>Логи агента · {title}</b>\n\nОтвет не пришёл или не прошёл проверку запроса."
+        body = f"📄 <b>Логи агента и Guardian · {title}</b>\n\nОтвет не пришёл или не прошёл проверку запроса."
     else:
         raw = str(result.get("text") or "")
         safe, redaction = access_store.redact_shell_output_with_summary(raw)
@@ -18506,7 +18506,7 @@ async def on_cmd_agent_logs(cq: CallbackQuery):
         elif result.get("truncated") is True:
             suffix += "\nПоказан хвост журнала: исходный файл больше лимита."
         body = (
-            f"📄 <b>Логи агента · {title}</b>\n"
+            f"📄 <b>Логи агента и Guardian · {title}</b>\n"
             f"Состояние: <code>{html.escape(str(result.get('state') or 'unknown'))}</code> · "
             f"строк: <code>{line_count}</code>{suffix}\n\n"
             f"<pre>{html.escape(safe[-3000:])}</pre>"

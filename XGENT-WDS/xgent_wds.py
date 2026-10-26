@@ -3883,32 +3883,51 @@ class XgentClient:
             "state": "unavailable", "lines": 0, "text": "",
         }
         try:
-            log_path = CONFIG_DIR / "xgent.log"
-            raw = log_path.read_bytes()
-            truncated = len(raw) > 32 * 1024
-            text = raw[-(32 * 1024):].decode("utf-8", errors="replace")
-            all_rows = text.splitlines()
-            truncated = truncated or len(all_rows) > 80
-            rows = all_rows[-80:]
             secret_patterns = (
                 re.compile(r"(?i)\b(token|password|passwd|secret|api[_-]?key|authorization|private[_-]?key)\b(\s*[:=]\s*)([^\s,;]+)"),
                 re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"),
             )
             clean = []
-            for row in rows:
-                for pattern in secret_patterns:
-                    row = pattern.sub(lambda match: f"{match.group(1)}=[REDACTED]" if match.lastindex and match.lastindex >= 3 else "Bearer [REDACTED]", row)
-                clean.append(row[-500:])
+            truncated = False
+            unavailable_sources = []
+            for label, log_path in (
+                ("agent", CONFIG_DIR / "xgent.log"),
+                ("guardian", CONFIG_DIR / "guardian.log"),
+            ):
+                try:
+                    raw = log_path.read_bytes()
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    unavailable_sources.append(label)
+                    continue
+                truncated = truncated or len(raw) > 16 * 1024
+                text = raw[-(16 * 1024):].decode("utf-8", errors="replace")
+                all_rows = text.splitlines()
+                truncated = truncated or len(all_rows) > 40
+                for row in all_rows[-40:]:
+                    for pattern in secret_patterns:
+                        row = pattern.sub(lambda match: f"{match.group(1)}=[REDACTED]" if match.lastindex and match.lastindex >= 3 else "Bearer [REDACTED]", row)
+                    clean.append(f"[{label}] {row[-480:]}")
+            if not clean and unavailable_sources:
+                result.update(state="unavailable", text="Не удалось прочитать локальные журналы агента и Guardian.")
+                self._publish_response("output", result)
+                return
+            if not clean:
+                result.update(state="missing", text="Локальные журналы агента и Guardian ещё не созданы.")
+                self._publish_response("output", result)
+                return
             joined = "\n".join(clean)
-            truncated = truncated or len(joined) > 8000
+            truncated = truncated or len(clean) > 80 or len(joined) > 8000
             result.update(
-                ok=True, state="available", lines=len(clean), truncated=truncated,
+                ok=True, state="available", lines=min(len(clean), 80),
+                truncated=truncated, partial=bool(unavailable_sources),
                 text=joined[-8000:],
             )
         except FileNotFoundError:
-            result.update(state="missing", text="Локальный файл xgent.log ещё не создан.")
+            result.update(state="missing", text="Локальные журналы агента и Guardian ещё не созданы.")
         except OSError:
-            result.update(state="unavailable", text="Не удалось прочитать локальный журнал агента.")
+            result.update(state="unavailable", text="Не удалось прочитать локальные журналы агента и Guardian.")
         self._publish_response("output", result)
 
     def _do_permission_settings(self, payload: dict) -> dict:

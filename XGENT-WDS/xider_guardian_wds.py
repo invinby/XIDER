@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import subprocess
 import sys
@@ -447,7 +448,16 @@ def main(argv: list[str] | None = None) -> int:
         set_guardian_desired_running(args.set_desired_running == "start")
         return 0
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    file_handler = RotatingFileHandler(
+        CONFIG_DIR / "guardian.log", maxBytes=2 * 1024 * 1024,
+        backupCount=3, encoding="utf-8",
+    )
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=[logging.StreamHandler(), file_handler],
+    )
     Guardian().run()
     return 0
 

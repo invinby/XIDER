@@ -3529,6 +3529,7 @@ class XgentClient:
         sources = (
             ("xgent.log", CONFIG_DIR / "xgent.log"),
             ("agent.log", _agent_install_dir() / "agent.log"),
+            ("guardian.log", _agent_install_dir() / "guardian.log"),
         )
         secret_patterns = (
             re.compile(r"(?i)\b(token|password|passwd|secret|api[_-]?key|authorization|private[_-]?key)\b(\s*[:=]\s*)([^\s,;]+)"),
