@@ -78,7 +78,14 @@ For X-DOCK, select one broker path before implementing credential issuance:
    revoke per-device identities and ACLs for the actual deployment. Confirm
    this against the account's plan and the current API before coding the
    adapter.
-2. Move to a broker deployment that supports a controlled credential issuer
+2. Upgrade to a managed deployment that supports mTLS client-certificate
+   mapping and an owner-controlled revocation path. EMQX Cloud documents a
+   password-free mTLS flow and dynamic `${clientid}`/`${username}` ACL
+   placeholders, but its certificate-mapping instructions currently specify
+   Dedicated/Dedicated Flex, not Serverless. Serverless's feature matrix lists
+   X.509 support, so confirm the actual account's available settings and
+   revocation mechanism before selecting this path.
+3. Move to a broker deployment that supports a controlled credential issuer
    and per-device ACLs, such as a self-hosted broker with an owner-controlled
    provisioning interface. The checked-in Mosquitto example is not sufficient
    as-is: it currently defines one shared account and a static ACL.
@@ -96,6 +103,8 @@ References checked 2026-10-26:
 - [EMQX Cloud HTTP authorization](https://docs.emqx.com/en/cloud/latest/deployments/http_authz.html)
 - [EMQX Cloud API overview](https://docs.emqx.com/en/cloud/latest/api/api_overview.html)
 - [EMQX Cloud deployment management API](https://docs.emqx.com/en/cloud/latest/api/deployment_manage.html)
+- [EMQX Cloud mTLS device-connection guide](https://docs.emqx.com/en/cloud/latest/deployments/mtls_best_practices.html)
+- [EMQX Cloud default authorization and client-ID placeholders](https://docs.emqx.com/en/cloud/latest/deployments/default_authz.html)
 
 ## Required failure and security tests
 
