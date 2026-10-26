@@ -3,8 +3,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PLIST="$HOME/Library/LaunchAgents/com.xider.guardian.plist"
-PYTHON="$PWD/venv/bin/python3"
-[[ -x "$PYTHON" ]] || PYTHON="$(command -v python3)"
+GUARDIAN_APP_BIN="$PWD/XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper"
+GUARDIAN_SCRIPT="$PWD/xider_guardian.py"
 
 mkdir -p "$HOME/Library/LaunchAgents"
 chmod +x "$0"
@@ -27,6 +27,22 @@ if [[ "${1:-}" == "--stop" || "${1:-}" == "-x" ]]; then
   exit 0
 fi
 
+xml_escape() {
+  printf '%s' "$1" | sed -e 's/\&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+if [[ -x "$GUARDIAN_APP_BIN" ]]; then
+  guardian_argument="<string>$(xml_escape "$GUARDIAN_APP_BIN")</string>"
+elif [[ -f "$GUARDIAN_SCRIPT" ]]; then
+  PYTHON="$PWD/venv/bin/python3"
+  [[ -x "$PYTHON" ]] || PYTHON="$(command -v python3 || true)"
+  [[ -n "$PYTHON" ]] || { echo "[ERROR] Не найден XIDER-Guard-Keeper.app и python3 для исходного Guardian." >&2; exit 1; }
+  guardian_argument="<string>$(xml_escape "$PYTHON")</string><string>$(xml_escape "$GUARDIAN_SCRIPT")</string>"
+else
+  echo "[ERROR] Не найден XIDER-Guard-Keeper.app или xider_guardian.py." >&2
+  exit 1
+fi
+
 cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -34,7 +50,7 @@ cat > "$PLIST" <<EOF
 <dict>
   <key>Label</key><string>com.xider.guardian</string>
   <key>ProgramArguments</key>
-  <array><string>$PYTHON</string><string>$PWD/xider_guardian.py</string></array>
+  <array>$guardian_argument</array>
   <key>WorkingDirectory</key><string>$PWD</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>

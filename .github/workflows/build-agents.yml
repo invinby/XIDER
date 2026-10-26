@@ -43,6 +43,10 @@ jobs:
         run: |
           cd XGENT-WDS
           pyinstaller --clean XGENT-WDS.spec
+          pyinstaller --clean --noconfirm --onefile --windowed `
+            --name XIDER-Guard-Keeper `
+            --distpath dist --workpath build/guardian `
+            xider_guardian_wds.py
           python ..\tools\verify_command_approval_bundle.py --executable dist/XGENT-WDS.exe
           Copy-Item .env.example dist/.env.example
           Copy-Item install_agent.ps1 dist/install_agent.ps1
@@ -103,6 +107,12 @@ jobs:
         run: |
           cd XGENT-MCS
           bash make_app.sh
+          pyinstaller --clean --noconfirm --windowed \
+            --name XIDER-Guard-Keeper \
+            --distpath dist/guardian --workpath build/guardian \
+            xider_guardian.py
+          codesign --force --deep --options runtime --timestamp \
+            --sign "$XIDER_MACOS_SIGNING_IDENTITY" dist/guardian/XIDER-Guard-Keeper.app
           codesign -dv --verbose=4 dist/XIDER.app
           plutil -p dist/XIDER.app/Contents/Info.plist
           python ../tools/verify_macos_bundle.py dist/XIDER.app
@@ -110,16 +120,23 @@ jobs:
 
       - name: "Notarize and staple without changing signed app contents"
         run: |
-          ditto -c -k --keepParent XGENT-MCS/dist/XIDER.app "$RUNNER_TEMP/xider-notarization.zip"
+          mkdir -p "$RUNNER_TEMP/xider-notary-payload"
+          ditto XGENT-MCS/dist/XIDER.app "$RUNNER_TEMP/xider-notary-payload/XIDER.app"
+          ditto XGENT-MCS/dist/guardian/XIDER-Guard-Keeper.app "$RUNNER_TEMP/xider-notary-payload/XIDER-Guard-Keeper.app"
+          ditto -c -k --sequesterRsrc "$RUNNER_TEMP/xider-notary-payload" "$RUNNER_TEMP/xider-notarization.zip"
           xcrun notarytool submit "$RUNNER_TEMP/xider-notarization.zip" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
           xcrun stapler staple XGENT-MCS/dist/XIDER.app
+          xcrun stapler staple XGENT-MCS/dist/guardian/XIDER-Guard-Keeper.app
           python tools/verify_macos_bundle.py XGENT-MCS/dist/XIDER.app --distribution
+          codesign --verify --deep --strict XGENT-MCS/dist/guardian/XIDER-Guard-Keeper.app
+          xcrun stapler validate XGENT-MCS/dist/guardian/XIDER-Guard-Keeper.app
 
       - name: "Create and verify the final ZIP artifact"
         run: |
           cd XGENT-MCS
           cp .env.example dist/.env.example
           cp start_agent.sh stop_agent.sh dist/
+          ditto -c -k --sequesterRsrc --keepParent guardian/XIDER-Guard-Keeper.app dist/Guard-Keeper-macOS.zip
           cd dist
           zip -r XGENT-MCS-macos-bundle.zip XIDER.app .env.example start_agent.sh stop_agent.sh
           python ../../tools/verify_command_approval_bundle.py --public-only-zip XGENT-MCS-macos-bundle.zip
@@ -133,7 +150,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: XGENT-MCS-macOS
-          path: XGENT-MCS/dist/XGENT-MCS-macos-bundle.zip
+          path: |
+            XGENT-MCS/dist/XGENT-MCS-macos-bundle.zip
+            XGENT-MCS/dist/Guard-Keeper-macOS.zip
 
       - name: "Remove temporary signing material"
         if: always()
@@ -145,53 +164,36 @@ jobs:
   pack-components:
     name: "Package Guard Keeper and server components"
     runs-on: ubuntu-latest
+    needs: [build-windows, build-macos]
     steps:
       - name: "Checkout repository"
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: "Download the Windows agent and Guard Keeper build"
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: XGENT-WDS-Windows
+          path: artifacts/windows
+
+      - name: "Download the signed macOS Guard Keeper build"
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: XGENT-MCS-macOS
+          path: artifacts/macos
 
       - name: "Create source packages from the tagged tree"
         run: |
           mkdir -p artifacts
           git archive --format=zip --prefix=XIDER-source/ \
             --output=artifacts/XIDER-source.zip HEAD
-          zip -q artifacts/Guard-Keeper-Windows.zip \
-            XGENT-WDS/xider_guardian_wds.py \
-            XGENT-WDS/install_guardian.ps1 \
-            XGENT-WDS/start_guardian.bat \
-            XGENT-WDS/stop_guardian.bat \
-            XGENT-WDS/config.py \
-            XGENT-WDS/crypto.py \
-            XGENT-WDS/xgencrypto.py \
-            XGENT-WDS/requirements.txt \
-            XGENT-WDS/.env.example
-          zip -q artifacts/Guard-Keeper-macOS.zip \
-            XGENT-MCS/xider_guardian.py \
-            XGENT-MCS/guardian_recovery.py \
-            XGENT-MCS/release_signature.py \
-            XGENT-MCS/update_package.py \
-            XGENT-MCS/start_guardian.sh \
-            XGENT-MCS/config.py \
-            XGENT-MCS/crypto.py \
-            XGENT-MCS/xgencrypto.py \
-            XGENT-MCS/requirements.txt \
-            XGENT-MCS/.env.example
+          cp artifacts/windows/XIDER-Guard-Keeper.exe artifacts/
+          (cd artifacts && zip -q Guard-Keeper-Windows.zip XIDER-Guard-Keeper.exe)
+          cp artifacts/macos/Guard-Keeper-macOS.zip artifacts/Guard-Keeper-macOS.zip
           for asset in Guard-Keeper-Windows.zip Guard-Keeper-macOS.zip; do
             unzip -t "artifacts/$asset"
           done
-          for file in \
-            XGENT-WDS/xider_guardian_wds.py XGENT-WDS/install_guardian.ps1 \
-            XGENT-WDS/config.py XGENT-WDS/crypto.py XGENT-WDS/xgencrypto.py \
-            XGENT-WDS/requirements.txt XGENT-WDS/.env.example; do
-            unzip -Z1 artifacts/Guard-Keeper-Windows.zip | grep -Fxq "$file"
-          done
-          for file in \
-            XGENT-MCS/xider_guardian.py XGENT-MCS/start_guardian.sh \
-            XGENT-MCS/guardian_recovery.py XGENT-MCS/release_signature.py \
-            XGENT-MCS/update_package.py \
-            XGENT-MCS/config.py XGENT-MCS/crypto.py XGENT-MCS/xgencrypto.py \
-            XGENT-MCS/requirements.txt XGENT-MCS/.env.example; do
-            unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Fxq "$file"
-          done
+          unzip -Z1 artifacts/Guard-Keeper-Windows.zip | grep -Fxq XIDER-Guard-Keeper.exe
+          unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Fq 'XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper'
           git archive --format=zip --output=artifacts/X-STAB-server.zip HEAD TG-BOT-SERVER deploy XGENT-MCS/release_signature.py
           python tools/verify_command_approval_bundle.py \
             --public-only-zip artifacts/XIDER-source.zip \
