@@ -70,8 +70,8 @@ def test_old_windows_source_update_adds_location_adapter_and_rollback_removes_it
     def download(manifest, archive, **kwargs):
         Path(manifest).write_text("fixture", encoding="utf-8")
         with zipfile.ZipFile(archive, "w") as bundle:
-            for name in (*original, "location_adapter.py", "camera_devices.py", "camera_series.py", "microphone_devices.py", "microphone_level.py", "audio_output_control.py", "media_temp.py", "media_history.py", "media_request_control.py", "display_contact_sheet.py", "window_capture.py", "dns_diagnostics.py", "dns_settings.py", "dns_comparison.py", "gateway_probe.py", "route_trace.py", "path_mtu.py", "captive_portal.py", "ipv6_connectivity.py", "tls_certificate.py", "service_probe.py", "endpoint_batch.py", "wifi_quality.py", "wifi_channel.py", "wifi_connection_history.py", "proxy_status.py", "vpn_route.py", "network_traffic.py", "network_traffic_schedule.py", "interface_status_history.py", "latency_series.py", "packet_loss_history.py", "jitter_measurement.py", "network_throughput.py", "network_link_speed.py", "route_lookup.py"):
-                component = "XGENT-WDS" if name in original[:4] or name in {"location_adapter.py", "camera_devices.py", "camera_series.py", "microphone_devices.py", "microphone_level.py", "audio_output_control.py", "media_temp.py", "media_history.py", "media_request_control.py", "display_contact_sheet.py", "window_capture.py", "dns_diagnostics.py", "dns_settings.py", "dns_comparison.py", "gateway_probe.py", "route_trace.py", "path_mtu.py", "captive_portal.py", "ipv6_connectivity.py", "tls_certificate.py", "service_probe.py", "endpoint_batch.py", "wifi_quality.py", "wifi_channel.py", "wifi_connection_history.py", "proxy_status.py", "vpn_route.py", "network_traffic.py", "latency_series.py", "packet_loss_history.py", "jitter_measurement.py", "network_throughput.py", "network_link_speed.py", "route_lookup.py"} else "XGENT-MCS"
+            for name in (*original, "xider_guardian_wds.py", "location_adapter.py", "camera_devices.py", "camera_series.py", "microphone_devices.py", "microphone_level.py", "audio_output_control.py", "media_temp.py", "media_history.py", "media_request_control.py", "display_contact_sheet.py", "window_capture.py", "dns_diagnostics.py", "dns_settings.py", "dns_comparison.py", "gateway_probe.py", "route_trace.py", "path_mtu.py", "captive_portal.py", "ipv6_connectivity.py", "tls_certificate.py", "service_probe.py", "endpoint_batch.py", "wifi_quality.py", "wifi_channel.py", "wifi_connection_history.py", "proxy_status.py", "vpn_route.py", "network_traffic.py", "network_traffic_schedule.py", "interface_status_history.py", "latency_series.py", "packet_loss_history.py", "jitter_measurement.py", "network_throughput.py", "network_link_speed.py", "route_lookup.py"):
+                component = "XGENT-WDS" if name in (*original[:4], "xider_guardian_wds.py") or name in {"location_adapter.py", "camera_devices.py", "camera_series.py", "microphone_devices.py", "microphone_level.py", "audio_output_control.py", "media_temp.py", "media_history.py", "media_request_control.py", "display_contact_sheet.py", "window_capture.py", "dns_diagnostics.py", "dns_settings.py", "dns_comparison.py", "gateway_probe.py", "route_trace.py", "path_mtu.py", "captive_portal.py", "ipv6_connectivity.py", "tls_certificate.py", "service_probe.py", "endpoint_batch.py", "wifi_quality.py", "wifi_channel.py", "wifi_connection_history.py", "proxy_status.py", "vpn_route.py", "network_traffic.py", "latency_series.py", "packet_loss_history.py", "jitter_measurement.py", "network_throughput.py", "network_link_speed.py", "route_lookup.py"} else "XGENT-MCS"
                 bundle.writestr(f"XIDER/{component}/{name}", "# selected\n")
             bundle.writestr("XIDER/XGENT-WDS/dnssec_check.py", "# selected\n")
         return "v4.2.0"
@@ -85,6 +85,7 @@ def test_old_windows_source_update_adds_location_adapter_and_rollback_removes_it
     assert (install / "display_contact_sheet.py").read_bytes() == b"# selected\n"
     assert (install / "window_capture.py").read_bytes() == b"# selected\n"
     assert (install / "wifi_connection_history.py").read_bytes() == b"# selected\n"
+    assert (install / "xider_guardian_wds.py").read_bytes() == b"# selected\n"
     result = package.rollback_unhealthy_agent(tmp_path / package.UPDATE_STATE_NAME, install)
     assert "location_adapter.py" in result["removed"]
     assert not (install / "location_adapter.py").exists()
@@ -94,6 +95,8 @@ def test_old_windows_source_update_adds_location_adapter_and_rollback_removes_it
     assert not (install / "window_capture.py").exists()
     assert "wifi_connection_history.py" in result["removed"]
     assert not (install / "wifi_connection_history.py").exists()
+    assert "xider_guardian_wds.py" in result["removed"]
+    assert not (install / "xider_guardian_wds.py").exists()
     assert (install / "xgent_wds.py").read_bytes() == b"# previous\n"
 
 
@@ -225,7 +228,7 @@ def test_source_update_validates_and_installs_only_windows_allowlist(monkeypatch
     }
     assert len(installed) == 1
     assert installed[0]["files"] == (
-        "xgent_wds.py", "config.py", "crypto.py", "xgencrypto.py",
+        "xgent_wds.py", "xider_guardian_wds.py", "config.py", "crypto.py", "xgencrypto.py",
         "release_signature.py", "update_package.py",
         "command_module_loader.py", "command_signing.py", "command_replay.py", "shell_execution.py", "location_adapter.py", "camera_devices.py", "camera_series.py", "microphone_devices.py", "microphone_level.py", "audio_output_control.py", "media_temp.py", "media_history.py", "media_request_control.py", "display_contact_sheet.py", "window_capture.py", "dns_diagnostics.py", "dns_settings.py", "dns_comparison.py", "dnssec_check.py", "gateway_probe.py", "route_trace.py", "path_mtu.py", "captive_portal.py", "ipv6_connectivity.py", "tls_certificate.py", "service_probe.py", "latency_series.py", "packet_loss_history.py", "jitter_measurement.py", "network_throughput.py", "network_link_speed.py", "route_lookup.py", "endpoint_batch.py", "wifi_quality.py", "wifi_channel.py", "wifi_connection_history.py", "proxy_status.py", "vpn_route.py", "network_traffic.py", "network_traffic_schedule.py", "interface_status_history.py",
     )
@@ -297,7 +300,7 @@ def test_windows_install_failure_reports_actual_matching_rollback_receipt(monkey
     import update_package as package
     install = tmp_path / "install"
     install.mkdir()
-    files = ("xgent_wds.py", "config.py", "crypto.py", "xgencrypto.py",
+    files = ("xgent_wds.py", "xider_guardian_wds.py", "config.py", "crypto.py", "xgencrypto.py",
              "release_signature.py", "update_package.py", "command_module_loader.py",
              "command_signing.py", "command_replay.py", "shell_execution.py", "location_adapter.py", "camera_devices.py", "camera_series.py", "microphone_devices.py", "microphone_level.py", "audio_output_control.py", "media_temp.py", "media_history.py", "media_request_control.py", "display_contact_sheet.py", "window_capture.py", "dns_diagnostics.py", "dns_settings.py", "dns_comparison.py", "gateway_probe.py", "route_trace.py", "path_mtu.py", "captive_portal.py", "ipv6_connectivity.py", "tls_certificate.py", "service_probe.py", "latency_series.py", "packet_loss_history.py", "jitter_measurement.py", "network_throughput.py", "network_link_speed.py", "route_lookup.py", "endpoint_batch.py", "wifi_quality.py", "wifi_channel.py", "wifi_connection_history.py", "proxy_status.py", "vpn_route.py", "network_traffic.py", "network_traffic_schedule.py", "interface_status_history.py")
     for name in files:
@@ -307,7 +310,7 @@ def test_windows_install_failure_reports_actual_matching_rollback_receipt(monkey
         Path(manifest).write_text("fixture", encoding="utf-8")
         with zipfile.ZipFile(archive, "w") as bundle:
             for name in files:
-                component = "XGENT-WDS" if name in files[:4] or name in {"location_adapter.py", "camera_devices.py", "camera_series.py", "microphone_devices.py", "microphone_level.py", "audio_output_control.py", "media_temp.py", "media_history.py", "media_request_control.py", "display_contact_sheet.py", "window_capture.py", "dns_diagnostics.py", "dns_settings.py", "dns_comparison.py", "gateway_probe.py", "route_trace.py", "path_mtu.py", "captive_portal.py", "ipv6_connectivity.py", "tls_certificate.py", "service_probe.py", "wifi_quality.py", "wifi_channel.py", "wifi_connection_history.py", "proxy_status.py", "network_traffic.py", "latency_series.py", "packet_loss_history.py", "jitter_measurement.py", "network_throughput.py", "network_link_speed.py", "route_lookup.py"} else "XGENT-MCS"
+                component = "XGENT-WDS" if name in files[:5] or name in {"location_adapter.py", "camera_devices.py", "camera_series.py", "microphone_devices.py", "microphone_level.py", "audio_output_control.py", "media_temp.py", "media_history.py", "media_request_control.py", "display_contact_sheet.py", "window_capture.py", "dns_diagnostics.py", "dns_settings.py", "dns_comparison.py", "gateway_probe.py", "route_trace.py", "path_mtu.py", "captive_portal.py", "ipv6_connectivity.py", "tls_certificate.py", "service_probe.py", "wifi_quality.py", "wifi_channel.py", "wifi_connection_history.py", "proxy_status.py", "network_traffic.py", "latency_series.py", "packet_loss_history.py", "jitter_measurement.py", "network_throughput.py", "network_link_speed.py", "route_lookup.py"} else "XGENT-MCS"
                 bundle.writestr(f"XIDER/{component}/{name}", "# replacement\n")
             bundle.writestr("XIDER/XGENT-WDS/dnssec_check.py", "# replacement\n")
         return "v4.2.0"
@@ -397,6 +400,8 @@ def test_mqtt_connect_confirms_pending_windows_update(monkeypatch, tmp_path):
     client._pending_command_subacks = set()
     client._command_subscriptions_failed = False
     client._publish_status = lambda: None
+    restarted = []
+    client._restart_existing_guardian_after_update = lambda: restarted.append(True)
     monkeypatch.setattr(wds, "CONFIG_DIR", tmp_path)
     monkeypatch.setattr(wds.sys, "frozen", False, raising=False)
     monkeypatch.setattr(wds, "__file__", str(install / "xgent_wds.py"))
@@ -413,10 +418,60 @@ def test_mqtt_connect_confirms_pending_windows_update(monkeypatch, tmp_path):
     assert state.exists()
     client._on_subscribe(mqtt_client, None, 102, [0])
     assert client._update_health.is_set()
+    assert restarted == [True]
     assert not state.exists()
     assert package.read_agent_update_result(state)["operation_id"] == "bot-op-windows-health"
     assert package.read_agent_update_result(state)["update_state"] == "succeeded"
     assert package.read_agent_update_result(state)["manifest_digest"] == 'a' * 64
+
+
+def test_windows_update_reloads_only_an_existing_guardian_task(monkeypatch):
+    client, sent = _update_client()
+    client._subscription_lock = threading.RLock()
+    client._running = threading.Event()
+    client._running.set()
+    client._update_health = threading.Event()
+    client._update_health.set()
+    calls = []
+    monkeypatch.setattr(wds.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(
+        wds.subprocess, "run",
+        lambda args, **_kwargs: calls.append(args) or MagicMock(returncode=0, stderr="", stdout=""),
+    )
+    monkeypatch.setattr(wds, "_scheduled_task_exists", lambda *_: False)
+    client._restart_existing_guardian_after_update()
+    assert calls == []
+    assert sent == []
+
+    monkeypatch.setattr(wds, "_scheduled_task_exists", lambda *_: True)
+    client._restart_existing_guardian_after_update()
+    assert calls == [
+        ["schtasks.exe", "/End", "/TN", wds.WINDOWS_GUARDIAN_TASK_NAME],
+        ["schtasks.exe", "/Run", "/TN", wds.WINDOWS_GUARDIAN_TASK_NAME],
+    ]
+    assert sent == []
+
+
+def test_windows_update_reports_guardian_restart_failure(monkeypatch):
+    client, sent = _update_client()
+    client._subscription_lock = threading.RLock()
+    client._running = threading.Event()
+    client._running.set()
+    client._update_health = threading.Event()
+    client._update_health.set()
+    monkeypatch.setattr(wds, "_scheduled_task_exists", lambda *_: True)
+    monkeypatch.setattr(wds.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(
+        wds.subprocess, "run",
+        lambda args, **_kwargs: MagicMock(
+            returncode=1 if "/Run" in args else 0,
+            stderr="start rejected", stdout="",
+        ),
+    )
+    client._restart_existing_guardian_after_update()
+    assert sent[-1][1]["state"] == "guardian_restart_failed"
+    assert sent[-1][1]["health_check"] == "passed"
+    assert "start rejected" in sent[-1][1]["text"]
 
 
 @pytest.mark.parametrize("failure", ["rejected", "send_failed", "disconnected"])

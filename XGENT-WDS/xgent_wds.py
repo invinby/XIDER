@@ -2308,8 +2308,48 @@ class XgentClient:
                 ):
                     self._update_health.set()
                     self._publish_status()
+                    self._restart_existing_guardian_after_update()
             except Exception:
                 log.exception("Не удалось подтвердить здоровье обновлённого Windows-агента")
+
+    def _restart_existing_guardian_after_update(self) -> None:
+        """Reload the updated Guardian script only when its owner task exists."""
+        with self._subscription_lock:
+            if not self._running.is_set() or not self._update_health.is_set():
+                return
+            try:
+                if not _scheduled_task_exists(WINDOWS_GUARDIAN_TASK_NAME):
+                    log.info("Windows Guardian не зарегистрирован; обновление не запускает его автоматически.")
+                    return
+                # /End may report that an idle task was not running. /Run is the
+                # authoritative result: it starts the already registered task
+                # with its existing owner, action, and permissions.
+                subprocess.run(
+                    ["schtasks.exe", "/End", "/TN", WINDOWS_GUARDIAN_TASK_NAME],
+                    capture_output=True, text=True, check=False, timeout=10,
+                )
+                time.sleep(0.5)
+                started = subprocess.run(
+                    ["schtasks.exe", "/Run", "/TN", WINDOWS_GUARDIAN_TASK_NAME],
+                    capture_output=True, text=True, check=False, timeout=10,
+                )
+                if started.returncode != 0:
+                    raise RuntimeError((started.stderr or started.stdout or "schtasks /Run failed").strip())
+                log.info("Зарегистрированный Windows Guardian перезапущен после подтверждения обновления агента.")
+            except Exception as exc:
+                log.exception("Агент обновлён и здоров, но Windows Guardian не перезапущен")
+                try:
+                    self._publish_response("output", {
+                        "type": "agent_update", "device_id": DEVICE_ID, "ok": True,
+                        "state": "guardian_restart_failed", "health_check": "passed",
+                        "guardian_restart": "failed",
+                        "text": (
+                            "⚠️ Обновление агента подтверждено, MQTT работает. "
+                            f"Перезапуск Guardian не выполнен: {exc}. Он может продолжать работу со старым кодом."
+                        ),
+                    })
+                except Exception:
+                    log.exception("Не удалось отправить предупреждение о перезапуске Windows Guardian")
 
     def _on_connect_fail(self, client, userdata, reason_code=None):
         log.warning(
@@ -6897,6 +6937,7 @@ setTimeout(()=>window.close(),15000);
             script_dir = Path(__file__).resolve().parent
             files = (
                 "xgent_wds.py",
+                "xider_guardian_wds.py",
                 "config.py",
                 "crypto.py",
                 "xgencrypto.py",
