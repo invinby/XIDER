@@ -113,9 +113,16 @@ jobs:
             --name XIDER-Guard-Keeper \
             --distpath dist/guardian --workpath build/guardian \
             xider_guardian.py
+          pyinstaller --clean --noconfirm --windowed \
+            --name XIDER-Layers \
+            --distpath dist/layers --workpath build/layers \
+            xider_layers.py
           codesign --force --deep --options runtime --timestamp \
             --sign "$XIDER_MACOS_SIGNING_IDENTITY" dist/guardian/XIDER-Guard-Keeper.app
+          codesign --force --deep --options runtime --timestamp \
+            --sign "$XIDER_MACOS_SIGNING_IDENTITY" dist/layers/XIDER-Layers.app
           codesign -dv --verbose=4 dist/XIDER.app
+          codesign --verify --deep --strict dist/layers/XIDER-Layers.app
           plutil -p dist/XIDER.app/Contents/Info.plist
           python ../tools/verify_macos_bundle.py dist/XIDER.app
           python ../tools/verify_command_approval_bundle.py --executable dist/XIDER.app/Contents/MacOS/XGENT-MCS
@@ -125,30 +132,42 @@ jobs:
           mkdir -p "$RUNNER_TEMP/xider-notary-payload"
           ditto XGENT-MCS/dist/XIDER.app "$RUNNER_TEMP/xider-notary-payload/XIDER.app"
           ditto XGENT-MCS/dist/guardian/XIDER-Guard-Keeper.app "$RUNNER_TEMP/xider-notary-payload/XIDER-Guard-Keeper.app"
+          ditto XGENT-MCS/dist/layers/XIDER-Layers.app "$RUNNER_TEMP/xider-notary-payload/XIDER-Layers.app"
           ditto -c -k --sequesterRsrc "$RUNNER_TEMP/xider-notary-payload" "$RUNNER_TEMP/xider-notarization.zip"
           xcrun notarytool submit "$RUNNER_TEMP/xider-notarization.zip" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
           xcrun stapler staple XGENT-MCS/dist/XIDER.app
           xcrun stapler staple XGENT-MCS/dist/guardian/XIDER-Guard-Keeper.app
+          xcrun stapler staple XGENT-MCS/dist/layers/XIDER-Layers.app
           python tools/verify_macos_bundle.py XGENT-MCS/dist/XIDER.app --distribution
           codesign --verify --deep --strict XGENT-MCS/dist/guardian/XIDER-Guard-Keeper.app
           xcrun stapler validate XGENT-MCS/dist/guardian/XIDER-Guard-Keeper.app
+          codesign --verify --deep --strict XGENT-MCS/dist/layers/XIDER-Layers.app
+          xcrun stapler validate XGENT-MCS/dist/layers/XIDER-Layers.app
 
       - name: "Create and verify the final ZIP artifact"
         run: |
           cd XGENT-MCS
           cp .env.example dist/.env.example
           cp start_agent.sh stop_agent.sh dist/
-          ditto -c -k --sequesterRsrc --keepParent guardian/XIDER-Guard-Keeper.app dist/Guard-Keeper-macOS.zip
-          ditto guardian/XIDER-Guard-Keeper.app dist/XIDER-Guard-Keeper.app
+          cp start_guardian.sh start_safari.sh start_siri.sh dist/
+          ditto -c -k --sequesterRsrc --keepParent dist/guardian/XIDER-Guard-Keeper.app dist/Guard-Keeper-macOS.zip
+          ditto dist/guardian/XIDER-Guard-Keeper.app dist/XIDER-Guard-Keeper.app
+          ditto dist/layers/XIDER-Layers.app dist/XIDER-Layers.app
           cd dist
-          zip -r XGENT-MCS-macos-bundle.zip XIDER.app XIDER-Guard-Keeper.app .env.example start_agent.sh stop_agent.sh
+          zip -r XGENT-MCS-macos-bundle.zip XIDER.app XIDER-Guard-Keeper.app XIDER-Layers.app .env.example start_agent.sh stop_agent.sh start_guardian.sh start_safari.sh start_siri.sh
+          if unzip -Z1 XGENT-MCS-macos-bundle.zip | grep -Eq '^(xider_layers|xider_guardian|xgent_mcs)\.py$'; then
+            echo 'Release bundle unexpectedly contains plaintext XIDER Python entrypoints.' >&2
+            exit 1
+          fi
           python ../../tools/verify_command_approval_bundle.py --public-only-zip XGENT-MCS-macos-bundle.zip
           mkdir "$RUNNER_TEMP/xider-final-extracted"
           ditto -x -k XGENT-MCS-macos-bundle.zip "$RUNNER_TEMP/xider-final-extracted"
           python ../../tools/verify_macos_bundle.py "$RUNNER_TEMP/xider-final-extracted/XIDER.app" --distribution
           codesign -dv --verbose=4 "$RUNNER_TEMP/xider-final-extracted/XIDER.app"
           codesign --verify --deep --strict "$RUNNER_TEMP/xider-final-extracted/XIDER-Guard-Keeper.app"
+          codesign --verify --deep --strict "$RUNNER_TEMP/xider-final-extracted/XIDER-Layers.app"
           xcrun stapler validate "$RUNNER_TEMP/xider-final-extracted/XIDER-Guard-Keeper.app"
+          xcrun stapler validate "$RUNNER_TEMP/xider-final-extracted/XIDER-Layers.app"
           plutil -p "$RUNNER_TEMP/xider-final-extracted/XIDER.app/Contents/Info.plist"
 
       - name: "Upload verified signed macOS app artifact"
@@ -208,6 +227,7 @@ jobs:
           unzip -Z1 artifacts/XGENT-WDS-Windows.zip | grep -Fxq install_guardian.ps1
           unzip -t artifacts/macos/XGENT-MCS-macos-bundle.zip
           unzip -Z1 artifacts/macos/XGENT-MCS-macos-bundle.zip | grep -Fq 'XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper'
+          unzip -Z1 artifacts/macos/XGENT-MCS-macos-bundle.zip | grep -Fq 'XIDER-Layers.app/Contents/MacOS/XIDER-Layers'
           git archive --format=zip --output=artifacts/X-STAB-server.zip HEAD TG-BOT-SERVER deploy XGENT-MCS/release_signature.py
           python tools/verify_command_approval_bundle.py \
             --public-only-zip artifacts/XIDER-source.zip \

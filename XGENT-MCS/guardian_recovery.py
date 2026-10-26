@@ -35,6 +35,7 @@ RECOVERY_FILES = (
     "xider_guardian.py", "requirements.txt", "setup_mac.py", "fake_update_screen.py", "location_adapter.py",
     "camera_quality.py", "camera_devices.py", "camera_series.py", "microphone_devices.py", "microphone_level.py", "audio_output_control.py", "media_temp.py", "media_history.py", "media_request_control.py", "display_contact_sheet.py", "window_capture.py", "dns_diagnostics.py", "dns_settings.py", "dns_comparison.py", "dnssec_check.py", "gateway_probe.py", "route_trace.py", "path_mtu.py", "captive_portal.py", "ipv6_connectivity.py", "tls_certificate.py", "service_probe.py", "latency_series.py", "packet_loss_history.py", "jitter_measurement.py", "network_throughput.py", "network_link_speed.py", "route_lookup.py", "endpoint_batch.py", "wifi_quality.py", "wifi_channel.py", "wifi_connection_history.py", "proxy_status.py", "vpn_route.py", "network_traffic.py", "network_traffic_schedule.py", "interface_status_history.py",
     "start_agent.sh", "stop_agent.sh", "start_guardian.sh",
+    "xider_layers.py", "start_safari.sh", "start_siri.sh",
 )
 _RELEASE = re.compile(r"^v\d{1,6}\.\d{1,6}\.\d{1,6}$")
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")

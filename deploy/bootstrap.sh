@@ -294,7 +294,7 @@ mv "$stage/env.updated" "$agent_env"
 chmod 600 "$agent_env"
 
 new_agent="$stage/new/XGENT-MCS"
-chmod +x "$new_agent/start_agent.sh" "$new_agent/stop_agent.sh" "$new_agent/start_guardian.sh"
+chmod +x "$new_agent/start_agent.sh" "$new_agent/stop_agent.sh" "$new_agent/start_guardian.sh" "$new_agent/start_safari.sh" "$new_agent/start_siri.sh"
 
 # Prepare dependencies before stopping the working version. The venv has a
 # stable absolute path: moving a staged venv would break its activation script
@@ -313,6 +313,62 @@ ln -s "$runtime" "$new_agent/venv"
 
 recovery_slot=''
 if [[ -n "$RELEASE_TAG" ]]; then
+  echo "Проверяю подписанный macOS-бандл $RELEASE_TAG до остановки текущей версии."
+  signed_bundle="$stage/XGENT-MCS-macos-bundle.zip"
+  bundle_manifest="$stage/mac-bundle-manifest.json"
+  (
+    cd "$new_agent"
+    "$runtime/bin/python3" - "$bundle_manifest" "$signed_bundle" "$RELEASE_TAG" <<'PY'
+from pathlib import Path
+import sys
+from update_package import download_verified_release_asset
+
+manifest, bundle, tag = sys.argv[1:]
+download_verified_release_asset(Path(manifest), Path(bundle), "XGENT-MCS-macos-bundle.zip", release_tag=tag)
+PY
+  ) || { echo "Подписанный macOS-бандл не прошёл проверку; действующая установка не менялась." >&2; exit 5; }
+  "$runtime/bin/python3" - "$signed_bundle" <<'PY'
+from pathlib import PurePosixPath
+from zipfile import ZipFile
+import sys
+
+allowed_apps = {"XIDER.app", "XIDER-Guard-Keeper.app", "XIDER-Layers.app"}
+allowed_files = {".env.example", "start_agent.sh", "stop_agent.sh", "start_guardian.sh", "start_safari.sh", "start_siri.sh"}
+allowed = allowed_apps | allowed_files
+total = 0
+with ZipFile(sys.argv[1]) as archive:
+    entries = archive.infolist()
+    if not entries or len(entries) > 100_000:
+        raise SystemExit("Бандл пустой или содержит слишком много записей.")
+    for entry in entries:
+        path = PurePosixPath(entry.filename)
+        if path.is_absolute() or ".." in path.parts or not path.parts or path.parts[0] not in allowed:
+            raise SystemExit(f"Недопустимый путь в macOS-бандле: {entry.filename!r}")
+        if len(path.parts) == 1 and path.parts[0] in allowed_apps and not entry.is_dir():
+            raise SystemExit(f"Ожидался каталог app: {entry.filename!r}")
+        if len(path.parts) > 1 and path.parts[0] in allowed_files:
+            raise SystemExit(f"Файл бандла содержит вложенный путь: {entry.filename!r}")
+        if entry.flag_bits & 1:
+            raise SystemExit("Зашифрованные записи в macOS-бандле запрещены.")
+        total += entry.file_size
+        if total > 2 * 1024 * 1024 * 1024:
+            raise SystemExit("Распакованный macOS-бандл превышает лимит 2 ГБ.")
+    if not allowed_apps.issubset({PurePosixPath(entry.filename).parts[0] for entry in entries}):
+        raise SystemExit("В подписанном macOS-бандле не хватает обязательного XIDER-компонента.")
+PY
+  mkdir -p "$stage/macos-bundle"
+  ditto -x -k "$signed_bundle" "$stage/macos-bundle"
+  for app in XIDER.app XIDER-Guard-Keeper.app XIDER-Layers.app; do
+    codesign --verify --deep --strict "$stage/macos-bundle/$app"
+    xcrun stapler validate "$stage/macos-bundle/$app"
+    mv "$stage/macos-bundle/$app" "$new_agent/$app"
+  done
+  # The signed release runs the compiled layer supervisor only. Keep the
+  # source fallback in development checkouts, never in a release installation.
+  rm -f "$new_agent/xider_layers.py"
+  : > "$new_agent/.xider-signed-release"
+  chmod 600 "$new_agent/.xider-signed-release"
+
   release_url="https://github.com/invinby/XIDER/releases/download/$RELEASE_TAG"
   echo "Проверяю подписанную резервную копию $RELEASE_TAG для Guard Keeper."
   curl --fail --silent --show-error --location --max-time 60 --max-filesize 1048576 \
@@ -341,6 +397,44 @@ fi
 
 # Keep the prior install for rollback; never recursively delete the live checkout.
 backup="${INSTALL_ROOT}/git-ver.previous.$(date +%Y%m%d%H%M%S).$$"
+layer_state_snapshot="$stage/layer-state-preserved.json"
+python3 - "$HOME/.xgent/layer-state.json" "$layer_state_snapshot" <<'PY'
+import json, pathlib, sys
+source, destination = map(pathlib.Path, sys.argv[1:])
+if source.is_symlink():
+    raise SystemExit("Состояние Safari/Siri является symlink; обновление остановлено до замены файлов.")
+state = {"safari": True, "siri": True}
+if source.is_file():
+    if source.stat().st_size > 4096:
+        raise SystemExit("Состояние Safari/Siri превышает допустимый размер.")
+    try:
+        saved = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"Не удалось прочитать состояние Safari/Siri: {exc}")
+    if not isinstance(saved, dict):
+        raise SystemExit("Некорректное состояние Safari/Siri.")
+    for role in state:
+        if role in saved:
+            if type(saved[role]) is not bool:
+                raise SystemExit(f"Некорректный флаг включения {role}.")
+            state[role] = saved[role]
+destination.write_text(json.dumps(state, separators=(",", ":")) + "\n", encoding="utf-8")
+PY
+layer_enabled() {
+  "$runtime/bin/python3" - "$layer_state_snapshot" "$1" <<'PY'
+import json, pathlib, sys
+try:
+    state = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, ValueError):
+    raise SystemExit(1)
+raise SystemExit(0 if isinstance(state, dict) and state.get(sys.argv[2]) is True else 1)
+PY
+}
+start_enabled_layers() {
+  local directory="$1"
+  if layer_enabled safari; then (cd "$directory" && bash ./start_safari.sh); fi
+  if layer_enabled siri; then (cd "$directory" && bash ./start_siri.sh); fi
+}
 stop_loaded_job() {
   local label="$1" service="gui/$(id -u)/$1"
   if launchctl print "$service" >/dev/null 2>&1; then
@@ -350,11 +444,14 @@ stop_loaded_job() {
     fi
   fi
 }
-# Stop the coordinator first, so it cannot restore/start the old worker in the
-# middle of the directory swap. An unload error is not an absent service.
-if ! stop_loaded_job com.xider.guardian || ! stop_loaded_job com.xgent.agent; then
+# Stop from the outermost recovery layer inward. Booting out a job preserves
+# the owner's enabled/disabled preference; `--stop` would overwrite it.
+if ! stop_loaded_job com.xider.siri || ! stop_loaded_job com.xider.safari ||
+   ! stop_loaded_job com.xider.guardian || ! stop_loaded_job com.xgent.agent; then
   if [[ -f "$TARGET/XGENT-MCS/start_guardian.sh" ]]; then
-    (cd "$TARGET/XGENT-MCS" && bash ./start_guardian.sh || true)
+    (cd "$TARGET/XGENT-MCS" && bash ./start_agent.sh || true;
+     bash ./start_guardian.sh || true;
+     start_enabled_layers "$TARGET/XGENT-MCS" || true)
   fi
   exit 5
 fi
@@ -363,16 +460,19 @@ if ! mv "$stage/new" "$TARGET"; then
   [[ ! -e "$backup" ]] || mv "$backup" "$TARGET"
   if [[ -f "$TARGET/XGENT-MCS/start_agent.sh" ]]; then
     (cd "$TARGET/XGENT-MCS" && XIDER_RUNTIME_PREPARED=1 bash ./start_agent.sh || true;
-     bash ./start_guardian.sh || true)
+     bash ./start_guardian.sh || true;
+     start_enabled_layers "$TARGET/XGENT-MCS" || true)
   fi
   echo "Не удалось активировать новую папку; прежняя установка сохранена." >&2
   exit 5
 fi
 
 if ! (cd "$TARGET/XGENT-MCS" && XIDER_RUNTIME_PREPARED=1 bash ./start_agent.sh && bash ./start_guardian.sh &&
+      start_enabled_layers "$TARGET/XGENT-MCS" &&
       bash ./start_agent.sh --status && bash ./start_guardian.sh --status); then
   echo "Запуск не прошёл; возвращаю предыдущую версию." >&2
-  if ! stop_loaded_job com.xider.guardian || ! stop_loaded_job com.xgent.agent; then
+  if ! stop_loaded_job com.xider.siri || ! stop_loaded_job com.xider.safari ||
+     ! stop_loaded_job com.xider.guardian || ! stop_loaded_job com.xgent.agent; then
     echo "Откат остановлен: новая служба не выгрузилась. Папки не перемещал; резервная копия: $backup" >&2
     exit 6
   fi
@@ -388,7 +488,9 @@ if ! (cd "$TARGET/XGENT-MCS" && XIDER_RUNTIME_PREPARED=1 bash ./start_agent.sh &
     fi
   fi
   if [[ -x "$TARGET/XGENT-MCS/start_agent.sh" ]]; then
-    (cd "$TARGET/XGENT-MCS" && XIDER_RUNTIME_PREPARED=1 bash ./start_agent.sh || true; bash ./start_guardian.sh || true)
+    (cd "$TARGET/XGENT-MCS" && XIDER_RUNTIME_PREPARED=1 bash ./start_agent.sh || true;
+     bash ./start_guardian.sh || true;
+     start_enabled_layers "$TARGET/XGENT-MCS" || true)
   fi
   [[ ! -e "$backup" ]] || echo "Предыдущая версия возвращена: $TARGET"
   exit 6

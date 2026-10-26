@@ -3933,16 +3933,22 @@ class XgentClient:
             for label, log_path in (
                 ("agent", CONFIG_DIR / "xgent.log"),
                 ("guardian", CONFIG_DIR / "guardian.log"),
+                ("safari", CONFIG_DIR / "safari.log"),
+                ("siri", CONFIG_DIR / "siri.log"),
             ):
                 try:
-                    raw = log_path.read_bytes()
+                    with log_path.open("rb") as stream:
+                        stream.seek(0, os.SEEK_END)
+                        size = stream.tell()
+                        stream.seek(max(0, size - 16 * 1024), os.SEEK_SET)
+                        raw = stream.read(16 * 1024)
                 except FileNotFoundError:
                     continue
                 except OSError:
                     unavailable_sources.append(label)
                     continue
-                truncated = truncated or len(raw) > 16 * 1024
-                text = raw[-(16 * 1024):].decode("utf-8", errors="replace")
+                truncated = truncated or size > 16 * 1024
+                text = raw.decode("utf-8", errors="replace")
                 all_rows = text.splitlines()
                 truncated = truncated or len(all_rows) > 40
                 for row in all_rows[-40:]:
@@ -3950,11 +3956,11 @@ class XgentClient:
                         row = pattern.sub(lambda match: f"{match.group(1)}=[REDACTED]" if match.lastindex and match.lastindex >= 3 else "Bearer [REDACTED]", row)
                     clean.append(f"[{label}] {row[-480:]}")
             if not clean and unavailable_sources:
-                result.update(state="unavailable", text="Не удалось прочитать локальные журналы агента и Guardian.")
+                result.update(state="unavailable", text="Не удалось прочитать локальные журналы XIDER-компонентов.")
                 self._publish_response("output", result)
                 return
             if not clean:
-                result.update(state="missing", text="Локальные журналы агента и Guardian ещё не созданы.")
+                result.update(state="missing", text="Локальные журналы XIDER-компонентов ещё не созданы.")
                 self._publish_response("output", result)
                 return
             joined = "\n".join(clean)
@@ -3965,9 +3971,9 @@ class XgentClient:
                 text=joined[-8000:],
             )
         except FileNotFoundError:
-            result.update(state="missing", text="Локальные журналы агента и Guardian ещё не созданы.")
+            result.update(state="missing", text="Локальные журналы XIDER-компонентов ещё не созданы.")
         except OSError:
-            result.update(state="unavailable", text="Не удалось прочитать локальные журналы агента и Guardian.")
+            result.update(state="unavailable", text="Не удалось прочитать локальные журналы XIDER-компонентов.")
         self._publish_response("output", result)
 
     def _do_permission_settings(self, payload: dict) -> dict:

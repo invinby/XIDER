@@ -22,6 +22,16 @@ microphone, screen recording, and location remain permission-gated by macOS.
 If the Mac is powered off or discharged, the VPS can only report its last
 heartbeat and notify the owner.
 
+### Recovery chain
+
+The visible recovery layers are one-way: **Siri → Safari → Guard Keeper →
+Agent**. Siri checks Safari's fresh health record. Safari checks both Guard
+Keeper and the Agent, and asks Guard Keeper to recover the Agent when needed.
+Each layer honors the owner's saved stop state; an intentional stop is not
+treated as a crash. The bot reports each component's own version/state and
+collects bounded, rotating local logs on request. The owner can stop or remove
+each LaunchAgent from the device.
+
 ### One-command install/update
 
 ```bash
@@ -29,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/invinby/XIDER/main/deploy/bootstrap
 ```
 
 The bootstrap preserves the local `.env`, downloads the current source, fixes
-script permissions, starts the worker, and registers Guardian. Do not paste the
+script permissions, starts the worker, and registers the recovery chain. Do not paste the
 shell prompt or surrounding backticks into Terminal.
 This convenience bootstrap follows the moving `main` branch and does not verify
 a signature before execution; this direct command is for development installs.
@@ -44,7 +54,13 @@ it runs and still relies on the initial HTTPS/GitHub download.
 cd "$HOME/XIDER/git-ver/XGENT-MCS"
 bash ./start_agent.sh --status
 bash ./start_guardian.sh --status
+bash ./start_safari.sh --status
+bash ./start_siri.sh --status
 ```
+
+Stop Safari or Siri locally with the matching script's `--stop` option. Stopping
+Guard Keeper with `bash ./start_guardian.sh --stop` records the owner's intent;
+Safari will not relaunch it until the owner starts it again from Telegram.
 
 Open **Device → Power & Protection → Guardian** in Telegram for status, start,
 stop, restart, and automatic recovery.
@@ -68,6 +84,16 @@ Guardian не скрывается в системе и не обходит ко
 пользователя. Если Mac выключен или разряжен, VPS покажет последний heartbeat,
 но не сможет включить ноутбук программно.
 
+### Цепочка восстановления
+
+Видимая цепочка работает в одну сторону: **Siri → Safari → Guard Keeper →
+Agent**. Siri проверяет свежий статус Safari. Safari следит отдельно за Guard
+Keeper и агентом и просит Keeper восстановить агента, если тот упал. Каждый
+уровень уважает сохранённую команду владельца на остановку и не принимает её
+за сбой. Бот показывает собственные версии и состояния компонентов, а журналы
+хранятся с ограничением размера и передаются только по запросу. Владелец может
+остановить или удалить каждый LaunchAgent с самого Mac.
+
 ### Установка или обновление одной командой
 
 ```bash
@@ -75,7 +101,7 @@ curl -fsSL https://raw.githubusercontent.com/invinby/XIDER/main/deploy/bootstrap
 ```
 
 Bootstrap сохраняет локальный `.env`, скачивает свежий код, исправляет права
-скриптов, запускает агент и регистрирует Guardian.
+скриптов, запускает агент и регистрирует цепочку восстановления.
 Эта прямая команда для разработки: она берёт изменяемую ветку `main` и не
 проверяет подпись bootstrap до запуска. Tagged release quickstart закрепляет
 скрипт и архив на одном полном commit ID и проверяет OpenSSH-подпись хэша,

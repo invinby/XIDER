@@ -1913,8 +1913,11 @@ def device_card(device_id: str) -> str:
     else:
         seen_str = "не в сети"
 
-    keeper = companion_status.device_companions(info, now=time.time())[0]
-    guardian_str = html.escape(_companion_row(keeper).split(": ", 1)[1])
+    companion_rows = companion_status.device_companions(info, now=time.time())
+    companion_lines = "\n".join(
+        f"• <b>{html.escape(row['name'])}:</b> {html.escape(_companion_row(row).split(': ', 1)[1])}"
+        for row in companion_rows
+    )
 
     os_low = os_str.lower()
     os_icon = "🍏" if ("mac" in os_low or "darwin" in os_low) else ("🪟" if "win" in os_low else "🐧")
@@ -1932,7 +1935,7 @@ def device_card(device_id: str) -> str:
         "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"• <b>ОС:</b> {os_str}\n"
         f"• <b>Агент:</b> v{ver}  •  <b>Пинг:</b> {seen_str}\n"
-        f"• <b>Guardian:</b> {guardian_str}\n"
+        f"{companion_lines}\n"
         f"{old_version_note}"
         "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "<i>Выберите категорию:</i>"
@@ -9796,6 +9799,10 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             "standby": is_standby,
             "command_approval_protocol": payload.get("command_approval_protocol") if type(payload.get("command_approval_protocol")) is int else 0,
         }
+        if "companions" in payload:
+            info["companion_records"] = companion_status.clean_layer_records(
+                payload.get("companions"), now=time.time(),
+            )
         update_mode = payload.get("update_mode")
         info["update_mode"] = (
             update_mode
@@ -10165,6 +10172,9 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             and isinstance(state, str)
             and state in allowed_states
         } if isinstance(raw_status, dict) else {}
+        clean_companions = companion_status.clean_layer_records(
+            payload.get("companions"), now=time.time(),
+        )
         # Every new report replaces the diagnostic snapshot, including malformed
         # reports without commands; a previous declaration must not remain fresh.
         devices.upsert(device_id, {
@@ -10174,7 +10184,9 @@ def on_mqtt_message(topic: str, data: dict) -> None:
                 "features": clean_features,
                 "feature_status": clean_status,
                 "snapshot": _parse_capability_snapshot(payload),
+                "companions": clean_companions,
             },
+            "companion_records": clean_companions,
             "capabilities_seen": time.time(),
         })
         capabilities_collector.submit(device_id, payload)
@@ -18493,7 +18505,7 @@ async def on_cmd_agent_logs(cq: CallbackQuery):
     if _device_declares_command(devices.get(target) or {}, "agent_logs") is False:
         await cq.answer("Обнови агент: эта версия ещё не отдаёт журнал.", show_alert=True)
         return
-    await cq.answer("Читаю локальные журналы агента и Guardian…")
+    await cq.answer("Читаю локальные журналы XIDER-компонентов…")
     sent, command_id = publish_tracked("agent_logs", _target=target)
     if not sent:
         await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
@@ -18505,7 +18517,7 @@ async def on_cmd_agent_logs(cq: CallbackQuery):
     title = html.escape(str(device.get("name") or target))
     if (not isinstance(result, dict) or result.get("device_id") != target
             or str(result.get("id") or "") != command_id):
-        body = f"📄 <b>Логи агента и Guardian · {title}</b>\n\nОтвет не пришёл или не прошёл проверку запроса."
+        body = f"📄 <b>Логи XIDER-компонентов · {title}</b>\n\nОтвет не пришёл или не прошёл проверку запроса."
     else:
         raw = str(result.get("text") or "")
         safe, redaction = access_store.redact_shell_output_with_summary(raw)
@@ -18518,7 +18530,7 @@ async def on_cmd_agent_logs(cq: CallbackQuery):
         elif result.get("truncated") is True:
             suffix += "\nПоказан хвост журнала: исходный файл больше лимита."
         body = (
-            f"📄 <b>Логи агента и Guardian · {title}</b>\n"
+            f"📄 <b>Логи XIDER-компонентов · {title}</b>\n"
             f"Состояние: <code>{html.escape(str(result.get('state') or 'unknown'))}</code> · "
             f"строк: <code>{line_count}</code>{suffix}\n\n"
             f"<pre>{html.escape(safe[-3000:])}</pre>"
@@ -26316,7 +26328,16 @@ async def on_cmd_guardian_menu(cq: CallbackQuery):
 
 
 def _companion_row(row: dict) -> str:
-    text = f"{row['name']}: {row['state']}"
+    state_labels = {
+        "running": "🟢 работает",
+        "waiting": "🟡 ждёт разрешённое состояние",
+        "error": "🔴 ошибка",
+        "stopped": "⚪ остановлен владельцем",
+        "installed": "⚪ установлен",
+        "unknown": "⚪ неизвестно",
+        "unsupported": "— не поддерживается",
+    }
+    text = f"{row['name']}: {state_labels.get(row['state'], row['state'])}"
     if row["version"]:
         text += f" · v{row['version']}"
     if row["reason"]:

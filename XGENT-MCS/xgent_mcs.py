@@ -1823,6 +1823,7 @@ class XgentClient:
             "release_update_ready": trusted_release_keys_ready() and not getattr(sys, "frozen", False),
             "update_manifest_binding_protocol": 1,
             "status": status,
+            "companions": _layer_health_snapshot(),
         }
         if _command_approval_protocol_enabled(self):
             payload["command_approval_protocol"] = 1
@@ -3515,6 +3516,7 @@ class XgentClient:
             "feature_status": feature_status,
             **_capability_snapshot(feature_status),
             "shell_runner": _shell_runner_diagnostic(self),
+            "companions": _layer_health_snapshot(),
         }
         if _command_approval_protocol_enabled(self):
             response["command_approval_protocol"] = 1
@@ -3530,6 +3532,8 @@ class XgentClient:
             ("xgent.log", CONFIG_DIR / "xgent.log"),
             ("agent.log", _agent_install_dir() / "agent.log"),
             ("guardian.log", _agent_install_dir() / "guardian.log"),
+            ("safari.log", CONFIG_DIR / "safari.log"),
+            ("siri.log", CONFIG_DIR / "siri.log"),
         )
         secret_patterns = (
             re.compile(r"(?i)\b(token|password|passwd|secret|api[_-]?key|authorization|private[_-]?key)\b(\s*[:=]\s*)([^\s,;]+)"),
@@ -3540,14 +3544,18 @@ class XgentClient:
         truncated = False
         for label, log_path in sources:
             try:
-                raw = log_path.read_bytes()
+                with log_path.open("rb") as stream:
+                    stream.seek(0, os.SEEK_END)
+                    size = stream.tell()
+                    stream.seek(max(0, size - 16 * 1024), os.SEEK_SET)
+                    raw = stream.read(16 * 1024)
             except FileNotFoundError:
                 continue
             except OSError:
                 unavailable_sources.append(label)
                 continue
-            truncated = truncated or len(raw) > 16 * 1024
-            text = raw[-(16 * 1024):].decode("utf-8", errors="replace")
+            truncated = truncated or size > 16 * 1024
+            text = raw.decode("utf-8", errors="replace")
             all_rows = text.splitlines()
             truncated = truncated or len(all_rows) > 40
             for row in all_rows[-40:]:
@@ -3555,9 +3563,9 @@ class XgentClient:
                     row = pattern.sub(lambda match: f"{match.group(1)}=[REDACTED]" if match.lastindex and match.lastindex >= 3 else "Bearer [REDACTED]", row)
                 clean_rows.append(f"[{label}] {row[-480:]}")
         if not clean_rows and unavailable_sources:
-            result.update(state="unavailable", text="Не удалось прочитать локальные журналы агента.")
+            result.update(state="unavailable", text="Не удалось прочитать локальные журналы XIDER-компонентов.")
         elif not clean_rows:
-            result.update(state="missing", text="Файлы локальных журналов агента ещё не созданы.")
+            result.update(state="missing", text="Локальные журналы XIDER-компонентов ещё не созданы.")
         else:
             truncated = truncated or len(clean_rows) > 80
             selected = clean_rows[-80:]
@@ -5601,6 +5609,35 @@ end tell'''
             set_guardian_desired_running(False)
         except Exception:
             log.exception("Could not persist Guardian stop intent before uninstall")
+        layer_scripts = {
+            role: _agent_install_dir() / f"start_{role}.sh"
+            for role in ("siri", "safari")
+        }
+        stopped_layers = []
+        for role in ("siri", "safari"):
+            script = layer_scripts[role]
+            if not script.is_file():
+                continue
+            try:
+                stopped = subprocess.run(
+                    ["/bin/bash", str(script), "--stop"],
+                    capture_output=True, text=True, check=False, timeout=20,
+                )
+                if stopped.returncode != 0:
+                    raise RuntimeError(stopped.stderr.strip() or f"{role.title()} did not stop")
+                stopped_layers.append(role)
+            except Exception as exc:
+                log.exception("Could not stop XIDER %s before uninstall", role)
+                for previous in reversed(stopped_layers):
+                    subprocess.run(
+                        ["/bin/bash", str(layer_scripts[previous])],
+                        capture_output=True, text=True, check=False, timeout=35,
+                    )
+                self._publish_response("output", {
+                    "type": "uninstall_agent", "device_id": DEVICE_ID, "ok": False,
+                    "text": f"❌ {role.title()} не остановился; удаление отменено: {exc}",
+                })
+                return
         # Unload the visible Guardian first: removing only the worker plist
         # leaves Guardian alive and able to relaunch the worker being removed.
         try:
@@ -5630,6 +5667,11 @@ end tell'''
                 set_guardian_desired_running(True)
             except Exception:
                 log.exception("Could not restore Guardian intent after failed uninstall")
+            for role in reversed(stopped_layers):
+                subprocess.run(
+                    ["/bin/bash", str(layer_scripts[role])],
+                    capture_output=True, text=True, check=False, timeout=35,
+                )
             self._publish_response("output", {
                 "type": "uninstall_agent", "device_id": DEVICE_ID, "ok": False,
                 "text": f"❌ Guardian остался загружен; удаление отменено, настройки сохранены: {exc}",
@@ -5709,6 +5751,41 @@ def _agent_install_dir() -> Path:
         if app is not None:
             return app.parent
     return Path(__file__).resolve().parent
+
+
+def _layer_health_snapshot() -> dict:
+    """Read only fresh, schema-checked Safari/Siri health markers for the bot."""
+    result = {}
+    allowed_states = {"running", "waiting", "error", "stopped"}
+    for role in ("safari", "siri"):
+        path = CONFIG_DIR / f"{role}-health.json"
+        try:
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > 4096:
+                continue
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict) or payload.get("schema") != 1 or payload.get("component") != role:
+            continue
+        version = payload.get("version")
+        stamp = payload.get("updated_at")
+        pid = payload.get("pid")
+        state = payload.get("state")
+        if (not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version)
+                or type(stamp) not in (int, float) or not math.isfinite(stamp)
+                or stamp <= 0 or stamp > time.time() + 5
+                or type(pid) is not int or pid <= 0 or not isinstance(state, str)
+                or state not in allowed_states):
+            continue
+        result[role] = {
+            "installed": True,
+            "version": version,
+            "version_source": role,
+            "state": state,
+            "pid": pid,
+            "last_seen": stamp,
+        }
+    return result
 
 
 def main() -> None:
