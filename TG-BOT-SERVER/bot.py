@@ -9748,7 +9748,9 @@ def on_mqtt_message(topic: str, data: dict) -> None:
         return
     device_id = parts[prefix_len]
     msg_type = parts[-1]
-    if msg_type in {"status", "update_progress"} and payload.get("device_id", device_id) != device_id:
+    # A broker identity is bound to one device topic. Never let a signed
+    # response on that topic claim a different device in its payload.
+    if payload.get("device_id", device_id) != device_id:
         return
     if msg_type == "update_progress" and payload.get("type") == "agent_update_progress":
         if bot_settings.is_blocked(device_id):

@@ -80,6 +80,18 @@ def test_final_update_failure_routes_to_operation_without_claiming_success(coord
     assert c.store.get(op.operation_id).state == 'failed'
 
 
+def test_output_cannot_claim_another_device_on_its_topic(coordinator, monkeypatch):
+    c, op = coordinator
+    monkeypatch.setattr(bot.fun_text_collector, 'submit', lambda *args: None)
+    monkeypatch.setattr(bot, '_schedule_lifecycle_failure_notice', lambda *args: None)
+    bot.on_mqtt_message(
+        f'{bot.MQTT_PREFIX}/mac1/output',
+        {'type': 'agent_update', 'device_id': 'mac2', 'operation_id': op.operation_id,
+         'update_state': 'succeeded', 'ok': True},
+    )
+    assert c.store.get(op.operation_id).state == 'queued'
+
+
 @pytest.mark.parametrize('failure', ['signature', 'topic', 'device', 'component', 'blocked'])
 def test_untrusted_progress_cannot_advance(coordinator, monkeypatch, failure):
     c, op = coordinator
