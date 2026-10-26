@@ -1320,6 +1320,7 @@ SUPPORTED_COMMANDS = (
     "volume_toggle",
     "power",
     "stop",
+    "agent_logs",
     "dir_list",
     "file_get",
     "file_put",
@@ -2073,6 +2074,7 @@ class XgentClient:
             "mic": self._do_mic,
             "open_app": self._do_open_app,
             "capabilities": self._do_capabilities,
+            "agent_logs": self._do_agent_logs,
             "permission_settings": self._do_permission_settings,
             "lock": self._do_lock_screen,
             "volume_toggle": self._do_volume_toggle,
@@ -3873,6 +3875,41 @@ class XgentClient:
             response["command_approval_protocol"] = 1
         self._publish_response("capabilities", response)
         log.info("Отчёт о возможностях отправлен")
+
+    def _do_agent_logs(self, payload: dict) -> None:
+        """Return a bounded, redacted tail of the local agent log on owner request."""
+        result = {
+            "type": "agent_logs", "device_id": DEVICE_ID, "ok": False,
+            "state": "unavailable", "lines": 0, "text": "",
+        }
+        try:
+            log_path = CONFIG_DIR / "xgent.log"
+            raw = log_path.read_bytes()
+            truncated = len(raw) > 32 * 1024
+            text = raw[-(32 * 1024):].decode("utf-8", errors="replace")
+            all_rows = text.splitlines()
+            truncated = truncated or len(all_rows) > 80
+            rows = all_rows[-80:]
+            secret_patterns = (
+                re.compile(r"(?i)\b(token|password|passwd|secret|api[_-]?key|authorization|private[_-]?key)\b(\s*[:=]\s*)([^\s,;]+)"),
+                re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"),
+            )
+            clean = []
+            for row in rows:
+                for pattern in secret_patterns:
+                    row = pattern.sub(lambda match: f"{match.group(1)}=[REDACTED]" if match.lastindex and match.lastindex >= 3 else "Bearer [REDACTED]", row)
+                clean.append(row[-500:])
+            joined = "\n".join(clean)
+            truncated = truncated or len(joined) > 8000
+            result.update(
+                ok=True, state="available", lines=len(clean), truncated=truncated,
+                text=joined[-8000:],
+            )
+        except FileNotFoundError:
+            result.update(state="missing", text="Локальный файл xgent.log ещё не создан.")
+        except OSError:
+            result.update(state="unavailable", text="Не удалось прочитать локальный журнал агента.")
+        self._publish_response("output", result)
 
     def _do_permission_settings(self, payload: dict) -> dict:
         """Open one fixed Windows privacy page; this never changes a grant."""

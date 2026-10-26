@@ -801,7 +801,7 @@ SUPPORTED_COMMANDS = (
     "clipboard_set", "kill_process", "disks", "volume_set",
     "mic", "shell", "shell_cancel", "open_app", "capabilities", "permission_settings", "lock", "volume_toggle",
     "display_catalog", "display_resolution", "display_contact_sheet", "display_screenshot", "display_region_screenshot", "window_catalog", "window_screenshot",
-    "power", "stop",
+    "power", "stop", "agent_logs",
     "dir_list", "file_get", "file_put", "file_del", "find_file", "path_open",
     "ext_ip", "geo_location", "screen_off", "screensaver_on", "wallpaper_set",
     "msgbox_spam", "type_text", "hotkey",
@@ -1341,6 +1341,7 @@ class XgentClient:
             "shell": self._do_shell,
             "open_app": self._do_open_app,
             "capabilities": self._do_capabilities,
+            "agent_logs": self._do_agent_logs,
             "permission_settings": self._do_permission_settings,
             "lock": self._do_lock_screen,
             "volume_toggle": self._do_volume_toggle,
@@ -3518,6 +3519,41 @@ class XgentClient:
         if _command_approval_protocol_enabled(self):
             response["command_approval_protocol"] = 1
         self._publish_response("capabilities", response)
+
+    def _do_agent_logs(self, payload: dict) -> None:
+        """Return a bounded, redacted tail of the local agent log on owner request."""
+        result = {
+            "type": "agent_logs", "device_id": DEVICE_ID, "ok": False,
+            "state": "unavailable", "lines": 0, "text": "",
+        }
+        try:
+            log_path = CONFIG_DIR / "xgent.log"
+            raw = log_path.read_bytes()
+            truncated = len(raw) > 32 * 1024
+            text = raw[-(32 * 1024):].decode("utf-8", errors="replace")
+            all_rows = text.splitlines()
+            truncated = truncated or len(all_rows) > 80
+            rows = all_rows[-80:]
+            secret_patterns = (
+                re.compile(r"(?i)\b(token|password|passwd|secret|api[_-]?key|authorization|private[_-]?key)\b(\s*[:=]\s*)([^\s,;]+)"),
+                re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"),
+            )
+            clean = []
+            for row in rows:
+                for pattern in secret_patterns:
+                    row = pattern.sub(lambda match: f"{match.group(1)}=[REDACTED]" if match.lastindex and match.lastindex >= 3 else "Bearer [REDACTED]", row)
+                clean.append(row[-500:])
+            joined = "\n".join(clean)
+            truncated = truncated or len(joined) > 8000
+            result.update(
+                ok=True, state="available", lines=len(clean), truncated=truncated,
+                text=joined[-8000:],
+            )
+        except FileNotFoundError:
+            result.update(state="missing", text="Локальный файл xgent.log ещё не создан.")
+        except OSError:
+            result.update(state="unavailable", text="Не удалось прочитать локальный журнал агента.")
+        self._publish_response("output", result)
 
     def _do_lock_screen(self, payload: dict) -> None:
         subprocess.run(["pmset", "displaysleepnow"], check=False)

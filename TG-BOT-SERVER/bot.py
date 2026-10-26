@@ -6571,6 +6571,12 @@ def device_menu(device_id: str, user_id: int | None = None):
             callback_data="catalog:fields:list", style="primary",
         )
 
+    if is_owner:
+        kb.button(
+            text=_ui_phrase("📄 Agent logs", "📄 Логи агента", "📄 Логи агента"),
+            callback_data="cmd:agent_logs", style="primary",
+        )
+
     # Bottom row: Back
     kb.button(
         text=_lex("devices_back_list_button"),
@@ -6580,7 +6586,7 @@ def device_menu(device_id: str, user_id: int | None = None):
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
 
     content_count = len(list(kb.buttons)) - 2
-    owner_field_row = 1 if is_owner else 0
+    owner_field_row = 2 if is_owner else 0
     regular_content = content_count - owner_field_row
     row_widths = [2] * (regular_content // 2)
     if regular_content % 2:
@@ -9433,7 +9439,7 @@ FUN_RESPONSE_TYPES = {
     # Режим ожидания (Watchdog) и автозапуск
     "standby_sleep", "wake", "autorun_status", "autorun_enable", "autorun_disable",
     # Системные утилиты и диагностика
-    "sys_uptime", "sys_clean_temp", "net_ping",
+    "sys_uptime", "sys_clean_temp", "net_ping", "agent_logs",
     "filevault_status",
     "sip_status",
     "gatekeeper_status",
@@ -18463,6 +18469,55 @@ async def on_cmd_services(cq: CallbackQuery):
     tot = res.get("total", "?")
     run = res.get("running", "?")
     await _replace_callback_message(cq, f"🛠 <b>Службы:</b>\nВсего: {tot}\nЗапущено: {run}", delivery_guard=_callback_delivery_guard(cq, target), reply_markup=back_to_device_kb())
+
+@router.callback_query(OwnerFilter(), F.data == "cmd:agent_logs")
+async def on_cmd_agent_logs(cq: CallbackQuery):
+    target = SESSION.get("target")
+    if not target or target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    if _device_declares_command(devices.get(target) or {}, "agent_logs") is False:
+        await cq.answer("Обнови агент: эта версия ещё не отдаёт журнал.", show_alert=True)
+        return
+    await cq.answer("Читаю локальный журнал агента…")
+    sent, command_id = publish_tracked("agent_logs", _target=target)
+    if not sent:
+        await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
+        return
+    result = await fun_text_collector.wait_for(target, "agent_logs", 12.0, command_id)
+    if not await _callback_result_access_or_report(cq, target, published=True):
+        return
+    device = devices.get(target) or {}
+    title = html.escape(str(device.get("name") or target))
+    if (not isinstance(result, dict) or result.get("device_id") != target
+            or str(result.get("id") or "") != command_id):
+        body = f"📄 <b>Логи агента · {title}</b>\n\nОтвет не пришёл или не прошёл проверку запроса."
+    else:
+        raw = str(result.get("text") or "")
+        safe, redaction = access_store.redact_shell_output_with_summary(raw)
+        line_count = result.get("lines")
+        if type(line_count) is not int or not 0 <= line_count <= 80:
+            line_count = 0
+        suffix = "\n🔎 Секреты замаскированы." if redaction.get("total", 0) else ""
+        if result.get("truncated") is True:
+            suffix += "\nПоказан хвост журнала: исходный файл больше лимита."
+        body = (
+            f"📄 <b>Логи агента · {title}</b>\n"
+            f"Состояние: <code>{html.escape(str(result.get('state') or 'unknown'))}</code> · "
+            f"строк: <code>{line_count}</code>{suffix}\n\n"
+            f"<pre>{html.escape(safe[-3000:])}</pre>"
+        )
+        access_store.append_audit(
+            "agent_logs", actor_id=cq.from_user.id, target_id=target,
+            detail=f"state={result.get('state', 'unknown')} lines={result.get('lines', 0)}",
+        )
+    await _replace_callback_message(
+        cq, body, delivery_guard=_callback_delivery_guard(cq, target),
+        reply_markup=back_to_device_kb(),
+    )
+
 
 @router.callback_query(AdminFilter(), F.data == "cmd:capabilities")
 async def on_cmd_capabilities(cq: CallbackQuery):
