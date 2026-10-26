@@ -14,6 +14,15 @@ REQUIRED = {"command_module_loader", "command_signing", "command_replay", "shell
             "winrt.windows.security.authorization.appcapabilityaccess"}
 PRIVATE_KEY_BASENAMES = {"id_rsa", "id_ecdsa", "id_ed25519", "id_dsa"}
 PRIVATE_PEM_MARKER = re.compile(rb"(?m)^-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----\r?$")
+PRIVATE_KEY_SUFFIXES = {".key", ".pem", ".p12", ".pfx", ".p8", ".mobileprovision"}
+SECRET_PATTERNS = (
+    re.compile(rb"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
+    re.compile(rb"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+    re.compile(rb"\bglpat-[A-Za-z0-9_-]{20,}\b"),
+    re.compile(rb"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(rb"\b(?:sk|rk)_live_[A-Za-z0-9]{20,}\b"),
+    re.compile(rb"\b[0-9]{8,10}:[A-Za-z0-9_-]{35,}\b"),
+)
 
 
 def _contains_private_pem(archive, member):
@@ -25,6 +34,19 @@ def _contains_private_pem(archive, member):
                 return False
             data = overlap + chunk
             if PRIVATE_PEM_MARKER.search(data):
+                return True
+            overlap = data[-256:]
+
+
+def _contains_secret_token(archive, member):
+    overlap = b""
+    with archive.open(member) as stream:
+        while True:
+            chunk = stream.read(1024 * 1024)
+            if not chunk:
+                return False
+            data = overlap + chunk
+            if any(pattern.search(data) for pattern in SECRET_PATTERNS):
                 return True
             overlap = data[-256:]
 
@@ -61,15 +83,18 @@ def verify_public_only_zip(path):
             private_name = (name in PRIVATE_KEY_BASENAMES or "private-key" in name
                             or "private_key" in name or "signing-key" in name
                             or ("private" in name and "signing" in name))
+            private_material_suffix = suffix in PRIVATE_KEY_SUFFIXES
             private_env = name == ".env" or (name.startswith(".env.")
                                                and name not in {".env.example", ".env.sample"})
-            if private_env or name == "bot.env" or private_name:
+            if private_env or name == "bot.env" or private_name or private_material_suffix:
                 raise ValueError("Private configuration in package: " + member.filename)
             # Search every member, regardless of extension. A PEM-looking
             # fixture embedded inside a source-code string is not a PEM block
             # because the marker does not start a line by itself.
             if not member.is_dir() and _contains_private_pem(archive, member):
                 raise ValueError("Private key material in package: " + member.filename)
+            if not member.is_dir() and _contains_secret_token(archive, member):
+                raise ValueError("Credential-like token in package: " + member.filename)
 
 
 if __name__ == "__main__":
