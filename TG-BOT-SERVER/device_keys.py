@@ -27,6 +27,8 @@ def key_for_device(device_id: str) -> str:
     directory = Path(root)
     if not directory.is_absolute():
         raise ValueError("device key directory must be absolute")
+    if not directory.is_dir():
+        raise ValueError("device key directory is missing")
     path = directory / f"{device_id}.key"
     try:
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
@@ -46,3 +48,29 @@ def key_for_device(device_id: str) -> str:
         return raw.decode("ascii")
     except UnicodeDecodeError as exc:
         raise ValueError("invalid device key encoding") from exc
+
+
+def save_device_key(device_id: str, key: str) -> None:
+    """Create an enrolled key once; never silently replace a working device."""
+    if not isinstance(device_id, str) or not _ID.fullmatch(device_id):
+        raise ValueError("invalid device ID")
+    if not isinstance(key, str) or not 32 <= len(key) <= 256 or not key.isascii() or any(
+        char in key for char in "\r\n"
+    ):
+        raise ValueError("invalid device key")
+    root = os.environ.get("XIDER_DEVICE_KEYS_DIR", "").strip()
+    directory = Path(root)
+    if not root or not directory.is_absolute() or not directory.is_dir():
+        raise ValueError("device key directory is unavailable")
+    path = directory / f"{device_id}.key"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as target:
+            if os.name == "posix":
+                os.fchmod(target.fileno(), 0o600)
+            target.write(key.encode("ascii"))
+            target.flush()
+            os.fsync(target.fileno())
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise

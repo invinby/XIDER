@@ -22,6 +22,18 @@ def test_device_key_is_loaded_outside_source_tree_and_legacy_still_works(tmp_pat
         device_keys.key_for_device("broken1")
 
 
+def test_device_key_is_created_once_without_overwriting(tmp_path, monkeypatch):
+    monkeypatch.setenv("XIDER_DEVICE_KEYS_DIR", str(tmp_path))
+    device_keys.save_device_key("macbook1", "m" * 64)
+    assert device_keys.key_for_device("macbook1") == "m" * 64
+    with pytest.raises(FileExistsError):
+        device_keys.save_device_key("macbook1", "n" * 64)
+    assert device_keys.key_for_device("macbook1") == "m" * 64
+    monkeypatch.setenv("XIDER_DEVICE_KEYS_DIR", str(tmp_path / "missing"))
+    with pytest.raises(ValueError, match="missing"):
+        device_keys.key_for_device("macbook1")
+
+
 def test_per_device_hmac_and_encryption_reject_legacy_key():
     key = "d" * 64
     encrypted = xgencrypto.encrypt_payload({"type": "status", "device_id": "macbook1"}, key=key)
