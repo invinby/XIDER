@@ -1,6 +1,6 @@
 # X-DOCK enrollment design
 
-Status: proposed; no enrollment endpoint or certificate has been deployed.
+Status: in progress; no enrollment endpoint or certificate has been deployed.
 Decision date: 2026-10-01.
 
 ## Goal
@@ -123,6 +123,22 @@ References checked 2026-10-26:
   credential-storage, service-start, and health-check failure.
 - Live rollout is staged only after stable-IP, port reachability, TLS renewal,
   broker ACL, Telegram approval, and backup/recovery have all been verified.
+
+## Broker issuer implementation (2026-10-27)
+
+`broker/dynsec_issuer.py` now builds a separate Dynamic Security role and
+credential for an approved device. It denies unmatched publish, subscribe, and
+receive operations, permits that device's output topics and the two command
+subscriptions used by Agent and Guardian, and can disable the identity.
+`broker/dynsec_channel.py` provides a TLS-validated MQTT admin channel with
+correlated control replies. Admin credentials must be supplied by the server,
+not by the installer. The focused policy/channel tests run without a live broker.
+
+The issuer is not called by an enrollment endpoint yet. The existing `broker/`
+Compose example remains a static shared-account broker and must not be used as
+proof of per-device ACL enforcement. Before rollout, deploy a dedicated Dynamic
+Security broker, exercise real cross-device ACL tests, add bot-side per-device
+message keys, then wire owner approval and short-command installers.
 
 ## Current evidence and non-claims
 
