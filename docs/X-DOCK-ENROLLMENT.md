@@ -148,17 +148,19 @@ bot can route enrolled devices through a separate MQTT transport and uses the
 matching per-device message key. These are source changes with focused offline
 tests; they are not a live deployment.
 
-The endpoint is still not reachable from a first-install client: Windows and
-macOS bootstraps do not create enrollment keys, submit/poll requests, or decrypt
-the sealed response. The current `broker/docker-compose.yml` still uses a static
-shared account and does not enable Dynamic Security. There is no bot MQTT role
-bootstrap, HTTPS reverse proxy, publicly trusted certificate, or automatic
-certificate-renewal/reload job. `XIDER_DOCK_ENABLED` therefore stays off. No
-new-device pairing or one-command no-SSH install is ready to publish.
+`deploy/x_dock_client.py` now creates short-lived request keys in memory, uses
+the signed approval/poll flow, decrypts the response, and writes the staged
+agent `.env` without printing secrets. Both platform bootstraps can call it when
+`XIDER_DOCK_URL` is configured. This is not yet an end-to-end first install:
+the current `broker/docker-compose.yml` still uses a static shared account and
+does not enable Dynamic Security. There is no bot MQTT role bootstrap, HTTPS
+reverse proxy, publicly trusted certificate, or automatic certificate-renewal/
+reload job. `XIDER_DOCK_ENABLED` therefore stays off. No live pairing or
+one-command no-SSH install is ready to publish.
 
 Next required sequence: add a reproducible Dynamic Security broker setup with
-separate bot/admin roles; provision HTTPS and verify renewal; implement the
-client half in both installers using OS-protected private-key storage; install
+separate bot/admin roles; provision HTTPS and verify renewal; test installer
+pairing, cancellation, and recovery when the bootstrap process exits; install
 Agent and Guard Keeper transactionally; then verify cross-device ACLs, replay,
 denial, enrollment, restart, and rollback before enabling it on a server.
 
@@ -166,7 +168,7 @@ denial, enrollment, restart, and rollback before enabling it on a server.
 
 The last recorded live server snapshot said only SSH was listening. That snapshot
 is historical and was not rechecked for this design decision. Local source now
-has the enrollment API and credential issuer, but there is no HTTPS endpoint,
-ACME certificate, configured Dynamic Security broker, installer client, or live
+has the enrollment API, credential issuer, and client helper, but there is no
+HTTPS endpoint, ACME certificate, configured Dynamic Security broker, or live
 pairing. The design removes a domain purchase as a hard prerequisite, not the
 need to verify VPS networking and automate six-day renewal.

@@ -6,6 +6,7 @@ param(
     [string]$ServerUser = 'ubuntu',
     [string]$Branch = 'main',
     [string]$Ref = $env:XIDER_REF,
+    [string]$DockUrl = $env:XIDER_DOCK_URL,
     [ValidateRange(1, 120)][int]$HealthTimeoutSeconds = 30,
     [switch]$PreflightOnly,
     [string]$SourceArchive
@@ -403,7 +404,8 @@ try {
         'XGENT-WDS\config.py',
         'XGENT-WDS\install_agent.ps1',
         'XGENT-WDS\install_guardian.ps1',
-        'XGENT-WDS\requirements.txt'
+        'XGENT-WDS\requirements.txt',
+        'deploy\x_dock_client.py'
     )) {
         if (-not (Test-Path -LiteralPath (Join-Path $downloaded.FullName $requiredFile) -PathType Leaf)) {
             throw "В скачанном архиве нет $requiredFile. Рабочая установка не изменена."
@@ -421,6 +423,26 @@ try {
         "$env:USERPROFILE\Desktop\XIDER\XGENT-WDS\.env"
     )
     $envSource = $envCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+
+    if (-not $envSource -and $DockUrl) {
+        Write-Host '[2/5] Запрашиваю X-DOCK-подключение; подтверди новое устройство в Telegram...'
+        $pythonLauncher = (Get-Command py.exe -ErrorAction SilentlyContinue).Source
+        $pythonExe = if ($pythonLauncher) { $pythonLauncher } else { (Get-Command python.exe -ErrorAction Stop).Source }
+        $pairingVenv = Join-Path $extract 'x-dock-venv'
+        if ($pythonLauncher) { & $pythonExe -3 -m venv $pairingVenv }
+        else { & $pythonExe -m venv $pairingVenv }
+        if ($LASTEXITCODE -ne 0) { throw 'Не удалось создать одноразовое окружение X-DOCK.' }
+        $pairingPython = Join-Path $pairingVenv 'Scripts\python.exe'
+        & $pairingPython -m pip install --disable-pip-version-check --no-input 'cryptography>=42.0'
+        if ($LASTEXITCODE -ne 0) { throw 'Не удалось подготовить криптографию для X-DOCK.' }
+        $pairingEnv = Join-Path $extract 'x-dock-agent.env'
+        & $pairingPython (Join-Path $downloaded.FullName 'deploy\x_dock_client.py') `
+            --base-url $DockUrl --env-output $pairingEnv --timeout 600
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $pairingEnv -PathType Leaf)) {
+            throw 'X-DOCK не выдал настройки; рабочая установка не изменена.'
+        }
+        $envSource = $pairingEnv
+    }
 
     if (-not $envSource) {
         Write-Host "Локальный .env не найден. Ищу настройки без запроса пароля: SSH-ключ/ssh-agent для $ServerUser@$ServerHost."

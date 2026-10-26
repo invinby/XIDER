@@ -165,6 +165,20 @@ PY
   else
     echo 'Публичный keyset сейчас недоступен; использую локальную конфигурацию.'
   fi
+elif [[ -n "${XIDER_DOCK_URL:-}" ]]; then
+  echo 'Локальной конфигурации нет; подтверждаю X-DOCK-подключение через Telegram.'
+  pairing_venv="$stage/x-dock-venv"
+  if ! python3 -m venv "$pairing_venv" ||
+     ! "$pairing_venv/bin/python3" -m pip install --disable-pip-version-check --quiet 'cryptography>=42.0'; then
+    echo 'Не удалось подготовить криптографию X-DOCK; действующая установка не менялась.' >&2
+    exit 4
+  fi
+  if ! "$pairing_venv/bin/python3" "$stage/new/deploy/x_dock_client.py" \
+      --base-url "$XIDER_DOCK_URL" --env-output "$agent_env" --timeout 600; then
+    echo 'X-DOCK не выдал настройки; действующая установка не менялась.' >&2
+    exit 4
+  fi
+  chmod 600 "$agent_env"
 else
   fetched_env="$stage/fetched.env"
   echo "Локального .env нет; читаю только настройки агента с ${SERVER_USER}@${SERVER_HOST}."
