@@ -77,8 +77,7 @@ def _command(
 ) -> list[str]:
     command = [
         sys.executable, "-m", "nuitka",
-        "--mode=standalone",
-        "--macos-create-app-bundle",
+        "--mode=app",
         "--macos-app-console-mode=disable",
         f"--macos-app-name={bundle_name}",
         f"--macos-app-version={version}",

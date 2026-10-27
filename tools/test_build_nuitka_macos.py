@@ -32,8 +32,9 @@ def test_nuitka_command_keeps_each_privacy_description_as_one_argument(tmp_path)
         protected_resources={"NSLocationUsageDescription": "Explicit one-shot location request."},
     )
 
-    assert "--mode=standalone" in command
-    assert "--macos-create-app-bundle" in command
+    assert "--mode=app" in command
+    assert "--mode=standalone" not in command
+    assert "--macos-create-app-bundle" not in command
     assert "--macos-app-name=XIDER" in command
     assert "--macos-app-version=4.2.0" in command
     assert "--include-module=CoreLocation" in command
