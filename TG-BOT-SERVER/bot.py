@@ -18574,9 +18574,15 @@ async def on_cmd_capabilities(cq: CallbackQuery):
         )
         return
     user_id = int(cq.from_user.id) if cq.from_user else 0
+    device_record = devices.get(target) or {}
+    render_result = {
+        **res,
+        "_guardian_record": device_record.get("guardian"),
+        "_guardian_last_seen": device_record.get("guardian_last_seen"),
+    }
     await _replace_callback_message(
         cq,
-        _format_capabilities(res),
+        _format_capabilities(render_result),
         delivery_guard=_callback_delivery_guard(cq, target),
         reply_markup=_capabilities_keyboard(res, user_id=user_id),
     )
@@ -19074,6 +19080,40 @@ def _format_capabilities(result: dict) -> str:
             else:
                 lines.append("Кнопки перехода появятся после обновления агента; пока открой раздел вручную.")
             lines.append("Для файлового доступа отдельного разрешения нет: проверь ACL. UAC подтверждает владелец.")
+
+    # Show the actual supervisor chain from fresh, component-owned reports.
+    # A stale/missing report is unknown; never infer that a component is alive
+    # just because its parent or the Agent answered this request.
+    platform = str(result.get("platform") or "")
+    if platform.startswith("macOS") or "windows" in platform.casefold():
+        now = time.time()
+        lines.append("\n<b>Состояние сторожей</b> <i>(устаревший отчёт = неизвестно)</i>")
+        lines.append("• Агент: ответил на текущую проверку")
+
+        def health_line(label: str, state: str | None, stamp: object) -> str:
+            if type(stamp) not in (int, float) or not math.isfinite(stamp) or stamp <= 0 or stamp > now + 5:
+                return f"• {label}: неизвестно (нет корректного отчёта)"
+            age = max(0, int(now - stamp))
+            if age >= companion_status.FRESHNESS_SECONDS:
+                return f"• {label}: неизвестно (отчёт устарел, {age} сек назад)"
+            shown_state = state if state in {"running", "waiting", "error", "stopped"} else "unknown"
+            return f"• {label}: {shown_state} · отчёт {age} сек назад"
+
+        guardian = result.get("_guardian_record")
+        guardian_seen = result.get("_guardian_last_seen")
+        # A fresh Guardian status reply proves it is alive; task_registered and
+        # launchd_loaded describe registrations, not the Guardian process.
+        guardian_state = "running" if isinstance(guardian, dict) else None
+        lines.append(health_line("Guard Keeper → агент", guardian_state, guardian_seen))
+
+        if platform.startswith("macOS"):
+            layer_records = companion_status.clean_layer_records(result.get("companions"), now=now)
+            for role, label in (("safari", "Safari → Guard Keeper"), ("siri", "Siri → Safari")):
+                record = layer_records.get(role)
+                if record is None:
+                    lines.append(f"• {label}: неизвестно (нет отчёта слоя)")
+                else:
+                    lines.append(health_line(label, record.get("state"), record.get("last_seen")))
 
     raw_statuses = result.get("feature_status")
     raw_features = result.get("features")
