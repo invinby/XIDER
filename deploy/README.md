@@ -35,10 +35,11 @@ Bootstrap не переносит `TG-BOT-SERVER\.env` и BOT_TOKEN на Windows
 подтверждение неизвестного SSH-хоста отключено. Отдельный
 `bootstrap-agent.ps1` для установки только агента использует OpenSSH только в
 безынтерактивном режиме: парольный fallback отключён. Для первой установки
-без локального `.env` нужен заранее настроенный SSH-ключ/agent. Отдельный
-X-DOCK enrollment через одноразовое owner approval пока не реализован, поэтому
-эта команда пока не может безопасно получить конфигурацию без локального секрета
-или SSH-ключа.
+без локального `.env` сейчас нужен заранее настроенный SSH-ключ/agent. Клиент
+и owner-approved X-DOCK flow уже есть в исходниках; оба bootstrap умеют вызвать
+клиент при заданном `XIDER_DOCK_URL`. Но публичный HTTPS endpoint, сертификат,
+отдельный broker с per-device Dynamic Security и live pairing ещё не подняты.
+Поэтому установка одной командой без `.env` и SSH пока не доступна.
 Настройки остаются в защищённом sidecar `.env`; секреты не печатаются и не
 включаются в EXE. Перед SSH-записью локальный preflight требует MQTT TLS,
 шифрование payload и непустые broker credentials, затем собирает EXE. Если
@@ -183,8 +184,10 @@ sidecar `.env` is absent, it connects to the configured XIDER VPS
 key/agent only. Password and keyboard-interactive authentication are disabled;
 the bootstrap recognizes `~/.ssh/xider`, or an explicit `XIDER_SSH_KEY`.
 Without a local `.env` or an already authorized key, it stops before installation.
-The one-time Telegram-approved X-DOCK enrollment design is documented separately
-but has no deployed endpoint yet. The bootstrap retrieves only the agent configuration keys from
+The source tree also has an optional `XIDER_DOCK_URL` enrollment client path,
+but the owner-approved X-DOCK service has no deployed HTTPS endpoint, trusted
+certificate, or per-device broker yet; that path is not live and cannot replace
+SSH today. The bootstrap retrieves only the agent configuration keys from
 `/etc/xider/bot.env`; `BOT_TOKEN` is never copied. The generated local file is
 mode `0600`. Set `XIDER_ENV_ROOT` to use an existing local `.env`, or set
 `XIDER_SERVER_HOST`/`XIDER_SERVER_USER` for another VPS. This does not deploy
