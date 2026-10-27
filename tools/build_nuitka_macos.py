@@ -31,6 +31,12 @@ AGENT_RESOURCES = {
     "NSMicrophoneUsageDescription": "XIDER records audio after an explicit owner request.",
     "NSAppleEventsUsageDescription": "XIDER runs owner-requested scripts.",
 }
+NUITKA_PROTECTED_RESOURCE_KEYS = frozenset({
+    "NSLocationWhenInUseUsageDescription",
+    "NSCameraUsageDescription",
+    "NSMicrophoneUsageDescription",
+    "NSAppleEventsUsageDescription",
+})
 
 
 def _version() -> str:
@@ -89,6 +95,8 @@ def _command(
         f"--product-name={bundle_name}",
     ]
     for key, description in (protected_resources or {}).items():
+        if key not in NUITKA_PROTECTED_RESOURCE_KEYS:
+            continue
         command.append(f"--macos-app-protected-resource={key}:{description}")
     command.extend(f"--include-module={module}" for module in modules)
     command.append(str(entry))

@@ -36,10 +36,11 @@ function Get-ScheduledTask {
     if ($global:XiderMockTasksRunning) {
         $binary = if ($TaskName -eq 'XIDER Agent') { 'pythonw.exe' } else { 'python.exe' }
         $execute = Join-Path $global:XiderMockAgentDir ("venv\Scripts\$binary")
+        $arguments = if ($TaskName -eq 'XIDER Agent') { 'xgent_wds.py' } else { 'xider_guardian_wds.py' }
         return [pscustomobject]@{
             TaskName = $TaskName
             State = 'Running'
-            Actions = [pscustomobject]@{ Execute = $execute }
+            Actions = [pscustomobject]@{ Execute = $execute; Arguments = $arguments }
         }
     }
     if ($global:XiderMockOldTasks) {

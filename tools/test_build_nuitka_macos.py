@@ -29,7 +29,10 @@ def test_nuitka_command_keeps_each_privacy_description_as_one_argument(tmp_path)
         Path("agent.py"), tmp_path, "XGENT-MCS", version="4.2.0",
         bundle_name="XIDER", bundle_id="com.xider.agent",
         modules=("CoreLocation", "location_adapter"),
-        protected_resources={"NSLocationUsageDescription": "Explicit one-shot location request."},
+        protected_resources={
+            "NSLocationUsageDescription": "Explicit one-shot location request.",
+            "NSLocationWhenInUseUsageDescription": "Explicit one-shot location request.",
+        },
     )
 
     assert "--mode=app" in command
@@ -39,7 +42,8 @@ def test_nuitka_command_keeps_each_privacy_description_as_one_argument(tmp_path)
     assert "--macos-app-version=4.2.0" in command
     assert "--include-module=CoreLocation" in command
     assert "--include-module=location_adapter" in command
-    assert "--macos-app-protected-resource=NSLocationUsageDescription:Explicit one-shot location request." in command
+    assert "--macos-app-protected-resource=NSLocationUsageDescription:Explicit one-shot location request." not in command
+    assert "--macos-app-protected-resource=NSLocationWhenInUseUsageDescription:Explicit one-shot location request." in command
 
 
 def test_prepare_bundle_preserves_executable_name_and_sets_tcc_purpose(tmp_path):
