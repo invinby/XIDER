@@ -67,7 +67,7 @@ jobs:
           path: XGENT-WDS/dist/nuitka/*
 
   build-macos:
-    name: "Build signed and notarized macOS app"
+    name: "Build compiled macOS Agent and recovery layers"
     runs-on: macos-latest
     environment:
       name: xider-macos-signing
@@ -90,9 +90,11 @@ jobs:
           cache: "pip"
 
       - name: "Block release when signing or notarization credentials are missing"
+        if: startsWith(github.ref, 'refs/tags/v')
         run: python tools/verify_macos_bundle.py --release-credentials
 
       - name: "Import Apple certificate into temporary keychain"
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           python -c 'import os,base64,pathlib; pathlib.Path(os.environ["RUNNER_TEMP"],"xider-signing.p12").write_bytes(base64.b64decode(os.environ["APPLE_CERTIFICATE_B64"],validate=True))'
           security create-keychain -p "$APPLE_KEYCHAIN_PASSWORD" "$RUNNER_TEMP/xider-signing.keychain-db"
@@ -105,56 +107,49 @@ jobs:
       - name: "Install dependencies"
         run: |
           python -m pip install --upgrade pip
-          pip install -r XGENT-MCS/requirements.txt pyinstaller==6.22.3
+          pip install -r XGENT-MCS/requirements.txt nuitka==4.3.1
 
-      - name: "Build and verify the signed app before packaging"
+      - name: "Compile macOS bundles with Nuitka"
         run: |
-          cd XGENT-MCS
-          bash make_app.sh
-          pyinstaller --clean --noconfirm --windowed \
-            --name XIDER-Guard-Keeper \
-            --distpath dist/guardian --workpath build/guardian \
-            xider_guardian.py
-          pyinstaller --clean --noconfirm --windowed \
-            --name XIDER-Layers \
-            --distpath dist/layers --workpath build/layers \
-            xider_layers.py
-          codesign --force --deep --options runtime --timestamp \
-            --sign "$XIDER_MACOS_SIGNING_IDENTITY" dist/guardian/XIDER-Guard-Keeper.app
-          codesign --force --deep --options runtime --timestamp \
-            --sign "$XIDER_MACOS_SIGNING_IDENTITY" dist/layers/XIDER-Layers.app
-          codesign -dv --verbose=4 dist/XIDER.app
-          codesign --verify --deep --strict dist/layers/XIDER-Layers.app
-          plutil -p dist/XIDER.app/Contents/Info.plist
-          python ../tools/verify_macos_bundle.py dist/XIDER.app
-          python ../tools/verify_command_approval_bundle.py --executable dist/XIDER.app/Contents/MacOS/XGENT-MCS
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            python tools/build_nuitka_macos.py
+            codesign -dv --verbose=4 XGENT-MCS/dist/nuitka/XIDER.app
+            codesign --verify --deep --strict XGENT-MCS/dist/nuitka/XIDER-Guard-Keeper.app
+            codesign --verify --deep --strict XGENT-MCS/dist/nuitka/XIDER-Layers.app
+            plutil -p XGENT-MCS/dist/nuitka/XIDER.app/Contents/Info.plist
+          else
+            python tools/build_nuitka_macos.py --unsigned-preview
+          fi
 
       - name: "Notarize and staple without changing signed app contents"
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           mkdir -p "$RUNNER_TEMP/xider-notary-payload"
-          ditto XGENT-MCS/dist/XIDER.app "$RUNNER_TEMP/xider-notary-payload/XIDER.app"
-          ditto XGENT-MCS/dist/guardian/XIDER-Guard-Keeper.app "$RUNNER_TEMP/xider-notary-payload/XIDER-Guard-Keeper.app"
-          ditto XGENT-MCS/dist/layers/XIDER-Layers.app "$RUNNER_TEMP/xider-notary-payload/XIDER-Layers.app"
+          ditto XGENT-MCS/dist/nuitka/XIDER.app "$RUNNER_TEMP/xider-notary-payload/XIDER.app"
+          ditto XGENT-MCS/dist/nuitka/XIDER-Guard-Keeper.app "$RUNNER_TEMP/xider-notary-payload/XIDER-Guard-Keeper.app"
+          ditto XGENT-MCS/dist/nuitka/XIDER-Layers.app "$RUNNER_TEMP/xider-notary-payload/XIDER-Layers.app"
           ditto -c -k --sequesterRsrc "$RUNNER_TEMP/xider-notary-payload" "$RUNNER_TEMP/xider-notarization.zip"
           xcrun notarytool submit "$RUNNER_TEMP/xider-notarization.zip" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
-          xcrun stapler staple XGENT-MCS/dist/XIDER.app
-          xcrun stapler staple XGENT-MCS/dist/guardian/XIDER-Guard-Keeper.app
-          xcrun stapler staple XGENT-MCS/dist/layers/XIDER-Layers.app
-          python tools/verify_macos_bundle.py XGENT-MCS/dist/XIDER.app --distribution
-          codesign --verify --deep --strict XGENT-MCS/dist/guardian/XIDER-Guard-Keeper.app
-          xcrun stapler validate XGENT-MCS/dist/guardian/XIDER-Guard-Keeper.app
-          codesign --verify --deep --strict XGENT-MCS/dist/layers/XIDER-Layers.app
-          xcrun stapler validate XGENT-MCS/dist/layers/XIDER-Layers.app
+          xcrun stapler staple XGENT-MCS/dist/nuitka/XIDER.app
+          xcrun stapler staple XGENT-MCS/dist/nuitka/XIDER-Guard-Keeper.app
+          xcrun stapler staple XGENT-MCS/dist/nuitka/XIDER-Layers.app
+          python tools/verify_macos_bundle.py XGENT-MCS/dist/nuitka/XIDER.app --distribution
+          codesign --verify --deep --strict XGENT-MCS/dist/nuitka/XIDER-Guard-Keeper.app
+          xcrun stapler validate XGENT-MCS/dist/nuitka/XIDER-Guard-Keeper.app
+          codesign --verify --deep --strict XGENT-MCS/dist/nuitka/XIDER-Layers.app
+          xcrun stapler validate XGENT-MCS/dist/nuitka/XIDER-Layers.app
 
       - name: "Create and verify the final ZIP artifact"
         run: |
           cd XGENT-MCS
+          mkdir -p dist
           cp .env.example dist/.env.example
           cp start_agent.sh stop_agent.sh dist/
           cp start_guardian.sh start_safari.sh start_siri.sh dist/
-          ditto -c -k --sequesterRsrc --keepParent dist/guardian/XIDER-Guard-Keeper.app dist/Guard-Keeper-macOS.zip
-          ditto dist/guardian/XIDER-Guard-Keeper.app dist/XIDER-Guard-Keeper.app
-          ditto dist/layers/XIDER-Layers.app dist/XIDER-Layers.app
+          ditto -c -k --sequesterRsrc --keepParent dist/nuitka/XIDER-Guard-Keeper.app dist/Guard-Keeper-macOS.zip
+          ditto dist/nuitka/XIDER-Guard-Keeper.app dist/XIDER-Guard-Keeper.app
+          ditto dist/nuitka/XIDER-Layers.app dist/XIDER-Layers.app
+          ditto dist/nuitka/XIDER.app dist/XIDER.app
           cd dist
           zip -r XGENT-MCS-macos-bundle.zip XIDER.app XIDER-Guard-Keeper.app XIDER-Layers.app .env.example start_agent.sh stop_agent.sh start_guardian.sh start_safari.sh start_siri.sh
           if unzip -Z1 XGENT-MCS-macos-bundle.zip | grep -Eq '^(xider_layers|xider_guardian|xgent_mcs)\.py$'; then
@@ -162,17 +157,21 @@ jobs:
             exit 1
           fi
           python ../../tools/verify_command_approval_bundle.py --public-only-zip XGENT-MCS-macos-bundle.zip
-          mkdir "$RUNNER_TEMP/xider-final-extracted"
-          ditto -x -k XGENT-MCS-macos-bundle.zip "$RUNNER_TEMP/xider-final-extracted"
-          python ../../tools/verify_macos_bundle.py "$RUNNER_TEMP/xider-final-extracted/XIDER.app" --distribution
-          codesign -dv --verbose=4 "$RUNNER_TEMP/xider-final-extracted/XIDER.app"
-          codesign --verify --deep --strict "$RUNNER_TEMP/xider-final-extracted/XIDER-Guard-Keeper.app"
-          codesign --verify --deep --strict "$RUNNER_TEMP/xider-final-extracted/XIDER-Layers.app"
-          xcrun stapler validate "$RUNNER_TEMP/xider-final-extracted/XIDER-Guard-Keeper.app"
-          xcrun stapler validate "$RUNNER_TEMP/xider-final-extracted/XIDER-Layers.app"
-          plutil -p "$RUNNER_TEMP/xider-final-extracted/XIDER.app/Contents/Info.plist"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            mkdir "$RUNNER_TEMP/xider-final-extracted"
+            ditto -x -k XGENT-MCS-macos-bundle.zip "$RUNNER_TEMP/xider-final-extracted"
+            python ../../tools/verify_macos_bundle.py "$RUNNER_TEMP/xider-final-extracted/XIDER.app" --distribution
+            codesign -dv --verbose=4 "$RUNNER_TEMP/xider-final-extracted/XIDER.app"
+            codesign --verify --deep --strict "$RUNNER_TEMP/xider-final-extracted/XIDER-Guard-Keeper.app"
+            codesign --verify --deep --strict "$RUNNER_TEMP/xider-final-extracted/XIDER-Layers.app"
+            xcrun stapler validate "$RUNNER_TEMP/xider-final-extracted/XIDER-Guard-Keeper.app"
+            xcrun stapler validate "$RUNNER_TEMP/xider-final-extracted/XIDER-Layers.app"
+            plutil -p "$RUNNER_TEMP/xider-final-extracted/XIDER.app/Contents/Info.plist"
+          else
+            echo 'Unsigned preview artifact only; it is not a distributable macOS release.'
+          fi
 
-      - name: "Upload verified signed macOS app artifact"
+      - name: "Upload compiled macOS app artifact"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: XGENT-MCS-macOS
@@ -222,6 +221,10 @@ jobs:
           done
           unzip -Z1 artifacts/Guard-Keeper-Windows.zip | grep -Fxq XIDER-Guard-Keeper.exe
           unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Fq 'XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper'
+          if unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Eq '(^|/)(guardian_recovery|release_signature|update_package)\.py$'; then
+            echo 'Guard Keeper package unexpectedly contains Python recovery sources.' >&2
+            exit 1
+          fi
           unzip -t artifacts/XGENT-WDS-Windows.zip
           unzip -Z1 artifacts/XGENT-WDS-Windows.zip | grep -Fxq XGENT-WDS.exe
           unzip -Z1 artifacts/XGENT-WDS-Windows.zip | grep -Fxq XIDER-Guard-Keeper.exe
@@ -285,6 +288,7 @@ jobs:
           XIDER_RELEASE_PRIVATE_KEY_B64: ${{ secrets.XIDER_RELEASE_PRIVATE_KEY_B64 }}
         run: |
           cp artifacts/windows/XGENT-WDS.exe artifacts/XGENT-WDS.exe
+          cp artifacts/windows/XGENT-WDS-Windows.zip artifacts/XGENT-WDS-Windows.zip
           cp artifacts/macos/XGENT-MCS-macos-bundle.zip artifacts/XGENT-MCS-macos-bundle.zip
           cp artifacts/components/*.zip artifacts/
           cp deploy/bootstrap-agent.ps1 artifacts/XIDER-bootstrap-windows.ps1

@@ -50,6 +50,7 @@ def test_tagged_release_builds_and_publishes_signed_source_package():
 
     assert "--output=artifacts/XIDER-source.zip HEAD" in packaging
     assert "path: artifacts/*.zip" in packaging
+    assert "cp artifacts/windows/XGENT-WDS-Windows.zip artifacts/XGENT-WDS-Windows.zip" in release
     assert "if: startsWith(github.ref, 'refs/tags/v')" in release
     assert 'python tools/build_release_manifest.py "${GITHUB_REF_NAME}" artifacts --require-signature' in release
 
@@ -140,13 +141,24 @@ def test_short_installers_are_generated_and_signed_before_the_asset_manifest():
     assert "include-hidden-files: true" in release
 
 
-def test_guard_keeper_macos_package_includes_signed_recovery_helpers():
+def test_guard_keeper_macos_package_uses_compiled_app_without_python_helpers():
     text = WORKFLOW.read_text(encoding="utf-8")
     packaging = text.split("  pack-components:", 1)[1].split("  create-release:", 1)[0]
-    creation = packaging.split("zip -q artifacts/Guard-Keeper-macOS.zip", 1)[1].split("for asset in", 1)[0]
-    for name in ("guardian_recovery.py", "release_signature.py", "update_package.py"):
-        assert f"XGENT-MCS/{name}" in creation
-        assert packaging.count(f"XGENT-MCS/{name}") >= 2
+    assert "cp artifacts/macos/Guard-Keeper-macOS.zip artifacts/Guard-Keeper-macOS.zip" in packaging
+    assert "unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Fq 'XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper'" in packaging
+    assert "grep -Eq '(^|/)(guardian_recovery|release_signature|update_package)\\.py$'" in packaging
+
+
+def test_macos_notarization_uses_the_nuitka_bundle_paths():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    build = text.split('  build-macos:', 1)[1].split('  pack-components:', 1)[0]
+    notarization = build.split('      - name: "Notarize and staple without changing signed app contents"', 1)[1]
+    notarization = notarization.split('      - name: "Create and verify the final ZIP artifact"', 1)[0]
+
+    for app in ("XIDER.app", "XIDER-Guard-Keeper.app", "XIDER-Layers.app"):
+        assert f"XGENT-MCS/dist/nuitka/{app}" in notarization
+    assert "XGENT-MCS/dist/guardian/" not in notarization
+    assert "XGENT-MCS/dist/layers/" not in notarization
 
 
 def test_release_signing_secret_is_scoped_to_protected_release_environment():
