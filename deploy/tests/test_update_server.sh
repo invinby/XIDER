@@ -23,7 +23,7 @@ trap cleanup EXIT
 
 mkdir -p "${APP_DIR}/TG-BOT-SERVER" "${APP_DIR}/XGENT-WDS" \
   "${APP_DIR}/XGENT-MCS" "${APP_DIR}/deploy" "${MOCK_BIN}" "${UNIT_DIR}" "${BACKUP_DIR}" \
-  "${TEMP_ROOT}/lock"
+  "${TEMP_ROOT}/lock" "${TEMP_ROOT}/system/var/lib" "${TEMP_ROOT}/system/etc/xider"
 mkdir -p "${ROOT_HELPER_DIR}"
 chmod 0777 "${BACKUP_DIR}"
 APP_DIR_MODE="$(stat -c '%a' "${APP_DIR}")"
