@@ -67,10 +67,12 @@ def test_pages_launchers_authenticate_latest_installer_before_running_it():
     assert "-Wait -PassThru" in pages["win.ps1"]
     assert "XIDER Windows installer failed" in pages["win.ps1"]
     assert "requesting administrator approval (UAC)" in pages["win.ps1"]
-    assert "Read-Host 'Install OpenSSH Client optional feature now? [Y/N]'" in pages["win.ps1"]
     assert "OpenSSH.Client~~~~0.0.1.0" in pages["win.ps1"]
     assert "OpenSSH Client is still unavailable" in pages["win.ps1"]
-    assert pages["win.ps1"].index("Read-Host 'Install OpenSSH Client optional feature now? [Y/N]'") < pages["win.ps1"].index("releases/latest/download")
+    assert "Read-Host" not in pages["win.ps1"]
+    assert "Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru" in pages["win.ps1"]
+    assert "System32\\OpenSSH\\ssh-keygen.exe" in pages["win.ps1"]
+    assert pages["win.ps1"].index("Add-WindowsCapability") < pages["win.ps1"].index("releases/latest/download")
     assert "XIDER launcher failed:" in pages["win.ps1"]
     assert "Set-ExecutionPolicy" not in pages["win.ps1"]
 
