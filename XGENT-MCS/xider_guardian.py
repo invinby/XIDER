@@ -71,7 +71,10 @@ def _read_component_logs() -> dict:
     """Read bounded local logs so Guardian can diagnose a stopped Agent."""
     sources = (
         ("agent", CONFIG_DIR / "xgent.log"),
-        ("guardian", SCRIPT_DIR / "guardian.log"),
+        # The frozen LaunchAgent captures this process in CONFIG_DIR. Keep the
+        # install-root path for legacy source installs started by old scripts.
+        ("guardian", CONFIG_DIR / "guardian.log"),
+        ("guardian-runtime", SCRIPT_DIR / "guardian.log"),
         ("agent-runtime", SCRIPT_DIR / "agent.log"),
         ("safari", CONFIG_DIR / "safari.log"),
         ("siri", CONFIG_DIR / "siri.log"),

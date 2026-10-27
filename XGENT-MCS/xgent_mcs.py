@@ -3581,7 +3581,10 @@ class XgentClient:
         sources = (
             ("xgent.log", CONFIG_DIR / "xgent.log"),
             ("agent.log", _agent_install_dir() / "agent.log"),
-            ("guardian.log", _agent_install_dir() / "guardian.log"),
+            # Frozen LaunchAgents capture Guardian stdout/stderr in CONFIG_DIR;
+            # older source installs wrote the same log beside the checkout.
+            ("guardian.log", CONFIG_DIR / "guardian.log"),
+            ("guardian-runtime.log", _agent_install_dir() / "guardian.log"),
             ("safari.log", CONFIG_DIR / "safari.log"),
             ("siri.log", CONFIG_DIR / "siri.log"),
         )
