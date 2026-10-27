@@ -408,6 +408,12 @@ install -o root -g mosquitto -m 0640 /dev/null "$DOCK_DIR/admin-password"
 printf '%s\n' "$ADMIN_PASSWORD" > "$DOCK_DIR/admin-password"
 chmod 0640 "$DOCK_DIR/admin-password"
 chown root:mosquitto "$DOCK_DIR/admin-password"
+# Dynamic Security requires its initial JSON database to exist before the
+# broker starts. Create it offline so the bootstrap admin secret never needs
+# an exposed listener or a password-init side channel.
+mosquitto_ctrl dynsec init "$DATA_DIR/dynamic-security.json" admin "$ADMIN_PASSWORD"
+chown mosquitto:mosquitto "$DATA_DIR/dynamic-security.json"
+chmod 0600 "$DATA_DIR/dynamic-security.json"
 
 openssl req -x509 -newkey rsa:3072 -nodes -sha256 -days 2 \
   -keyout "$DOCK_DIR/bootstrap.key" -out "$DOCK_DIR/bootstrap.crt" \
@@ -423,7 +429,7 @@ python3 "$APP_DIR/broker/x_dock_config.py" \
   --plugin "$PLUGIN_PATH" --security-file "$DATA_DIR/dynamic-security.json" \
   --data-dir "$DATA_DIR/data" --cert-file "$DOCK_DIR/bootstrap.crt" \
   --key-file "$DOCK_DIR/bootstrap.key" --port 18884 --bind-address 127.0.0.1 \
-  --password-init-file "$DOCK_DIR/admin-password" --output "$DOCK_DIR/mosquitto-bootstrap.conf"
+  --output "$DOCK_DIR/mosquitto-bootstrap.conf"
 chown root:mosquitto "$DOCK_DIR/mosquitto-bootstrap.conf"
 chmod 0640 "$DOCK_DIR/mosquitto-bootstrap.conf"
 
