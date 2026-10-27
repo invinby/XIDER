@@ -36,6 +36,14 @@ DOCK_DIR_PREEXISTED=0
 DATA_DIR_PREEXISTED=0
 WEBROOT_PREEXISTED=0
 RENEW_TIMER_INSTALLED=0
+SNAPD_PACKAGE_PREEXISTED=0
+SNAPD_SOCKET_ACTIVE_BEFORE=0
+SNAPD_SOCKET_ENABLED_BEFORE=0
+SNAPD_SERVICE_ACTIVE_BEFORE=0
+SNAPD_SERVICE_ENABLED_BEFORE=0
+SNAP_CERTBOT_PREEXISTED=0
+SNAP_CERTBOT_REVISION_BEFORE=""
+SNAP_CERTBOT_INSTALLED_BY_XIDER=0
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run this installer as root." >&2
@@ -142,6 +150,20 @@ if dpkg-query -W -f='${Status}' nginx 2>/dev/null | grep -q 'install ok installe
   fi
 fi
 
+# Snapshot snapd state before the transaction. Installing the newer Certbot
+# snap may start/enable snapd even when a later X-DOCK step fails.
+if dpkg-query -W -f='${Status}' snapd 2>/dev/null | grep -q 'install ok installed'; then
+  SNAPD_PACKAGE_PREEXISTED=1
+fi
+systemctl is-active --quiet snapd.socket && SNAPD_SOCKET_ACTIVE_BEFORE=1 || true
+systemctl is-enabled --quiet snapd.socket && SNAPD_SOCKET_ENABLED_BEFORE=1 || true
+systemctl is-active --quiet snapd.service && SNAPD_SERVICE_ACTIVE_BEFORE=1 || true
+systemctl is-enabled --quiet snapd.service && SNAPD_SERVICE_ENABLED_BEFORE=1 || true
+if command -v snap >/dev/null 2>&1; then
+  SNAP_CERTBOT_REVISION_BEFORE="$(snap list certbot 2>/dev/null | awk 'NR == 2 { print $3 }' || true)"
+  if [[ -n "$SNAP_CERTBOT_REVISION_BEFORE" ]]; then SNAP_CERTBOT_PREEXISTED=1; fi
+fi
+
 cleanup_on_exit() {
   local code=$?
   trap - EXIT ERR INT TERM HUP
@@ -172,6 +194,39 @@ cleanup_on_exit() {
   if [[ -f "$CERT_RENEWAL" && -n "$CERTBOT_BIN" && -x "$CERTBOT_BIN" ]]; then
     "$CERTBOT_BIN" delete --non-interactive --cert-name "$CERT_NAME" >/dev/null 2>&1 || true
   fi
+  local snap_cleanup_ok=1
+  if [[ "$SNAP_CERTBOT_INSTALLED_BY_XIDER" -eq 1 ]] && command -v snap >/dev/null 2>&1; then
+    if snap list certbot >/dev/null 2>&1 && ! snap remove certbot --purge >/dev/null 2>&1; then
+      snap_cleanup_ok=0
+      echo "Could not remove the Certbot snap installed by this attempt; leaving snapd intact." >&2
+    fi
+  elif [[ "$SNAP_CERTBOT_PREEXISTED" -eq 1 && -n "$SNAP_CERTBOT_REVISION_BEFORE" ]] && command -v snap >/dev/null 2>&1; then
+    current_certbot_revision="$(snap list certbot 2>/dev/null | awk 'NR == 2 { print $3 }' || true)"
+    if [[ -n "$current_certbot_revision" && "$current_certbot_revision" != "$SNAP_CERTBOT_REVISION_BEFORE" ]] &&
+       ! snap revert certbot >/dev/null 2>&1; then
+      echo "Could not revert the Certbot snap refresh; review 'snap changes' manually." >&2
+    fi
+  fi
+  if [[ "$snap_cleanup_ok" -eq 1 ]]; then
+    if [[ "$SNAPD_SOCKET_ACTIVE_BEFORE" -eq 0 ]]; then
+      systemctl stop snapd.socket >/dev/null 2>&1 || true
+    fi
+    if [[ "$SNAPD_SOCKET_ENABLED_BEFORE" -eq 0 ]]; then
+      systemctl disable snapd.socket >/dev/null 2>&1 || true
+    fi
+    if [[ "$SNAPD_SERVICE_ACTIVE_BEFORE" -eq 0 ]]; then
+      systemctl stop snapd.service >/dev/null 2>&1 || true
+    fi
+    if [[ "$SNAPD_SERVICE_ENABLED_BEFORE" -eq 0 ]]; then
+      systemctl disable snapd.service >/dev/null 2>&1 || true
+    fi
+    if [[ "$SNAPD_PACKAGE_PREEXISTED" -eq 0 ]]; then
+      if ! apt-get purge -y -- snapd >/dev/null 2>&1; then
+        echo "Could not remove snapd installed by this attempt; review the package state manually." >&2
+      fi
+    fi
+  fi
+  systemctl daemon-reload >/dev/null 2>&1 || true
   rm -rf -- "/etc/letsencrypt/live/$CERT_NAME" "/etc/letsencrypt/archive/$CERT_NAME"
   rm -f -- "$CERT_RENEWAL"
   rm -f -- "$DOCK_DIR/admin-password" "$DOCK_DIR/bootstrap.key" \
@@ -274,6 +329,7 @@ if ! certbot_supports_ip_webroot "$CERTBOT_BIN"; then
   if snap list certbot >/dev/null 2>&1; then
     snap refresh certbot
   else
+    SNAP_CERTBOT_INSTALLED_BY_XIDER=1
     snap install --classic certbot
   fi
   CERTBOT_BIN=/snap/bin/certbot
