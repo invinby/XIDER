@@ -173,9 +173,11 @@ VPS. It creates a separate Mosquitto instance, bootstraps Dynamic Security on
 loopback, removes the demo identity, issues a short-lived IP certificate, and
 configures the TLS listener plus HTTPS enrollment proxy and renewal hook. It
 stores broker credentials only in the server's protected bot environment and
-does not print them. It currently requires the bot's exact `MQTT_PREFIX=xgent/v1`
-and opens host-firewall ports 80, 443 and 8884 when UFW is active; the cloud
-security group still needs those inbound ports. The script is not live-verified:
+does not print them. Before the ACME HTTP-01 challenge, it opens TCP/80 in active
+UFW when no global IPv4 allow rule exists, and removes that temporary rule on
+rollback. On success, it opens 443 and 8884 too. It requires the bot's exact
+`MQTT_PREFIX=xgent/v1`; the cloud security group still needs inbound ports 80,
+443 and 8884. The script is not live-verified:
 it has not been run on a VPS, the provider security-group ports have not been
 checked, and certificate renewal and device enrollment have not been exercised
 end to end.

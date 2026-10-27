@@ -44,6 +44,7 @@ SNAPD_SERVICE_ENABLED_BEFORE=0
 SNAP_CERTBOT_PREEXISTED=0
 SNAP_CERTBOT_REVISION_BEFORE=""
 SNAP_CERTBOT_INSTALLED_BY_XIDER=0
+UFW_HTTP_RULE_ADDED=0
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run this installer as root." >&2
@@ -168,6 +169,10 @@ cleanup_on_exit() {
   local code=$?
   trap - EXIT ERR INT TERM HUP
   if [[ "$SETUP_COMPLETE" -eq 1 ]]; then return "$code"; fi
+  if [[ "$UFW_HTTP_RULE_ADDED" -eq 1 ]] && command -v ufw >/dev/null 2>&1; then
+    ufw --force delete allow 80/tcp >/dev/null 2>&1 || \
+      echo "Could not remove the temporary X-DOCK HTTP firewall rule; review UFW manually." >&2
+  fi
   if [[ "$BOT_ENV_CHANGED" -eq 1 && -n "$BOT_ENV_BACKUP" && -f "$BOT_ENV_BACKUP" ]]; then
     if cp -a "$BOT_ENV_BACKUP" "$BOT_ENV"; then
       rm -f -- "$BOT_ENV_BACKUP"
@@ -435,6 +440,14 @@ EOF
 install -o root -g root -m 0644 "$STAGE/nginx-http.conf" "$NGINX_SITE"
 nginx -t
 systemctl enable --now nginx
+if command -v ufw >/dev/null 2>&1 && ufw status | grep -q '^Status: active$'; then
+  if ! ufw status | awk '$1 == "80/tcp" && $2 != "(v6)" && /ALLOW/ && /Anywhere/ { found = 1 } END { exit !found }'; then
+    # ACME HTTP-01 must reach Nginx before the public HTTPS listener exists.
+    # Track only a rule added by this transaction so rollback preserves prior UFW state.
+    UFW_HTTP_RULE_ADDED=1
+    ufw allow 80/tcp
+  fi
+fi
 "$CERTBOT_BIN" certonly --non-interactive --agree-tos --email "$CERT_EMAIL" \
   --webroot --webroot-path "$WEBROOT" --ip-address "$PUBLIC_IP" \
   --preferred-profile shortlived --cert-name "$CERT_NAME"
@@ -602,7 +615,6 @@ STAGE=""
 SETUP_COMPLETE=1
 trap - EXIT INT TERM HUP
 if command -v ufw >/dev/null 2>&1 && ufw status | grep -q '^Status: active$'; then
-  ufw allow 80/tcp || echo "[WARN] Could not open TCP/80 in UFW; configure the host firewall manually." >&2
   ufw allow 443/tcp || echo "[WARN] Could not open TCP/443 in UFW; configure the host firewall manually." >&2
   ufw allow 8884/tcp || echo "[WARN] Could not open TCP/8884 in UFW; configure the host firewall manually." >&2
 fi
