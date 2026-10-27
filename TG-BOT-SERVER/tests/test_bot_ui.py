@@ -12312,7 +12312,7 @@ def test_device_card_shows_guardian_state(monkeypatch):
         "guardian_last_seen": __import__("time").time(),
     })
     text = bot.device_card("mac-1")
-    assert "Guardian" in text
+    assert "Guard Keeper" in text
     assert "v1.0" in text
 
 
