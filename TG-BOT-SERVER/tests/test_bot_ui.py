@@ -8407,6 +8407,75 @@ def test_guardian_command_includes_dispatch_marker(monkeypatch):
     assert captured["action"] == "guardian"
 
 
+def test_tracked_guardian_dispatch_can_include_action_metadata(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(bot.uuid, "uuid4", lambda: SimpleNamespace(hex="a" * 32))
+    monkeypatch.setattr(
+        bot, "publish",
+        lambda command_type, **kwargs: captured.update(command_type=command_type, **kwargs) or True,
+    )
+
+    sent, command_id = bot.publish_tracked(
+        "guardian", _target="mac-1", action="guardian", command="logs",
+    )
+
+    assert sent is True
+    assert command_id == "a" * 12
+    assert captured == {
+        "command_type": "guardian", "_target": "mac-1", "action": "guardian",
+        "command": "logs", "id": "a" * 12,
+    }
+
+
+def test_agent_logs_falls_back_to_guardian_when_agent_lacks_log_command(monkeypatch):
+    rendered, waits, published = [], [], []
+
+    async def answer(*args, **kwargs):
+        return None
+
+    async def replace(_cq, text, **kwargs):
+        rendered.append(text)
+
+    async def allowed(*args, **kwargs):
+        return True
+
+    async def wait_for(target, action, timeout, command_id):
+        waits.append((target, action, command_id))
+        return {
+            "type": "guardian", "device_id": "mac-1", "id": command_id,
+            "state": "available", "lines": 1, "text": "[siri] recovered Safari",
+        }
+
+    monkeypatch.setattr(bot, "SESSION", {"target": "mac-1"})
+    monkeypatch.setattr(bot.devices, "get", lambda _target: {"name": "Mac", "os": "macOS"})
+    monkeypatch.setattr(bot, "_callback_result_access_or_report", allowed)
+    monkeypatch.setattr(bot, "_callback_delivery_guard", lambda *_args: lambda: True)
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    monkeypatch.setattr(bot, "_device_declares_command", lambda *_args: False)
+    monkeypatch.setattr(
+        bot, "publish_tracked",
+        lambda command_type, **kwargs: (published.append((command_type, kwargs)) or (True, "guardian-id")),
+    )
+    monkeypatch.setattr(bot.fun_text_collector, "wait_for", wait_for)
+    monkeypatch.setattr(
+        bot.access_store, "redact_shell_output_with_summary",
+        lambda text: (text, {"total": 0}),
+    )
+    monkeypatch.setattr(bot.access_store, "append_audit", lambda *args, **kwargs: None)
+    cq = SimpleNamespace(
+        from_user=SimpleNamespace(id=bot.ADMIN_ID), data="cmd:agent_logs",
+        answer=answer, message=SimpleNamespace(chat=SimpleNamespace(id=1), message_id=2),
+    )
+
+    asyncio.run(bot.on_cmd_agent_logs(cq))
+
+    assert published and published[0][0] == "guardian"
+    assert published[0][1]["command"] == "logs"
+    assert waits == [("mac-1", "guardian", "guardian-id")]
+    assert "[siri] recovered Safari" in rendered[-1]
+    assert "Источник: <code>Guardian</code>" in rendered[-1]
+
+
 def test_power_confirmation_dispatches_action_payload_without_duplicate_callback_answer(monkeypatch):
     from types import SimpleNamespace
 

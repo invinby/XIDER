@@ -42,6 +42,28 @@ def test_new_guardian_install_enables_recovery_by_default(
     assert guardian.state["desired_running"] is True
 
 
+def test_guardian_can_return_bounded_redacted_logs_without_agent(
+    guardian_module, monkeypatch, tmp_path,
+):
+    module = guardian_module
+    _use_temp_state(monkeypatch, module, tmp_path)
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    monkeypatch.setattr(module, "SCRIPT_DIR", install_dir)
+    (tmp_path / "guardian.log").write_text(
+        "api_key=do-not-send\nGuardian is alive\n", encoding="utf-8",
+    )
+    (install_dir / "agent.log").write_text("Agent crashed\n", encoding="utf-8")
+
+    result = module._read_component_logs()
+
+    assert result["state"] == "available"
+    assert "Guardian is alive" in result["text"]
+    assert "Agent crashed" in result["text"]
+    assert "do-not-send" not in result["text"]
+    assert "api_key=[REDACTED]" in result["text"]
+
+
 def test_runtime_install_dir_uses_windows_executable_directory_for_frozen_build(
     guardian_module, monkeypatch, tmp_path
 ):

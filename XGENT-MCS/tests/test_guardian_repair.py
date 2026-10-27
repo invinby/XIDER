@@ -237,6 +237,26 @@ def test_siri_accepts_only_a_fresh_safari_health_record(guardian_module, monkeyp
     assert xider_layers._start_child("siri") == "healthy"
 
 
+def test_guardian_can_return_bounded_redacted_logs_without_agent(guardian_module, monkeypatch, tmp_path):
+    module = guardian_module
+    config_dir = tmp_path / "config"
+    install_dir = tmp_path / "install"
+    config_dir.mkdir()
+    install_dir.mkdir()
+    monkeypatch.setattr(module, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(module, "SCRIPT_DIR", install_dir)
+    (install_dir / "guardian.log").write_text("password=do-not-send\nGuardian is alive\n", encoding="utf-8")
+    (config_dir / "safari.log").write_text("Safari restarted Guardian\n", encoding="utf-8")
+
+    result = module._read_component_logs()
+
+    assert result["state"] == "available"
+    assert "Guardian is alive" in result["text"]
+    assert "Safari restarted Guardian" in result["text"]
+    assert "do-not-send" not in result["text"]
+    assert "password=[REDACTED]" in result["text"]
+
+
 def test_siri_starts_stale_safari_only_when_owner_enabled(
     guardian_module, monkeypatch, tmp_path,
 ):

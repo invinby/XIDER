@@ -8938,10 +8938,10 @@ def publish(command_name: str, *, _target: str | None = None, **kwargs) -> bool 
     return transport.publish_command(target, command_name, **kwargs)
 
 
-def publish_tracked(action: str, *, _target: str | None = None, **kwargs) -> tuple[bool | None, str]:
+def publish_tracked(command_type: str, *, _target: str | None = None, **kwargs) -> tuple[bool | None, str]:
     """Send with a correlation ID and optionally pin it to a captured target."""
     command_id = uuid.uuid4().hex[:12]
-    ok = publish(action, _target=_target, id=command_id, **kwargs)
+    ok = publish(command_type, _target=_target, id=command_id, **kwargs)
     return ok, command_id
 
 def _no_target_text() -> str:
@@ -18517,22 +18517,49 @@ async def on_cmd_agent_logs(cq: CallbackQuery):
         return
     if not await _callback_result_access_or_report(cq, target):
         return
-    if _device_declares_command(devices.get(target) or {}, "agent_logs") is False:
-        await cq.answer("Обнови агент: эта версия ещё не отдаёт журнал.", show_alert=True)
-        return
-    await cq.answer("Читаю локальные журналы XIDER-компонентов…")
-    sent, command_id = publish_tracked("agent_logs", _target=target)
-    if not sent:
-        await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
-        return
-    result = await fun_text_collector.wait_for(target, "agent_logs", 12.0, command_id)
-    if not await _callback_result_access_or_report(cq, target, published=True):
-        return
+    await cq.answer("Читаю журналы XIDER-компонентов…")
+    guard = _callback_delivery_guard(cq, target)
+    await _replace_callback_message(
+        cq, "📄 Запрашиваю локальные журналы…", delivery_guard=guard,
+        reply_markup=back_to_device_kb(),
+    )
+    info = devices.get(target) or {}
+    result = None
+    source = "Agent"
+    if _device_declares_command(info, "agent_logs") is not False:
+        sent, command_id = publish_tracked("agent_logs", _target=target)
+        if sent:
+            result = await fun_text_collector.wait_for(target, "agent_logs", 8.0, command_id)
+            if not await _callback_result_access_or_report(cq, target, published=True):
+                return
+            if (not isinstance(result, dict) or result.get("device_id") != target
+                    or str(result.get("id") or "") != command_id):
+                result = None
+        elif not await _callback_result_access_or_report(cq, target, published=False):
+            return
+    if not isinstance(result, dict) or result.get("state") != "available":
+        # Guardian keeps its own MQTT channel, so it can return local logs when
+        # the Agent is crashed, disconnected, or too old to implement agent_logs.
+        sent, guardian_id = publish_tracked(
+            "guardian", _target=target, action="guardian", command="logs",
+        )
+        if sent:
+            guardian_result = await fun_text_collector.wait_for(
+                target, "guardian", 10.0, guardian_id,
+            )
+            if not await _callback_result_access_or_report(cq, target, published=True):
+                return
+            if (isinstance(guardian_result, dict)
+                    and guardian_result.get("device_id") == target
+                    and str(guardian_result.get("id") or "") == guardian_id):
+                result = guardian_result
+                source = "Guardian"
+        elif not await _callback_result_access_or_report(cq, target, published=False):
+            return
     device = devices.get(target) or {}
     title = html.escape(str(device.get("name") or target))
-    if (not isinstance(result, dict) or result.get("device_id") != target
-            or str(result.get("id") or "") != command_id):
-        body = f"📄 <b>Логи XIDER-компонентов · {title}</b>\n\nОтвет не пришёл или не прошёл проверку запроса."
+    if not isinstance(result, dict):
+        body = f"📄 <b>Логи XIDER-компонентов · {title}</b>\n\nAgent не ответил; Guardian также не вернул проверенный ответ."
     else:
         raw = str(result.get("text") or "")
         safe, redaction = access_store.redact_shell_output_with_summary(raw)
@@ -18546,16 +18573,16 @@ async def on_cmd_agent_logs(cq: CallbackQuery):
             suffix += "\nПоказан хвост журнала: исходный файл больше лимита."
         body = (
             f"📄 <b>Логи XIDER-компонентов · {title}</b>\n"
-            f"Состояние: <code>{html.escape(str(result.get('state') or 'unknown'))}</code> · "
+            f"Источник: <code>{source}</code> · состояние: <code>{html.escape(str(result.get('state') or 'unknown'))}</code> · "
             f"строк: <code>{line_count}</code>{suffix}\n\n"
             f"<pre>{html.escape(safe[-3000:])}</pre>"
         )
         access_store.append_audit(
             "agent_logs", actor_id=cq.from_user.id, target_id=target,
-            detail=f"state={result.get('state', 'unknown')} lines={result.get('lines', 0)}",
+            detail=f"source={source} state={result.get('state', 'unknown')} lines={result.get('lines', 0)}",
         )
     await _replace_callback_message(
-        cq, body, delivery_guard=_callback_delivery_guard(cq, target),
+        cq, body, delivery_guard=guard,
         reply_markup=back_to_device_kb(),
     )
 

@@ -59,6 +59,58 @@ except ImportError:
 log = logging.getLogger("xider.guardian")
 
 
+def _read_component_logs() -> dict:
+    """Read bounded local logs so Guardian can diagnose a stopped Agent."""
+    sources = (
+        ("agent", CONFIG_DIR / "xgent.log"),
+        ("guardian", SCRIPT_DIR / "guardian.log"),
+        ("agent-runtime", SCRIPT_DIR / "agent.log"),
+        ("safari", CONFIG_DIR / "safari.log"),
+        ("siri", CONFIG_DIR / "siri.log"),
+    )
+    secret_patterns = (
+        re.compile(r"(?i)\b(token|password|passwd|secret|api[_-]?key|authorization|private[_-]?key)\b(\s*[:=]\s*)([^\s,;]+)"),
+        re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"),
+    )
+    rows, unavailable, truncated = [], [], False
+    for label, path in sources:
+        try:
+            if path.is_symlink() or not path.is_file():
+                continue
+            with path.open("rb") as stream:
+                stream.seek(0, os.SEEK_END)
+                size = stream.tell()
+                stream.seek(max(0, size - 16 * 1024), os.SEEK_SET)
+                raw = stream.read(16 * 1024)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            unavailable.append(label)
+            continue
+        truncated = truncated or size > 16 * 1024
+        lines = raw.decode("utf-8", errors="replace").splitlines()
+        truncated = truncated or len(lines) > 40
+        for line in lines[-40:]:
+            for pattern in secret_patterns:
+                line = pattern.sub(
+                    lambda match: f"{match.group(1)}=[REDACTED]"
+                    if match.lastindex and match.lastindex >= 3 else "Bearer [REDACTED]",
+                    line,
+                )
+            rows.append(f"[{label}] {line[-480:]}")
+    if not rows:
+        state = "unavailable" if unavailable else "missing"
+        text = ("Не удалось прочитать локальные журналы XIDER-компонентов."
+                if unavailable else "Локальные журналы XIDER-компонентов ещё не созданы.")
+        return {"ok": False, "state": state, "lines": 0, "text": text}
+    text = "\n".join(rows)
+    truncated = truncated or len(rows) > 80 or len(text) > 8000
+    return {
+        "ok": True, "state": "available", "lines": min(len(rows), 80),
+        "truncated": truncated, "partial": bool(unavailable), "text": text[-8000:],
+    }
+
+
 def _runtime_install_dir() -> Path:
     """Resolve the directory beside the installed apps for source and bundles."""
     if getattr(sys, "frozen", False):
@@ -824,6 +876,8 @@ class Guardian:
         try:
             if command == "status":
                 result = self.status_payload()
+            elif command == "logs":
+                result = _read_component_logs()
             elif command == "start":
                 self._reset_recovery_backoff()
                 self.state["desired_running"] = True
