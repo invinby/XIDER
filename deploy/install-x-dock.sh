@@ -48,6 +48,11 @@ SNAP_CERTBOT_PREEXISTED=0
 SNAP_CERTBOT_REVISION_BEFORE=""
 SNAP_CERTBOT_INSTALLED_BY_XIDER=0
 UFW_HTTP_RULE_ADDED=0
+APPARMOR_PROFILE=/etc/apparmor.d/mosquitto
+APPARMOR_LOCAL=/etc/apparmor.d/local/mosquitto
+APPARMOR_WAS_ACTIVE=0
+APPARMOR_OVERRIDE_CHANGED=0
+APPARMOR_LOCAL_PREEXISTED=0
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run this installer as root." >&2
@@ -86,6 +91,24 @@ for path in "$DATA_DIR" "$DOCK_DIR" "$WEBROOT" "$NGINX_SITE" "/etc/nginx/conf.d"
     exit 2
   fi
 done
+if systemctl is-active --quiet apparmor.service; then
+  APPARMOR_WAS_ACTIVE=1
+  if [[ ! -r "$APPARMOR_PROFILE" ]] || ! grep -Fq 'include if exists <local/mosquitto>' "$APPARMOR_PROFILE"; then
+    echo "Active AppArmor has no supported Mosquitto local-profile include; refusing to weaken confinement." >&2
+    exit 2
+  fi
+  if [[ -L "$APPARMOR_LOCAL" ]]; then
+    echo "Refusing symlink at AppArmor local profile path: $APPARMOR_LOCAL" >&2
+    exit 2
+  fi
+  if [[ -e "$APPARMOR_LOCAL" ]]; then
+    APPARMOR_LOCAL_PREEXISTED=1
+    if grep -Fq '# XIDER X-DOCK BEGIN' "$APPARMOR_LOCAL"; then
+      echo "X-DOCK AppArmor rules already exist; refusing to duplicate them." >&2
+      exit 2
+    fi
+  fi
+fi
 [[ -d "$DOCK_DIR" ]] && DOCK_DIR_PREEXISTED=1
 [[ -d "$DATA_DIR" ]] && DATA_DIR_PREEXISTED=1
 [[ -d "$WEBROOT" ]] && WEBROOT_PREEXISTED=1
@@ -196,6 +219,16 @@ cleanup_on_exit() {
   fi
   systemctl disable --now "$BROKER_SERVICE" >/dev/null 2>&1 || true
   rm -f -- "$BROKER_UNIT"
+  if [[ "$APPARMOR_OVERRIDE_CHANGED" -eq 1 ]]; then
+    if [[ "$APPARMOR_LOCAL_PREEXISTED" -eq 1 && -f "$STAGE/apparmor-local.backup" ]]; then
+      install -o root -g root -m 0644 "$STAGE/apparmor-local.backup" "$APPARMOR_LOCAL"
+    else
+      rm -f -- "$APPARMOR_LOCAL"
+    fi
+    if [[ "$APPARMOR_WAS_ACTIVE" -eq 1 ]] && ! apparmor_parser -r "$APPARMOR_PROFILE" >/dev/null 2>&1; then
+      echo "Could not reload the restored Mosquitto AppArmor profile; review it before retrying." >&2
+    fi
+  fi
   rm -f -- "$CERT_HOOK" /usr/local/sbin/xider-dock-cert-deploy "$NGINX_SITE"
   systemctl daemon-reload >/dev/null 2>&1 || true
   if [[ "$NGINX_WAS_ACTIVE" -eq 1 ]]; then
@@ -279,11 +312,11 @@ export DEBIAN_FRONTEND=noninteractive
 # Prevent dpkg's service helper from briefly launching the stock listener on
 # 1883 while installing Mosquitto. The runtime mask is removed immediately
 # after package configuration and does not alter the persistent unit state.
-if ! systemctl is-masked --runtime --quiet mosquitto.service; then
+if [[ "$(systemctl show mosquitto.service -p LoadState --value 2>/dev/null || true)" != "masked" ]]; then
   systemctl mask --runtime mosquitto.service
   MOSQUITTO_RUNTIME_MASKED=1
 fi
-if [[ "$NGINX_WAS_INSTALLED" -eq 0 ]] && ! systemctl is-masked --runtime --quiet nginx.service; then
+if [[ "$NGINX_WAS_INSTALLED" -eq 0 && "$(systemctl show nginx.service -p LoadState --value 2>/dev/null || true)" != "masked" ]]; then
   systemctl mask --runtime nginx.service
   NGINX_RUNTIME_MASKED=1
 fi
@@ -365,6 +398,9 @@ install -d -o mosquitto -g mosquitto -m 0750 "$DATA_DIR" "$DATA_DIR/data"
 install -d -o root -g root -m 0755 "$WEBROOT/.well-known/acme-challenge"
 STAGE="$(mktemp -d /var/tmp/xider-dock.XXXXXX)"
 chmod 0700 "$STAGE"
+if [[ "$APPARMOR_LOCAL_PREEXISTED" -eq 1 ]]; then
+  cp -a "$APPARMOR_LOCAL" "$STAGE/apparmor-local.backup"
+fi
 
 ADMIN_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
 BOT_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
@@ -390,6 +426,23 @@ python3 "$APP_DIR/broker/x_dock_config.py" \
   --password-init-file "$DOCK_DIR/admin-password" --output "$DOCK_DIR/mosquitto-bootstrap.conf"
 chown root:mosquitto "$DOCK_DIR/mosquitto-bootstrap.conf"
 chmod 0640 "$DOCK_DIR/mosquitto-bootstrap.conf"
+
+if [[ "$APPARMOR_WAS_ACTIVE" -eq 1 ]]; then
+  install -d -o root -g root -m 0755 "$(dirname "$APPARMOR_LOCAL")"
+  APPARMOR_OVERRIDE_CHANGED=1
+  cat >> "$APPARMOR_LOCAL" <<'EOF'
+
+# XIDER X-DOCK BEGIN
+/etc/xider-dock/ r,
+/etc/xider-dock/** r,
+/var/lib/xider-dock/ r,
+/var/lib/xider-dock/** rwk,
+# XIDER X-DOCK END
+EOF
+  chown root:root "$APPARMOR_LOCAL"
+  chmod 0644 "$APPARMOR_LOCAL"
+  apparmor_parser -r "$APPARMOR_PROFILE"
+fi
 
 cat > "$STAGE/xider-dock-mqtt.service" <<EOF
 [Unit]
