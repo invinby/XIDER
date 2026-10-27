@@ -4,6 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "build-agents.yml"
+SERVER_BUNDLE_WORKFLOW = ROOT / ".github" / "workflows" / "server-deploy-bundle.yml"
 WORKFLOWS = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
 EXPECTED_ACTIONS = {
     "actions/checkout": ("11bd71901bbe5b1630ceea73d27597364c9af683", "v4.2.2"),
@@ -170,3 +171,18 @@ def test_release_signing_secret_is_scoped_to_protected_release_environment():
     assert "permissions:\n      contents: write" in release
     assert "XIDER_RELEASE_PRIVATE_KEY_B64: ${{ secrets.XIDER_RELEASE_PRIVATE_KEY_B64 }}" in release
     assert "XIDER_RELEASE_PRIVATE_KEY_B64" not in text.split("  create-release:", 1)[0]
+
+
+def test_server_bundle_workflow_signs_source_without_publishing_a_general_release():
+    assert SERVER_BUNDLE_WORKFLOW.is_file()
+    text = SERVER_BUNDLE_WORKFLOW.read_text(encoding="utf-8")
+
+    assert 'tags: ["server-deploy-*"]' in text
+    assert "environment:\n      name: xider-release-signing" in text
+    assert "permissions:\n  contents: read" in text
+    assert "XIDER_RELEASE_PRIVATE_KEY_B64: ${{ secrets.XIDER_RELEASE_PRIVATE_KEY_B64 }}" in text
+    assert "git archive --format=zip --prefix=XIDER-source/ --output=artifacts/XIDER-source.zip HEAD" in text
+    assert "tools/sign_server_bundle.py" in text
+    assert "deploy/verify_server_bundle.py" in text
+    assert "name: XIDER-server-deploy-bundle" in text
+    assert "softprops/action-gh-release" not in text
