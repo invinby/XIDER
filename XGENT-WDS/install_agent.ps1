@@ -2,6 +2,7 @@
 param(
     [string]$AgentDir = $PSScriptRoot,
     [string]$TaskName = 'XIDER Agent',
+    [string]$GuardianInstaller,
     [switch]$PreferPython,
     [switch]$PreflightOnly
 )
@@ -64,7 +65,11 @@ if ($PreferPython) {
     throw 'Neither XGENT-WDS.exe nor venv\Scripts\pythonw.exe + xgent_wds.py was found.'
 }
 
-$guardianInstaller = Join-Path $AgentDir 'install_guardian.ps1'
+$guardianInstaller = if ($GuardianInstaller) {
+    (Resolve-Path -LiteralPath $GuardianInstaller -ErrorAction Stop).Path
+} else {
+    Join-Path $AgentDir 'install_guardian.ps1'
+}
 if (-not (Test-Path -LiteralPath $guardianInstaller -PathType Leaf)) {
     throw 'Windows Guardian installer is missing.'
 }

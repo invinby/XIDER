@@ -43,17 +43,17 @@ jobs:
         run: |
           python tools/build_nuitka_windows.py
           Copy-Item XGENT-WDS/.env.example XGENT-WDS/dist/nuitka/.env.example
-          Copy-Item XGENT-WDS/install_agent.ps1 XGENT-WDS/dist/nuitka/install_agent.ps1
-          Copy-Item XGENT-WDS/install_guardian.ps1 XGENT-WDS/dist/nuitka/install_guardian.ps1
-          Copy-Item XGENT-WDS/start_agent.bat XGENT-WDS/dist/nuitka/start_agent.bat
-          Copy-Item XGENT-WDS/stop_agent.bat XGENT-WDS/dist/nuitka/stop_agent.bat
-          Copy-Item XGENT-WDS/start_guardian.bat XGENT-WDS/dist/nuitka/start_guardian.bat
-          Copy-Item XGENT-WDS/stop_guardian.bat XGENT-WDS/dist/nuitka/stop_guardian.bat
           python tools/verify_command_approval_bundle.py --nuitka-executable XGENT-WDS/dist/nuitka/XGENT-WDS.exe
           $unexpected = Get-ChildItem XGENT-WDS/dist/nuitka -Recurse -File | Where-Object {
-            $_.Name -match '\.py[co]?$' -or ($_.Name -eq '.env')
+            $_.Name -match '\.(py[co]?|ps1|psm1|bat|cmd|sh)$' -or ($_.Name -eq '.env')
           }
-          if ($unexpected) { throw ('Unexpected source or private .env in Windows release: ' + ($unexpected.FullName -join ', ')) }
+          if ($unexpected) { throw ('Unexpected plaintext helper/source or private .env in Windows release: ' + ($unexpected.FullName -join ', ')) }
+          $expected = @('.env.example', 'XGENT-WDS.exe', 'XIDER-Guard-Keeper.exe')
+          $actual = @(Get-ChildItem XGENT-WDS/dist/nuitka -File | ForEach-Object Name | Sort-Object)
+          $expectedSorted = @($expected | Sort-Object)
+          if (Compare-Object $expectedSorted $actual) {
+            throw ('Unexpected Windows release contents: ' + ($actual -join ', '))
+          }
           $packageRoot = 'XGENT-WDS/dist/nuitka'
           $package = Join-Path $env:RUNNER_TEMP 'XGENT-WDS-Windows.zip'
           Compress-Archive -Path "$packageRoot\*" -DestinationPath $package -Force
@@ -228,8 +228,11 @@ jobs:
           unzip -t artifacts/XGENT-WDS-Windows.zip
           unzip -Z1 artifacts/XGENT-WDS-Windows.zip | grep -Fxq XGENT-WDS.exe
           unzip -Z1 artifacts/XGENT-WDS-Windows.zip | grep -Fxq XIDER-Guard-Keeper.exe
-          unzip -Z1 artifacts/XGENT-WDS-Windows.zip | grep -Fxq install_agent.ps1
-          unzip -Z1 artifacts/XGENT-WDS-Windows.zip | grep -Fxq install_guardian.ps1
+          unzip -Z1 artifacts/XGENT-WDS-Windows.zip | grep -Fxq .env.example
+          if unzip -Z1 artifacts/XGENT-WDS-Windows.zip | grep -Eiq '\.(py[co]?|ps1|psm1|bat|cmd|sh)$'; then
+            echo 'Windows release package contains plaintext source or helper scripts.' >&2
+            exit 1
+          fi
           unzip -t artifacts/macos/XGENT-MCS-macos-bundle.zip
           unzip -Z1 artifacts/macos/XGENT-MCS-macos-bundle.zip | grep -Fq 'XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper'
           unzip -Z1 artifacts/macos/XGENT-MCS-macos-bundle.zip | grep -Fq 'XIDER-Layers.app/Contents/MacOS/XIDER-Layers'

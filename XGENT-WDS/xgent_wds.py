@@ -5233,22 +5233,26 @@ class XgentClient:
         })
 
     def _do_autorun_enable(self, payload: dict) -> None:
-        """Включить тот же Scheduled Task, который создаёт установщик."""
+        """Enable the pre-registered visible Scheduled Task without source helpers."""
         try:
-            cur_dir = Path(sys.executable if _BUNDLED_RUNTIME else __file__).resolve().parent
-            installer = cur_dir / "install_agent.ps1"
-            if not installer.exists():
-                raise RuntimeError("install_agent.ps1 не найден рядом с агентом")
+            if not _scheduled_task_exists():
+                raise RuntimeError(
+                    f"Задача «{WINDOWS_TASK_NAME}» отсутствует; переустанови подписанный Windows-пакет."
+                )
+            task = subprocess.run(
+                ["schtasks.exe", "/Change", "/TN", WINDOWS_TASK_NAME, "/ENABLE"],
+                capture_output=True, text=True, timeout=20, check=False,
+            )
+            if task.returncode != 0:
+                raise RuntimeError((task.stderr or task.stdout or "не удалось включить Scheduled Task").strip())
+            set_guardian_startup_enabled(True)
             result = subprocess.run(
-                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                 "-File", str(installer), "-AgentDir", str(cur_dir),
-                 "-TaskName", WINDOWS_TASK_NAME],
-                capture_output=True, text=True, timeout=30, check=False,
+                ["schtasks.exe", "/Run", "/TN", WINDOWS_TASK_NAME],
+                capture_output=True, text=True, timeout=20, check=False,
             )
             if result.returncode != 0:
-                raise RuntimeError((result.stderr or result.stdout or "schtasks failed").strip())
-            set_guardian_startup_enabled(True)
-            text = f"✅ Автозапуск Windows включён через Scheduled Task «{WINDOWS_TASK_NAME}»."
+                raise RuntimeError((result.stderr or result.stdout or "не удалось запустить Scheduled Task").strip())
+            text = f"✅ Автозапуск Windows включён; задача «{WINDOWS_TASK_NAME}» запущена."
             ok = True
         except Exception as exc:
             text = f"⚠️ Ошибка включения автозапуска: {exc}"

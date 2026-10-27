@@ -85,11 +85,7 @@ function Assert-XiderWindowsBundleArchive {
     param([Parameter(Mandatory)][string]$ArchivePath)
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $expected = @(
-        '.env.example', 'install_agent.ps1', 'install_guardian.ps1',
-        'start_agent.bat', 'stop_agent.bat', 'start_guardian.bat', 'stop_guardian.bat',
-        'XGENT-WDS.exe', 'XIDER-Guard-Keeper.exe'
-    )
+    $expected = @('.env.example', 'XGENT-WDS.exe', 'XIDER-Guard-Keeper.exe')
     $archive = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
     try {
         $seen = @{}
@@ -100,6 +96,9 @@ function Assert-XiderWindowsBundleArchive {
             }
             if ($seen.ContainsKey($name)) { throw "Повторяющийся файл в Windows-бандле: $name" }
             if ($entry.Length -le 0) { throw "Пустой файл в Windows-бандле: $name" }
+            if ($name -in @('XGENT-WDS.exe', 'XIDER-Guard-Keeper.exe') -and $entry.Length -lt 1048576) {
+                throw "Слишком маленький скомпилированный файл в Windows-бандле: $name"
+            }
             $seen[$name] = $true
         }
         $missing = @($expected | Where-Object { -not $seen.ContainsKey($_) })
@@ -763,7 +762,18 @@ try {
     }
     $healthProbeStartedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0
     $taskInstallAttempted = $true
-    $agentInstallerArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $agent 'install_agent.ps1'), '-AgentDir', $agent)
+    # Signed-release helper scripts execute from the temporary, commit-pinned
+    # source checkout. Only compiled binaries and configuration data remain in
+    # the installed directory. Development branch installs keep their scripts.
+    $agentInstallerPath = if ($ReleaseTag) {
+        Join-Path $downloaded.FullName 'XGENT-WDS\install_agent.ps1'
+    } else {
+        Join-Path $agent 'install_agent.ps1'
+    }
+    $agentInstallerArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $agentInstallerPath, '-AgentDir', $agent)
+    if ($ReleaseTag) {
+        $agentInstallerArguments += @('-GuardianInstaller', (Join-Path $downloaded.FullName 'XGENT-WDS\install_guardian.ps1'))
+    }
     if (-not $ReleaseTag) { $agentInstallerArguments += '-PreferPython' }
     & powershell.exe @agentInstallerArguments
     if ($LASTEXITCODE -ne 0) { throw 'Установка Windows-агента/Guardian завершилась ошибкой.' }
