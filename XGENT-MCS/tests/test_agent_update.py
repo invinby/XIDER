@@ -940,7 +940,13 @@ def test_delayed_uninstall_failure_preserves_original_command_id(source_update, 
     monkeypatch.setattr(mcs.Path, "home", classmethod(lambda _cls: tmp_path))
     monkeypatch.setattr(mcs.os, "getuid", lambda: 501, raising=False)
     monkeypatch.setattr(mcs, "set_guardian_desired_running", lambda _running: None)
-    results = iter((MagicMock(returncode=0), MagicMock(returncode=1), MagicMock(returncode=0)))
+    results = iter((
+        MagicMock(returncode=0),  # stop Siri
+        MagicMock(returncode=0),  # stop Safari
+        MagicMock(returncode=0),  # unload Guardian
+        MagicMock(returncode=1),  # delayed worker unload fails
+        MagicMock(returncode=0),  # worker is still loaded
+    ))
     monkeypatch.setattr(mcs.subprocess, "run", lambda *_args, **_kwargs: next(results))
     monkeypatch.setattr(mcs.os, "_exit", lambda *_args: pytest.fail("failed unload must keep worker reachable"))
     client._do_uninstall_agent({})
