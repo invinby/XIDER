@@ -158,11 +158,25 @@ reverse proxy, publicly trusted certificate, or automatic certificate-renewal/
 reload job. `XIDER_DOCK_ENABLED` therefore stays off. No live pairing or
 one-command no-SSH install is ready to publish.
 
-Next required sequence: add a reproducible Dynamic Security broker setup with
-separate bot/admin roles; provision HTTPS and verify renewal; test installer
-pairing, cancellation, and recovery when the bootstrap process exits; install
-Agent and Guard Keeper transactionally; then verify cross-device ACLs, replay,
-denial, enrollment, restart, and rollback before enabling it on a server.
+`deploy/install-x-dock.sh` is a preparation script for an already-installed bot
+VPS. It creates a separate Mosquitto instance, bootstraps Dynamic Security on
+loopback, removes the demo identity, issues a short-lived IP certificate, and
+configures the TLS listener plus HTTPS enrollment proxy and renewal hook. It
+stores broker credentials only in the server's protected bot environment and
+does not print them. It currently requires the bot's exact `MQTT_PREFIX=xgent/v1`
+and opens host-firewall ports 80, 443 and 8884 when UFW is active; the cloud
+security group still needs those inbound ports. The script is not live-verified:
+it has not been run on a VPS, the provider security-group ports have not been
+checked, and certificate renewal and device enrollment have not been exercised
+end to end.
+
+Next required sequence: review and run the VPS installer after SSH access and
+provider ports are available; verify certificate issuance and renewal; test
+owner-approved pairing, cancellation, and recovery when bootstrap exits;
+install Agent and Guard Keeper transactionally; then verify cross-device ACLs,
+replay, denial, enrollment, restart, and rollback before enabling it on a
+server. A one-command installer and bot-driven install remain unverified until
+that full sequence succeeds on Windows and macOS.
 
 ## Current evidence and non-claims
 

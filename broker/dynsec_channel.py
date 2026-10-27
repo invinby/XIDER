@@ -18,10 +18,14 @@ RESPONSE = f"{CONTROL}/response"
 
 
 class DynSecChannel:
-    def __init__(self, host: str, port: int, username: str, password: str, timeout: float = 10):
+    def __init__(
+        self, host: str, port: int, username: str, password: str,
+        timeout: float = 10, ca_certs: str | None = None,
+    ):
         if not host or not username or not password or not 1 <= port <= 65535:
             raise ValueError("broker admin connection is incomplete")
         self.host, self.port, self.timeout = host, port, timeout
+        self.ca_certs = ca_certs
         self._ready = threading.Event()
         self._responses: queue.Queue[dict] = queue.Queue()
         self._lock = threading.Lock()
@@ -31,7 +35,9 @@ class DynSecChannel:
             protocol=mqtt.MQTTv311,
         )
         self._client.username_pw_set(username, password)
-        self._client.tls_set()  # System CA and hostname validation stay enabled.
+        # System CA and hostname validation stay enabled. A private CA file is
+        # permitted for the loopback-only first-boot bootstrap listener.
+        self._client.tls_set(ca_certs=ca_certs)
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
         self._client.on_subscribe = self._on_subscribe

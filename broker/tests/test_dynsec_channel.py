@@ -59,3 +59,28 @@ def test_subscribe_ack_accepts_paho_reason_code():
     channel._ready = threading.Event()
     channel._on_subscribe(None, None, 1, [ReasonCode(PacketTypes.SUBACK, identifier=0)])
     assert channel._ready.is_set()
+
+
+def test_channel_accepts_an_explicit_ca_file_for_loopback_bootstrap(monkeypatch):
+    calls = []
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def reconnect_delay_set(self, **kwargs):
+            pass
+
+        def username_pw_set(self, *args):
+            pass
+
+        def tls_set(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(dynsec_channel.mqtt, "Client", Client)
+
+    dynsec_channel.DynSecChannel(
+        "localhost", 18884, "admin", "password", ca_certs="/tmp/xider-local-ca.pem",
+    )
+
+    assert calls == [{"ca_certs": "/tmp/xider-local-ca.pem"}]

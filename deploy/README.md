@@ -37,8 +37,11 @@ Bootstrap не переносит `TG-BOT-SERVER\.env` и BOT_TOKEN на Windows
 безынтерактивном режиме: парольный fallback отключён. Для первой установки
 без локального `.env` сейчас нужен заранее настроенный SSH-ключ/agent. Клиент
 и owner-approved X-DOCK flow уже есть в исходниках; оба bootstrap умеют вызвать
-клиент при заданном `XIDER_DOCK_URL`. Но публичный HTTPS endpoint, сертификат,
-отдельный broker с per-device Dynamic Security и live pairing ещё не подняты.
+клиент при заданном `XIDER_DOCK_URL`. `install-x-dock.sh` теперь готовит
+отдельный broker с per-device Dynamic Security, HTTPS endpoint и обновление
+короткоживущего IP-сертификата на уже установленном VPS. Этот скрипт пока не
+запускался на VPS; сертификат, renewal, внешний security group и live pairing
+не проверены.
 Поэтому установка одной командой без `.env` и SSH пока не доступна.
 Настройки остаются в защищённом sidecar `.env`; секреты не печатаются и не
 включаются в EXE. Перед SSH-записью локальный preflight требует MQTT TLS,
