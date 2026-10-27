@@ -775,6 +775,7 @@ from config import (
     MQTT_USERNAME,
     PLATFORM,
     VERSION,
+    write_runtime_health,
 )
 from crypto import sign_message, verify_message
 from xgencrypto import decrypt_payload, encrypt_payload
@@ -1262,6 +1263,7 @@ class XgentClient:
         self._update_lock = threading.Lock()
         self._lifecycle_lock = threading.RLock()
         self._update_cancelled = threading.Event()
+        self._mqtt_connected = False
         self._pending_command_subacks: set[int] = set()
         self._command_subscriptions_failed = False
         self._client = mqtt.Client(
@@ -1502,6 +1504,7 @@ class XgentClient:
         return self._running.is_set()
 
     def start(self) -> None:
+        self._write_local_health(state="waiting")
         if MQTT_TLS:
             self._client.tls_set()  # системные CA; без отключения проверки сертификата
         if MQTT_USERNAME:
@@ -1530,6 +1533,7 @@ class XgentClient:
 
     def stop(self) -> None:
         self._running.clear()
+        self._write_local_health(state="stopped")
         self._sysinfo_schedule_wake.set()
         wake = getattr(self, "_network_traffic_schedule_wake", None)
         if wake is not None:
@@ -1548,6 +1552,7 @@ class XgentClient:
         except Exception:
             log.exception("Не удалось откатить отменённое обновление перед остановкой")
         self._running.clear()
+        self._write_local_health(state="stopped")
         self._sysinfo_schedule_wake.set()
         wake = getattr(self, "_network_traffic_schedule_wake", None)
         if wake is not None:
@@ -1569,6 +1574,8 @@ class XgentClient:
                 )
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
+        self._mqtt_connected = reason_code == 0
+        self._write_local_health(state="running" if self._mqtt_connected else "waiting")
         with self._lifecycle_lock:
             self._pending_command_subacks.clear()
             self._command_subscriptions_failed = reason_code != 0
@@ -1665,6 +1672,8 @@ class XgentClient:
         log.warning("Попытка подключения к брокеру не удалась (код %s)", reason_code)
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
+        self._mqtt_connected = False
+        self._write_local_health(state="waiting" if self._running.is_set() else "stopped")
         with self._lifecycle_lock:
             self._pending_command_subacks.clear()
             self._command_subscriptions_failed = True
@@ -1857,6 +1866,12 @@ class XgentClient:
         envelope = sign_message(body)
         self._client.publish(f"{MQTT_PREFIX}/{DEVICE_ID}/status", json.dumps(envelope, ensure_ascii=False), qos=1)
 
+    def _write_local_health(self, *, state: str = "running") -> None:
+        try:
+            write_runtime_health("agent", self._mqtt_connected, state=state)
+        except OSError:
+            log.exception("Could not write Agent health heartbeat")
+
     def _publish_response(self, topic_suffix: str, payload: dict) -> bool:
         cmd_id = getattr(self._command_context, "cmd_id", None)
         if cmd_id is not None and "id" not in payload:
@@ -1895,8 +1910,10 @@ class XgentClient:
     def _heartbeat_loop(self) -> None:
         while self._running.is_set():
             time.sleep(HEARTBEAT_INTERVAL + random.uniform(0, 10))
-            if self._running.is_set() and self._client.is_connected():
-                self._publish_status()
+            if self._running.is_set():
+                self._write_local_health(state="running")
+                if self._client.is_connected():
+                    self._publish_status()
 
     def _do_sysinfo_interval(self, payload: dict) -> None:
         request_id = payload.get("id")

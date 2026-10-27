@@ -2627,8 +2627,13 @@ class XgentClient:
     def _heartbeat_loop(self) -> None:
         while self._running.is_set():
             time.sleep(HEARTBEAT_INTERVAL + random.uniform(0, 10))
-            if self._running.is_set() and self._client.is_connected():
-                self._publish_status()
+            if self._running.is_set():
+                try:
+                    write_runtime_health("agent", self._client.is_connected())
+                except OSError:
+                    log.exception("Could not write Windows Agent health heartbeat")
+                if self._client.is_connected():
+                    self._publish_status()
 
     def _do_sysinfo_interval(self, payload: dict) -> None:
         request_id = payload.get("id")

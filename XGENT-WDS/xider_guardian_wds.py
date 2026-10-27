@@ -48,6 +48,7 @@ LEGACY_STATE_FILE = CONFIG_DIR / "guardian-windows.json"
 AGENT_TASK = "XIDER Agent"
 GUARDIAN_TASK = "XIDER Guardian"
 AGENT_STABLE_SECONDS = 60.0
+AGENT_HEALTH_STALE_SECONDS = 180.0
 
 
 def _load_state() -> dict:
@@ -222,6 +223,38 @@ class Guardian:
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
         return None
+
+    def _agent_health_is_stale(self, pid: int) -> bool:
+        """Treat only this Agent PID's old local heartbeat as an unresponsive worker."""
+        try:
+            path = CONFIG_DIR / "agent-health.json"
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > 4096:
+                return False
+            health = json.loads(path.read_text(encoding="utf-8"))
+            stamp = health.get("updated_at") if isinstance(health, dict) else None
+            return (
+                health.get("component") == "agent"
+                and health.get("pid") == pid
+                and type(stamp) in (int, float)
+                and 0 <= time.time() - stamp > AGENT_HEALTH_STALE_SECONDS
+            )
+        except (OSError, ValueError, json.JSONDecodeError):
+            return False
+
+    def _terminate_unresponsive_agent(self, proc: psutil.Process) -> None:
+        """Stop only the process currently identified as the XIDER Agent."""
+        current = self.agent_process()
+        if current is None or current.pid != proc.pid:
+            return
+        try:
+            current.terminate()
+            try:
+                current.wait(timeout=5)
+            except psutil.TimeoutExpired:
+                current.kill()
+                current.wait(timeout=5)
+        except psutil.NoSuchProcess:
+            return
 
     def _agent_command(self) -> list[str]:
         exe = SCRIPT_DIR / "XGENT-WDS.exe"
@@ -411,6 +444,17 @@ class Guardian:
                     continue
                 now = time.monotonic()
                 proc = self.agent_process()
+                if proc and self._agent_health_is_stale(proc.pid):
+                    log.warning("Windows Agent PID %s heartbeat is stale; restarting the unresponsive worker", proc.pid)
+                    try:
+                        self._terminate_unresponsive_agent(proc)
+                        proc = self.agent_process()
+                        if proc:
+                            raise RuntimeError("зависший процесс агента не завершился")
+                    except Exception as exc:
+                        log.exception("Windows Guardian could not stop stale Agent")
+                        self._record_recovery_failure(exc)
+                        continue
                 self._observe_agent_process(proc, now)
                 if proc or now < self._next_restart_at:
                     continue

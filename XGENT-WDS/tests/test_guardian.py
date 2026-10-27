@@ -1,5 +1,6 @@
 import json
 import threading
+import time
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -78,6 +79,21 @@ def test_guardian_status_reports_agent_and_guardian_tasks_separately(
     assert "Задача агента: зарегистрирована" in result["text"]
     assert "Задача Guardian: не зарегистрирована" in result["text"]
     assert queried == [module.AGENT_TASK, module.GUARDIAN_TASK]
+
+
+def test_guardian_detects_only_its_agents_matching_stale_heartbeat(
+    guardian_module, monkeypatch, tmp_path
+):
+    module = guardian_module
+    monkeypatch.setattr(module, "CONFIG_DIR", tmp_path)
+    (tmp_path / "agent-health.json").write_text(json.dumps({
+        "component": "agent", "pid": 4321,
+        "updated_at": time.time() - module.AGENT_HEALTH_STALE_SECONDS - 1,
+    }), encoding="utf-8")
+    guardian = object.__new__(module.Guardian)
+
+    assert guardian._agent_health_is_stale(4321) is True
+    assert guardian._agent_health_is_stale(9876) is False
 
 
 def test_guardian_status_keeps_task_query_errors_unknown(guardian_module, monkeypatch):

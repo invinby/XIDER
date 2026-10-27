@@ -67,6 +67,20 @@ def test_safari_restarts_a_stale_guardian_even_if_agent_pid_exists(guardian_modu
     assert xider_layers._start_child("safari") == "stale_guardian_restarted"
 
 
+def test_guardian_detects_only_its_agents_matching_stale_heartbeat(guardian_module, monkeypatch, tmp_path):
+    module = guardian_module
+    guardian = object.__new__(module.Guardian)
+    health = {
+        "schema": 1, "component": "agent", "pid": 4321,
+        "state": "running", "updated_at": time.time() - module.AGENT_HEALTH_STALE_SECONDS - 1,
+    }
+    (tmp_path / "agent-health.json").write_text(json.dumps(health), encoding="utf-8")
+    monkeypatch.setattr(module, "CONFIG_DIR", tmp_path)
+
+    assert guardian._agent_health_is_stale(4321) is True
+    assert guardian._agent_health_is_stale(9876) is False
+
+
 def test_guardian_fails_closed_when_worker_or_env_is_missing(
     guardian_module, monkeypatch, tmp_path
 ):

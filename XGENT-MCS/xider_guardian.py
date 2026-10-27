@@ -75,6 +75,7 @@ def _runtime_install_dir() -> Path:
 SCRIPT_DIR = _runtime_install_dir()
 STATE_FILE = CONFIG_DIR / "guardian.json"
 AGENT_STABLE_SECONDS = 60.0
+AGENT_HEALTH_STALE_SECONDS = 180.0
 MAX_LAUNCHAGENT_PLISTS = 512
 MAX_LAUNCHAGENT_PLIST_BYTES = 256 * 1024
 
@@ -268,6 +269,40 @@ class Guardian:
         except OSError:
             pass
         return None
+
+    def _agent_health_is_stale(self, pid: int) -> bool:
+        """Only treat a matching, previously observed Agent heartbeat as stale."""
+        try:
+            path = CONFIG_DIR / "agent-health.json"
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > 4096:
+                return False
+            health = json.loads(path.read_text(encoding="utf-8"))
+            stamp = health.get("updated_at") if isinstance(health, dict) else None
+            return (
+                health.get("schema") == 1
+                and health.get("component") == "agent"
+                and health.get("pid") == pid
+                and health.get("state") == "running"
+                and type(stamp) in (int, float)
+                and 0 <= time.time() - stamp > AGENT_HEALTH_STALE_SECONDS
+            )
+        except (OSError, ValueError, json.JSONDecodeError):
+            return False
+
+    def _terminate_unresponsive_agent(self, pid: int) -> None:
+        """Stop only the currently identified XIDER worker after stale health."""
+        if self.agent_pid() != pid:
+            return
+        try:
+            process = psutil.Process(pid)
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except psutil.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        except psutil.NoSuchProcess:
+            return
 
     def launchd_loaded(self) -> bool:
         """Whether the worker LaunchAgent is registered in this GUI session."""
@@ -571,6 +606,16 @@ class Guardian:
                 if self.state.get("auto_restart") and self.state.get("desired_running"):
                     now = time.monotonic()
                     pid = self.agent_pid()
+                    if pid and self._agent_health_is_stale(pid):
+                        log.warning("Agent PID %s heartbeat is stale; restarting the unresponsive worker", pid)
+                        try:
+                            self._terminate_unresponsive_agent(pid)
+                            pid = self.agent_pid()
+                            if pid:
+                                raise RuntimeError("зависший процесс агента не завершился")
+                        except Exception as exc:
+                            self._record_recovery_failure(exc)
+                            continue
                     self._observe_agent_process(pid, now)
                     if pid or now < self._next_restart_at:
                         continue
