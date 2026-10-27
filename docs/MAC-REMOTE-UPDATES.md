@@ -95,9 +95,10 @@ Guard Keeper. Перед запуском любого нижнего уровн
 штатным uninstall-командом.
 
 **Снимок статуса на 2026-10-27:** PR #32 остаётся draft. Публичная ветка и
-приватный backup-ref `codex/tarped-resume-20261026` совпадают на
+приватный backup-ref `codex/tarped-resume-20261026` были синхронизированы на
+docs-only commit `5a29d2e`; кодовый commit для сборок —
 `3bb8d633c7f6e58b00ad8ef34634a11aa2414480`. CI run `40462940956` и Pages run
-`40462941093` для этого коммита завершились успешно. Build run `40462993794` на
+`40462941093` для кодового коммита завершились успешно. Build run `40462993794` на
 preview-ref `xider-local-prep-tarped-20261027-current` тоже завершился успешно:
 Nuitka-сборки macOS и Windows и проверка ZIP-компонентов прошли. Артефакты
 `XGENT-MCS-macOS`, `XGENT-WDS-Windows` и `XIDER-Components` опубликованы как
@@ -108,7 +109,8 @@ Nuitka-сборки macOS и Windows и проверка ZIP-компонент�
 SSH-ключа, а парольная SSH-аутентификация отклонена; X-DOCK не развёрнут. Пока
 устройство не прислало свежий собственный health record, бот показывает
 неизвестное/устаревшее состояние; версия Agent не подставляется за версию Safari
-или Siri.
+или Siri. После обновления этой сводки Pages run `40465447813` для PR завершился
+успешно; CI run `40465448055` для docs-only commit выполнялся.
 
 В релизной поставке macOS Agent, Guard Keeper и Safari/Siri собраны в Nuitka
 `.app`-бандлы; Windows Agent и Guard Keeper — в Nuitka `.exe`. Python-модули не
