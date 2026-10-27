@@ -42,7 +42,7 @@ broker с per-device Dynamic Security и HTTPS enrollment. MQTT WebSocket идё
 через уже открытый HTTPS-порт 443; raw MQTT на 8884 привязан к loopback, так что
 AWS Security Group менять не нужно. На уже установленном X-DOCK VPS сначала
 обнови подписанный серверный исходник, затем выполни
-`sudo /usr/local/sbin/xider-server-ops enable-x-dock-websockets`. Миграция хранит
+`sudo /bin/bash /opt/xider/deploy/enable-x-dock-websockets.sh`. Миграция хранит
 копии конфигов в `/var/backups/xider/` и откатывает изменённые файлы, если
 перезапуск службы не прошёл.
 Поэтому установка одной командой без `.env` и SSH пока не доступна.

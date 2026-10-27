@@ -7,7 +7,9 @@ NGINX_SITE=/etc/nginx/conf.d/xider-dock.conf
 BOT_ENV=/etc/xider/bot.env
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP_DIR="/var/backups/xider/x-dock-websockets-${STAMP}"
-STAGE="$(mktemp -d /run/xider-dock-ws.XXXXXX)"
+STAGE="$(mktemp -d /etc/xider-dock/.ws.XXXXXX)"
+chown root:mosquitto "$STAGE"
+chmod 0750 "$STAGE"
 BROKER_CHANGED=0
 NGINX_CHANGED=0
 ENV_CHANGED=0
@@ -65,6 +67,8 @@ python3 "$APP_DIR/broker/x_dock_config.py" \
   --key-file /etc/xider-dock/tls/privkey.pem \
   --port 8884 --bind-address 127.0.0.1 --websocket-port 18885 \
   --output "$STAGE/mosquitto.conf"
+chown root:mosquitto "$STAGE/mosquitto.conf"
+chmod 0640 "$STAGE/mosquitto.conf"
 mosquitto -c "$STAGE/mosquitto.conf" -t
 install -o root -g mosquitto -m 0640 "$STAGE/mosquitto.conf" "$BROKER_CONFIG"
 BROKER_CHANGED=1
