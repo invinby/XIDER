@@ -35,6 +35,7 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts
           git archive --format=zip --prefix=XIDER-source/ --output=artifacts/XIDER-source.zip HEAD
+          python tools/verify_command_approval_bundle.py --public-only-zip artifacts/XIDER-source.zip
           key_path="$RUNNER_TEMP/xider-release-signing.pem"
           trap 'rm -f "$key_path"' EXIT
           printf '%s' "$XIDER_RELEASE_PRIVATE_KEY_B64" | base64 --decode > "$key_path"

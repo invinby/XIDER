@@ -182,6 +182,7 @@ def test_server_bundle_workflow_signs_source_without_publishing_a_general_releas
     assert "permissions:\n  contents: read" in text
     assert "XIDER_RELEASE_PRIVATE_KEY_B64: ${{ secrets.XIDER_RELEASE_PRIVATE_KEY_B64 }}" in text
     assert "git archive --format=zip --prefix=XIDER-source/ --output=artifacts/XIDER-source.zip HEAD" in text
+    assert "python tools/verify_command_approval_bundle.py --public-only-zip artifacts/XIDER-source.zip" in text
     assert "tools/sign_server_bundle.py" in text
     assert "deploy/verify_server_bundle.py" in text
     assert "name: XIDER-server-deploy-bundle" in text
