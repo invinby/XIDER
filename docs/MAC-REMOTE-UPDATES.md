@@ -94,18 +94,15 @@ Guard Keeper. Перед запуском любого нижнего уровн
 отдельные версии и журналы, отображаются в разделе компонентов бота и удаляются
 штатным uninstall-командом.
 
-**Статус на 2026-10-27:** HEAD ветки — `3acc31a` в PR #32 и приватном backup-ref
-`codex/tarped-resume-20261026`. Для Mac добавлен скомпилированный CLI управления
-Agent, Guard Keeper и слоями Safari/Siri; signed-release пакет содержит три `.app`
-и `.env.example`, без соседних shell-лаунчеров. CI run `40454564796` прошёл на
-Python 3.11 и 3.12, включая Windows bootstrap/rollback fixtures и Unix installer
-checks. Каждый Python job подтвердил 1663 + 501 + 610 + 29 + 171 тестов и ещё
-25 дополнительных кейсов в отдельном наборе; skips отражены в выводе каждого
-suite. Mac Nuitka job собрал unsigned preview
-для Agent, Guard Keeper и Safari/Siri и проверил архив на plaintext source/helper
-scripts; это не подписанный распространяемый релиз. Windows Nuitka job для
-соседнего build-ref всё ещё выполняется. Apple signing/notarization, новый
-публичный релиз, установка на физический Mac и восстановление на устройстве не
+**Снимок статуса на 2026-10-27:** PR #32 и приватный backup-ref
+`codex/tarped-resume-20261026` синхронизированы на `af5d1e2` на момент проверки.
+Pages run `40455729236` прошёл. CI run `40455729522` ещё выполнялся: Unix installer
+checks прошли, Python 3.11/3.12 component suites оставались активны. Отдельный
+build run `40452870765` на ref `xider-local-prep-siri-safari-20261027` завершил
+Nuitka-сборки Windows и macOS и упаковку компонентов; release gate был пропущен,
+поскольку это не tag build. Его артефакты — тестовые, Mac-пакет unsigned; это не
+подписанный распространяемый релиз. Apple signing/notarization, публичный
+релиз, установка на физические устройства и восстановление на устройстве не
 подтверждены. Пока устройство не прислало свежий собственный health record, бот
 показывает неизвестное/устаревшее состояние; версия Agent не подставляется за
 версию Safari или Siri.
