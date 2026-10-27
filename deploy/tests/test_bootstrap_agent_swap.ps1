@@ -163,6 +163,9 @@ try {
         $body = if ($name -eq 'requirements.txt') { '' } elseif ($name -eq 'config.py') { 'VERSION = "fixture"' } else { 'fixture' }
         [IO.File]::WriteAllText((Join-Path $agentSource $name), $body, $utf8)
     }
+    $dockClient = Join-Path $sourceRoot 'XIDER-fixture\deploy\x_dock_client.py'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $dockClient) -Force | Out-Null
+    [IO.File]::WriteAllText($dockClient, '# fixture client', $utf8)
     [IO.File]::WriteAllText((Join-Path $agentSource 'new-marker.txt'), 'new-version', $utf8)
     Compress-Archive -Path (Join-Path $sourceRoot 'XIDER-fixture') -DestinationPath $archive
 
