@@ -172,6 +172,10 @@ one-command no-SSH install is ready to publish.
 VPS. It creates a separate Mosquitto instance, bootstraps Dynamic Security on
 loopback, removes the demo identity, issues a short-lived IP certificate, and
 configures the TLS listener plus HTTPS enrollment proxy and renewal hook. It
+can coexist with an already active Nginx service: it adds a dedicated IP
+virtual host, reloads the existing service, and its rollback removes only that
+virtual-host file while preserving the service's original enabled/running
+state. It does not replace the existing domain routes. It
 stores broker credentials only in the server's protected bot environment and
 does not print them. Before the ACME HTTP-01 challenge, it opens TCP/80 in active
 UFW when no global IPv4 allow rule exists, and removes that temporary rule on

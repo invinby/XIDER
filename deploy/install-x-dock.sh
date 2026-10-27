@@ -31,6 +31,9 @@ MOSQUITTO_RUNTIME_MASKED=0
 MOSQUITTO_WAS_INSTALLED=0
 NGINX_RUNTIME_MASKED=0
 NGINX_WAS_INSTALLED=0
+NGINX_WAS_ACTIVE=0
+NGINX_WAS_ENABLED=0
+NGINX_STARTED_BY_XIDER=0
 SETUP_COMPLETE=0
 DOCK_DIR_PREEXISTED=0
 DATA_DIR_PREEXISTED=0
@@ -132,8 +135,13 @@ then
   echo "The bot must have exactly one MQTT_PREFIX=xgent/v1 setting for this X-DOCK broker." >&2
   exit 2
 fi
-if ss -H -ltn | awk '{print $4}' | grep -Eq ':(80|443|8787|8884|18884)$'; then
-  echo "One of TCP/80, 443, 8787, 8884, 18884 is already listening; resolve the conflict before setup." >&2
+listeners="$(ss -H -ltn | awk '{print $4}')"
+if printf '%s\n' "$listeners" | grep -Eq ':(8787|8884|18884)$'; then
+  echo "One of TCP/8787, 8884, or 18884 is already listening; resolve the conflict before setup." >&2
+  exit 2
+fi
+if ! systemctl is-active --quiet nginx.service && printf '%s\n' "$listeners" | grep -Eq ':(80|443)$'; then
+  echo "TCP/80 or 443 is occupied while Nginx is inactive; resolve the conflict before setup." >&2
   exit 2
 fi
 if dpkg-query -W -f='${Status}' mosquitto 2>/dev/null | grep -q 'install ok installed'; then
@@ -145,10 +153,8 @@ if dpkg-query -W -f='${Status}' mosquitto 2>/dev/null | grep -q 'install ok inst
 fi
 if dpkg-query -W -f='${Status}' nginx 2>/dev/null | grep -q 'install ok installed'; then
   NGINX_WAS_INSTALLED=1
-  if systemctl is-active --quiet nginx.service || systemctl is-enabled --quiet nginx.service; then
-    echo "The stock Nginx service is active or enabled; refusing to modify an existing web server." >&2
-    exit 2
-  fi
+  systemctl is-active --quiet nginx.service && NGINX_WAS_ACTIVE=1 || true
+  systemctl is-enabled --quiet nginx.service && NGINX_WAS_ENABLED=1 || true
 fi
 
 # Snapshot snapd state before the transaction. Installing the newer Certbot
@@ -189,12 +195,18 @@ cleanup_on_exit() {
     rm -f -- "$RENEW_SERVICE" "$RENEW_TIMER"
   fi
   systemctl disable --now "$BROKER_SERVICE" >/dev/null 2>&1 || true
-  systemctl disable --now nginx.service >/dev/null 2>&1 || true
   rm -f -- "$BROKER_UNIT"
   rm -f -- "$CERT_HOOK" /usr/local/sbin/xider-dock-cert-deploy "$NGINX_SITE"
   systemctl daemon-reload >/dev/null 2>&1 || true
-  if command -v nginx >/dev/null 2>&1; then
-    if nginx -t >/dev/null 2>&1; then systemctl reload nginx >/dev/null 2>&1 || true; fi
+  if [[ "$NGINX_WAS_ACTIVE" -eq 1 ]]; then
+    if command -v nginx >/dev/null 2>&1 && nginx -t >/dev/null 2>&1; then
+      systemctl reload nginx >/dev/null 2>&1 || true
+    fi
+  elif [[ "$NGINX_STARTED_BY_XIDER" -eq 1 ]]; then
+    systemctl stop nginx.service >/dev/null 2>&1 || true
+    if [[ "$NGINX_WAS_ENABLED" -eq 0 ]]; then
+      systemctl disable nginx.service >/dev/null 2>&1 || true
+    fi
   fi
   if [[ -f "$CERT_RENEWAL" && -n "$CERTBOT_BIN" && -x "$CERTBOT_BIN" ]]; then
     "$CERTBOT_BIN" delete --non-interactive --cert-name "$CERT_NAME" >/dev/null 2>&1 || true
@@ -271,7 +283,7 @@ if ! systemctl is-masked --runtime --quiet mosquitto.service; then
   systemctl mask --runtime mosquitto.service
   MOSQUITTO_RUNTIME_MASKED=1
 fi
-if ! systemctl is-masked --runtime --quiet nginx.service; then
+if [[ "$NGINX_WAS_INSTALLED" -eq 0 ]] && ! systemctl is-masked --runtime --quiet nginx.service; then
   systemctl mask --runtime nginx.service
   NGINX_RUNTIME_MASKED=1
 fi
@@ -292,8 +304,6 @@ else
 fi
 if [[ "$NGINX_WAS_INSTALLED" -eq 0 ]]; then
   systemctl disable --now nginx.service >/dev/null 2>&1 || true
-else
-  systemctl stop nginx.service >/dev/null 2>&1 || true
 fi
 
 certbot_supports_ip_webroot() {
@@ -439,7 +449,12 @@ server {
 EOF
 install -o root -g root -m 0644 "$STAGE/nginx-http.conf" "$NGINX_SITE"
 nginx -t
-systemctl enable --now nginx
+if [[ "$NGINX_WAS_ACTIVE" -eq 1 ]]; then
+  systemctl reload nginx
+else
+  NGINX_STARTED_BY_XIDER=1
+  systemctl enable --now nginx
+fi
 if command -v ufw >/dev/null 2>&1 && ufw status | grep -q '^Status: active$'; then
   if ! ufw status | awk '$1 == "80/tcp" && $2 != "(v6)" && /ALLOW/ && /Anywhere/ { found = 1 } END { exit !found }'; then
     # ACME HTTP-01 must reach Nginx before the public HTTPS listener exists.
