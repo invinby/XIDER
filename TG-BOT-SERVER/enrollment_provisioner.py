@@ -18,6 +18,7 @@ class EnrollmentProvisioner:
     def __init__(
         self, store: EnrollmentStore, issuer: BrokerIssuer, *, broker_host: str,
         broker_port: int, broker_prefix: str, command_verify_keyset: str = "",
+        broker_transport: str = "tcp", broker_ws_path: str = "/mqtt",
     ):
         if not broker_host or any(char in broker_host for char in " /\\\r\n"):
             raise ValueError("invalid broker host")
@@ -28,6 +29,12 @@ class EnrollmentProvisioner:
         self.host = broker_host
         self.port = broker_port
         self.prefix = broker_prefix
+        if broker_transport not in {"tcp", "websockets"}:
+            raise ValueError("invalid broker transport")
+        if not broker_ws_path.startswith("/") or any(char in broker_ws_path for char in "\r\n\x00"):
+            raise ValueError("invalid broker websocket path")
+        self.transport = broker_transport
+        self.ws_path = broker_ws_path
         self.command_verify_keyset = command_verify_keyset
 
     def fulfill(self, request_id: str) -> bool:
@@ -50,6 +57,8 @@ class EnrollmentProvisioner:
                 "MQTT_PORT": str(self.port),
                 "MQTT_PREFIX": self.prefix,
                 "MQTT_TLS": "true",
+                "MQTT_TRANSPORT": self.transport,
+                "MQTT_WS_PATH": self.ws_path,
                 "MQTT_USERNAME": credential.username,
                 "MQTT_PASSWORD": credential.password,
                 "ENCRYPT_PAYLOAD": "true",

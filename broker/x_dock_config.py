@@ -29,11 +29,17 @@ def render_config(
     port: int,
     bind_address: str | None = None,
     password_init_file: str | Path | None = None,
+    websocket_port: int | None = None,
+    websocket_bind_address: str = "127.0.0.1",
 ) -> str:
     if type(port) is not int or not 1 <= port <= 65535:
         raise ValueError("port must be between 1 and 65535")
     if bind_address is not None and bind_address not in {"127.0.0.1", "::1"}:
         raise ValueError("bootstrap listener must bind to loopback only")
+    if websocket_port is not None and (type(websocket_port) is not int or not 1 <= websocket_port <= 65535):
+        raise ValueError("websocket_port must be between 1 and 65535")
+    if websocket_port is not None and websocket_bind_address not in {"127.0.0.1", "::1"}:
+        raise ValueError("websocket listener must bind to loopback only")
 
     plugin = _absolute_path("plugin_path", plugin_path)
     state = _absolute_path("security_file", security_file)
@@ -53,6 +59,11 @@ def render_config(
         f"plugin {plugin}",
         f"plugin_opt_config_file {state}",
     ]
+    if websocket_port is not None:
+        lines.extend((
+            f"listener {websocket_port} {websocket_bind_address}",
+            "protocol websockets",
+        ))
     if init:
         lines.append(f"plugin_opt_password_init_file {init}")
     lines.extend((
@@ -92,6 +103,8 @@ def main() -> int:
     parser.add_argument("--port", required=True, type=int)
     parser.add_argument("--bind-address", choices=("127.0.0.1", "::1"))
     parser.add_argument("--password-init-file", type=Path)
+    parser.add_argument("--websocket-port", type=int)
+    parser.add_argument("--websocket-bind-address", choices=("127.0.0.1", "::1"), default="127.0.0.1")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     try:
@@ -104,6 +117,8 @@ def main() -> int:
             port=args.port,
             bind_address=args.bind_address,
             password_init_file=args.password_init_file,
+            websocket_port=args.websocket_port,
+            websocket_bind_address=args.websocket_bind_address,
         )
         write_config(args.output, content)
     except (OSError, RuntimeError, ValueError) as exc:

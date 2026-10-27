@@ -30960,9 +30960,13 @@ def _dock_settings() -> dict[str, str | int]:
         if not value:
             raise ValueError(f"X-DOCK requires {name}")
         settings[name] = value
-    settings["XIDER_DOCK_BROKER_PORT"] = int(os.environ.get("XIDER_DOCK_BROKER_PORT", "8883"))
+    settings["XIDER_DOCK_BROKER_PORT"] = int(os.environ.get("XIDER_DOCK_BROKER_PORT", "8884"))
+    settings["XIDER_DOCK_WS_PORT"] = int(os.environ.get("XIDER_DOCK_WS_PORT", "18885"))
+    settings["XIDER_DOCK_PUBLIC_PORT"] = int(os.environ.get("XIDER_DOCK_PUBLIC_PORT", "443"))
     settings["XIDER_DOCK_HTTP_PORT"] = int(os.environ.get("XIDER_DOCK_HTTP_PORT", "8787"))
-    if not 1 <= settings["XIDER_DOCK_BROKER_PORT"] <= 65535 or not 1 <= settings["XIDER_DOCK_HTTP_PORT"] <= 65535:
+    if not all(1 <= settings[name] <= 65535 for name in (
+        "XIDER_DOCK_BROKER_PORT", "XIDER_DOCK_WS_PORT", "XIDER_DOCK_PUBLIC_PORT", "XIDER_DOCK_HTTP_PORT",
+    )):
         raise ValueError("invalid X-DOCK port")
     if not Path(str(settings["XIDER_DOCK_DB"])).is_absolute() or not Path(str(settings["XIDER_DEVICE_KEYS_DIR"])).is_absolute():
         raise ValueError("X-DOCK state paths must be absolute")
@@ -30996,15 +31000,18 @@ def _dock_fulfill(request_id: str, settings: dict[str, str | int]) -> bool:
     from broker.dynsec_issuer import DynSecIssuer
 
     with DynSecChannel(
-        str(settings["XIDER_DOCK_BROKER_HOST"]), int(settings["XIDER_DOCK_BROKER_PORT"]),
+        "127.0.0.1", int(settings["XIDER_DOCK_WS_PORT"]),
         str(settings["XIDER_DOCK_ADMIN_USERNAME"]), str(settings["XIDER_DOCK_ADMIN_PASSWORD"]),
+        transport="websockets", tls=False, ws_path="/mqtt",
     ) as channel:
         issuer = DynSecIssuer(channel.request, prefix=MQTT_PREFIX)
         return EnrollmentProvisioner(
             _dock_store, issuer,
             broker_host=str(settings["XIDER_DOCK_BROKER_HOST"]),
-            broker_port=int(settings["XIDER_DOCK_BROKER_PORT"]),
+            broker_port=int(settings["XIDER_DOCK_PUBLIC_PORT"]),
             broker_prefix=MQTT_PREFIX,
+            broker_transport="websockets",
+            broker_ws_path="/mqtt",
             command_verify_keyset=os.environ.get("XIDER_COMMAND_VERIFY_KEYSET_B64", ""),
         ).fulfill(request_id)
 
@@ -31106,12 +31113,15 @@ async def main() -> None:
         _dock_store = EnrollmentStore(Path(str(dock_settings["XIDER_DOCK_DB"])))
         transport.secondary = MQTTTransport(
             on_mqtt_message,
-            host=str(dock_settings["XIDER_DOCK_BROKER_HOST"]),
-            port=int(dock_settings["XIDER_DOCK_BROKER_PORT"]),
+            host="127.0.0.1",
+            port=int(dock_settings["XIDER_DOCK_WS_PORT"]),
             username=str(dock_settings["XIDER_DOCK_BOT_USERNAME"]),
             password=str(dock_settings["XIDER_DOCK_BOT_PASSWORD"]),
             prefix=MQTT_PREFIX,
             client_id="xgent-bot-dock",
+            tls=False,
+            transport="websockets",
+            ws_path="/mqtt",
         )
         dock_runner = web.AppRunner(create_enrollment_app(_dock_store, _dock_notify_pending, trust_loopback_proxy=True))
         await dock_runner.setup()

@@ -52,10 +52,14 @@ if not MQTT_BROKER:
 MQTT_PORT = int(os.getenv("MQTT_PORT", "8883"))
 MQTT_PREFIX = os.getenv("MQTT_PREFIX", "xgent/v1")
 MQTT_TLS = os.getenv("MQTT_TLS", "true").strip().lower() in ("1", "true", "yes")
+MQTT_TRANSPORT = os.getenv("MQTT_TRANSPORT", "tcp").strip().lower()
+MQTT_WS_PATH = os.getenv("MQTT_WS_PATH", "/mqtt").strip()
 MQTT_USERNAME = os.getenv("MQTT_USERNAME", "").strip() or None
 MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "").strip() or None
 if not MQTT_TLS:
     raise SystemExit("FATAL: MQTT_TLS must be true; plaintext MQTT is disabled.")
+if MQTT_TRANSPORT not in {"tcp", "websockets"} or not MQTT_WS_PATH.startswith("/"):
+    raise SystemExit("FATAL: invalid MQTT transport configuration.")
 if not MQTT_USERNAME or not MQTT_PASSWORD:
     raise SystemExit("FATAL: private MQTT_USERNAME and MQTT_PASSWORD are required for broker ACLs.")
 

@@ -21,11 +21,17 @@ class DynSecChannel:
     def __init__(
         self, host: str, port: int, username: str, password: str,
         timeout: float = 10, ca_certs: str | None = None,
+        transport: str = "tcp", tls: bool = True, ws_path: str = "/mqtt",
     ):
         if not host or not username or not password or not 1 <= port <= 65535:
             raise ValueError("broker admin connection is incomplete")
         self.host, self.port, self.timeout = host, port, timeout
         self.ca_certs = ca_certs
+        if transport not in {"tcp", "websockets"}:
+            raise ValueError("unsupported broker control transport")
+        if not ws_path.startswith("/") or any(char in ws_path for char in "\r\n\x00"):
+            raise ValueError("invalid broker control websocket path")
+        self.transport, self.tls, self.ws_path = transport, tls, ws_path
         self._ready = threading.Event()
         self._responses: queue.Queue[dict] = queue.Queue()
         self._lock = threading.Lock()
@@ -33,11 +39,15 @@ class DynSecChannel:
             mqtt.CallbackAPIVersion.VERSION2,
             client_id=f"xider-issuer-{secrets.token_hex(8)}",
             protocol=mqtt.MQTTv311,
+            transport=self.transport,
         )
         self._client.username_pw_set(username, password)
-        # System CA and hostname validation stay enabled. A private CA file is
-        # permitted for the loopback-only first-boot bootstrap listener.
-        self._client.tls_set(ca_certs=ca_certs)
+        # TLS verification stays enabled when TLS is selected. A private CA
+        # file is permitted only for the loopback first-boot listener.
+        if self.transport == "websockets":
+            self._client.ws_set_options(path=self.ws_path)
+        if self.tls:
+            self._client.tls_set(ca_certs=ca_certs)
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
         self._client.on_subscribe = self._on_subscribe

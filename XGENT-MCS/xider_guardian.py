@@ -36,6 +36,8 @@ from config import (
     MQTT_PORT,
     MQTT_PREFIX,
     MQTT_TLS,
+    MQTT_TRANSPORT,
+    MQTT_WS_PATH,
     MQTT_USERNAME,
     VERSION,
     set_guardian_desired_running,
@@ -316,7 +318,10 @@ class Guardian:
             mqtt.CallbackAPIVersion.VERSION2,
             client_id=f"xider-guardian-{DEVICE_ID}",
             protocol=mqtt.MQTTv311,
+            transport=MQTT_TRANSPORT,
         )
+        if MQTT_TRANSPORT == "websockets":
+            self.client.ws_set_options(path=MQTT_WS_PATH)
         self.client.reconnect_delay_set(min_delay=2, max_delay=60)
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect

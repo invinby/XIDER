@@ -534,7 +534,9 @@ install -o root -g mosquitto -m 0640 "$CERT_LINEAGE/privkey.pem" "$DOCK_DIR/tls/
 python3 "$APP_DIR/broker/x_dock_config.py" \
   --plugin "$PLUGIN_PATH" --security-file "$DATA_DIR/dynamic-security.json" \
   --data-dir "$DATA_DIR/data" --cert-file "$DOCK_DIR/tls/fullchain.pem" \
-  --key-file "$DOCK_DIR/tls/privkey.pem" --port 8884 --output "$STAGE/mosquitto-public.conf"
+  --key-file "$DOCK_DIR/tls/privkey.pem" --port 8884 --bind-address 127.0.0.1 \
+  --websocket-port 18885 \
+  --output "$STAGE/mosquitto-public.conf"
 install -o root -g mosquitto -m 0640 "$STAGE/mosquitto-public.conf" "$BROKER_CONFIG"
 sed -i "s#ExecStart=/usr/sbin/mosquitto -c .*#ExecStart=/usr/sbin/mosquitto -c $BROKER_CONFIG#" "$BROKER_UNIT"
 systemctl daemon-reload
@@ -572,6 +574,15 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-Proto https;
         proxy_pass http://127.0.0.1:8787;
+    }
+    location = /mqtt {
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_read_timeout 1h;
+        proxy_buffering off;
+        proxy_pass http://127.0.0.1:18885;
     }
     location / { return 404; }
 }
@@ -634,6 +645,8 @@ export XIDER_DOCK_DB=/var/lib/xider/enrollment.sqlite3
 export XIDER_DEVICE_KEYS_DIR=/etc/xider/device-keys
 export XIDER_DOCK_BROKER_HOST="$PUBLIC_IP"
 export XIDER_DOCK_BROKER_PORT=8884
+export XIDER_DOCK_WS_PORT=18885
+export XIDER_DOCK_PUBLIC_PORT=443
 export XIDER_DOCK_BOT_USERNAME=xider-bot
 export XIDER_DOCK_BOT_PASSWORD="$BOT_PASSWORD"
 export XIDER_DOCK_ADMIN_USERNAME=admin
@@ -646,6 +659,7 @@ path = pathlib.Path(sys.argv[1])
 keys = (
     "XIDER_DOCK_ENABLED", "XIDER_DOCK_DB", "XIDER_DEVICE_KEYS_DIR",
     "XIDER_DOCK_BROKER_HOST", "XIDER_DOCK_BROKER_PORT",
+    "XIDER_DOCK_WS_PORT", "XIDER_DOCK_PUBLIC_PORT",
     "XIDER_DOCK_BOT_USERNAME", "XIDER_DOCK_BOT_PASSWORD",
     "XIDER_DOCK_ADMIN_USERNAME", "XIDER_DOCK_ADMIN_PASSWORD",
     "XIDER_DOCK_HTTP_PORT",
@@ -683,6 +697,7 @@ done
 systemctl is-active --quiet "$BOT_SERVICE"
 nginx -t
 ss -ltn | awk '{print $4}' | grep -q ':8884$'
+ss -ltn | awk '{print $4}' | grep -q '127.0.0.1:18885$'
 ss -ltn | awk '{print $4}' | grep -q ':443$'
 rm -rf -- "$STAGE"
 STAGE=""
@@ -690,8 +705,7 @@ SETUP_COMPLETE=1
 trap - EXIT INT TERM HUP
 if command -v ufw >/dev/null 2>&1 && ufw status | grep -q '^Status: active$'; then
   ufw allow 443/tcp || echo "[WARN] Could not open TCP/443 in UFW; configure the host firewall manually." >&2
-  ufw allow 8884/tcp || echo "[WARN] Could not open TCP/8884 in UFW; configure the host firewall manually." >&2
 fi
 echo "[OK] X-DOCK is enabled. HTTPS enrollment URL: https://$PUBLIC_IP"
-echo "[INFO] Allow inbound TCP/80, TCP/443 and TCP/8884 in the VPS security group."
+echo "[INFO] Allow inbound TCP/80 and TCP/443 in the VPS security group; MQTT stays on loopback."
 echo "[INFO] Certificate renewal is scheduled; deploy hook reloads X-DOCK services after renewal."

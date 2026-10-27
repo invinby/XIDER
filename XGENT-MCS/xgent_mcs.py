@@ -782,6 +782,8 @@ from config import (
     MQTT_PORT,
     MQTT_PREFIX,
     MQTT_TLS,
+    MQTT_TRANSPORT,
+    MQTT_WS_PATH,
     MQTT_USERNAME,
     PLATFORM,
     VERSION,
@@ -1280,7 +1282,10 @@ class XgentClient:
             mqtt.CallbackAPIVersion.VERSION2,
             client_id=f"xgent-mcs-{DEVICE_ID}",
             protocol=mqtt.MQTTv311,
+            transport=MQTT_TRANSPORT,
         )
+        if MQTT_TRANSPORT == "websockets":
+            self._client.ws_set_options(path=MQTT_WS_PATH)
         self._client.reconnect_delay_set(min_delay=1, max_delay=120)
         self._client.on_connect = self._on_connect
         self._client.on_subscribe = self._on_subscribe

@@ -5,7 +5,7 @@ SERVICE="xider-bot.service"
 UPDATE_HELPER="/usr/local/libexec/xider/update-server.sh"
 
 if [[ "$#" -ne 1 ]]; then
-  echo "Usage: xider-server-ops {status|logs|restart|update|rollback}" >&2
+  echo "Usage: xider-server-ops {status|logs|restart|update|rollback|enable-x-dock-websockets}" >&2
   exit 2
 fi
 
@@ -26,8 +26,11 @@ case "${1:-}" in
   rollback)
     exec /bin/bash "$UPDATE_HELPER" rollback
     ;;
+  enable-x-dock-websockets)
+    exec /bin/bash /opt/xider/deploy/enable-x-dock-websockets.sh
+    ;;
   *)
-    echo "Usage: xider-server-ops {status|logs|restart|update|rollback}" >&2
+    echo "Usage: xider-server-ops {status|logs|restart|update|rollback|enable-x-dock-websockets}" >&2
     exit 2
     ;;
 esac

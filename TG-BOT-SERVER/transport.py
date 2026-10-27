@@ -13,7 +13,7 @@ from typing import Any, Callable, Dict
 
 import paho.mqtt.client as mqtt
 
-from config import ENCRYPT_PAYLOAD, MQTT_BROKER, MQTT_PASSWORD, MQTT_PORT, MQTT_PREFIX, MQTT_TLS, MQTT_USERNAME
+from config import ENCRYPT_PAYLOAD, MQTT_BROKER, MQTT_PASSWORD, MQTT_PORT, MQTT_PREFIX, MQTT_TLS, MQTT_TRANSPORT, MQTT_USERNAME, MQTT_WS_PATH
 from crypto import sign_message
 from device_keys import enrolled_device_ids, key_for_device
 from xgencrypto import encrypt_payload
@@ -30,17 +30,25 @@ class MQTTTransport:
         host: str = MQTT_BROKER, port: int = MQTT_PORT,
         username: str | None = MQTT_USERNAME, password: str | None = MQTT_PASSWORD,
         prefix: str = MQTT_PREFIX, client_id: str = "xgent-bot",
+        tls: bool | None = None, transport: str = MQTT_TRANSPORT,
+        ws_path: str = MQTT_WS_PATH,
     ):
         self.on_message = on_message
         self.host, self.port, self.username, self.password, self.prefix = host, port, username, password, prefix
-        self.tls = MQTT_TLS
+        self.tls = MQTT_TLS if tls is None else tls
+        if transport not in {"tcp", "websockets"}:
+            raise ValueError("unsupported MQTT transport")
+        self.transport = transport
         self.secondary: MQTTTransport | None = None
         self.connected = threading.Event()
         self._client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
             client_id=client_id,
             protocol=mqtt.MQTTv311,
+            transport=self.transport,
         )
+        if self.transport == "websockets":
+            self._client.ws_set_options(path=ws_path)
         self._client.reconnect_delay_set(min_delay=2, max_delay=30)
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect

@@ -37,6 +37,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 _ENV_KEYS = frozenset({
     "SHARED_KEY", "MQTT_BROKER", "MQTT_PORT", "MQTT_PREFIX", "MQTT_TLS",
+    "MQTT_TRANSPORT", "MQTT_WS_PATH",
     "MQTT_USERNAME", "MQTT_PASSWORD", "ENCRYPT_PAYLOAD",
     "XIDER_COMMAND_VERIFY_KEYSET_B64",
 })
@@ -121,6 +122,10 @@ def _write_env(path: Path, settings: dict) -> None:
         raise ValueError("X-DOCK returned an unsupported setting")
     if settings["MQTT_TLS"] != "true" or settings["ENCRYPT_PAYLOAD"] != "true":
         raise ValueError("X-DOCK refused an unencrypted agent configuration")
+    if settings.get("MQTT_TRANSPORT", "tcp") not in {"tcp", "websockets"}:
+        raise ValueError("X-DOCK returned an unsupported MQTT transport")
+    if not re.fullmatch(r"/[A-Za-z0-9._/-]{0,127}", str(settings.get("MQTT_WS_PATH", "/mqtt"))):
+        raise ValueError("X-DOCK returned an invalid MQTT websocket path")
     if not re.fullmatch(r"[0-9]{1,5}", str(settings["MQTT_PORT"])) or not 1 <= int(settings["MQTT_PORT"]) <= 65535:
         raise ValueError("X-DOCK returned an invalid MQTT port")
     if not re.fullmatch(r"[A-Za-z0-9._/-]{1,128}", str(settings["MQTT_PREFIX"])):
