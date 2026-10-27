@@ -29,7 +29,8 @@ chmod 0777 "${BACKUP_DIR}"
 APP_DIR_MODE="$(stat -c '%a' "${APP_DIR}")"
 cp "${FIXTURES}/mock-systemctl.sh" "${MOCK_BIN}/systemctl"
 cp "${FIXTURES}/mock-chown.sh" "${MOCK_BIN}/chown"
-sed -i 's/\r$//' "${MOCK_BIN}/systemctl" "${MOCK_BIN}/chown"
+cp "${FIXTURES}/mock-install.sh" "${MOCK_BIN}/install"
+sed -i 's/\r$//' "${MOCK_BIN}/systemctl" "${MOCK_BIN}/chown" "${MOCK_BIN}/install"
 cp "${ROOT}/deploy/safe_extract.py" "${APP_DIR}/deploy/safe_extract.py"
 cp "${ROOT}/deploy/safe_extract.py" "${ROOT_HELPER_DIR}/safe_extract.py"
 cat >"${ROOT_HELPER_DIR}/verify_server_bundle.py" <<'PY'
@@ -41,7 +42,7 @@ if Path(sys.argv[1]).read_text(encoding="utf-8").strip() != "signed-test-manifes
 if not Path(sys.argv[2]).is_file():
     raise SystemExit("test bundle missing")
 PY
-chmod +x "${MOCK_BIN}/systemctl" "${MOCK_BIN}/chown"
+chmod +x "${MOCK_BIN}/systemctl" "${MOCK_BIN}/chown" "${MOCK_BIN}/install"
 printf 'old\n' >"${APP_DIR}/TG-BOT-SERVER/bot.py"
 printf 'test-dependency==1\r\n' >"${APP_DIR}/TG-BOT-SERVER/requirements.txt"
 printf 'keep-runtime-config\n' >"${APP_DIR}/TG-BOT-SERVER/.env"
@@ -91,6 +92,7 @@ run_updater() {
     "XIDER_HEALTH_ATTEMPTS=2" \
     "XIDER_HEALTH_STABLE_CHECKS=1" \
     "XIDER_TEST_SYSTEMCTL_STATE=${STATE_FILE}" \
+    "XIDER_TEST_ROOT=${TEMP_ROOT}/system" \
     "XIDER_TEST_FAIL_HEALTH=${XIDER_TEST_FAIL_HEALTH:-0}" \
     bash "${SCRIPT}" "${operation}" "$@"
 }
@@ -117,6 +119,8 @@ fi
 [[ "$(<"${APP_DIR}/TG-BOT-SERVER/bot.py")" == old ]]
 rm -f -- "${TEMP_ROOT}/lock/unsafe-update.lock"
 run_update
+[[ -d "${TEMP_ROOT}/system/var/lib/xider" ]]
+[[ -d "${TEMP_ROOT}/system/etc/xider/device-keys" ]]
 old_backup="$(find "${BACKUP_DIR}" -maxdepth 1 -type f -name 'xider-*.tar.gz' -print -quit)"
 [[ -n "${old_backup}" ]]
 [[ "$(<"${APP_DIR}/TG-BOT-SERVER/bot.py")" == good ]]
