@@ -69,7 +69,6 @@ python3 "$APP_DIR/broker/x_dock_config.py" \
   --output "$STAGE/mosquitto.conf"
 chown root:mosquitto "$STAGE/mosquitto.conf"
 chmod 0640 "$STAGE/mosquitto.conf"
-mosquitto -c "$STAGE/mosquitto.conf" -t
 install -o root -g mosquitto -m 0640 "$STAGE/mosquitto.conf" "$BROKER_CONFIG"
 BROKER_CHANGED=1
 systemctl restart xider-dock-mqtt
