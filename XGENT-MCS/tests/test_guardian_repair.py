@@ -46,6 +46,79 @@ def test_guardian_publishes_fresh_local_heartbeat(guardian_module):
     assert record["updated_at"] <= time.time()
 
 
+def test_runtime_health_reports_freshness_of_every_other_recovery_layer(guardian_module):
+    import config
+
+    now = time.time()
+    for component in ("guardian", "safari", "siri"):
+        (config.CONFIG_DIR / f"{component}-health.json").write_text(json.dumps({
+            "schema": 1, "component": component, "state": "running",
+            "updated_at": now, "pid": 100,
+        }), encoding="utf-8")
+
+    config.write_runtime_health("agent", True)
+    record = json.loads((config.CONFIG_DIR / "agent-health.json").read_text(encoding="utf-8"))
+
+    assert record["observed_components"] == {
+        "guardian": {"state": "running", "freshness": "fresh"},
+        "safari": {"state": "running", "freshness": "fresh"},
+        "siri": {"state": "running", "freshness": "fresh"},
+    }
+
+
+def test_runtime_health_marks_malformed_peer_record_invalid(guardian_module):
+    import config
+
+    (config.CONFIG_DIR / "siri-health.json").write_text(json.dumps({
+        "schema": 1, "component": "siri", "state": [], "updated_at": time.time(),
+    }), encoding="utf-8")
+
+    assert config.observed_component_health("agent")["siri"] == {
+        "state": "unknown", "freshness": "invalid",
+    }
+
+
+def test_siri_health_record_reports_agent_guardian_and_safari(guardian_module):
+    import config
+    import xider_layers
+
+    for component in ("agent", "guardian", "safari"):
+        (config.CONFIG_DIR / f"{component}-health.json").write_text(json.dumps({
+            "schema": 1, "component": component, "state": "running",
+            "updated_at": time.time(), "pid": 100,
+        }), encoding="utf-8")
+
+    xider_layers._write_health("siri", "running")
+    record = json.loads((config.CONFIG_DIR / "siri-health.json").read_text(encoding="utf-8"))
+
+    assert set(record["observed_components"]) == {"agent", "guardian", "safari"}
+    assert all(item["freshness"] == "fresh" for item in record["observed_components"].values())
+
+
+def test_guardian_status_relays_valid_observed_component_health(guardian_module):
+    import config
+
+    observations = {
+        "agent": {"state": "running", "freshness": "fresh"},
+        "guardian": {"state": "running", "freshness": "fresh"},
+        "siri": {"state": "stopped", "freshness": "fresh"},
+        "unknown": {"state": "running", "freshness": "fresh"},
+    }
+    (config.CONFIG_DIR / "safari-health.json").write_text(json.dumps({
+        "schema": 1, "component": "safari", "version": "0.1.0",
+        "state": "running", "updated_at": time.time(), "pid": 123,
+        "observed_components": observations,
+    }), encoding="utf-8")
+
+    snapshot = guardian_module._layer_health_snapshot()
+
+    assert snapshot["safari"]["observed_components"] == {
+        "agent": {"state": "running", "freshness": "fresh"},
+        "guardian": {"state": "running", "freshness": "fresh"},
+        "siri": {"state": "stopped", "freshness": "fresh"},
+    }
+
+
 def test_guardian_compiled_cli_persists_owner_stop_without_starting_mqtt(
     guardian_module, monkeypatch,
 ):

@@ -47,10 +47,27 @@ def clean_layer_records(value: object, *, now: float) -> dict:
                 or not isinstance(state, str)
                 or state not in {"running", "waiting", "error", "stopped"}):
             continue
-        cleaned[name] = {
+        clean_record = {
             "installed": True, "version": version, "version_source": name,
             "state": state, "pid": pid, "last_seen": stamp,
         }
+        observed = record.get("observed_components")
+        if isinstance(observed, dict):
+            clean_observed = {}
+            for peer in ("agent", "guardian", "safari", "siri"):
+                peer_record = observed.get(peer)
+                if peer == name or not isinstance(peer_record, dict):
+                    continue
+                peer_state = peer_record.get("state")
+                freshness = peer_record.get("freshness")
+                if (isinstance(peer_state, str)
+                        and peer_state in {"running", "waiting", "error", "stopped", "unknown"}
+                        and isinstance(freshness, str)
+                        and freshness in {"fresh", "stale", "missing", "invalid"}):
+                    clean_observed[peer] = {"state": peer_state, "freshness": freshness}
+            if clean_observed:
+                clean_record["observed_components"] = clean_observed
+        cleaned[name] = clean_record
     return cleaned
 
 
@@ -95,6 +112,8 @@ def component_state(name: str, os_name: str, *, record: dict | None = None,
     state = record.get("state") if name in {"safari", "siri"} else "installed"
     if state not in {"running", "waiting", "error", "stopped", "installed"}:
         state = "installed"
+    if name in {"safari", "siri"} and isinstance(record.get("observed_components"), dict):
+        result["observed_components"] = record["observed_components"]
     return {**result, "state": state, "version": version.strip()[:128]}
 
 

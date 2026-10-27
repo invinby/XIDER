@@ -183,6 +183,22 @@ def _layer_health_snapshot() -> dict:
             "installed": True, "version": version, "version_source": role,
             "state": state, "pid": pid, "last_seen": stamp,
         }
+        observed = payload.get("observed_components")
+        if isinstance(observed, dict):
+            clean_observed = {}
+            for peer in ("agent", "guardian", "safari", "siri"):
+                peer_record = observed.get(peer)
+                if peer == role or not isinstance(peer_record, dict):
+                    continue
+                peer_state = peer_record.get("state")
+                freshness = peer_record.get("freshness")
+                if (isinstance(peer_state, str)
+                        and peer_state in {"running", "waiting", "error", "stopped", "unknown"}
+                        and isinstance(freshness, str)
+                        and freshness in {"fresh", "stale", "missing", "invalid"}):
+                    clean_observed[peer] = {"state": peer_state, "freshness": freshness}
+            if clean_observed:
+                result[role]["observed_components"] = clean_observed
     return result
 
 

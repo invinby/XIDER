@@ -180,6 +180,41 @@ def set_guardian_startup_enabled(enabled: bool) -> None:
     update_guardian_state(**updates)
 
 
+def observed_component_health(component: str) -> dict[str, dict[str, str]]:
+    """Return bounded freshness/state observations for every other local layer."""
+    if component not in {"agent", "guardian", "safari", "siri"}:
+        raise ValueError("Unknown XIDER recovery layer.")
+    observed: dict[str, dict[str, str]] = {}
+    now = time.time()
+    for peer in ("agent", "guardian", "safari", "siri"):
+        if peer == component:
+            continue
+        path = CONFIG_DIR / f"{peer}-health.json"
+        if path.is_symlink() or not path.is_file():
+            observed[peer] = {"state": "unknown", "freshness": "missing"}
+            continue
+        try:
+            if path.stat().st_size > 4096:
+                raise ValueError("health record too large")
+            record = json.loads(path.read_text(encoding="utf-8"))
+            stamp = record.get("updated_at") if isinstance(record, dict) else None
+            state = record.get("state") if isinstance(record, dict) else None
+            valid = isinstance(record, dict) and (
+                record.get("schema") == 1 and record.get("component") == peer
+                and type(stamp) in (int, float) and 0 < stamp <= now + 5
+                and isinstance(state, str)
+                and state in {"running", "waiting", "error", "stopped"}
+            )
+            if not valid:
+                observed[peer] = {"state": "unknown", "freshness": "invalid"}
+            else:
+                freshness = "fresh" if now - stamp < 35 else "stale"
+                observed[peer] = {"state": state, "freshness": freshness}
+        except (OSError, ValueError, json.JSONDecodeError):
+            observed[peer] = {"state": "unknown", "freshness": "invalid"}
+    return observed
+
+
 def write_runtime_health(component: str, connected: bool, *, state: str = "running") -> Path:
     """Publish a local process heartbeat used by the visible recovery layers."""
     if component not in {"agent", "guardian"}:
@@ -207,6 +242,7 @@ def write_runtime_health(component: str, connected: bool, *, state: str = "runni
                 "version": VERSION,
                 "updated_at": time.time(),
                 "state": state,
+                "observed_components": observed_component_health(component),
             }, stream, separators=(",", ":"))
             stream.flush()
             os.fsync(stream.fileno())

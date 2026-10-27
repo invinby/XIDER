@@ -77,6 +77,34 @@ def test_companions_require_component_owned_inventory(name, os_name, record, wan
     assert result["version"] is None and result["available_version"] is None
 
 
+def test_device_companion_status_preserves_only_valid_peer_observations():
+    import companion_status
+
+    layer = {
+        "installed": True, "version_source": "safari", "version": "0.1.0",
+        "state": "running", "pid": 123, "last_seen": 990,
+        "observed_components": {
+            "agent": {"state": "running", "freshness": "fresh"},
+            "guardian": {"state": "error", "freshness": "stale"},
+            "siri": {"state": "stopped", "freshness": "fresh"},
+            "unknown": {"state": "running", "freshness": "fresh"},
+        },
+    }
+    cleaned = companion_status.clean_layer_records({"safari": layer}, now=1000)
+    info = {"os": "macOS 27", "companion_records": cleaned}
+    safari = next(row for row in companion_status.device_companions(info, now=1000) if row["name"] == "Safari")
+
+    assert safari["observed_components"] == {
+        "agent": {"state": "running", "freshness": "fresh"},
+        "guardian": {"state": "error", "freshness": "stale"},
+        "siri": {"state": "stopped", "freshness": "fresh"},
+    }
+    import bot
+    rendered = bot._companion_row(safari)
+    assert "Agent" in rendered and "Guard Keeper" in rendered and "Siri" in rendered
+    assert "устарел" in rendered
+
+
 @pytest.mark.parametrize("name", ["keeper", "safari", "siri"])
 def test_unsupported_os_is_explicit(name):
     import companion_status

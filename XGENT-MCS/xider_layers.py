@@ -3,8 +3,9 @@
 Siri supervises Safari, Safari supervises Guard Keeper, and Guard Keeper
 supervises the Agent. Safari also checks the Agent heartbeat; if it is stale,
 Safari restarts Guard Keeper so recovery still flows through the next layer.
-Each layer writes a local health record and starts only its immediate child
-when the owner's persisted intent allows it.
+Every component records the state and freshness of the other three in its local
+health record. Repair authority stays on the directed Siri -> Safari -> Guard
+Keeper -> Agent path, and every start checks the owner's persisted intent.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ import threading
 import time
 from pathlib import Path
 
-from config import CONFIG_DIR
+from config import CONFIG_DIR, observed_component_health
 
 try:
     import fcntl
@@ -155,6 +156,7 @@ def _write_health(role: str, state: str, detail: str = "") -> None:
         "updated_at": time.time(),
         "state": state if state in {"running", "waiting", "error", "stopped"} else "unknown",
         "detail": re.sub(r"[\x00-\x1f\x7f]", " ", str(detail))[:240],
+        "observed_components": observed_component_health(role),
     }
     fd, temporary = tempfile.mkstemp(prefix=f".{role}-health.", suffix=".tmp", dir=CONFIG_DIR)
     try:

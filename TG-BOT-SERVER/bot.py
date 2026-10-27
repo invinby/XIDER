@@ -26445,6 +26445,27 @@ def _companion_row(row: dict) -> str:
         text += f" · {companion_status.REASONS[row['reason']]}"
     if row["available_version"]:
         text += f" · подписанный пакет {row['available_version']}"
+    observed = row.get("observed_components")
+    if isinstance(observed, dict):
+        peer_names = {"agent": "Agent", "guardian": "Guard Keeper", "safari": "Safari", "siri": "Siri"}
+        peer_states = {
+            "running": "работает", "waiting": "ожидает", "error": "ошибка",
+            "stopped": "остановлен", "unknown": "неизвестно",
+        }
+        freshness_labels = {
+            "fresh": "свежий", "stale": "устарел", "missing": "нет сигнала", "invalid": "битый отчёт",
+        }
+        peer_rows = []
+        for peer in ("agent", "guardian", "safari", "siri"):
+            item = observed.get(peer)
+            if not isinstance(item, dict) or peer not in peer_names:
+                continue
+            state = peer_states.get(item.get("state"))
+            freshness = freshness_labels.get(item.get("freshness"))
+            if state and freshness:
+                peer_rows.append(f"{peer_names[peer]} — {state}, {freshness}")
+        if peer_rows:
+            text += " · видит: " + "; ".join(peer_rows)
     return text
 
 
