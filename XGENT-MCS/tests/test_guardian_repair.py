@@ -350,6 +350,7 @@ def test_stable_agent_process_resets_guardian_crash_backoff(guardian_module):
 
 def test_guardian_monitor_waits_before_retrying_a_crashed_worker(guardian_module, monkeypatch):
     guardian = object.__new__(guardian_module.Guardian)
+    guardian._mqtt_connected = False
     guardian.state = {"auto_restart": True, "desired_running": True}
     guardian.lock = threading.RLock()
     guardian.stop_event = Mock()
@@ -469,6 +470,7 @@ def test_explicit_worker_stop_persists_guardian_intent(guardian_module, monkeypa
     saved = []
     monkeypatch.setattr(mcs, "set_guardian_desired_running", saved.append)
     client = object.__new__(mcs.XgentClient)
+    client._mqtt_connected = False
     client._running = threading.Event()
     client._running.set()
     client._sysinfo_schedule_wake = threading.Event()
@@ -763,6 +765,7 @@ def test_recovery_never_mixes_present_files_with_another_release(signed_recovery
 
 def test_missing_worker_monitor_respects_stop_intent(guardian_module, monkeypatch):
     guardian = object.__new__(guardian_module.Guardian)
+    guardian._mqtt_connected = False
     guardian.state = {"auto_restart": True, "desired_running": True}
     guardian.lock = threading.RLock()
     guardian.stop_event = Mock()
