@@ -237,14 +237,18 @@ try {
         $global:XiderMockHealthStatus = $healthStatus
         $global:XiderMockOldTasks = $false
         $rejectedAsUnhealthy = $false
+        $healthFailureMessage = ''
         try { & $bootstrap -InstallRoot $healthRoot -SourceArchive $archive -HealthTimeoutSeconds 1 }
-        catch { $rejectedAsUnhealthy = $_.Exception.Message -match 'MQTT|соединен|connection|health|здоров' }
+        catch {
+            $healthFailureMessage = $_.Exception.Message
+            $rejectedAsUnhealthy = $healthFailureMessage -match 'MQTT|соединен|connection|health|здоров'
+        }
         if (-not $rejectedAsUnhealthy -or
             -not (Test-Path -LiteralPath (Join-Path $healthRoot 'git-ver\XGENT-WDS\old-marker.txt'))) {
             $rootEntries = @(Get-ChildItem -LiteralPath $healthRoot -Force -ErrorAction SilentlyContinue |
                 ForEach-Object { $_.Name + $(if ($_.PSIsContainer) { '/' } else { '' }) }) -join ', '
             $oldMarkerPath = Join-Path $healthRoot 'git-ver\XGENT-WDS\old-marker.txt'
-            throw "Bootstrap accepted $healthStatus MQTT health or failed to restore the previous checkout. rejected=$rejectedAsUnhealthy; oldMarker=$(Test-Path -LiteralPath $oldMarkerPath); entries=[$rootEntries]"
+            throw "Bootstrap rollback assertion failed for $healthStatus health. rejected=$rejectedAsUnhealthy; failure='$healthFailureMessage'; oldMarker=$(Test-Path -LiteralPath $oldMarkerPath); entries=[$rootEntries]"
         }
     }
 
