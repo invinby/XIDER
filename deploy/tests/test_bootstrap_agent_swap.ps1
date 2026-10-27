@@ -241,7 +241,10 @@ try {
         catch { $rejectedAsUnhealthy = $_.Exception.Message -match 'MQTT|соединен|connection|health|здоров' }
         if (-not $rejectedAsUnhealthy -or
             -not (Test-Path -LiteralPath (Join-Path $healthRoot 'git-ver\XGENT-WDS\old-marker.txt'))) {
-            throw "Bootstrap accepted $healthStatus MQTT health or failed to restore the previous checkout."
+            $rootEntries = @(Get-ChildItem -LiteralPath $healthRoot -Force -ErrorAction SilentlyContinue |
+                ForEach-Object { $_.Name + $(if ($_.PSIsContainer) { '/' } else { '' }) }) -join ', '
+            $oldMarkerPath = Join-Path $healthRoot 'git-ver\XGENT-WDS\old-marker.txt'
+            throw "Bootstrap accepted $healthStatus MQTT health or failed to restore the previous checkout. rejected=$rejectedAsUnhealthy; oldMarker=$(Test-Path -LiteralPath $oldMarkerPath); entries=[$rootEntries]"
         }
     }
 
