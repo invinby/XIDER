@@ -17,8 +17,15 @@ certificates for public IPv4 and IPv6 addresses, but IP certificates use its
 short-lived profile (160 hours, just over six days). The official Certbot guide
 documents `--ip-address`; its March 2026 instructions require renewal automation
 and a deploy hook to reload the certificate, because the web-server installer
-plugins did not then support IP certificates. Recheck the current Certbot
-support before implementing the VPS setup.
+plugins did not then support IP certificates. `deploy/install-x-dock.sh` now
+checks for Certbot 5.4+ with IP webroot support and, when the OS package is too
+old, installs the official Certbot snap and uses that binary without removing an
+existing OS package. Renewal is left to the selected Certbot package's
+preconfigured scheduler when one is active; otherwise X-DOCK installs its own
+renewal timer. A deploy hook copies the renewed certificate and reloads the
+broker and Nginx. The installer avoids adding a second timer when Certbot already
+has an active systemd timer or cron job.
+The script still needs a live issuance, renewal, and TLS verification on the VPS.
 
 Candidate transport: HTTPS on the VPS's reserved public IP, with normal
 certificate validation on Windows and macOS. Let's Encrypt IP validation uses

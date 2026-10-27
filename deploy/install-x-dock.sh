@@ -21,6 +21,7 @@ BOT_ENV_BACKUP="$BOT_ENV.pre-x-dock"
 CERT_NAME=""
 CERT_LINEAGE=""
 CERT_RENEWAL=""
+CERTBOT_BIN="$(command -v certbot || true)"
 CERT_HOOK=/etc/letsencrypt/renewal-hooks/deploy/50-xider-dock
 RENEW_SERVICE=/etc/systemd/system/xider-dock-cert-renew.service
 RENEW_TIMER=/etc/systemd/system/xider-dock-cert-renew.timer
@@ -34,6 +35,7 @@ SETUP_COMPLETE=0
 DOCK_DIR_PREEXISTED=0
 DATA_DIR_PREEXISTED=0
 WEBROOT_PREEXISTED=0
+RENEW_TIMER_INSTALLED=0
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run this installer as root." >&2
@@ -155,17 +157,20 @@ cleanup_on_exit() {
   elif [[ -n "$BOT_ENV_BACKUP" ]]; then
     rm -f -- "$BOT_ENV_BACKUP"
   fi
-  systemctl disable --now xider-dock-cert-renew.timer >/dev/null 2>&1 || true
+  if [[ "$RENEW_TIMER_INSTALLED" -eq 1 ]]; then
+    systemctl disable --now xider-dock-cert-renew.timer >/dev/null 2>&1 || true
+    rm -f -- "$RENEW_SERVICE" "$RENEW_TIMER"
+  fi
   systemctl disable --now "$BROKER_SERVICE" >/dev/null 2>&1 || true
   systemctl disable --now nginx.service >/dev/null 2>&1 || true
-  rm -f -- "$BROKER_UNIT" "$RENEW_SERVICE" "$RENEW_TIMER"
+  rm -f -- "$BROKER_UNIT"
   rm -f -- "$CERT_HOOK" /usr/local/sbin/xider-dock-cert-deploy "$NGINX_SITE"
   systemctl daemon-reload >/dev/null 2>&1 || true
   if command -v nginx >/dev/null 2>&1; then
     if nginx -t >/dev/null 2>&1; then systemctl reload nginx >/dev/null 2>&1 || true; fi
   fi
-  if [[ -f "$CERT_RENEWAL" ]] && command -v certbot >/dev/null 2>&1; then
-    certbot delete --non-interactive --cert-name "$CERT_NAME" >/dev/null 2>&1 || true
+  if [[ -f "$CERT_RENEWAL" && -n "$CERTBOT_BIN" && -x "$CERTBOT_BIN" ]]; then
+    "$CERTBOT_BIN" delete --non-interactive --cert-name "$CERT_NAME" >/dev/null 2>&1 || true
   fi
   rm -rf -- "/etc/letsencrypt/live/$CERT_NAME" "/etc/letsencrypt/archive/$CERT_NAME"
   rm -f -- "$CERT_RENEWAL"
@@ -211,7 +216,7 @@ if ! systemctl is-masked --runtime --quiet nginx.service; then
   NGINX_RUNTIME_MASKED=1
 fi
 apt-get update
-apt-get install -y --no-install-recommends mosquitto mosquitto-clients nginx certbot openssl ca-certificates
+apt-get install -y --no-install-recommends mosquitto mosquitto-clients nginx openssl ca-certificates
 if [[ "$MOSQUITTO_RUNTIME_MASKED" -eq 1 ]]; then
   systemctl unmask --runtime mosquitto.service
   MOSQUITTO_RUNTIME_MASKED=0
@@ -231,12 +236,50 @@ else
   systemctl stop nginx.service >/dev/null 2>&1 || true
 fi
 
-if ! certbot --version | awk '{split($2,v,"."); if ((v[1]+0)>5 || ((v[1]+0)==5 && (v[2]+0)>=4)) ok=1} END {exit !ok}'; then
-  echo "Certbot 5.4+ is required for IP webroot certificates; refusing an untrusted fallback." >&2
-  exit 3
+certbot_supports_ip_webroot() {
+  local candidate="$1"
+  [[ -n "$candidate" && -x "$candidate" ]] || return 1
+  "$candidate" --version 2>/dev/null \
+    | awk '{split($2,v,"."); if ((v[1]+0)>5 || ((v[1]+0)==5 && (v[2]+0)>=4)) ok=1} END {exit !ok}' \
+    || return 1
+  "$candidate" --help all 2>&1 | grep -q -- '--ip-address'
+}
+
+certbot_scheduler_active() {
+  if [[ "$CERTBOT_BIN" == /snap/bin/certbot ]]; then
+    systemctl is-active --quiet snap.certbot.renew.timer
+    return
+  fi
+  systemctl is-active --quiet certbot.timer && return 0
+  grep -RqsE '(^|[[:space:]/])certbot([[:space:]]|$).*renew' \
+    /etc/crontab /etc/cron.d /etc/cron.hourly /etc/cron.daily /etc/cron.weekly 2>/dev/null
+}
+
+if ! certbot_supports_ip_webroot "$CERTBOT_BIN"; then
+  # Ubuntu's apt repository can lag behind the Certbot release that added IP
+  # webroot certificates. The official snap is the recommended install path;
+  # install the official snap alongside any existing OS package. Existing
+  # unrelated certificates must not lose their system Certbot installation.
+  if ! command -v snap >/dev/null 2>&1; then
+    apt-get install -y --no-install-recommends snapd
+  fi
+  if ! command -v snap >/dev/null 2>&1; then
+    echo "Snap is unavailable and the installed Certbot lacks IP webroot support; refusing an untrusted fallback." >&2
+    exit 3
+  fi
+  systemctl enable --now snapd.socket
+  if dpkg-query -W -f='${Status}' certbot 2>/dev/null | grep -q 'install ok installed'; then
+    echo "Keeping the existing OS Certbot package; X-DOCK will use the snap binary." >&2
+  fi
+  if snap list certbot >/dev/null 2>&1; then
+    snap refresh certbot
+  else
+    snap install --classic certbot
+  fi
+  CERTBOT_BIN=/snap/bin/certbot
 fi
-if ! certbot --help all 2>&1 | grep -q -- '--ip-address'; then
-  echo "Installed Certbot does not support --ip-address." >&2
+if ! certbot_supports_ip_webroot "$CERTBOT_BIN"; then
+  echo "Certbot 5.4+ with --ip-address support is required; refusing an untrusted fallback." >&2
   exit 3
 fi
 PLUGIN_PATH="$(dpkg -L mosquitto 2>/dev/null | awk '/\/mosquitto_dynamic_security\.so$/ {print; exit}')"
@@ -334,7 +377,7 @@ EOF
 install -o root -g root -m 0644 "$STAGE/nginx-http.conf" "$NGINX_SITE"
 nginx -t
 systemctl enable --now nginx
-certbot certonly --non-interactive --agree-tos --email "$CERT_EMAIL" \
+"$CERTBOT_BIN" certonly --non-interactive --agree-tos --email "$CERT_EMAIL" \
   --webroot --webroot-path "$WEBROOT" --ip-address "$PUBLIC_IP" \
   --preferred-profile shortlived --cert-name "$CERT_NAME"
 [[ -s "$CERT_LINEAGE/fullchain.pem" && -s "$CERT_LINEAGE/privkey.pem" ]]
@@ -409,17 +452,20 @@ install -d -o root -g root -m 0755 /etc/letsencrypt/renewal-hooks/deploy
 ln -s /usr/local/sbin/xider-dock-cert-deploy \
   /etc/letsencrypt/renewal-hooks/deploy/50-xider-dock
 
-cat > "$STAGE/xider-dock-cert-renew.service" <<EOF
+# Prefer the scheduler installed by Certbot (apt or snap). Only add an X-DOCK
+# timer when this host has no active Certbot timer/cron, avoiding duplicate jobs.
+if ! certbot_scheduler_active; then
+  cat > "$STAGE/xider-dock-cert-renew.service" <<EOF
 [Unit]
 Description=Renew the XIDER X-DOCK short-lived IP certificate
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/certbot renew --quiet --cert-name $CERT_NAME
+ExecStart=$CERTBOT_BIN renew --quiet --cert-name $CERT_NAME
 EOF
-cat > "$STAGE/xider-dock-cert-renew.timer" <<'EOF'
+  cat > "$STAGE/xider-dock-cert-renew.timer" <<'EOF'
 [Unit]
-Description=Check the XIDER X-DOCK certificate renewal window
+Description=Check the XIDER X-DOCK short-lived certificate renewal window
 
 [Timer]
 OnCalendar=*-*-* 00,06,12,18:17:00
@@ -429,10 +475,12 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 EOF
-install -o root -g root -m 0644 "$STAGE/xider-dock-cert-renew.service" /etc/systemd/system/xider-dock-cert-renew.service
-install -o root -g root -m 0644 "$STAGE/xider-dock-cert-renew.timer" /etc/systemd/system/xider-dock-cert-renew.timer
-systemctl daemon-reload
-systemctl enable --now xider-dock-cert-renew.timer
+  RENEW_TIMER_INSTALLED=1
+  install -o root -g root -m 0644 "$STAGE/xider-dock-cert-renew.service" "$RENEW_SERVICE"
+  install -o root -g root -m 0644 "$STAGE/xider-dock-cert-renew.timer" "$RENEW_TIMER"
+  systemctl daemon-reload
+  systemctl enable --now xider-dock-cert-renew.timer
+fi
 
 install -d -o xider -g xider -m 0700 /etc/xider/device-keys /var/lib/xider
 cp -a "$BOT_ENV" "$BOT_ENV.pre-x-dock"
@@ -502,4 +550,4 @@ if command -v ufw >/dev/null 2>&1 && ufw status | grep -q '^Status: active$'; th
 fi
 echo "[OK] X-DOCK is enabled. HTTPS enrollment URL: https://$PUBLIC_IP"
 echo "[INFO] Allow inbound TCP/80, TCP/443 and TCP/8884 in the VPS security group."
-echo "[INFO] Certificate auto-renewal timer: xider-dock-cert-renew.timer"
+echo "[INFO] Certificate renewal is scheduled; deploy hook reloads X-DOCK services after renewal."
