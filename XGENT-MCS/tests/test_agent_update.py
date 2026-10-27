@@ -192,6 +192,7 @@ def _make_client():
     client._update_lock = threading.Lock()
     client._lifecycle_lock = threading.RLock()
     client._update_cancelled = threading.Event()
+    client._mqtt_connected = False
     client._command_context = threading.local()
     client._pending_command_subacks = set()
     client._command_subscriptions_failed = False
@@ -369,6 +370,7 @@ def test_frozen_agent_update_fails_closed_without_mutating_bundle(monkeypatch, t
     client._publish_response = lambda topic, payload: sent.append((topic, payload))
     monkeypatch.setattr(mcs, "CONFIG_DIR", tmp_path)
     monkeypatch.setattr(mcs.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(mcs, "_BUNDLED_RUNTIME", True)
     monkeypatch.setattr(
         mcs,
         "download_verified_source_archive",

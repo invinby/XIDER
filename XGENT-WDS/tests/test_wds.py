@@ -693,6 +693,7 @@ def test_windows_frozen_status_advertises_non_updatable_package(client, monkeypa
 
     monkeypatch.setattr(wds, "ENCRYPT_PAYLOAD", False)
     monkeypatch.setattr(wds.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(wds, "_BUNDLED_RUNTIME", True)
 
     client._publish_status()
 

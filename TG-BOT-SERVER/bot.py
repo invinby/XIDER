@@ -6593,13 +6593,15 @@ def device_menu(device_id: str, user_id: int | None = None):
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
 
     content_count = len(list(kb.buttons)) - 2
-    owner_field_row = 2 if is_owner else 0
-    regular_content = content_count - owner_field_row
+    # Owner-only controls are singleton rows: pin toggle, inventory fields,
+    # and the combined Agent/Guardian log entry. Keep them out of the regular
+    # two-column grid so Back/Home remain paired at the bottom.
+    owner_field_rows = 3 if is_owner else 0
+    regular_content = content_count - owner_field_rows
     row_widths = [2] * (regular_content // 2)
     if regular_content % 2:
         row_widths.append(1)
-    if owner_field_row:
-        row_widths.append(1)
+    row_widths.extend([1] * owner_field_rows)
     row_widths.append(2)
     kb.adjust(*row_widths)
     return _filter_device_keyboard(kb.as_markup(), user_id)

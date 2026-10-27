@@ -60,12 +60,20 @@ def test_darwin_keeper_never_selects_a_windows_package(signed_catalog_release):
 
 
 @pytest.mark.parametrize("name", ["safari", "siri"])
-@pytest.mark.parametrize("os_name", ["Windows 11", "macOS 27"])
-@pytest.mark.parametrize("record", [None, {"version": "9.9.9"}, {"installed": False}, {"owner_removed": True}])
-def test_unimplemented_companions_never_invent_inventory(name, os_name, record, signed_keeper_release):
+@pytest.mark.parametrize("os_name,record,want,reason", [
+    ("Windows 11", None, "unsupported", "unsupported_os"),
+    ("Windows 11", {"version": "9.9.9"}, "unsupported", "unsupported_os"),
+    ("Windows 11", {"installed": False}, "unsupported", "unsupported_os"),
+    ("Windows 11", {"owner_removed": True}, "unsupported", "unsupported_os"),
+    ("macOS 27", None, "unknown", "missing_inventory"),
+    ("macOS 27", {"version": "9.9.9"}, "unknown", "missing_inventory"),
+    ("macOS 27", {"installed": False}, "not_installed", None),
+    ("macOS 27", {"owner_removed": True}, "unknown", "owner_removed"),
+])
+def test_companions_require_component_owned_inventory(name, os_name, record, want, reason, signed_keeper_release):
     import companion_status
     result = companion_status.component_state(name, os_name, record=record, checked_at=990, releases=[signed_keeper_release], now=1000)
-    assert result["state"] == "unknown" and result["reason"] == "not_implemented"
+    assert result["state"] == want and result["reason"] == reason
     assert result["version"] is None and result["available_version"] is None
 
 
@@ -102,10 +110,11 @@ def test_version_page_separates_agent_and_companions(ui, os_name, keeper_version
     text, markup = cards[-1]
     assert "88.77.66" in text
     keeper_row = next(line for line in text.splitlines() if "Guard Keeper:" in line)
-    assert keeper_version in keeper_row and "installed" in keeper_row and "88.77.66" not in keeper_row
+    assert keeper_version in keeper_row and "установлен" in keeper_row and "88.77.66" not in keeper_row
     for name in ("Safari", "Siri"):
         row = next(line for line in text.splitlines() if f"{name}:" in line)
-        assert "unknown" in row and "не реализован" in row and "88.77.66" not in row
+        expected = "не поддерживается" if os_name == "Windows 11" else "неизвестно"
+        assert expected in row and "88.77.66" not in row
     callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
     assert callbacks == ["versions:list:agent:0", "versions:list:keeper:0", "back:device"]
 
@@ -118,7 +127,7 @@ def test_keeper_context_never_uses_stale_or_missing_version(ui, guardian, seen):
     asyncio.run(bot.on_versions_device(cq))
     text, markup = cards[-1]
     keeper_row = next(line for line in text.splitlines() if "Guard Keeper:" in line)
-    assert "unknown" in keeper_row and "88.77.66" not in keeper_row
+    assert "неизвестно" in keeper_row and "88.77.66" not in keeper_row
     assert not any("install" in button.callback_data for row in markup.inline_keyboard for button in row)
 
 

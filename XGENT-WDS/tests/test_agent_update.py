@@ -340,6 +340,7 @@ def test_windows_install_failure_reports_actual_matching_rollback_receipt(monkey
 def test_frozen_rejection_always_has_bounded_operation_id(monkeypatch, incoming):
     client, sent = _update_client()
     monkeypatch.setattr(wds.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(wds, "_BUNDLED_RUNTIME", True)
     client._do_agent_update({"manifest_digest": "a" * 64, "update": True, "id": incoming})
     result = sent[-1][1]
     assert isinstance(result["operation_id"], str) and 1 <= len(result["operation_id"]) <= 128
@@ -354,6 +355,7 @@ def test_frozen_rejection_without_id_does_not_use_source_updater(monkeypatch, co
     client._command_context = threading.local()
     client._command_context.cmd_id = context_id
     monkeypatch.setattr(wds.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(wds, "_BUNDLED_RUNTIME", True)
     monkeypatch.delattr(wds, "update_operation_id")
     client._do_agent_update({"manifest_digest": "a" * 64, "update": True})
     result = sent[-1][1]
@@ -366,6 +368,7 @@ def test_frozen_windows_update_fails_closed_before_download(monkeypatch, tmp_pat
     client, sent = _update_client()
     monkeypatch.setattr(wds, "CONFIG_DIR", tmp_path)
     monkeypatch.setattr(wds.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(wds, "_BUNDLED_RUNTIME", True)
     monkeypatch.setattr(
         wds,
         "download_verified_source_archive",

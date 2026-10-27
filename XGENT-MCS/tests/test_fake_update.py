@@ -37,6 +37,7 @@ def test_fake_update_reenters_frozen_binary_without_a_script_path(monkeypatch):
     popen = Mock(return_value=Mock(poll=Mock(return_value=None)))
     monkeypatch.setattr(mcs.subprocess, "Popen", popen)
     monkeypatch.setattr(mcs.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(mcs, "_BUNDLED_RUNTIME", True)
 
     client._do_prank_fake_update({})
 

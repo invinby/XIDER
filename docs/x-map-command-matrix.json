@@ -1,7 +1,7 @@
 {
   "source_only": true,
   "worker_command_count": 193,
-  "guardian_command_count": 5,
+  "guardian_command_count": 7,
   "permission_profile_gaps": [],
   "permission_profiles": {
     "agent_account": {
@@ -6880,6 +6880,39 @@
       }
     },
     {
+      "command": "logs",
+      "platforms": {
+        "windows": {
+          "source_support": "source_branch_present",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "AST found the platform Guardian command branch; runtime behavior remains unverified."
+          },
+          "permission_profile_ids": [
+            "guardian_service"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms a literal Guardian command branch only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "source_branch_present",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "AST found the platform Guardian command branch; runtime behavior remains unverified."
+          },
+          "permission_profile_ids": [
+            "guardian_service"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms a literal Guardian command branch only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
       "command": "restart",
       "platforms": {
         "windows": {
@@ -6980,6 +7013,39 @@
     },
     {
       "command": "stop",
+      "platforms": {
+        "windows": {
+          "source_support": "source_branch_present",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "AST found the platform Guardian command branch; runtime behavior remains unverified."
+          },
+          "permission_profile_ids": [
+            "guardian_service"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms a literal Guardian command branch only; no current physical-device acceptance is recorded."
+          }
+        },
+        "macos": {
+          "source_support": "source_branch_present",
+          "source_behavior": {
+            "state": "handler_present",
+            "evidence": "AST found the platform Guardian command branch; runtime behavior remains unverified."
+          },
+          "permission_profile_ids": [
+            "guardian_service"
+          ],
+          "stability": {
+            "state": "source_only_unverified",
+            "evidence": "AST confirms a literal Guardian command branch only; no current physical-device acceptance is recorded."
+          }
+        }
+      }
+    },
+    {
+      "command": "update_agent",
       "platforms": {
         "windows": {
           "source_support": "source_branch_present",

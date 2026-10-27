@@ -240,6 +240,7 @@ def test_launchagent_preserves_bundle_executable_identity(monkeypatch, tmp_path)
     import sys
     bundle_exe = tmp_path / "XIDER.app/Contents/MacOS/XGENT-MCS"
     monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(agent, "_BUNDLED_RUNTIME", True)
     monkeypatch.setattr(sys, "executable", str(bundle_exe))
     command = getattr(agent, "_worker_launch_command", None)
     assert callable(command), "Bundle worker startup missing"

@@ -196,7 +196,7 @@ def test_command_matrix_records_source_support_permissions_and_stability_for_eve
     assert matrix["source_only"] is True
     assert matrix["worker_command_count"] == len(expected_worker) == len(rows)
     assert set(rows) == expected_worker
-    assert matrix["guardian_command_count"] == 5
+    assert matrix["guardian_command_count"] == 7
     assert matrix["permission_profile_gaps"] == []
     for row in (*matrix["worker_commands"], *matrix["guardian_commands"]):
         assert set(row["platforms"]) == {"windows", "macos"}
@@ -237,7 +237,9 @@ def test_command_matrix_records_source_support_permissions_and_stability_for_eve
         assert "fixed, allowlisted settings target" in permission_settings["platforms"][platform]["source_behavior"]["evidence"]
 
     guardian_rows = {row["command"]: row for row in matrix["guardian_commands"]}
-    assert set(guardian_rows) == {"auto_restart", "restart", "start", "status", "stop"}
+    assert set(guardian_rows) == {
+        "auto_restart", "logs", "restart", "start", "status", "stop", "update_agent",
+    }
     assert guardian_rows["stop"]["platforms"]["windows"]["source_support"] == "source_branch_present"
 
 

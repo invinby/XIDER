@@ -6854,7 +6854,7 @@ def test_primary_navigation_is_grouped_into_compact_dashboard_rows(monkeypatch):
     ]
     assert device_rows[5] == ["catalog:pinned:toggle:dev1"]
     assert device_rows[6] == ["catalog:fields:list"]
-    assert device_rows[7] == ["menu:target", "menu:main"]
+    assert device_rows[7] == ["cmd:agent_logs"]
     assert device_rows[-1] == ["menu:target", "menu:main"]
 
 
@@ -9210,12 +9210,14 @@ def _rendered_callback_inventory(monkeypatch):
         "token": "0123456789abcdef0123456789abcdef",
         "preview_token": "0123456789ab",
         "entry": {"token": "0123456789ab", "request_id": "late-request"},
+        "row": {"request_id": "0123456789abcdef0123456789abcdef"},
         "pending": SimpleNamespace(request_id="0123456789abcdef0123456789"),
         "replacement": SimpleNamespace(request_id="fedcba9876543210fedcba9876543210"),
         "command_id": "media-series-sample",
         "approve_callback": "cmd:shell-approve:sample", "cancel_callback": "cmd:shell-cancel:sample",
         "permission": "camera",
         "feature_id": "D01-F01",
+        "request_id": "0123456789abcdef0123456789abcdef",
         "release": SimpleNamespace(tag="v4.1.0"),
         "bootstrap_release": SimpleNamespace(tag="v4.1.0"), "tag": "v4.1.0",
         "plan": SimpleNamespace(plan_id="0123456789abcdef0123456789"),
@@ -9480,8 +9482,8 @@ def _expected_callback_gate(callback):
         return "OwnerFilter"
     if callback in {"devices:search", "devices:search:cancel"}:
         return "AdminFilter"
-    if callback in {"shell:ok", "menu:admin", "menu:target", "url:favorites", "versions:server", "cpu:history", "memory:history", "volume:history", "volume:topology", "clock:drift", "sysinfo:history", "sysinfo:compare", "sysinfo:export", "sysinfo:interval", "sysinfo:threshold", "sysinfo:aggregate", "sysinfo:uncertainty", "camera:quality", "media:temp:cleanup", "display:catalog", "display:resolution", "pressure:history", "thermal:snapshot", "battery:health", "battery:cycles", "energy:usage", "sleep:history", "boot:duration", "reboot:status", "os:support", "hardware:history", "drivers:history", "apps:history", "startup:history", "services:history", "crash:summary", "smart:trend", "cmd:dns_resolution", "cmd:dns_settings", "cmd:dns_comparison", "cmd:gateway_probe"} or callback.startswith(
-        ("screenshot:mask", "screenshot:preview", "display:", "window:", "admin:", "devmg:", "install:", "server:", "server_confirm:", "url:fav:", "versions:bootstrap:", "versions:canary:", "versions:rollout:", "cmd:shell-approve:", "cmd:shell-cancel:", "cmd:shell-stop:", "cmd:shell-dryrun:", "permhelp:", "permsettings:", "permverify:", "location:", "catalog:synonym:", "catalog:snapshot:", "catalog:collection:", "catalog:saved-filter:", "catalog:inactivity:", "catalog:fields:", "catalog:tags:", "catalog:order:", "catalog:note:", "catalog:place:", "catalog:review:", "catalog:purpose:", "files:inbox", "cpu:history:", "memory:history:", "pressure:history:", "sysinfo:export:", "sysinfo:interval:", "sysinfo:threshold:", "sysinfo:aggregate:")
+    if callback in {"shell:ok", "menu:admin", "menu:target", "url:favorites", "versions:server", "cpu:history", "memory:history", "volume:history", "volume:topology", "clock:drift", "sysinfo:history", "sysinfo:compare", "sysinfo:export", "sysinfo:interval", "sysinfo:threshold", "sysinfo:aggregate", "sysinfo:uncertainty", "camera:quality", "media:temp:cleanup", "display:catalog", "display:resolution", "pressure:history", "thermal:snapshot", "battery:health", "battery:cycles", "energy:usage", "sleep:history", "boot:duration", "reboot:status", "os:support", "hardware:history", "drivers:history", "apps:history", "startup:history", "services:history", "crash:summary", "smart:trend", "cmd:dns_resolution", "cmd:dns_settings", "cmd:dns_comparison", "cmd:gateway_probe", "cmd:agent_logs"} or callback.startswith(
+        ("screenshot:mask", "screenshot:preview", "display:", "window:", "admin:", "devmg:", "install:", "server:", "server_confirm:", "url:fav:", "versions:bootstrap:", "versions:canary:", "versions:rollout:", "cmd:shell-approve:", "cmd:shell-cancel:", "cmd:shell-stop:", "cmd:shell-dryrun:", "permhelp:", "permsettings:", "permverify:", "location:", "dock:", "catalog:synonym:", "catalog:snapshot:", "catalog:collection:", "catalog:saved-filter:", "catalog:inactivity:", "catalog:fields:", "catalog:tags:", "catalog:order:", "catalog:note:", "catalog:place:", "catalog:review:", "catalog:purpose:", "files:inbox", "cpu:history:", "memory:history:", "pressure:history:", "sysinfo:export:", "sysinfo:interval:", "sysinfo:threshold:", "sysinfo:aggregate:")
     ):
         return "OwnerFilter"
     if callback in {"menu:main", "menu:about", "menu:server", "menu:guest_devices", "guest:readonly", "url:cancel", "catalog:areas", "catalog:back"} or callback.startswith(("about:chapter:", "url:count:", "catalog:area:", "catalog:feature:", "catalog:search:", "catalog:filter:")):
@@ -10380,6 +10382,16 @@ _DEPENDENT_ACTION_CONTRACTS["on_network_check_set_run"] = dict(
     category="network", wire_action="service_probe", os_support=("Windows", "macOS"), timeout=40.0,
     result_sensitivity="bounded reachability states for at most five owner-selected targets",
     risk="owner-only explicit one-time run; one request per saved endpoint, no ranges or recurring scan",
+)
+_DEPENDENT_ACTION_CONTRACTS["on_dock_decision"] = dict(
+    category="enrollment", os_support=("Telegram",), timeout=0.0,
+    result_sensitivity="pairing request status and device fingerprint",
+    risk="owner-only explicit device enrollment decision; private keys and broker credentials stay server-side",
+)
+_DEPENDENT_ACTION_CONTRACTS["on_cmd_agent_logs"] = dict(
+    category="administration", wire_action="agent_logs", os_support=("Windows", "macOS"), timeout=18.0,
+    result_sensitivity="bounded redacted XIDER component logs",
+    risk="owner-only local diagnostic read; output redacted before Telegram delivery",
 )
 
 
