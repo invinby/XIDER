@@ -184,11 +184,14 @@ stores broker credentials only in the server's protected bot environment and
 does not print them. Before the ACME HTTP-01 challenge, it opens TCP/80 in active
 UFW when no global IPv4 allow rule exists, and removes that temporary rule on
 rollback. On success, it opens 443 and 8884 too. It requires the bot's exact
-`MQTT_PREFIX=xgent/v1`; the cloud security group still needs inbound ports 80,
-443 and 8884. The script is not live-verified:
-it has not been run on a VPS, the provider security-group ports have not been
-checked, and certificate renewal and device enrollment have not been exercised
-end to end.
+`MQTT_PREFIX=xgent/v1`.
+
+Live status (2026-10-27): the script has run successfully on the primary VPS.
+The bot, dedicated Dynamic Security broker, Nginx, and AppArmor are active; the
+IP certificate was issued and HTTPS responds. External TCP/8884 currently times
+out because the AWS security group has not yet been opened. Certificate renewal
+is scheduled but has not yet been observed through a renewal cycle. No device
+has completed live enrollment.
 
 Next required sequence: review and run the VPS installer after SSH access and
 provider ports are available; verify certificate issuance and renewal; test
@@ -200,9 +203,8 @@ that full sequence succeeds on Windows and macOS.
 
 ## Current evidence and non-claims
 
-The last recorded live server snapshot said only SSH was listening. That snapshot
-is historical and was not rechecked for this design decision. Local source now
-has the enrollment API, credential issuer, and client helper, but there is no
-HTTPS endpoint, ACME certificate, configured Dynamic Security broker, or live
-pairing. The design removes a domain purchase as a hard prerequisite, not the
-need to verify VPS networking and automate six-day renewal.
+The latest server snapshot confirms HTTPS and the dedicated broker listeners.
+The blocked provider port and missing `XIDER_DOCK_URL` release setting prevent
+an end-to-end client installation. The design removes a domain purchase as a
+hard prerequisite, not the need to finish provider networking, observe renewal,
+and verify pairing on Windows and macOS.

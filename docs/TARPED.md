@@ -110,12 +110,13 @@ edited per-voice copy remain compatible without being deleted.
 The first TARPED source changes add X-LEX core copy and owner selection,
 X-LEDGER's read-only GitHub Release catalogue, a per-device version browser,
 and an in-bot handbook. They do **not** yet implement A/B installation,
-complete six-voice coverage, or live-verified updates. X-DOCK now has a separate
-proposed enrollment design: a stable public IP may replace a domain if
-short-lived IP-TLS certificates can be renewed and reloaded reliably. No live
-enrollment endpoint, publicly trusted certificate, or live pairing exists yet;
-the source endpoint, per-device credential issuer, and client are described
-under Backend progress below.
+complete six-voice coverage, or live-verified updates. X-DOCK has a separate
+enrollment design and is now installed on the primary VPS. The broker, bot,
+Nginx, and AppArmor are active; HTTPS to the public IP responds with a valid IP
+certificate. AWS still blocks external TCP/8884, so device enrollment and live
+pairing are not yet verified. The GitHub `XIDER_DOCK_URL` release variable is
+also not configured, so signed installers do not yet contain the enrollment
+endpoint. X-DOCK is deployed but not ready to claim one-command enrollment.
 The Windows installer now retires only the documented legacy `XGENT` scheduled
 task and `XGENT`/`XGentAgent` per-user Run entries before registering the single
 supported `XIDER Agent` task; preflight remains read-only and `.env` is untouched.
