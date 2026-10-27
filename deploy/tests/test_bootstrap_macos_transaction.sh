@@ -101,11 +101,16 @@ cat > "$SOURCE_ROOT/XGENT-MCS/start_guardian.sh" <<'KEEPER'
 #!/usr/bin/env bash
 exit 0
 KEEPER
+printf '#!/usr/bin/env bash\nexit 0\n' > "$SOURCE_ROOT/XGENT-MCS/start_safari.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$SOURCE_ROOT/XGENT-MCS/start_siri.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$SOURCE_ROOT/XGENT-MCS/stop_agent.sh"
 printf 'new\n' > "$SOURCE_ROOT/XGENT-MCS/new-version.marker"
 printf '# fixture dependencies\n' > "$SOURCE_ROOT/XGENT-MCS/requirements.txt"
 chmod +x "$SOURCE_ROOT/XGENT-MCS/start_agent.sh" \
-  "$SOURCE_ROOT/XGENT-MCS/start_guardian.sh" "$SOURCE_ROOT/XGENT-MCS/stop_agent.sh"
+  "$SOURCE_ROOT/XGENT-MCS/start_guardian.sh" \
+  "$SOURCE_ROOT/XGENT-MCS/start_safari.sh" \
+  "$SOURCE_ROOT/XGENT-MCS/start_siri.sh" \
+  "$SOURCE_ROOT/XGENT-MCS/stop_agent.sh"
 
 python3 - "$SOURCE_ROOT" "$ARCHIVE" <<'PY'
 from pathlib import Path
