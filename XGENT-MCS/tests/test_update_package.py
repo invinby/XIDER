@@ -168,6 +168,101 @@ def test_source_update_accepts_additional_signed_bootstrap_assets(tmp_path, monk
     assert archive_path.read_bytes() == b"source zip"
 
 
+def test_windows_frozen_update_downloads_only_the_pinned_signed_exe(tmp_path, monkeypatch):
+    tag = "v4.0.1"
+    executable = b"signed windows executable"
+    source_archive = b"signed source archive"
+    digest = hashlib.sha256(executable).hexdigest()
+    manifest = signature.sign_manifest({
+        "schema": 1,
+        "release": tag,
+        "assets": [{
+            "name": "XGENT-WDS.exe",
+            "component": "windows_agent",
+            "platform": "windows",
+            "size": len(executable),
+            "sha256": digest,
+        }, {
+            "name": package.SOURCE_ASSET,
+            "component": "source",
+            "platform": "all",
+            "size": len(source_archive),
+            "sha256": hashlib.sha256(source_archive).hexdigest(),
+        }],
+    }, _TEST_PRIVATE_PEM)
+    routes = {
+        f"{package.RELEASE_API}/tags/{tag}": json.dumps({
+            "tag_name": tag,
+            "draft": False,
+            "prerelease": False,
+            "assets": [
+                {"name": package.MANIFEST_ASSET},
+                {"name": package.SOURCE_ASSET},
+                {"name": "XGENT-WDS.exe"},
+            ],
+        }).encode(),
+        package._release_asset_url(tag, package.MANIFEST_ASSET): json.dumps(manifest).encode(),
+        package._release_asset_url(tag, "XGENT-WDS.exe"): executable,
+        package._release_asset_url(tag, package.SOURCE_ASSET): source_archive,
+    }
+    observed = _use_routes(monkeypatch, routes)
+    manifest_digest = hashlib.sha256(signature.manifest_signing_bytes(manifest)).hexdigest()
+    output = tmp_path / "XGENT-WDS.exe"
+
+    assert package.download_verified_release_asset(
+        tmp_path / "release-manifest.json", output, "XGENT-WDS.exe",
+        release_tag=tag, expected_manifest_digest=manifest_digest,
+    ) == tag
+    assert output.read_bytes() == executable
+    assert observed[-1][0] == package._release_asset_url(tag, "XGENT-WDS.exe")
+
+
+def test_windows_frozen_update_rejects_unpinned_manifest_digest(tmp_path, monkeypatch):
+    tag = "v4.0.1"
+    executable = b"signed windows executable"
+    source_archive = b"signed source archive"
+    manifest = signature.sign_manifest({
+        "schema": 1,
+        "release": tag,
+        "assets": [{
+            "name": "XGENT-WDS.exe",
+            "component": "windows_agent",
+            "platform": "windows",
+            "size": len(executable),
+            "sha256": hashlib.sha256(executable).hexdigest(),
+        }, {
+            "name": package.SOURCE_ASSET,
+            "component": "source",
+            "platform": "all",
+            "size": len(source_archive),
+            "sha256": hashlib.sha256(source_archive).hexdigest(),
+        }],
+    }, _TEST_PRIVATE_PEM)
+    routes = {
+        f"{package.RELEASE_API}/tags/{tag}": json.dumps({
+            "tag_name": tag, "draft": False, "prerelease": False,
+            "assets": [
+                {"name": package.MANIFEST_ASSET},
+                {"name": package.SOURCE_ASSET},
+                {"name": "XGENT-WDS.exe"},
+            ],
+        }).encode(),
+        package._release_asset_url(tag, package.MANIFEST_ASSET): json.dumps(manifest).encode(),
+        package._release_asset_url(tag, "XGENT-WDS.exe"): executable,
+        package._release_asset_url(tag, package.SOURCE_ASSET): source_archive,
+    }
+    observed = _use_routes(monkeypatch, routes)
+    output = tmp_path / "XGENT-WDS.exe"
+
+    with pytest.raises(ValueError, match="manifest digest"):
+        package.download_verified_release_asset(
+            tmp_path / "release-manifest.json", output, "XGENT-WDS.exe",
+            release_tag=tag, expected_manifest_digest="0" * 64,
+        )
+    assert not output.exists()
+    assert all(not url.endswith("XGENT-WDS.exe") for url, _ in observed)
+
+
 def test_source_update_does_not_delete_a_preexisting_archive_destination(tmp_path, monkeypatch):
     _use_routes(monkeypatch, _release_routes())
     archive_path = tmp_path / "source.zip"

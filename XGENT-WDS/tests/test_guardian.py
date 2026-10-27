@@ -42,6 +42,234 @@ def test_new_guardian_install_enables_recovery_by_default(
     assert guardian.state["desired_running"] is True
 
 
+def test_runtime_install_dir_uses_windows_executable_directory_for_frozen_build(
+    guardian_module, monkeypatch, tmp_path
+):
+    module = guardian_module
+    executable = tmp_path / "XIDER-Guard-Keeper.exe"
+    executable.write_bytes(b"test")
+    monkeypatch.setattr(module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(module.sys, "executable", str(executable))
+
+    assert module._runtime_install_dir() == tmp_path.resolve()
+
+
+def test_runtime_install_dir_uses_nuitka_containing_dir(
+    guardian_module, monkeypatch, tmp_path
+):
+    module = guardian_module
+    compiled_dir = tmp_path / "installed"
+    compiled_dir.mkdir()
+    monkeypatch.setattr(module.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(module, "__compiled__", type("Compiled", (), {"containing_dir": str(compiled_dir)})(), raising=False)
+
+    assert module._runtime_install_dir() == compiled_dir.resolve()
+
+
+def test_frozen_update_request_is_bound_to_operation_release_and_component(guardian_module):
+    module = guardian_module
+    request = {
+        "id": "a" * 32,
+        "release_tag": "v4.2.0",
+        "manifest_digest": "b" * 64,
+        "component": "windows_agent",
+    }
+
+    assert module.validate_frozen_update_request(request) == (
+        "a" * 32, "v4.2.0", "b" * 64,
+    )
+    with pytest.raises(ValueError):
+        module.validate_frozen_update_request({**request, "id": "..\\escape"})
+    with pytest.raises(ValueError):
+        module.validate_frozen_update_request({**request, "component": "mac_agent"})
+
+
+def _frozen_update_guardian(module, monkeypatch, tmp_path, health_results):
+    guardian = object.__new__(module.Guardian)
+    guardian._update_lock = threading.Lock()
+    guardian._active_update_id = "a" * 32
+    guardian.lock = threading.RLock()
+    guardian.state = {"desired_running": True}
+    monkeypatch.setattr(module, "SCRIPT_DIR", tmp_path / "install")
+    monkeypatch.setattr(module, "CONFIG_DIR", tmp_path / "config")
+    monkeypatch.setattr(module, "STATE_FILE", tmp_path / "config" / "guardian.json")
+    (tmp_path / "install").mkdir()
+    (tmp_path / "config").mkdir()
+    (tmp_path / "install" / "XGENT-WDS.exe").write_bytes(b"old-agent")
+    progress = []
+    results = []
+    monkeypatch.setattr(guardian, "_publish_update_progress", lambda *args: progress.append(args[-1]))
+    monkeypatch.setattr(guardian, "_publish", results.append)
+    monkeypatch.setattr(guardian, "_stop_agent_for_update", lambda: None)
+    monkeypatch.setattr(guardian, "start_agent", lambda: 321)
+    health_iter = iter(health_results)
+    monkeypatch.setattr(guardian, "_wait_for_agent_health", lambda *args: next(health_iter))
+
+    def download(_manifest_path, asset_path, asset_name, *, release_tag, expected_manifest_digest):
+        assert asset_name == "XGENT-WDS.exe"
+        assert expected_manifest_digest == "b" * 64
+        asset_path.write_bytes(b"new-agent" * 131072)
+        return release_tag
+
+    monkeypatch.setattr(module, "download_verified_release_asset", download)
+    return guardian, progress, results
+
+
+def test_guardian_replaces_frozen_agent_only_after_signed_download_and_keeps_backup(
+    guardian_module, monkeypatch, tmp_path
+):
+    module = guardian_module
+    guardian, progress, results = _frozen_update_guardian(module, monkeypatch, tmp_path, [True])
+    guardian._update_agent_package({
+        "id": "a" * 32, "release_tag": "v4.2.0", "manifest_digest": "b" * 64,
+        "component": "windows_agent",
+    })
+    install = tmp_path / "install"
+
+    assert (install / "XGENT-WDS.exe").read_bytes() == b"new-agent" * 131072
+    assert (install / f".XGENT-WDS.{ 'a' * 32 }.backup").read_bytes() == b"old-agent"
+    assert progress == ["downloading", "verifying", "installing", "reconnecting", "health_check"]
+    assert results[-1]["update_state"] == "succeeded"
+    assert results[-1]["component"] == "windows_agent"
+    assert guardian._active_update_id is None
+
+
+def test_guardian_restores_previous_frozen_agent_when_new_health_fails(
+    guardian_module, monkeypatch, tmp_path
+):
+    module = guardian_module
+    guardian, progress, results = _frozen_update_guardian(module, monkeypatch, tmp_path, [False, True])
+    guardian._update_agent_package({
+        "id": "a" * 32, "release_tag": "v4.2.0", "manifest_digest": "b" * 64,
+        "component": "windows_agent",
+    })
+
+    assert (tmp_path / "install" / "XGENT-WDS.exe").read_bytes() == b"old-agent"
+    assert "rolling_back" in progress
+    assert results[-1]["update_state"] == "rolled_back"
+    assert guardian._active_update_id is None
+
+
+def test_frozen_update_terminal_receipt_survives_restart_and_replays_duplicate(
+    guardian_module, monkeypatch, tmp_path
+):
+    module = guardian_module
+    monkeypatch.setattr(module, "CONFIG_DIR", tmp_path / "config")
+    operation = "a" * 32
+    receipt = module._persist_update_receipt({
+        "ok": True, "text": "update completed", "component": "windows_agent",
+        "operation_id": operation, "release_tag": "v4.2.0",
+        "manifest_digest": "b" * 64, "update_state": "succeeded",
+        "updated_at": time.time(),
+    })
+
+    guardian = object.__new__(module.Guardian)
+    guardian._update_lock = threading.Lock()
+    guardian._active_update_id = None
+    guardian.lock = threading.RLock()
+    guardian.state = {"desired_running": True}
+    guardian.status_payload = lambda: {"type": "guardian", "ok": True}
+    published = []
+    guardian._publish = published.append
+    monkeypatch.setattr(module.threading, "Thread", lambda **_kwargs: pytest.fail("duplicate update must not start"))
+
+    guardian.handle({
+        "command": "update_agent", "id": operation,
+        "release_tag": "v4.2.0", "manifest_digest": "b" * 64,
+        "component": "windows_agent",
+    })
+
+    assert published[-1]["update_state"] == "succeeded"
+    assert published[-1]["operation_id"] == operation
+    assert published[-1]["text"] == receipt["text"]
+
+
+def test_guardian_replays_latest_terminal_update_receipt_on_mqtt_reconnect(
+    guardian_module, monkeypatch, tmp_path
+):
+    module = guardian_module
+    monkeypatch.setattr(module, "CONFIG_DIR", tmp_path / "config")
+    module._persist_update_receipt({
+        "ok": False, "text": "rolled back", "component": "windows_agent",
+        "operation_id": "c" * 32, "release_tag": "v4.2.0",
+        "manifest_digest": "d" * 64, "update_state": "rolled_back",
+        "updated_at": time.time(),
+    })
+    guardian = object.__new__(module.Guardian)
+    guardian._mqtt_connected = False
+    guardian.client = Mock()
+    guardian.status_payload = Mock(return_value={"type": "guardian", "ok": True})
+    published = []
+    guardian._publish = published.append
+    monkeypatch.setattr(module, "write_runtime_health", lambda *_args: None)
+
+    guardian._on_connect(guardian.client, None, None, 0)
+
+    assert len(published) == 2
+    assert published[0]["type"] == "guardian"
+    assert published[1]["operation_id"] == "c" * 32
+    assert published[1]["update_state"] == "rolled_back"
+
+
+def test_guardian_recovers_interrupted_exe_swap_from_durable_backup(
+    guardian_module, monkeypatch, tmp_path
+):
+    module = guardian_module
+    install = tmp_path / "install"
+    config_dir = tmp_path / "config"
+    install.mkdir()
+    config_dir.mkdir()
+    live = install / "XGENT-WDS.exe"
+    live.write_bytes(b"partially-installed")
+    operation = "e" * 32
+    backup = install / f".XGENT-WDS.{operation}.backup"
+    backup.write_bytes(b"previous-working-agent")
+    monkeypatch.setattr(module, "SCRIPT_DIR", install)
+    monkeypatch.setattr(module, "CONFIG_DIR", config_dir)
+    module._atomic_json(module._update_journal_path(), {
+        "schema": 1, "component": "windows_agent", "operation_id": operation,
+        "release_tag": "v4.2.0", "manifest_digest": "f" * 64,
+        "phase": "installing", "updated_at": time.time(),
+    })
+    guardian = object.__new__(module.Guardian)
+    guardian.state = {"desired_running": True}
+    guardian.lock = threading.RLock()
+    guardian._refresh_worker_intent = lambda: None
+    guardian._stop_agent_for_update = lambda: None
+    guardian.start_agent = lambda: 456
+    guardian._wait_for_agent_health = lambda *_args: True
+    guardian._publish = Mock()
+
+    guardian._recover_interrupted_agent_update()
+
+    assert live.read_bytes() == b"previous-working-agent"
+    assert not module._update_journal_path().exists()
+    assert guardian._publish.call_args.args[0]["update_state"] == "rolled_back"
+    receipt = module._read_update_receipt(module._update_receipt_path(operation))
+    assert receipt["update_state"] == "rolled_back"
+
+
+def test_guardian_completes_receipt_for_committed_update_after_restart(
+    guardian_module, monkeypatch, tmp_path
+):
+    module = guardian_module
+    monkeypatch.setattr(module, "CONFIG_DIR", tmp_path / "config")
+    operation = "9" * 32
+    module._atomic_json(module._update_journal_path(), {
+        "schema": 1, "component": "windows_agent", "operation_id": operation,
+        "release_tag": "v4.2.0", "manifest_digest": "a" * 64,
+        "phase": "committed", "updated_at": time.time(),
+    })
+    guardian = object.__new__(module.Guardian)
+    guardian._publish = Mock()
+
+    guardian._recover_interrupted_agent_update()
+
+    assert not module._update_journal_path().exists()
+    assert guardian._publish.call_args.args[0]["update_state"] == "succeeded"
+    assert module._read_update_receipt(module._update_receipt_path(operation))["update_state"] == "succeeded"
+
+
 def test_guardian_mqtt_callbacks_write_connected_and_disconnected_health(
     guardian_module, monkeypatch
 ):
@@ -109,6 +337,28 @@ def test_guardian_status_keeps_task_query_errors_unknown(guardian_module, monkey
     assert result["guardian_task_registered"] is None
     assert "Задача агента: статус неизвестен" in result["text"]
     assert "Задача Guardian: статус неизвестен" in result["text"]
+
+
+def test_guardian_periodically_publishes_fresh_update_capability(guardian_module, monkeypatch):
+    module = guardian_module
+    guardian = object.__new__(module.Guardian)
+    waits = iter((False, True))
+    guardian.stop_event = Mock()
+    guardian.stop_event.wait.side_effect = lambda _seconds: next(waits)
+    guardian.lock = threading.RLock()
+    guardian.state = {"auto_restart": False, "desired_running": True}
+    guardian._mqtt_connected = True
+    guardian._last_status_publish = 0.0
+    guardian._refresh_worker_intent = Mock()
+    guardian.status_payload = Mock(return_value={"agent_update_protocol": 1})
+    published = []
+    guardian._publish = published.append
+    monkeypatch.setattr(module.time, "monotonic", lambda: 100.0)
+
+    guardian.monitor()
+
+    assert published == [{"agent_update_protocol": 1}]
+    assert guardian._last_status_publish == 100.0
 
 
 def test_task_query_access_error_is_not_reported_as_missing(guardian_module, monkeypatch):

@@ -37,6 +37,7 @@ RELEASE_BASE = "https://github.com/invinby/XIDER/releases/download"
 SOURCE_ASSET = "XIDER-source.zip"
 MANIFEST_ASSET = "release-manifest.json"
 SIGNED_INSTALL_ASSETS = {
+    "XGENT-WDS.exe": ("windows_agent", "windows"),
     "XGENT-WDS-Windows.zip": ("windows_agent", "windows"),
     "XGENT-MCS-macos-bundle.zip": ("mac_agent", "macos"),
     "Guard-Keeper-Windows.zip": ("windows_keeper", "windows"),

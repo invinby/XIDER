@@ -3,7 +3,12 @@ cd "$(dirname "$0")"
 
 # Record an intentional owner stop before terminating the worker, so the
 # visible Guardian distinguishes it from a crash and does not relaunch it.
-if [ -x "venv/bin/python3" ] && [ -f ".env" ]; then
+GUARDIAN_APP_BIN="$(pwd)/XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper"
+if [ -x "$GUARDIAN_APP_BIN" ]; then
+    if ! "$GUARDIAN_APP_BIN" --owner-stop-agent >/dev/null 2>&1; then
+        echo "⚠️ Не удалось передать Guardian намерение остановить агента; он может восстановить процесс." >&2
+    fi
+elif [ -x "venv/bin/python3" ] && [ -f ".env" ]; then
     if ! "venv/bin/python3" -c 'from config import set_guardian_desired_running; set_guardian_desired_running(False)' >/dev/null 2>&1; then
         echo "⚠️ Не удалось передать Guardian намерение остановить агента; он может восстановить процесс." >&2
     fi

@@ -44,7 +44,11 @@ from config import (
 )
 from crypto import sign_message, verify_message
 from guardian_recovery import RECOVERY_FILES, restore_missing_agent_files
-from update_package import UPDATE_STATE_NAME, _read_update_state, rollback_unhealthy_agent
+from mac_bundle_update import install_signed_bundle, restore_backup_set
+from update_package import (
+    UPDATE_STATE_NAME, _read_update_state, download_verified_release_asset,
+    rollback_unhealthy_agent,
+)
 from xgencrypto import decrypt_payload, encrypt_payload
 
 try:
@@ -79,6 +83,25 @@ AGENT_STABLE_SECONDS = 60.0
 AGENT_HEALTH_STALE_SECONDS = 180.0
 MAX_LAUNCHAGENT_PLISTS = 512
 MAX_LAUNCHAGENT_PLIST_BYTES = 256 * 1024
+MAC_BUNDLE_UPDATE_PROTOCOL = 1
+_BUNDLE_UPDATE_OPERATION_ID = re.compile(r"^[0-9a-f]{32}$")
+_BUNDLE_UPDATE_RELEASE_TAG = re.compile(r"^v[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}$")
+_BUNDLE_UPDATE_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+
+
+def validate_mac_bundle_update_request(payload: dict) -> tuple[str, str, str]:
+    operation_id = payload.get("operation_id") or payload.get("id")
+    release_tag = payload.get("release_tag")
+    manifest_digest = payload.get("manifest_digest")
+    if not isinstance(operation_id, str) or not _BUNDLE_UPDATE_OPERATION_ID.fullmatch(operation_id):
+        raise ValueError("Некорректный ID операции обновления Mac.")
+    if not isinstance(release_tag, str) or not _BUNDLE_UPDATE_RELEASE_TAG.fullmatch(release_tag):
+        raise ValueError("Некорректный тег стабильного релиза.")
+    if not isinstance(manifest_digest, str) or not _BUNDLE_UPDATE_DIGEST.fullmatch(manifest_digest):
+        raise ValueError("Некорректный digest подписанного manifest.")
+    if payload.get("component") != "mac_agent":
+        raise ValueError("Guardian принимает только подписанный macOS-бандл.")
+    return operation_id, release_tag, manifest_digest
 
 
 def _layer_health_snapshot() -> dict:
@@ -201,6 +224,8 @@ class Guardian:
             _save_state(self.state, *changed_fields)
         self.stop_event = threading.Event()
         self.lock = threading.RLock()
+        self._bundle_update_lock = threading.Lock()
+        self._active_bundle_update_id: str | None = None
         self._restart_backoff_seconds = 5.0
         self._next_restart_at = 0.0
         self._last_recovery_error: str | None = None
@@ -378,6 +403,7 @@ class Guardian:
             "ok": True,
             "version": VERSION,
             "guardian": "1.0",
+            "agent_update_protocol": MAC_BUNDLE_UPDATE_PROTOCOL if (SCRIPT_DIR / ".xider-signed-release").is_file() else 0,
             "agent_running": bool(pid),
             "agent_pid": pid,
             "companions": companions,
@@ -595,6 +621,196 @@ class Guardian:
             except ProcessLookupError:
                 pass
 
+    def _stop_agent_for_bundle_update(self, was_launchd_loaded: bool) -> None:
+        """Stop the worker without changing the owner's persisted run intent."""
+        self._require_running_intent()
+        plist = Path.home() / "Library" / "LaunchAgents" / "com.xgent.agent.plist"
+        if was_launchd_loaded:
+            result = subprocess.run(
+                ["launchctl", "bootout", f"gui/{os.getuid()}", str(plist)],
+                capture_output=True, text=True, check=False, timeout=15,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr.strip() or "Не удалось временно остановить LaunchAgent агента.")
+        pid = self.agent_pid()
+        if pid:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                return
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline and self.agent_pid() == pid:
+                time.sleep(0.2)
+            if self.agent_pid() == pid:
+                os.kill(pid, signal.SIGKILL)
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline and self.agent_pid() == pid:
+                    time.sleep(0.2)
+            if self.agent_pid() == pid:
+                raise RuntimeError("Старый процесс агента не завершился; бандл не заменён.")
+
+    def _start_agent_after_bundle_update(self, was_launchd_loaded: bool) -> int | None:
+        self._require_running_intent()
+        plist = Path.home() / "Library" / "LaunchAgents" / "com.xgent.agent.plist"
+        if was_launchd_loaded and plist.is_file() and not plist.is_symlink():
+            result = subprocess.run(
+                ["launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist)],
+                capture_output=True, text=True, check=False, timeout=15,
+            )
+            if result.returncode != 0 and not self.launchd_loaded():
+                raise RuntimeError(result.stderr.strip() or "LaunchAgent агента не запустился после обновления.")
+            return self.agent_pid()
+        return self.start_agent()
+
+    def _wait_for_bundle_agent_health(self, expected_version: str, after: float) -> bool:
+        deadline = time.monotonic() + 90
+        health_path = CONFIG_DIR / "agent-health.json"
+        while time.monotonic() < deadline:
+            try:
+                if health_path.is_symlink() or not health_path.is_file() or health_path.stat().st_size > 4096:
+                    time.sleep(1)
+                    continue
+                payload = json.loads(health_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                time.sleep(1)
+                continue
+            pid = payload.get("pid") if isinstance(payload, dict) else None
+            stamp = payload.get("updated_at") if isinstance(payload, dict) else None
+            if (
+                payload.get("component") == "agent" and payload.get("device_id") == DEVICE_ID
+                and payload.get("version") == expected_version and type(pid) is int
+                and type(stamp) in (int, float) and stamp >= after and self.agent_pid() == pid
+            ):
+                return True
+            time.sleep(1)
+        return False
+
+    def _publish_bundle_update_progress(
+        self, operation_id: str, release_tag: str, manifest_digest: str, state: str,
+    ) -> None:
+        payload = {
+            "type": "agent_update_progress", "device_id": DEVICE_ID,
+            "component": "mac_agent", "operation_id": operation_id,
+            "release_tag": release_tag, "manifest_digest": manifest_digest,
+            "update_state": state,
+        }
+        info = self.client.publish(
+            f"{MQTT_PREFIX}/{DEVICE_ID}/update_progress", self._envelope(payload), qos=1,
+        )
+        try:
+            info.wait_for_publish(timeout=3)
+        except Exception:
+            pass
+
+    def _update_mac_bundle(self, payload: dict) -> None:
+        operation_id = release_tag = manifest_digest = None
+        backup_root = None
+        was_launchd_loaded = False
+        stopped = False
+        try:
+            operation_id, release_tag, manifest_digest = validate_mac_bundle_update_request(payload)
+            if not (SCRIPT_DIR / ".xider-signed-release").is_file():
+                raise RuntimeError("Установка не отмечена как подписанный frozen-релиз.")
+            was_launchd_loaded = self.launchd_loaded()
+            if not self._bundle_update_lock.acquire(blocking=False):
+                raise RuntimeError("Обновление Mac-агента уже выполняется.")
+            try:
+                with self.lock:
+                    self._refresh_worker_intent()
+                    if not self.state.get("desired_running"):
+                        raise RuntimeError("Запуск агента остановлен владельцем; обновление отменено.")
+                self._publish_bundle_update_progress(operation_id, release_tag, manifest_digest, "downloading")
+                CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+                archive = CONFIG_DIR / f"mac-agent-{operation_id}.zip"
+                manifest = CONFIG_DIR / f"mac-agent-{operation_id}.manifest.json"
+                if any(path.exists() or path.is_symlink() for path in (archive, manifest)):
+                    raise FileExistsError("Для этой операции уже существуют временные файлы.")
+                verified_tag = download_verified_release_asset(
+                    manifest, archive, "XGENT-MCS-macos-bundle.zip",
+                    release_tag=release_tag,
+                    expected_manifest_digest=manifest_digest,
+                )
+                if verified_tag != release_tag:
+                    raise ValueError("GitHub вернул другой тег релиза.")
+                self._publish_bundle_update_progress(operation_id, release_tag, manifest_digest, "verifying")
+                self._stop_agent_for_bundle_update(was_launchd_loaded)
+                stopped = True
+                self._publish_bundle_update_progress(operation_id, release_tag, manifest_digest, "installing")
+                backup_root = install_signed_bundle(archive, SCRIPT_DIR, operation_id)
+                self._publish_bundle_update_progress(operation_id, release_tag, manifest_digest, "reconnecting")
+                started_at = time.time()
+                pid = self._start_agent_after_bundle_update(was_launchd_loaded)
+                stopped = False
+                self._publish_bundle_update_progress(operation_id, release_tag, manifest_digest, "health_check")
+                if not pid or not self._wait_for_bundle_agent_health(release_tag[1:], started_at):
+                    raise RuntimeError("Новый Mac-агент не подтвердил свежий heartbeat за 90 секунд.")
+                self._publish({
+                    "ok": True, "text": f"✅ Mac-агент обновлён до {release_tag}; свежий heartbeat подтверждён.",
+                    "component": "mac_agent", "operation_id": operation_id,
+                    "release_tag": release_tag, "manifest_digest": manifest_digest,
+                    "update_state": "succeeded", "updated_at": time.time(),
+                    "agent_update_protocol": MAC_BUNDLE_UPDATE_PROTOCOL,
+                })
+                # The running Guardian image is still the old signed app. Let
+                # launchd restart it from the atomically replaced bundle.
+                threading.Timer(
+                    2.0,
+                    lambda: subprocess.run(
+                        ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.xider.guardian"],
+                        capture_output=True, check=False,
+                    ),
+                ).start()
+            finally:
+                self._bundle_update_lock.release()
+        except Exception as exc:
+            log.exception("macOS frozen agent update failed")
+            outcome = "failed"
+            if backup_root is not None:
+                try:
+                    self._publish_bundle_update_progress(
+                        operation_id, release_tag, manifest_digest, "rolling_back",
+                    )
+                    if self.agent_pid():
+                        self._stop_agent_for_bundle_update(was_launchd_loaded)
+                        stopped = True
+                    failed_root = restore_backup_set(backup_root, SCRIPT_DIR, operation_id)
+                    if self.state.get("desired_running"):
+                        started_at = time.time()
+                        pid = self._start_agent_after_bundle_update(was_launchd_loaded)
+                        stopped = False
+                        if pid and self._wait_for_bundle_agent_health(str(VERSION), started_at):
+                            outcome = "rolled_back"
+                    else:
+                        outcome = "rolled_back"
+                except Exception:
+                    log.exception("macOS app bundle rollback failed")
+            elif stopped and self.state.get("desired_running"):
+                try:
+                    self._start_agent_after_bundle_update(was_launchd_loaded)
+                except Exception:
+                    log.exception("Could not restart unchanged macOS Agent after update preparation failed")
+            self._publish({
+                "ok": outcome == "rolled_back",
+                "text": f"❌ Обновление Mac-агента не завершено: {exc}" + (
+                    " Предыдущий бандл восстановлен." if outcome == "rolled_back" else ""
+                ),
+                "component": "mac_agent", "operation_id": operation_id,
+                "release_tag": release_tag, "manifest_digest": manifest_digest,
+                "update_state": outcome, "updated_at": time.time(),
+                "agent_update_protocol": MAC_BUNDLE_UPDATE_PROTOCOL,
+            })
+        finally:
+            if operation_id and getattr(self, "_active_bundle_update_id", None) == operation_id:
+                self._active_bundle_update_id = None
+            if operation_id:
+                for suffix in ("zip", "manifest.json"):
+                    try:
+                        path = CONFIG_DIR / f"mac-agent-{operation_id}.{suffix}"
+                        if path.is_file() and not path.is_symlink():
+                            path.unlink()
+                    except OSError:
+                        log.warning("Could not remove a temporary Mac update file")
+
     def handle(self, payload: dict) -> None:
         lock = getattr(self, "lock", None)
         if lock is None:
@@ -633,6 +849,37 @@ class Guardian:
                 _save_state(self.state, "auto_restart")
                 result = self.status_payload()
                 result["text"] = f"🛡 Автовосстановление: {'ВКЛ' if enabled else 'ВЫКЛ'}"
+            elif command == "update_agent":
+                operation_id, release_tag, manifest_digest = validate_mac_bundle_update_request(payload)
+                if not (SCRIPT_DIR / ".xider-signed-release").is_file():
+                    raise RuntimeError("Эта команда обновляет только подписанную frozen-сборку Mac.")
+                active_id = getattr(self, "_active_bundle_update_id", None)
+                if active_id == operation_id:
+                    result = self.status_payload()
+                    result.update({
+                        "operation_id": operation_id, "release_tag": release_tag,
+                        "manifest_digest": manifest_digest,
+                        "text": f"⏳ Обновление Mac {release_tag} уже выполняется.",
+                    })
+                elif active_id is not None:
+                    raise RuntimeError("Другое обновление Mac-агента уже выполняется.")
+                else:
+                    self._active_bundle_update_id = operation_id
+                    worker = threading.Thread(
+                        target=self._update_mac_bundle, args=(dict(payload),),
+                        daemon=True, name=f"xider-mac-update-{operation_id[:8]}",
+                    )
+                    try:
+                        worker.start()
+                    except Exception:
+                        self._active_bundle_update_id = None
+                        raise
+                    result = self.status_payload()
+                    result.update({
+                        "operation_id": operation_id, "release_tag": release_tag,
+                        "manifest_digest": manifest_digest,
+                        "text": f"📦 Guardian принял подписанный Mac-бандл {release_tag}.",
+                    })
             else:
                 result = {"ok": False, "text": f"Неизвестная команда Guardian: {command}"}
         except Exception as exc:
@@ -647,6 +894,10 @@ class Guardian:
             self._write_health()
             with self.lock:
                 self._refresh_worker_intent()
+                update_lock = getattr(self, "_bundle_update_lock", None)
+                if (getattr(self, "_active_bundle_update_id", None) is not None
+                        or (update_lock is not None and update_lock.locked())):
+                    continue
                 if self.state.get("auto_restart") and self.state.get("desired_running"):
                     now = time.monotonic()
                     pid = self.agent_pid()
@@ -689,6 +940,15 @@ class Guardian:
             self.client.disconnect()
 
 
-if __name__ == "__main__":
+def main() -> int:
+    if sys.argv[1:] == ["--owner-stop-agent"]:
+        set_guardian_desired_running(False)
+        print("[OK] XIDER Guardian saved the owner's stop choice.")
+        return 0
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     Guardian().run()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -12,19 +12,27 @@ import json
 import logging
 from logging.handlers import RotatingFileHandler
 import os
+import plistlib
 import re
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 
 from config import CONFIG_DIR
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - exercised only by Windows-hosted tests
+    fcntl = None
 
 
 VERSION = "0.1.0"
 TICK_SECONDS = 10
 HEALTH_STALE_SECONDS = 35
 LAYER_STATE = CONFIG_DIR / "layer-state.json"
+_LAYER_STATE_THREAD_LOCK = threading.RLock()
 LAYERS = {
     "safari": {
         "label": "com.xider.safari",
@@ -39,6 +47,87 @@ LAYERS = {
         "child_state": None,
     },
 }
+
+
+def set_layer_enabled(role: str, enabled: bool) -> None:
+    """Persist an owner-controlled layer switch without losing sibling updates."""
+    if role not in LAYERS or type(enabled) is not bool:
+        raise ValueError("invalid XIDER layer state")
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    if LAYER_STATE.is_symlink():
+        raise RuntimeError("Refusing symlink layer state.")
+    lock_path = LAYER_STATE.with_suffix(".lock")
+    if lock_path.is_symlink():
+        raise RuntimeError("Refusing symlink layer-state lock.")
+    with _LAYER_STATE_THREAD_LOCK, lock_path.open("a+b") as lock_file:
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            state = _read_json(LAYER_STATE)
+            state[role] = enabled
+            fd, temporary = tempfile.mkstemp(prefix=".layer-state.", suffix=".tmp", dir=CONFIG_DIR)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                    json.dump(state, stream, ensure_ascii=False, separators=(",", ":"))
+                    stream.write("\n")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary, LAYER_STATE)
+            finally:
+                Path(temporary).unlink(missing_ok=True)
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def owner_stop(role: str) -> None:
+    """Persist the owner's stop choice and publish a matching local health record."""
+    set_layer_enabled(role, False)
+    _write_health(role, "stopped", "disabled by owner")
+
+
+def write_launch_agent(
+    role: str, root: Path, python: str, app_bin: Path,
+    release_marker: Path, plist_path: Path,
+) -> None:
+    """Create a visible LaunchAgent using the compiled release runtime when present."""
+    if role not in LAYERS:
+        raise ValueError("invalid XIDER layer")
+    root = root.resolve()
+    app_bin = app_bin.resolve()
+    source = root / "xider_layers.py"
+    if app_bin.is_file():
+        program = [str(app_bin), "--role", role]
+    elif release_marker.exists():
+        raise FileNotFoundError("Signed XIDER-Layers.app is missing; refusing source fallback.")
+    elif source.is_file() and python:
+        program = [python, str(source), "--role", role]
+    else:
+        raise FileNotFoundError("XIDER-Layers runtime is unavailable.")
+
+    plist_path.parent.mkdir(parents=True, exist_ok=True)
+    if plist_path.is_symlink():
+        raise RuntimeError("Refusing symlink LaunchAgent plist.")
+    payload = {
+        "Label": LAYERS[role]["label"],
+        "ProgramArguments": program,
+        "WorkingDirectory": str(root),
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        "ProcessType": "Background",
+        "StandardOutPath": "/dev/null",
+        "StandardErrorPath": "/dev/null",
+    }
+    fd, temporary = tempfile.mkstemp(prefix=f".{plist_path.name}.", suffix=".tmp", dir=plist_path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            plistlib.dump(payload, stream, fmt=plistlib.FMT_XML, sort_keys=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, plist_path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def _read_json(path: Path) -> dict:
@@ -200,8 +289,39 @@ def run(role: str) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--role", choices=tuple(LAYERS), required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--role", choices=tuple(LAYERS))
+    mode.add_argument("--set-enabled", nargs=2, metavar=("ROLE", "START|STOP"))
+    mode.add_argument("--owner-stop", choices=tuple(LAYERS))
+    mode.add_argument(
+        "--write-launch-agent", nargs=6,
+        metavar=("ROLE", "ROOT", "PYTHON", "APP_BIN", "RELEASE_MARKER", "PLIST"),
+    )
     args = parser.parse_args()
+    if args.owner_stop is not None:
+        try:
+            owner_stop(args.owner_stop)
+        except (OSError, RuntimeError, ValueError) as exc:
+            parser.error(str(exc))
+        return 0
+    if args.write_launch_agent is not None:
+        role, root, python, app_bin, release_marker, plist_path = args.write_launch_agent
+        try:
+            write_launch_agent(
+                role, Path(root), python, Path(app_bin), Path(release_marker), Path(plist_path),
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            parser.error(str(exc))
+        return 0
+    if args.set_enabled is not None:
+        role, action = args.set_enabled
+        if action not in {"start", "stop"}:
+            parser.error("--set-enabled action must be start or stop")
+        try:
+            set_layer_enabled(role, action == "start")
+        except ValueError as exc:
+            parser.error(str(exc))
+        return 0
     return run(args.role)
 
 

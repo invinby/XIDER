@@ -21,39 +21,17 @@ if [[ "${1:-}" == "--status" || "${1:-}" == "-s" ]]; then
 fi
 
 if [[ "${1:-}" == "--stop" || "${1:-}" == "-x" ]]; then
-  PYTHON="$PWD/venv/bin/python3"
-  [[ -x "$PYTHON" ]] || PYTHON="$(command -v python3 || true)"
-  [[ -n "$PYTHON" ]] || { echo "[ERROR] Нужен Python 3, чтобы сохранить команду остановки Guardian." >&2; exit 1; }
-  "$PYTHON" - "$HOME/.xgent/guardian.json" <<'PY'
-import json, os, pathlib, sys, tempfile
-
-path = pathlib.Path(sys.argv[1])
-path.parent.mkdir(parents=True, exist_ok=True)
-if path.is_symlink():
-    raise SystemExit("[ERROR] Состояние Guardian является symlink; остановка отменена.")
-state = {}
-if path.exists():
-    if not path.is_file() or path.stat().st_size > 64 * 1024:
-        raise SystemExit("[ERROR] Состояние Guardian повреждено или слишком велико; остановка отменена.")
-    try:
-        state = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise SystemExit(f"[ERROR] Не удалось прочитать состояние Guardian; остановка отменена: {exc}")
-    if not isinstance(state, dict):
-        raise SystemExit("[ERROR] Состояние Guardian имеет неверный формат; остановка отменена.")
-state["desired_running"] = False
-fd, temporary = tempfile.mkstemp(prefix="guardian-state.", suffix=".tmp", dir=path.parent)
-try:
-    os.fchmod(fd, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as stream:
-        json.dump(state, stream, ensure_ascii=False, separators=(",", ":"))
-        stream.write("\n")
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, path)
-finally:
-    pathlib.Path(temporary).unlink(missing_ok=True)
-PY
+  if [[ -x "$GUARDIAN_APP_BIN" ]]; then
+    "$GUARDIAN_APP_BIN" --owner-stop-agent
+  elif [[ -f "$GUARDIAN_SCRIPT" ]]; then
+    PYTHON="$PWD/venv/bin/python3"
+    [[ -x "$PYTHON" ]] || PYTHON="$(command -v python3 || true)"
+    [[ -n "$PYTHON" ]] || { echo "[ERROR] Нужен Python 3, чтобы сохранить команду остановки Guardian." >&2; exit 1; }
+    "$PYTHON" -c 'from config import set_guardian_desired_running; set_guardian_desired_running(False)'
+  else
+    echo "[ERROR] Не найден XIDER-Guard-Keeper.app или runtime для сохранения намерения владельца." >&2
+    exit 1
+  fi
   if launchctl print "gui/$(id -u)/com.xider.guardian" >/dev/null 2>&1; then
     launchctl bootout "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || {
       echo "[ERROR] Не удалось выгрузить Guardian; его намерение остановиться сохранено." >&2

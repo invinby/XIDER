@@ -124,7 +124,11 @@ downloaded="$(find "$stage" -mindepth 1 -maxdepth 1 -type d ! -name '.xider-inst
   echo "В архиве не найден XGENT-MCS/start_agent.sh" >&2; exit 3;
 }
 mkdir "$stage/new"
-cp -R "$downloaded/." "$stage/new/"
+if [[ -n "$RELEASE_TAG" ]]; then
+  mkdir -p "$stage/new/XGENT-MCS"
+else
+  cp -R "$downloaded/." "$stage/new/"
+fi
 
 # Берём существующий локальный .env, не трогая ключи и состояние в ~/.xgent.
 preserved_env="$stage/agent.env"
@@ -294,22 +298,37 @@ mv "$stage/env.updated" "$agent_env"
 chmod 600 "$agent_env"
 
 new_agent="$stage/new/XGENT-MCS"
-chmod +x "$new_agent/start_agent.sh" "$new_agent/stop_agent.sh" "$new_agent/start_guardian.sh" "$new_agent/start_safari.sh" "$new_agent/start_siri.sh"
 
-# Prepare dependencies before stopping the working version. The venv has a
-# stable absolute path: moving a staged venv would break its activation script
-# and installed entry points. Old runtimes remain available with their backups.
-mkdir -p "$INSTALL_ROOT/runtimes"
-runtime="$(mktemp -d "$INSTALL_ROOT/runtimes/macos.XXXXXX")"
-echo "Подготавливаю Python и зависимости; действующий агент пока не останавливаю."
-if ! python3 -m venv "$runtime" ||
-   ! "$runtime/bin/python3" -m pip install --disable-pip-version-check -r "$new_agent/requirements.txt" ||
-   ! "$runtime/bin/python3" -m compileall -q "$new_agent"; then
+# The signed release installs only compiled apps and their thin control scripts.
+# This temporary runtime is for verifying release metadata; it is not linked
+# into the active install. Development installs retain their movable-outside
+# runtime and source checkout behavior.
+if [[ -n "$RELEASE_TAG" ]]; then
+  runtime="$(mktemp -d "$stage/runtime.XXXXXX")"
+else
+  mkdir -p "$INSTALL_ROOT/runtimes"
+  runtime="$(mktemp -d "$INSTALL_ROOT/runtimes/macos.XXXXXX")"
+fi
+echo "Подготавливаю временные инструменты проверки; действующий агент пока не останавливаю."
+if ! python3 -m venv "$runtime"; then
   echo "Подготовка окружения не прошла; прежняя установка не менялась." >&2
   echo "Диагностическое окружение сохранено: $runtime" >&2
   exit 5
 fi
-ln -s "$runtime" "$new_agent/venv"
+if [[ -n "$RELEASE_TAG" ]]; then
+  if ! "$runtime/bin/python3" -m pip install --disable-pip-version-check --quiet 'cryptography>=42.0'; then
+    echo "Не удалось подготовить проверку подписи; прежняя установка не менялась." >&2
+    exit 5
+  fi
+else
+  if ! "$runtime/bin/python3" -m pip install --disable-pip-version-check -r "$new_agent/requirements.txt" ||
+     ! "$runtime/bin/python3" -m compileall -q "$new_agent"; then
+    echo "Подготовка окружения не прошла; прежняя установка не менялась." >&2
+    echo "Диагностическое окружение сохранено: $runtime" >&2
+    exit 5
+  fi
+  ln -s "$runtime" "$new_agent/venv"
+fi
 
 recovery_slot=''
 if [[ -n "$RELEASE_TAG" ]]; then
@@ -318,7 +337,7 @@ if [[ -n "$RELEASE_TAG" ]]; then
   bundle_manifest="$stage/mac-bundle-manifest.json"
   (
     cd "$new_agent"
-    "$runtime/bin/python3" - "$bundle_manifest" "$signed_bundle" "$RELEASE_TAG" <<'PY'
+    PYTHONPATH="$downloaded/XGENT-MCS" "$runtime/bin/python3" - "$bundle_manifest" "$signed_bundle" "$RELEASE_TAG" <<'PY'
 from pathlib import Path
 import sys
 from update_package import download_verified_release_asset
@@ -358,6 +377,9 @@ with ZipFile(sys.argv[1]) as archive:
 PY
   mkdir -p "$stage/macos-bundle"
   ditto -x -k "$signed_bundle" "$stage/macos-bundle"
+  for file in .env.example start_agent.sh stop_agent.sh start_guardian.sh start_safari.sh start_siri.sh; do
+    cp "$stage/macos-bundle/$file" "$new_agent/$file"
+  done
   for app in XIDER.app XIDER-Guard-Keeper.app XIDER-Layers.app; do
     codesign --verify --deep --strict "$stage/macos-bundle/$app"
     xcrun stapler validate "$stage/macos-bundle/$app"
@@ -368,31 +390,15 @@ PY
   rm -f "$new_agent/xider_layers.py"
   : > "$new_agent/.xider-signed-release"
   chmod 600 "$new_agent/.xider-signed-release"
-
-  release_url="https://github.com/invinby/XIDER/releases/download/$RELEASE_TAG"
-  echo "Проверяю подписанную резервную копию $RELEASE_TAG для Guard Keeper."
-  curl --fail --silent --show-error --location --max-time 60 --max-filesize 1048576 \
-    "$release_url/release-manifest.json" -o "$stage/release-manifest.json"
-  curl --fail --silent --show-error --location --max-time 120 --max-filesize 104857600 \
-    "$release_url/XIDER-source.zip" -o "$stage/XIDER-source.zip"
-  # Deferred selection keeps the prior cache active if installation rolls back.
-  recovery_slot="$(cd "$new_agent" && "$runtime/bin/python3" - \
-    "$stage/release-manifest.json" "$stage/XIDER-source.zip" "$RELEASE_TAG" <<'PY'
-from pathlib import Path
-import sys
-from guardian_recovery import stage_recovery_package, validate_recovery_install
-
-manifest, archive, expected = sys.argv[1:]
-root = Path.home() / '.xgent' / 'recovery'
-slot = stage_recovery_package(Path(manifest), Path(archive), root, activate=False)
-if not slot.startswith(expected + '-'):
-    raise SystemExit('Подписанная версия не совпадает с выбранным релизом.')
-validate_recovery_install(Path.cwd(), root, slot)
-print(slot)
-PY
-  )" || { echo "Recovery-пакет отклонён; прежняя установка не менялась." >&2; exit 5; }
+  chmod +x "$new_agent/start_agent.sh" "$new_agent/stop_agent.sh" "$new_agent/start_guardian.sh" "$new_agent/start_safari.sh" "$new_agent/start_siri.sh"
+  if find "$new_agent" -type f \( -name '*.py' -o -name '*.pyc' -o -name '*.pyo' \) -print -quit | grep -q .; then
+    echo "Unexpected Python source in signed macOS install; refusing activation." >&2
+    exit 5
+  fi
+  echo "Подписанные Agent, Guard Keeper и Safari/Siri подготовлены без Python-исходников."
 else
-  echo "Development-установка: подписанный recovery-пакет не выбран."
+  chmod +x "$new_agent/start_agent.sh" "$new_agent/stop_agent.sh" "$new_agent/start_guardian.sh" "$new_agent/start_safari.sh" "$new_agent/start_siri.sh"
+  echo "Development-установка: исходники остаются в локальном checkout."
 fi
 
 # Keep the prior install for rollback; never recursively delete the live checkout.
@@ -506,7 +512,7 @@ PY
   ) || { echo "Агент запущен, но выбор recovery-пакета не прошёл; проверь диагностику Guard Keeper." >&2; exit 7; }
 fi
 
-echo "Установка завершена. Исходники: $TARGET"
+echo "Установка завершена: $TARGET"
 [[ ! -e "$backup" ]] || echo "Предыдущая установка сохранена: $backup"
 echo "Проверка: cd \"$TARGET/XGENT-MCS\" && bash ./start_agent.sh --status && bash ./start_guardian.sh --status"
 echo "Запуск процессов подтверждён. Связь MQTT и системные разрешения проверь в карточке устройства в боте."

@@ -49,6 +49,12 @@ class Release:
             asset["component"] == component for asset in self.manifest["assets"]
         )
 
+    def signed_asset(self, name: str, component: str) -> bool:
+        return verify_release_metadata(self, self.manifest) and any(
+            asset["name"] == name and asset["component"] == component
+            for asset in self.manifest["assets"]
+        )
+
     def has_package(self, component: str) -> bool:
         return bool(self.asset_names & _ASSET_NAMES.get(component, set()))
 

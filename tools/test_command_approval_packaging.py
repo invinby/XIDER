@@ -3,7 +3,6 @@ import os
 from pathlib import Path
 import runpy
 import sys
-from types import ModuleType, SimpleNamespace
 import zipfile
 
 import pytest
@@ -13,36 +12,34 @@ MODULES = {"command_module_loader", "command_signing", "command_replay", "shell_
 
 
 @pytest.mark.parametrize("component", ["XGENT-WDS", "XGENT-MCS"])
-def test_specs_feed_command_gate_and_probe_to_pyinstaller(component, monkeypatch):
-    captured = {}
-    hooks = ModuleType("PyInstaller.utils.hooks")
-    hooks.collect_all = lambda _name: ([], [], [])
-    monkeypatch.setitem(sys.modules, "PyInstaller.utils.hooks", hooks)
-    monkeypatch.setenv("XIDER_MACOS_SIGNING_IDENTITY", "Apple Development: Fixture (TEAM)")
-    def analysis(*args, **kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(pure=[], scripts=[], binaries=[], datas=[])
-    runpy.run_path(str(ROOT / component / f"{component}.spec"), init_globals={
-        "SPECPATH": str(ROOT / component), "Analysis": analysis,
-        "PYZ": lambda *_a: None, "EXE": lambda *_a, **_kw: None,
-        "BUNDLE": lambda *_a, **_kw: None,
-    })
-    assert MODULES <= set(captured["hiddenimports"])
-    assert "cryptography.hazmat.primitives.asymmetric.ed25519" in captured["hiddenimports"]
-    if component in {"XGENT-WDS", "XGENT-MCS"}:
-        assert "media_history" in captured["hiddenimports"]
-        assert "media_request_control" in captured["hiddenimports"]
-        assert "dns_settings" in captured["hiddenimports"]
-        assert "dns_comparison" in captured["hiddenimports"]
-    assert captured["runtime_hooks"] == [str(ROOT / "tools" / "command_approval_bundle_smoke.py")]
+def test_nuitka_builders_reuse_the_command_gate_inventory(component):
+    sys.path.insert(0, str(ROOT / "tools"))
+    try:
+        builder = runpy.run_path(str(ROOT / "tools" / (
+            "build_nuitka_windows.py" if component == "XGENT-WDS" else "build_nuitka_macos.py"
+        )))
+        hidden_imports = set(builder["_hidden_imports"]())
+    finally:
+        sys.path.pop(0)
+
+    assert MODULES <= hidden_imports
+    assert "cryptography.hazmat.primitives.asymmetric.ed25519" in hidden_imports
+    assert "media_history" in hidden_imports
+    assert "media_request_control" in hidden_imports
+    assert "dns_settings" in hidden_imports
+    assert "dns_comparison" in hidden_imports
+    assert "command_approval_bundle_smoke" in hidden_imports
 
 
-def test_ci_pins_pyinstaller_and_checks_real_agent_archives():
+def test_ci_pins_nuitka_and_checks_compiled_agent_artifacts():
     workflow = (ROOT / ".github" / "workflows" / "build-agents.yml").read_text(encoding="utf-8")
-    install_lines = [line.strip().lower() for line in workflow.splitlines()
-                     if "pip install" in line.lower() and "pyinstaller" in line.lower()]
-    assert len(install_lines) >= 2
-    assert all("pyinstaller==6.22.3" in line for line in install_lines)
+    build_lines = [line.strip().lower() for line in workflow.splitlines()
+                   if "nuitka==" in line.lower()]
+    assert len(build_lines) >= 2
+    assert all("nuitka==4.3.1" in line for line in build_lines)
+    assert "python tools/build_nuitka_windows.py" in workflow
+    assert "python tools/build_nuitka_macos.py" in workflow
+    assert workflow.count("--nuitka-executable") >= 1
     assert workflow.count("verify_command_approval_bundle.py") >= 2
     verifier = runpy.run_path(str(ROOT / "tools" / "verify_command_approval_bundle.py"))
     assert MODULES | {"cryptography.hazmat.primitives.asymmetric.ed25519"} <= verifier["REQUIRED"]

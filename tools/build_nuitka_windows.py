@@ -74,6 +74,7 @@ def main() -> int:
     guardian_dir = BUILD_ROOT / "guardian"
     guardian = _build(
         WDS / "xider_guardian_wds.py", guardian_dir, "XIDER-Guard-Keeper.exe",
+        ("update_package", "release_signature"),
     )
     # Copy only compiled executables into the release root. Nuitka's generated
     # C and distribution trees remain outside the upload directory.

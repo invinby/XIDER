@@ -46,6 +46,25 @@ def test_guardian_publishes_fresh_local_heartbeat(guardian_module):
     assert record["updated_at"] <= time.time()
 
 
+def test_guardian_compiled_cli_persists_owner_stop_without_starting_mqtt(
+    guardian_module, monkeypatch,
+):
+    module = guardian_module
+    state_path = module.STATE_FILE
+    state_path.write_text(json.dumps({
+        "state_version": 2, "auto_restart": True,
+        "desired_running": True, "startup_enabled": True,
+    }), encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["XIDER-Guard-Keeper", "--owner-stop-agent"])
+    monkeypatch.setattr(module, "Guardian", lambda: pytest.fail("Owner stop must not start the MQTT service"))
+
+    assert module.main() == 0
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["desired_running"] is False
+    assert state["startup_enabled"] is True
+    assert state["auto_restart"] is True
+
+
 def test_safari_restarts_a_stale_guardian_even_if_agent_pid_exists(guardian_module, monkeypatch):
     import subprocess
     import config
@@ -99,6 +118,154 @@ def test_safari_restarts_healthy_guardian_when_agent_heartbeat_is_stale(
 
     assert xider_layers._start_child("safari") == "guardian_restarted_for_agent"
     assert commands == [["launchctl", "kickstart", "-k", f"gui/{xider_layers.os.getuid()}/com.xider.guardian"]]
+
+
+def test_siri_layer_state_updates_preserve_safari_owner_choice(guardian_module, monkeypatch):
+    import config
+    import xider_layers
+
+    state_path = config.CONFIG_DIR / "layer-state.json"
+    monkeypatch.setattr(xider_layers, "CONFIG_DIR", config.CONFIG_DIR)
+    monkeypatch.setattr(xider_layers, "LAYER_STATE", state_path)
+    state_path.write_text(json.dumps({"safari": True, "siri": True}), encoding="utf-8")
+
+    xider_layers.set_layer_enabled("safari", False)
+    xider_layers.set_layer_enabled("siri", False)
+
+    assert json.loads(state_path.read_text(encoding="utf-8")) == {
+        "safari": False, "siri": False,
+    }
+    assert state_path.with_suffix(".lock").is_file()
+
+
+def test_layer_state_writer_rejects_unknown_layer(guardian_module):
+    import xider_layers
+
+    with pytest.raises(ValueError, match="invalid XIDER layer state"):
+        xider_layers.set_layer_enabled("unknown", True)
+
+
+def test_compiled_layer_cli_can_disable_only_the_selected_layer(guardian_module, monkeypatch):
+    import config
+    import xider_layers
+
+    state_path = config.CONFIG_DIR / "layer-state.json"
+    monkeypatch.setattr(xider_layers, "CONFIG_DIR", config.CONFIG_DIR)
+    monkeypatch.setattr(xider_layers, "LAYER_STATE", state_path)
+    state_path.write_text(json.dumps({"safari": True, "siri": True}), encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["XIDER-Layers", "--set-enabled", "siri", "stop"])
+
+    assert xider_layers.main() == 0
+    assert json.loads(state_path.read_text(encoding="utf-8")) == {
+        "safari": True, "siri": False,
+    }
+
+
+def test_compiled_layer_cli_owner_stop_writes_stopped_health(guardian_module, monkeypatch):
+    import config
+    import xider_layers
+
+    state_path = config.CONFIG_DIR / "layer-state.json"
+    monkeypatch.setattr(xider_layers, "CONFIG_DIR", config.CONFIG_DIR)
+    monkeypatch.setattr(xider_layers, "LAYER_STATE", state_path)
+    state_path.write_text(json.dumps({"safari": True, "siri": True}), encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["XIDER-Layers", "--owner-stop", "siri"])
+
+    assert xider_layers.main() == 0
+    assert json.loads(state_path.read_text(encoding="utf-8")) == {
+        "safari": True, "siri": False,
+    }
+    health = json.loads((config.CONFIG_DIR / "siri-health.json").read_text(encoding="utf-8"))
+    assert health["component"] == "siri"
+    assert health["state"] == "stopped"
+    assert health["detail"] == "disabled by owner"
+
+
+def test_compiled_layer_cli_writes_release_launch_agent_without_python_sources(
+    guardian_module, monkeypatch, tmp_path,
+):
+    import plistlib
+    import xider_layers
+
+    app_bin = tmp_path / "XIDER-Layers.app/Contents/MacOS/XIDER-Layers"
+    app_bin.parent.mkdir(parents=True)
+    app_bin.write_bytes(b"compiled")
+    source = tmp_path / "xider_layers.py"
+    source.write_text("raise RuntimeError('source fallback must not run')", encoding="utf-8")
+    release_marker = tmp_path / ".xider-signed-release"
+    release_marker.write_text("signed\n", encoding="utf-8")
+    plist_path = tmp_path / "LaunchAgents/com.xider.safari.plist"
+    argv = [
+        "XIDER-Layers", "--write-launch-agent", "safari", str(tmp_path),
+        "", str(app_bin), str(release_marker), str(plist_path),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    assert xider_layers.main() == 0
+    with plist_path.open("rb") as stream:
+        plist = plistlib.load(stream)
+    assert plist["Label"] == "com.xider.safari"
+    assert plist["ProgramArguments"] == [str(app_bin), "--role", "safari"]
+    assert plist["WorkingDirectory"] == str(tmp_path)
+
+
+@pytest.mark.parametrize("script_name", ["start_safari.sh", "start_siri.sh"])
+def test_layer_shell_wrapper_forwards_all_cli_args_to_development_runtime(script_name):
+    script = (ROOT / script_name).read_text(encoding="utf-8")
+
+    assert '"$PYTHON" "$PWD/xider_layers.py" "$@"' in script
+    assert '"$PWD/xider_layers.py" --set-enabled "$ROLE" "$action"' not in script
+
+
+def test_siri_accepts_only_a_fresh_safari_health_record(guardian_module, monkeypatch):
+    import config
+    import xider_layers
+
+    monkeypatch.setattr(xider_layers, "CONFIG_DIR", config.CONFIG_DIR)
+    monkeypatch.setattr(xider_layers, "LAYER_STATE", config.CONFIG_DIR / "layer-state.json")
+    monkeypatch.setattr(xider_layers.os, "getuid", lambda: 501, raising=False)
+    xider_layers.LAYER_STATE.write_text(json.dumps({"safari": True}), encoding="utf-8")
+    (config.CONFIG_DIR / "safari-health.json").write_text(json.dumps({
+        "schema": 1, "component": "safari", "state": "running", "updated_at": time.time(),
+    }), encoding="utf-8")
+    monkeypatch.setattr(xider_layers, "_service_running", lambda _label: True)
+    monkeypatch.setattr(
+        xider_layers.subprocess, "run",
+        lambda *args, **kwargs: pytest.fail("Healthy Safari must not be restarted"),
+    )
+
+    assert xider_layers._start_child("siri") == "healthy"
+
+
+def test_siri_starts_stale_safari_only_when_owner_enabled(
+    guardian_module, monkeypatch, tmp_path,
+):
+    import subprocess
+    import config
+    import xider_layers
+
+    monkeypatch.setattr(xider_layers, "CONFIG_DIR", config.CONFIG_DIR)
+    monkeypatch.setattr(xider_layers, "LAYER_STATE", config.CONFIG_DIR / "layer-state.json")
+    monkeypatch.setattr(xider_layers.os, "getuid", lambda: 501, raising=False)
+    monkeypatch.setattr(xider_layers, "_service_running", lambda _label: False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "start_safari.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    commands = []
+    monkeypatch.setattr(
+        xider_layers.subprocess, "run",
+        lambda args, **kwargs: (
+            commands.append(args) or subprocess.CompletedProcess(args, 0, "", "")
+        ),
+    )
+
+    xider_layers.LAYER_STATE.write_text(json.dumps({"safari": True}), encoding="utf-8")
+    assert xider_layers._start_child("siri") == "started"
+    assert commands == [["/bin/bash", str(tmp_path / "start_safari.sh")]]
+
+    commands.clear()
+    xider_layers.LAYER_STATE.write_text(json.dumps({"safari": False}), encoding="utf-8")
+    assert xider_layers._start_child("siri") == "owner_disabled"
+    assert commands == []
 
 
 def test_guardian_detects_only_its_agents_matching_stale_heartbeat(guardian_module, monkeypatch, tmp_path):
@@ -976,3 +1143,65 @@ def test_recovery_toggle_does_not_override_explicit_worker_stop(
 
     assert guardian.state["auto_restart"] is False
     assert guardian.state["desired_running"] is False
+
+
+def test_guardian_monitor_does_not_restart_agent_during_mac_bundle_update(guardian_module):
+    module = guardian_module
+
+    class StopAfterOneWait:
+        def __init__(self):
+            self.calls = 0
+
+        def wait(self, _timeout):
+            self.calls += 1
+            return self.calls > 1
+
+    guardian = object.__new__(module.Guardian)
+    guardian.stop_event = StopAfterOneWait()
+    guardian.lock = threading.RLock()
+    guardian._bundle_update_lock = threading.Lock()
+    guardian._bundle_update_lock.acquire()
+    guardian._active_bundle_update_id = "a" * 32
+    guardian.state = {"auto_restart": True, "desired_running": True}
+    guardian._next_restart_at = 0
+    guardian._write_health = Mock()
+    guardian._refresh_worker_intent = Mock()
+    guardian.agent_pid = Mock(return_value=None)
+    guardian.start_agent = Mock(return_value=1234)
+    guardian._observe_agent_process = Mock()
+    guardian._publish = Mock()
+
+    guardian.monitor()
+
+    guardian.agent_pid.assert_not_called()
+    guardian.start_agent.assert_not_called()
+
+
+def test_mac_bundle_update_reports_launchd_probe_failure_and_releases_operation(
+    guardian_module, monkeypatch, tmp_path,
+):
+    module = guardian_module
+    install_root = tmp_path / "install"
+    install_root.mkdir()
+    (install_root / ".xider-signed-release").write_text("signed", encoding="utf-8")
+    monkeypatch.setattr(module, "SCRIPT_DIR", install_root)
+
+    operation_id = "b" * 32
+    guardian = object.__new__(module.Guardian)
+    guardian.state = {"desired_running": True}
+    guardian._bundle_update_lock = threading.Lock()
+    guardian._active_bundle_update_id = operation_id
+    guardian.launchd_loaded = Mock(side_effect=OSError("launchctl unavailable"))
+    guardian._publish_bundle_update_progress = Mock()
+    guardian._publish = Mock()
+
+    guardian._update_mac_bundle({
+        "operation_id": operation_id,
+        "release_tag": "v4.2.0",
+        "manifest_digest": "c" * 64,
+        "component": "mac_agent",
+    })
+
+    assert guardian._active_bundle_update_id is None
+    assert guardian._publish.call_args.args[0]["update_state"] == "failed"
+    assert guardian._publish.call_args.args[0]["operation_id"] == operation_id

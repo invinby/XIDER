@@ -72,6 +72,96 @@ def test_authenticated_progress_routes_to_coordinator(coordinator):
     assert c.store.get(op.operation_id).state == 'downloading'
 
 
+def test_guardian_frozen_update_receipt_reconciles_only_exact_published_operation(
+    coordinator, monkeypatch
+):
+    c, _ = coordinator
+    operation = c.start_batch(
+        ['mac2'], 'v4.2.0', 'windows_agent', now=1000,
+        manifest_digest='b' * 64,
+    )[0]
+    c.dispatch_ready(operation.batch_id, lambda _op: True, now=1000)
+    monkeypatch.setattr(bot.fun_text_collector, 'submit', lambda *args: None)
+    payload = {
+        'type': 'guardian', 'device_id': 'mac2', 'guardian': '1.0-windows',
+        'agent_update_protocol': 1, 'agent_running': True, 'desired_running': True,
+        'component': 'windows_agent', 'operation_id': operation.operation_id,
+        'release_tag': operation.release_tag, 'manifest_digest': operation.manifest_digest,
+        'update_state': 'succeeded', 'updated_at': 1009,
+    }
+
+    bot.on_mqtt_message(f'{bot.MQTT_PREFIX}/mac2/guardian', payload)
+    assert c.store.get(operation.operation_id).state == 'succeeded'
+
+
+def test_guardian_update_receipt_cannot_complete_another_device_operation(
+    coordinator, monkeypatch
+):
+    c, operation = coordinator
+    monkeypatch.setattr(bot.fun_text_collector, 'submit', lambda *args: None)
+    payload = {
+        'type': 'guardian', 'device_id': 'mac2', 'guardian': '1.0-windows',
+        'agent_update_protocol': 1, 'component': 'mac_agent',
+        'operation_id': operation.operation_id, 'release_tag': operation.release_tag,
+        'manifest_digest': operation.manifest_digest, 'update_state': 'succeeded',
+        'updated_at': 1009,
+    }
+
+    bot.on_mqtt_message(f'{bot.MQTT_PREFIX}/mac2/guardian', payload)
+    assert c.store.get(operation.operation_id).state == 'queued'
+
+
+@pytest.mark.parametrize("os_name,component,asset,device_id", [
+    ("Windows 11", "windows_agent", "XGENT-WDS.exe", "win-device"),
+    ("macOS 27", "mac_agent", "XGENT-MCS-macos-bundle.zip", "mac-device"),
+])
+def test_frozen_selected_release_dispatches_through_guardian(
+    monkeypatch, tmp_path, signed_catalog_release, os_name, component, asset, device_id,
+):
+    import time
+    import release_catalog
+
+    release = signed_catalog_release(release_catalog.Release(
+        'v4.2.0', (4, 2, 0), f'{os_name} package', '2026-10-20', 'Signed bundle',
+        frozenset({asset, 'XIDER-source.zip', 'release-manifest.json'}),
+    ))
+    info = {
+        'os': os_name, 'version': '4.1.0', 'update_mode': 'frozen',
+        'online': True, 'last_seen': 1010,
+        'guardian': {'agent_update_protocol': 1, 'desired_running': True},
+        'guardian_last_seen': 1010,
+    }
+    coordinator = Coordinator(UpdateStore(tmp_path / 'updates.json'))
+    monkeypatch.setattr(bot, 'update_coordinator', coordinator)
+    monkeypatch.setattr(bot, 'time', SimpleNamespace(time=lambda: 1010))
+    monkeypatch.setattr(bot, 'SESSION', {'target': device_id})
+    monkeypatch.setattr(bot, 'devices', SimpleNamespace(get=lambda _device: info))
+    monkeypatch.setattr(bot, '_simple_command_still_allowed', lambda *args: True)
+    sent = []
+    monkeypatch.setattr(bot, 'publish', lambda command_name, **kwargs: sent.append((command_name, kwargs)) or True)
+    async def no_op(*args, **kwargs):
+        return None
+    monkeypatch.setattr(bot, '_replace_callback_message', no_op)
+    monkeypatch.setattr(bot, '_replace_message_card', no_op)
+    monkeypatch.setattr(bot, '_wait_update_operation', no_op)
+    callback = SimpleNamespace(
+        data='versions:install:agent:v4.2.0',
+        from_user=SimpleNamespace(id=1), answer=no_op,
+    )
+
+    asyncio.run(bot._coordinated_agent_update(
+        callback, 'update', 10, 'v4.2.0', update_release=release,
+    ))
+
+    assert len(sent) == 1
+    action, command = sent[0]
+    assert action == 'guardian'
+    assert command['action'] == 'guardian'
+    assert command['command'] == 'update_agent'
+    assert command['component'] == component
+    assert command['manifest_digest'] == coordinator.store.all()[0].manifest_digest
+
+
 def test_final_update_failure_routes_to_operation_without_claiming_success(coordinator, monkeypatch):
     c, op = coordinator
     monkeypatch.setattr(bot.fun_text_collector, 'submit', lambda *args: None)

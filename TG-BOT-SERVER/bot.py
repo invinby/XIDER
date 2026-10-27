@@ -10203,6 +10203,8 @@ def on_mqtt_message(topic: str, data: dict) -> None:
                 "launchd_loaded": bool(payload.get("launchd_loaded")),
                 "task_registered": bool(payload.get("guardian_task_registered", payload.get("launchd_loaded"))),
                 "auto_restart": bool(payload.get("auto_restart")),
+                "desired_running": bool(payload.get("desired_running")),
+                "agent_update_protocol": payload.get("agent_update_protocol") if type(payload.get("agent_update_protocol")) is int else 0,
             },
             "guardian_last_seen": time.time(),
         }
@@ -10211,6 +10213,14 @@ def on_mqtt_message(topic: str, data: dict) -> None:
                 payload.get("companions"), now=time.time(),
             )
         devices.upsert(device_id, guardian_update)
+        if (payload.get("update_state") in {"health_check", "succeeded", "failed", "rolled_back", "rolling_back", "reconnecting"}
+                and not bot_settings.is_blocked(device_id)):
+            try:
+                update_coordinator.reconcile(
+                    device_id, payload, received_at=time.time(), heartbeat_at=guardian_update["guardian_last_seen"],
+                )
+            except (OSError, ValueError):
+                log.warning("Update journal unavailable; Guardian result remains unconfirmed")
         fun_text_collector.submit(device_id, payload)
     elif msg_type == "ack" and payload.get("type") == "ack":
         status = payload.get("status")
@@ -25826,6 +25836,14 @@ async def _coordinated_agent_update(cq, label, timeout, release_tag, update_devi
             return True
         def send(op):
             try:
+                current = devices.get(op.device_id) or {}
+                if current.get("update_mode") == "frozen":
+                    return publish(
+                        "guardian", _target=op.device_id, id=op.operation_id,
+                        action="guardian", command="update_agent", update=True,
+                        operation_id=op.operation_id, release_tag=op.release_tag,
+                        manifest_digest=op.manifest_digest, component=op.component,
+                    )
                 return publish("agent_update", _target=op.device_id, id=op.operation_id,
                                update=True, release_tag=op.release_tag, manifest_digest=op.manifest_digest)
             except Exception:
@@ -26449,17 +26467,35 @@ _VERSION_BOOTSTRAP_BLOCK_REASONS = frozenset({
 
 
 def _version_install_block_reason(kind: str, release, component: str, info: dict | None) -> str | None:
-    """Fail closed unless this exact release can be verified by this live source agent."""
+    """Require a verified package and a live updater protocol on this device."""
     if kind != "agent":
         return "versions_install_component_unsupported"
-    if not release.has_source_update_payload(component):
-        return "versions_install_payload_missing"
-    if not release.signed_source_update_payload(component):
-        return "versions_install_trust_missing"
     if not info:
         return "versions_missing_device"
     if release_catalog.component_for(str(info.get("os") or "")) != component:
         return "versions_install_component_unsupported"
+    if info.get("update_mode") == "frozen":
+        frozen_asset = {
+            "windows_agent": "XGENT-WDS.exe",
+            "mac_agent": "XGENT-MCS-macos-bundle.zip",
+        }.get(component)
+        if frozen_asset is None or not release.signed_asset(frozen_asset, component):
+            return "versions_install_frozen"
+        guardian = info.get("guardian") if isinstance(info.get("guardian"), dict) else {}
+        guardian_seen = info.get("guardian_last_seen")
+        if (type(guardian.get("agent_update_protocol")) is not int
+                or guardian["agent_update_protocol"] < 1
+                or guardian.get("desired_running") is not True
+                or type(guardian_seen) not in (int, float)
+                or not 0 <= time.time() - guardian_seen <= 120):
+            return "versions_install_requires_agent"
+        if _status_dot(info) == "⚪":
+            return "versions_install_offline"
+        return None
+    if not release.has_source_update_payload(component):
+        return "versions_install_payload_missing"
+    if not release.signed_source_update_payload(component):
+        return "versions_install_trust_missing"
     if not release_catalog.supports_release_manifest_update(str(info.get("version") or "")):
         return "versions_install_requires_agent"
     if type(info.get("update_manifest_binding_protocol")) is not int or info["update_manifest_binding_protocol"] < 1:

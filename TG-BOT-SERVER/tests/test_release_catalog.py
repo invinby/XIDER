@@ -78,6 +78,77 @@ def test_unsigned_catalogue_cannot_offer_install():
     assert bot._version_install_block_reason("agent", release, "windows_agent", info) is not None
 
 
+def test_frozen_windows_install_requires_signed_exe_and_fresh_guardian_protocol(
+    signed_catalog_release, monkeypatch
+):
+    import time
+    import bot
+    import release_catalog
+
+    release = signed_catalog_release(release_catalog.Release(
+        "v4.2.0", (4, 2, 0), "signed Windows", "", "",
+        frozenset({"XGENT-WDS.exe", "XIDER-source.zip", "release-manifest.json"}),
+    ))
+    info = {
+        "os": "Windows 11", "version": "4.1.0", "update_mode": "frozen",
+        "online": True, "last_seen": time.time(),
+        "guardian": {"agent_update_protocol": 1, "desired_running": True},
+        "guardian_last_seen": time.time(),
+    }
+    assert bot._version_install_block_reason("agent", release, "windows_agent", info) is None
+    assert bot._version_install_block_reason(
+        "agent", release, "windows_agent", {**info, "guardian_last_seen": time.time() - 121},
+    ) == "versions_install_requires_agent"
+    assert bot._version_install_block_reason(
+        "agent", release, "windows_agent", {**info, "guardian": {"agent_update_protocol": 1, "desired_running": False}},
+    ) == "versions_install_requires_agent"
+
+    without_exe = signed_catalog_release(release_catalog.Release(
+        "v4.2.0", (4, 2, 0), "zip only", "", "",
+        frozenset({"XGENT-WDS-Windows.zip", "XIDER-source.zip", "release-manifest.json"}),
+    ))
+    assert bot._version_install_block_reason(
+        "agent", without_exe, "windows_agent", info,
+    ) == "versions_install_frozen"
+
+
+def test_frozen_mac_install_requires_signed_bundle_and_fresh_guardian_protocol(
+    signed_catalog_release, monkeypatch
+):
+    import time
+    import bot
+    import release_catalog
+
+    release = signed_catalog_release(release_catalog.Release(
+        "v4.2.0", (4, 2, 0), "signed macOS bundle", "", "",
+        frozenset({"XGENT-MCS-macos-bundle.zip", "XIDER-source.zip", "release-manifest.json"}),
+    ))
+    info = {
+        "os": "macOS 27", "version": "4.1.0", "update_mode": "frozen",
+        "online": True, "last_seen": time.time(),
+        "guardian": {"agent_update_protocol": 1, "desired_running": True},
+        "guardian_last_seen": time.time(),
+    }
+
+    assert bot._version_install_block_reason("agent", release, "mac_agent", info) is None
+    assert bot._version_install_block_reason(
+        "agent", release, "mac_agent", {**info, "guardian_last_seen": time.time() - 121},
+    ) == "versions_install_requires_agent"
+    assert bot._version_install_block_reason(
+        "agent", release, "mac_agent", {
+            **info, "guardian": {"agent_update_protocol": 1, "desired_running": False},
+        },
+    ) == "versions_install_requires_agent"
+
+    without_bundle = signed_catalog_release(release_catalog.Release(
+        "v4.2.0", (4, 2, 0), "source only", "", "",
+        frozenset({"XIDER-source.zip", "release-manifest.json"}),
+    ))
+    assert bot._version_install_block_reason(
+        "agent", without_bundle, "mac_agent", info,
+    ) == "versions_install_frozen"
+
+
 @pytest.mark.parametrize('capability', [None, 0, True, '1'])
 def test_old_agent_without_manifest_binding_fails_closed(signed_catalog_release, capability):
     import bot
