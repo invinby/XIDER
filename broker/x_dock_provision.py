@@ -49,8 +49,6 @@ def provision(request, *, bot_username: str, bot_password: str, prefix: str = DE
                 {"acltype": "subscribe", "allow": False},
             ],
         },
-        {"command": "deleteClient", "username": "democlient"},
-        {"command": "deleteRole", "rolename": "client"},
     )
     for command in commands:
         response = request(command)
