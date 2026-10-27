@@ -302,10 +302,12 @@ certbot_supports_ip_webroot() {
 
 certbot_scheduler_active() {
   if [[ "$CERTBOT_BIN" == /snap/bin/certbot ]]; then
-    systemctl is-active --quiet snap.certbot.renew.timer
-    return
+    systemctl is-active --quiet snap.certbot.renew.timer && return 0
+    systemctl is-enabled --quiet snap.certbot.renew.timer && return 0
+    return 1
   fi
   systemctl is-active --quiet certbot.timer && return 0
+  systemctl is-enabled --quiet certbot.timer && return 0
   grep -RqsE '(^|[[:space:]/])certbot([[:space:]]|$).*renew' \
     /etc/crontab /etc/cron.d /etc/cron.hourly /etc/cron.daily /etc/cron.weekly 2>/dev/null
 }
@@ -509,7 +511,7 @@ ln -s /usr/local/sbin/xider-dock-cert-deploy \
   /etc/letsencrypt/renewal-hooks/deploy/50-xider-dock
 
 # Prefer the scheduler installed by Certbot (apt or snap). Only add an X-DOCK
-# timer when this host has no active Certbot timer/cron, avoiding duplicate jobs.
+# timer when this host has no active or enabled Certbot timer/cron, avoiding duplicates.
 if ! certbot_scheduler_active; then
   cat > "$STAGE/xider-dock-cert-renew.service" <<EOF
 [Unit]
