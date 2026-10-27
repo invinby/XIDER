@@ -54,6 +54,7 @@ def test_safari_restarts_a_stale_guardian_even_if_agent_pid_exists(guardian_modu
     health_dir = config.CONFIG_DIR
     monkeypatch.setattr(xider_layers, "CONFIG_DIR", health_dir)
     monkeypatch.setattr(xider_layers, "LAYER_STATE", health_dir / "layer-state.json")
+    monkeypatch.setattr(xider_layers.os, "getuid", lambda: 501, raising=False)
     monkeypatch.setitem(xider_layers.LAYERS["safari"], "child_state", health_dir / "guardian.json")
     (health_dir / "layer-state.json").write_text(json.dumps({"safari": True}), encoding="utf-8")
     (health_dir / "guardian.json").write_text(json.dumps({"desired_running": True}), encoding="utf-8")
@@ -65,6 +66,39 @@ def test_safari_restarts_a_stale_guardian_even_if_agent_pid_exists(guardian_modu
     monkeypatch.setattr(xider_layers.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "", ""))
 
     assert xider_layers._start_child("safari") == "stale_guardian_restarted"
+
+
+def test_safari_restarts_healthy_guardian_when_agent_heartbeat_is_stale(
+    guardian_module, monkeypatch,
+):
+    import subprocess
+    import config
+    import xider_layers
+
+    health_dir = config.CONFIG_DIR
+    monkeypatch.setattr(xider_layers, "CONFIG_DIR", health_dir)
+    monkeypatch.setattr(xider_layers, "LAYER_STATE", health_dir / "layer-state.json")
+    monkeypatch.setattr(xider_layers.os, "getuid", lambda: 501, raising=False)
+    monkeypatch.setitem(xider_layers.LAYERS["safari"], "child_state", health_dir / "guardian.json")
+    (health_dir / "layer-state.json").write_text(json.dumps({"safari": True}), encoding="utf-8")
+    (health_dir / "guardian.json").write_text(json.dumps({"desired_running": True}), encoding="utf-8")
+    fresh = time.time() - 1
+    stale = fresh - xider_layers.HEALTH_STALE_SECONDS - 1
+    (health_dir / "guardian-health.json").write_text(json.dumps({
+        "schema": 1, "component": "guardian", "state": "running", "updated_at": fresh,
+    }), encoding="utf-8")
+    (health_dir / "agent-health.json").write_text(json.dumps({
+        "schema": 1, "component": "agent", "state": "running", "updated_at": stale,
+    }), encoding="utf-8")
+    commands = []
+    monkeypatch.setattr(xider_layers, "_service_running", lambda _label: True)
+    monkeypatch.setattr(
+        xider_layers.subprocess, "run",
+        lambda args, **kwargs: (commands.append(args) or subprocess.CompletedProcess(args, 0, "", "")),
+    )
+
+    assert xider_layers._start_child("safari") == "guardian_restarted_for_agent"
+    assert commands == [["launchctl", "kickstart", "-k", f"gui/{xider_layers.os.getuid()}/com.xider.guardian"]]
 
 
 def test_guardian_detects_only_its_agents_matching_stale_heartbeat(guardian_module, monkeypatch, tmp_path):
