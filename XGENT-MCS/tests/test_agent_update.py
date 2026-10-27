@@ -448,7 +448,7 @@ def source_update(monkeypatch, tmp_path):
         "xgent_mcs.py", "config.py", "crypto.py", "xgencrypto.py",
         "fake_update_screen.py", "location_adapter.py", "media_history.py", "media_request_control.py", "camera_quality.py", "camera_devices.py", "camera_series.py", "media_temp.py", "display_contact_sheet.py", "window_capture.py", "dns_diagnostics.py",
         "xider_guardian.py", "requirements.txt", "setup_mac.py",
-        "stop_agent.sh", "start_guardian.sh",
+        "stop_agent.sh", "start_guardian.sh", "start_safari.sh", "start_siri.sh",
     )
     candidates = {name: b"# new signed source\n" for name in files}
     candidates["requirements.txt"] = b"paho-mqtt>=2.0,<3\n"

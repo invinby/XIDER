@@ -21,9 +21,9 @@ def test_signed_macos_bootstrap_stages_only_signed_runtime_bundle():
     assert "mkdir -p \"$stage/new/XGENT-MCS\"" in source[release_start:release_end]
     assert 'PYTHONPATH="$downloaded/XGENT-MCS"' in source
     assert 'download_verified_release_asset(Path(manifest), Path(bundle), "XGENT-MCS-macos-bundle.zip"' in source
-    assert 'cp "$stage/macos-bundle/$file" "$new_agent/$file"' in source
+    assert 'cp "$stage/macos-bundle/.env.example" "$new_agent/.env.example"' in source
     assert 'mv "$stage/macos-bundle/$app" "$new_agent/$app"' in source
-    assert 'Unexpected Python source in signed macOS install; refusing activation.' in source
+    assert 'Unexpected plaintext source or helper script in signed macOS install; refusing activation.' in source
     assert 'Подписанные Agent, Guard Keeper и Safari/Siri подготовлены без Python-исходников.' in source
 
 
@@ -31,7 +31,7 @@ def test_signed_macos_runtime_is_verified_before_stopping_current_services():
     source = (ROOT / "deploy" / "bootstrap.sh").read_text(encoding="utf-8")
     assert source.index("download_verified_release_asset(") < source.index("stop_loaded_job com.xider.siri")
     assert source.index('codesign --verify --deep --strict') < source.index("stop_loaded_job com.xider.siri")
-    assert source.index("Unexpected Python source in signed macOS install") < source.index("stop_loaded_job com.xider.siri")
+    assert source.index("Unexpected plaintext source or helper script in signed macOS install") < source.index("stop_loaded_job com.xider.siri")
     assert "Критично: recovery" not in source
 
 
