@@ -17,13 +17,19 @@ from logging.handlers import RotatingFileHandler
 import os
 import plistlib
 import re
+import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 from pathlib import Path
 
 from config import CONFIG_DIR, observed_component_health
+from mac_service_control import (
+    app_install_root, start_launch_agent, stop_launch_agent,
+    write_launch_agent as write_service_launch_agent,
+)
 
 try:
     import fcntl
@@ -40,13 +46,13 @@ LAYERS = {
     "safari": {
         "label": "com.xider.safari",
         "child_label": "com.xider.guardian",
-        "child_start": "start_guardian.sh",
+        "child_role": "guardian",
         "child_state": CONFIG_DIR / "guardian.json",
     },
     "siri": {
         "label": "com.xider.siri",
         "child_label": "com.xider.safari",
-        "child_start": "start_safari.sh",
+        "child_role": "safari",
         "child_state": None,
     },
 }
@@ -196,6 +202,52 @@ def _service_running(label: str) -> bool:
     return result.returncode == 0 and bool(re.search(r"(?m)^\s*(?:pid = [1-9][0-9]*|state = running)\s*$", result.stdout))
 
 
+def _start_compiled_child(role: str) -> str:
+    """Start a child LaunchAgent directly from its compiled app bundle."""
+    try:
+        root = app_install_root(Path(sys.executable))
+    except RuntimeError:
+        root = Path.cwd().resolve()
+    marker = root / ".xider-signed-release"
+    if role == "guardian":
+        app_binary = root / "XIDER-Guard-Keeper.app" / "Contents" / "MacOS" / "XIDER-Guard-Keeper"
+        label = "com.xider.guardian"
+        arguments = [str(app_binary)]
+        log_path = CONFIG_DIR / "guardian.log"
+    else:
+        app_binary = root / "XIDER-Layers.app" / "Contents" / "MacOS" / "XIDER-Layers"
+        if role not in LAYERS:
+            raise ValueError("unknown XIDER child role")
+        label = LAYERS[role]["label"]
+        arguments = [str(app_binary), "--role", role]
+        log_path = CONFIG_DIR / f"{role}.log"
+    if marker.is_file() and not app_binary.is_file():
+        raise FileNotFoundError(f"Signed XIDER app is missing for role {role}.")
+    if app_binary.is_file():
+        plist_path = write_service_launch_agent(
+            label=label, program_arguments=arguments, working_directory=root,
+            stdout_path=log_path,
+        )
+        start_launch_agent(label, plist_path)
+        return "started"
+
+    # Development/source fallback only. Frozen release installs are fail-closed.
+    if marker.exists():
+        raise FileNotFoundError("Compiled XIDER runtime is missing; source fallback is disabled.")
+    script_name = "start_guardian.sh" if role == "guardian" else f"start_{role}.sh"
+    script = root / script_name
+    if not script.is_file():
+        raise FileNotFoundError(f"Missing development XIDER service script: {script_name}")
+    result = subprocess.run(
+        ["/bin/bash", str(script)], capture_output=True, text=True,
+        check=False, timeout=35,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "launchd rejected the start request").strip()
+        raise RuntimeError(" ".join(detail.split())[:220])
+    return "started"
+
+
 def _health_is_fresh(role: str) -> bool:
     record = _read_json(CONFIG_DIR / f"{role}-health.json")
     stamp = record.get("updated_at")
@@ -228,17 +280,52 @@ def _start_child(role: str) -> str:
             )
             if result.returncode == 0:
                 return "guardian_restarted_for_agent" if guardian_healthy else "stale_guardian_restarted"
-    script = Path.cwd() / child["child_start"]
-    if not script.is_file():
-        raise FileNotFoundError(f"Missing visible XIDER service script: {script.name}")
-    result = subprocess.run(
-        ["/bin/bash", str(script)], capture_output=True, text=True,
-        check=False, timeout=35,
+    return _start_compiled_child(child["child_role"])
+
+
+def manage_layer(role: str, action: str) -> bool:
+    """Owner-facing start/stop/status API used by the compiled layer app."""
+    if role not in LAYERS or action not in {"start", "stop", "status"}:
+        raise ValueError("invalid XIDER layer service action")
+    label = LAYERS[role]["label"]
+    plist_path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+    if action == "status":
+        return _service_running(label)
+    if action == "stop":
+        owner_stop(role)
+        stop_launch_agent(label)
+        return False
+    set_layer_enabled(role, True)
+    try:
+        root = app_install_root(Path(sys.executable))
+    except RuntimeError:
+        root = Path.cwd().resolve()
+    app_binary = root / "XIDER-Layers.app" / "Contents" / "MacOS" / "XIDER-Layers"
+    marker = root / ".xider-signed-release"
+    if app_binary.is_file():
+        plist_path = write_service_launch_agent(
+            label=label, program_arguments=[str(app_binary), "--role", role],
+            working_directory=root, stdout_path=CONFIG_DIR / f"{role}.log",
+        )
+        start_launch_agent(label, plist_path)
+        return True
+    if marker.exists():
+        raise FileNotFoundError("Signed XIDER-Layers.app is missing; source fallback is disabled.")
+    source = root / "xider_layers.py"
+    if not source.is_file():
+        raise FileNotFoundError("XIDER-Layers runtime is unavailable.")
+    python = root / "venv" / "bin" / "python3"
+    if not python.is_file():
+        found = shutil.which("python3")
+        if not found:
+            raise FileNotFoundError("Python 3 is required for the development source fallback.")
+        python = Path(found)
+    plist_path = write_service_launch_agent(
+        label=label, program_arguments=[str(python), str(source), "--role", role],
+        working_directory=root, stdout_path=CONFIG_DIR / f"{role}.log",
     )
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "launchd rejected the start request").strip()
-        raise RuntimeError(" ".join(detail.split())[:220])
-    return "started"
+    start_launch_agent(label, plist_path)
+    return True
 
 
 def run(role: str) -> int:
@@ -297,6 +384,7 @@ def main() -> int:
     mode.add_argument("--role", choices=tuple(LAYERS))
     mode.add_argument("--set-enabled", nargs=2, metavar=("ROLE", "START|STOP"))
     mode.add_argument("--owner-stop", choices=tuple(LAYERS))
+    mode.add_argument("--service", nargs=2, metavar=("ROLE", "START|STOP|STATUS"))
     mode.add_argument(
         "--write-launch-agent", nargs=6,
         metavar=("ROLE", "ROOT", "PYTHON", "APP_BIN", "RELEASE_MARKER", "PLIST"),
@@ -307,6 +395,21 @@ def main() -> int:
             owner_stop(args.owner_stop)
         except (OSError, RuntimeError, ValueError) as exc:
             parser.error(str(exc))
+        return 0
+    if args.service is not None:
+        role, action = args.service
+        action = action.lower()
+        try:
+            running = manage_layer(role, action)
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+            print(f"XIDER {role} {action}: {exc}", file=sys.stderr)
+            return 1
+        if action == "status":
+            state = "OK" if running else "STOPPED"
+            print(f"[{state}] XIDER {role} LaunchAgent")
+            print(f"[LOG] {CONFIG_DIR / f'{role}.log'}")
+            return 0 if running else 1
+        print(f"[OK] XIDER {role}: {action}")
         return 0
     if args.write_launch_agent is not None:
         role, root, python, app_bin, release_marker, plist_path = args.write_launch_agent

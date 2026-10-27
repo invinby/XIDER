@@ -8,6 +8,7 @@ MQTT-связь, сообщать состояние и по явно включ
 
 from __future__ import annotations
 
+import argparse
 from contextlib import contextmanager
 import json
 import logging
@@ -50,6 +51,13 @@ from update_package import (
     rollback_unhealthy_agent,
 )
 from xgencrypto import decrypt_payload, encrypt_payload
+from mac_service_control import (
+    LABELS as MAC_SERVICE_LABELS,
+    launch_agent_running,
+    start_launch_agent,
+    stop_launch_agent,
+    write_launch_agent as write_mac_launch_agent,
+)
 
 try:
     import fcntl
@@ -1015,6 +1023,47 @@ def main() -> int:
         set_guardian_desired_running(False)
         print("[OK] XIDER Guardian saved the owner's stop choice.")
         return 0
+    if len(sys.argv) >= 2 and sys.argv[1] == "--service":
+        parser = argparse.ArgumentParser(description="XIDER macOS Guard Keeper LaunchAgent control")
+        parser.add_argument("--service", choices=("start", "stop", "status"), required=True)
+        args = parser.parse_args()
+        label = MAC_SERVICE_LABELS["guardian"]
+        plist_path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+        try:
+            if args.service == "status":
+                running = launch_agent_running(label)
+                print(f"[{'OK' if running else 'STOPPED'}] XIDER Guard Keeper LaunchAgent")
+                print(f"[LOG] {SCRIPT_DIR / 'guardian.log'}")
+                return 0 if running else 1
+            if args.service == "stop":
+                set_guardian_desired_running(False)
+                set_guardian_startup_enabled(False)
+                stop_launch_agent(label)
+                print("[OK] XIDER Guard Keeper: stop")
+                return 0
+            executable = Path(sys.executable).resolve()
+            if not getattr(sys, "frozen", False) and globals().get("__compiled__") is None:
+                executable = Path(__file__).resolve()
+                arguments = [sys.executable, str(executable)]
+                working_directory = executable.parent
+            else:
+                arguments = [str(executable)]
+                working_directory = SCRIPT_DIR
+            if not (working_directory / ".env").is_file():
+                raise FileNotFoundError("Файл .env не найден; Guard Keeper не регистрирую.")
+            set_guardian_desired_running(True)
+            set_guardian_startup_enabled(True)
+            plist_path = write_mac_launch_agent(
+                label=label, program_arguments=arguments,
+                working_directory=working_directory,
+                stdout_path=CONFIG_DIR / "guardian.log",
+            )
+            start_launch_agent(label, plist_path)
+            print("[OK] XIDER Guard Keeper: start")
+            return 0
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+            print(f"XIDER Guard Keeper {args.service}: {exc}", file=sys.stderr)
+            return 1
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     Guardian().run()
     return 0

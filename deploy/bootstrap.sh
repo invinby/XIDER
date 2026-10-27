@@ -352,7 +352,7 @@ from zipfile import ZipFile
 import sys
 
 allowed_apps = {"XIDER.app", "XIDER-Guard-Keeper.app", "XIDER-Layers.app"}
-allowed_files = {".env.example", "start_agent.sh", "stop_agent.sh", "start_guardian.sh", "start_safari.sh", "start_siri.sh"}
+allowed_files = {".env.example"}
 allowed = allowed_apps | allowed_files
 total = 0
 with ZipFile(sys.argv[1]) as archive:
@@ -377,9 +377,11 @@ with ZipFile(sys.argv[1]) as archive:
 PY
   mkdir -p "$stage/macos-bundle"
   ditto -x -k "$signed_bundle" "$stage/macos-bundle"
-  for file in .env.example start_agent.sh stop_agent.sh start_guardian.sh start_safari.sh start_siri.sh; do
-    cp "$stage/macos-bundle/$file" "$new_agent/$file"
-  done
+  if [[ ! -f "$stage/macos-bundle/.env.example" ]]; then
+    echo "В подписанном macOS-бандле отсутствует .env.example." >&2
+    exit 5
+  fi
+  cp "$stage/macos-bundle/.env.example" "$new_agent/.env.example"
   for app in XIDER.app XIDER-Guard-Keeper.app XIDER-Layers.app; do
     codesign --verify --deep --strict "$stage/macos-bundle/$app"
     xcrun stapler validate "$stage/macos-bundle/$app"
@@ -390,9 +392,8 @@ PY
   rm -f "$new_agent/xider_layers.py"
   : > "$new_agent/.xider-signed-release"
   chmod 600 "$new_agent/.xider-signed-release"
-  chmod +x "$new_agent/start_agent.sh" "$new_agent/stop_agent.sh" "$new_agent/start_guardian.sh" "$new_agent/start_safari.sh" "$new_agent/start_siri.sh"
-  if find "$new_agent" -type f \( -name '*.py' -o -name '*.pyc' -o -name '*.pyo' \) -print -quit | grep -q .; then
-    echo "Unexpected Python source in signed macOS install; refusing activation." >&2
+  if find "$new_agent" -type f \( -name '*.py' -o -name '*.pyc' -o -name '*.pyo' -o -name '*.ps1' -o -name '*.psm1' -o -name '*.bat' -o -name '*.cmd' -o -name '*.sh' \) -print -quit | grep -q .; then
+    echo "Unexpected plaintext source or helper script in signed macOS install; refusing activation." >&2
     exit 5
   fi
   echo "Подписанные Agent, Guard Keeper и Safari/Siri подготовлены без Python-исходников."
@@ -438,8 +439,43 @@ PY
 }
 start_enabled_layers() {
   local directory="$1"
-  if layer_enabled safari; then (cd "$directory" && bash ./start_safari.sh); fi
-  if layer_enabled siri; then (cd "$directory" && bash ./start_siri.sh); fi
+  local layer_binary="$directory/XIDER-Layers.app/Contents/MacOS/XIDER-Layers"
+  if [[ -x "$layer_binary" ]]; then
+    if { ! layer_enabled safari || "$layer_binary" --service safari start; } &&
+       { ! layer_enabled siri || "$layer_binary" --service siri start; }; then
+      return 0
+    fi
+    echo "Compiled layer control failed; trying only the previous install's bundled helpers." >&2
+  fi
+  [[ -f "$directory/start_safari.sh" && -f "$directory/start_siri.sh" ]] || return 1
+  if layer_enabled safari; then (cd "$directory" && bash ./start_safari.sh) || return 1; fi
+  if layer_enabled siri; then (cd "$directory" && bash ./start_siri.sh) || return 1; fi
+}
+start_runtime_services() {
+  local directory="$1"
+  local agent_binary="$directory/XIDER.app/Contents/MacOS/XGENT-MCS"
+  local guardian_binary="$directory/XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper"
+  if [[ -x "$agent_binary" && -x "$guardian_binary" ]]; then
+    if "$agent_binary" --service start && "$guardian_binary" --service start; then
+      return 0
+    fi
+    echo "Compiled service control failed; trying only the previous install's bundled helpers." >&2
+  fi
+  [[ -f "$directory/start_agent.sh" && -f "$directory/start_guardian.sh" ]] || return 1
+  (cd "$directory" && XIDER_RUNTIME_PREPARED=1 bash ./start_agent.sh && bash ./start_guardian.sh)
+}
+runtime_services_status() {
+  local directory="$1"
+  local agent_binary="$directory/XIDER.app/Contents/MacOS/XGENT-MCS"
+  local guardian_binary="$directory/XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper"
+  if [[ -x "$agent_binary" && -x "$guardian_binary" ]]; then
+    if "$agent_binary" --service status && "$guardian_binary" --service status; then
+      return 0
+    fi
+    echo "Compiled status probe failed; trying only the previous install's bundled helpers." >&2
+  fi
+  [[ -f "$directory/start_agent.sh" && -f "$directory/start_guardian.sh" ]] || return 1
+  (cd "$directory" && bash ./start_agent.sh --status && bash ./start_guardian.sh --status)
 }
 stop_loaded_job() {
   local label="$1" service="gui/$(id -u)/$1"
@@ -454,28 +490,26 @@ stop_loaded_job() {
 # the owner's enabled/disabled preference; `--stop` would overwrite it.
 if ! stop_loaded_job com.xider.siri || ! stop_loaded_job com.xider.safari ||
    ! stop_loaded_job com.xider.guardian || ! stop_loaded_job com.xgent.agent; then
-  if [[ -f "$TARGET/XGENT-MCS/start_guardian.sh" ]]; then
-    (cd "$TARGET/XGENT-MCS" && bash ./start_agent.sh || true;
-     bash ./start_guardian.sh || true;
-     start_enabled_layers "$TARGET/XGENT-MCS" || true)
+  if [[ -d "$TARGET/XGENT-MCS/XIDER.app" || -f "$TARGET/XGENT-MCS/start_guardian.sh" ]]; then
+    start_runtime_services "$TARGET/XGENT-MCS" || true
+    start_enabled_layers "$TARGET/XGENT-MCS" || true
   fi
   exit 5
 fi
 if [[ -e "$TARGET" ]]; then mv "$TARGET" "$backup"; fi
 if ! mv "$stage/new" "$TARGET"; then
   [[ ! -e "$backup" ]] || mv "$backup" "$TARGET"
-  if [[ -f "$TARGET/XGENT-MCS/start_agent.sh" ]]; then
-    (cd "$TARGET/XGENT-MCS" && XIDER_RUNTIME_PREPARED=1 bash ./start_agent.sh || true;
-     bash ./start_guardian.sh || true;
-     start_enabled_layers "$TARGET/XGENT-MCS" || true)
+  if [[ -d "$TARGET/XGENT-MCS/XIDER.app" || -f "$TARGET/XGENT-MCS/start_agent.sh" ]]; then
+    start_runtime_services "$TARGET/XGENT-MCS" || true
+    start_enabled_layers "$TARGET/XGENT-MCS" || true
   fi
   echo "Не удалось активировать новую папку; прежняя установка сохранена." >&2
   exit 5
 fi
 
-if ! (cd "$TARGET/XGENT-MCS" && XIDER_RUNTIME_PREPARED=1 bash ./start_agent.sh && bash ./start_guardian.sh &&
+if ! (start_runtime_services "$TARGET/XGENT-MCS" &&
       start_enabled_layers "$TARGET/XGENT-MCS" &&
-      bash ./start_agent.sh --status && bash ./start_guardian.sh --status); then
+      runtime_services_status "$TARGET/XGENT-MCS"); then
   echo "Запуск не прошёл; возвращаю предыдущую версию." >&2
   if ! stop_loaded_job com.xider.siri || ! stop_loaded_job com.xider.safari ||
      ! stop_loaded_job com.xider.guardian || ! stop_loaded_job com.xgent.agent; then
@@ -493,10 +527,9 @@ if ! (cd "$TARGET/XGENT-MCS" && XIDER_RUNTIME_PREPARED=1 bash ./start_agent.sh &
       echo "КРИТИЧНО: не удалось вернуть резервную версию из $backup" >&2
     fi
   fi
-  if [[ -x "$TARGET/XGENT-MCS/start_agent.sh" ]]; then
-    (cd "$TARGET/XGENT-MCS" && XIDER_RUNTIME_PREPARED=1 bash ./start_agent.sh || true;
-     bash ./start_guardian.sh || true;
-     start_enabled_layers "$TARGET/XGENT-MCS" || true)
+  if [[ -d "$TARGET/XGENT-MCS/XIDER.app" || -x "$TARGET/XGENT-MCS/start_agent.sh" ]]; then
+    start_runtime_services "$TARGET/XGENT-MCS" || true
+    start_enabled_layers "$TARGET/XGENT-MCS" || true
   fi
   [[ ! -e "$backup" ]] || echo "Предыдущая версия возвращена: $TARGET"
   exit 6
@@ -514,5 +547,5 @@ fi
 
 echo "Установка завершена: $TARGET"
 [[ ! -e "$backup" ]] || echo "Предыдущая установка сохранена: $backup"
-echo "Проверка: cd \"$TARGET/XGENT-MCS\" && bash ./start_agent.sh --status && bash ./start_guardian.sh --status"
+echo "Проверка: \"$TARGET/XGENT-MCS/XIDER.app/Contents/MacOS/XGENT-MCS\" --service status; \"$TARGET/XGENT-MCS/XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper\" --service status"
 echo "Запуск процессов подтверждён. Связь MQTT и системные разрешения проверь в карточке устройства в боте."

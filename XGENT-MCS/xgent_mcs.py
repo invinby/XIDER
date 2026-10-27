@@ -3,6 +3,7 @@
 Подключается к публичному MQTT-брокеру, слушает команды бота
 и выполняет их на этой машине.
 """
+import argparse
 import base64
 import binascii
 import datetime
@@ -72,6 +73,14 @@ import network_traffic
 import interface_status_history
 from network_traffic_schedule import load_schedule as load_network_traffic_schedule, save_schedule as save_network_traffic_schedule
 from media_request_control import MEDIA_REQUEST_ACTIONS, MediaRequestRegistry
+from mac_service_control import (
+    LABELS as MAC_SERVICE_LABELS,
+    app_install_root as mac_app_install_root,
+    launch_agent_running,
+    start_launch_agent,
+    stop_launch_agent,
+    write_launch_agent as write_mac_launch_agent,
+)
 
 _NUITKA_RUNTIME = bool("__compiled__" in globals() and not getattr(sys, "frozen", False))
 _BUNDLED_RUNTIME = bool(getattr(sys, "frozen", False) or _NUITKA_RUNTIME)
@@ -720,7 +729,8 @@ def _claim_bootstrap_lock() -> bool:
         return False
 
 
-if __name__ == "__main__" and not _claim_bootstrap_lock():
+if (__name__ == "__main__" and not (len(sys.argv) > 1 and sys.argv[1] == "--service")
+        and not _claim_bootstrap_lock()):
     sys.stderr.write("FATAL: XGENT-MCS уже запущен на этой машине! Второй экземпляр остановлен.\n")
     raise SystemExit(1)
 
@@ -5653,26 +5663,40 @@ end tell'''
             role: _agent_install_dir() / f"start_{role}.sh"
             for role in ("siri", "safari")
         }
-        stopped_layers = []
-        for role in ("siri", "safari"):
+        layer_binary = _agent_install_dir() / "XIDER-Layers.app" / "Contents" / "MacOS" / "XIDER-Layers"
+
+        def control_layer(role: str, action: str) -> subprocess.CompletedProcess[str]:
+            if _BUNDLED_RUNTIME:
+                if not layer_binary.is_file():
+                    raise FileNotFoundError("Скомпилированный XIDER-Layers.app не найден.")
+                return subprocess.run(
+                    [str(layer_binary), "--service", role, action],
+                    capture_output=True, text=True, check=False, timeout=35,
+                )
             script = layer_scripts[role]
             if not script.is_file():
-                continue
+                raise FileNotFoundError(f"Исходный start_{role}.sh не найден.")
+            command = ["/bin/bash", str(script)]
+            if action == "stop":
+                command.append("--stop")
+            return subprocess.run(
+                command, capture_output=True, text=True, check=False, timeout=35,
+            )
+
+        stopped_layers = []
+        for role in ("siri", "safari"):
             try:
-                stopped = subprocess.run(
-                    ["/bin/bash", str(script), "--stop"],
-                    capture_output=True, text=True, check=False, timeout=20,
-                )
+                stopped = control_layer(role, "stop")
                 if stopped.returncode != 0:
-                    raise RuntimeError(stopped.stderr.strip() or f"{role.title()} did not stop")
+                    raise RuntimeError(stopped.stderr.strip() or stopped.stdout.strip() or f"{role.title()} did not stop")
                 stopped_layers.append(role)
             except Exception as exc:
                 log.exception("Could not stop XIDER %s before uninstall", role)
                 for previous in reversed(stopped_layers):
-                    subprocess.run(
-                        ["/bin/bash", str(layer_scripts[previous])],
-                        capture_output=True, text=True, check=False, timeout=35,
-                    )
+                    try:
+                        control_layer(previous, "start")
+                    except Exception:
+                        log.exception("Could not restore XIDER %s after uninstall was cancelled", previous)
                 self._publish_response("output", {
                     "type": "uninstall_agent", "device_id": DEVICE_ID, "ok": False,
                     "text": f"❌ {role.title()} не остановился; удаление отменено: {exc}",
@@ -5708,10 +5732,12 @@ end tell'''
             except Exception:
                 log.exception("Could not restore Guardian intent after failed uninstall")
             for role in reversed(stopped_layers):
-                subprocess.run(
-                    ["/bin/bash", str(layer_scripts[role])],
-                    capture_output=True, text=True, check=False, timeout=35,
-                )
+                try:
+                    restored = control_layer(role, "start")
+                    if restored.returncode != 0:
+                        raise RuntimeError(restored.stderr.strip() or restored.stdout.strip() or "restart failed")
+                except Exception:
+                    log.exception("Could not restart XIDER %s after failed Guardian unload", role)
             self._publish_response("output", {
                 "type": "uninstall_agent", "device_id": DEVICE_ID, "ok": False,
                 "text": f"❌ Guardian остался загружен; удаление отменено, настройки сохранены: {exc}",
@@ -5779,6 +5805,46 @@ def setup_logging() -> None:
     handler = RotatingFileHandler(CONFIG_DIR / "xgent.log", maxBytes=500_000, backupCount=3, encoding="utf-8")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", handlers=[handler])
 
+
+def _manage_agent_launch_agent(action: str) -> bool:
+    """Manage the visible Agent LaunchAgent from the compiled app or source."""
+    if action not in {"start", "stop", "status"}:
+        raise ValueError("service action must be start, stop, or status")
+    label = MAC_SERVICE_LABELS["agent"]
+    plist_path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+    if action == "status":
+        return launch_agent_running(label)
+    if action == "stop":
+        set_guardian_desired_running(False)
+        stop_launch_agent(label)
+        return False
+
+    install_dir = _agent_install_dir().resolve()
+    env_file = install_dir / ".env"
+    marker = install_dir / ".xider-signed-release"
+    if env_file.is_symlink() or not env_file.is_file():
+        raise FileNotFoundError("Файл .env не найден; Agent не регистрирую.")
+    if _BUNDLED_RUNTIME:
+        executable = Path(sys.executable).resolve()
+        try:
+            install_dir = mac_app_install_root(executable)
+        except RuntimeError as exc:
+            raise RuntimeError("Не удалось определить папку установленного XIDER.app.") from exc
+        arguments = [str(executable)]
+        if marker.is_file() and not executable.is_file():
+            raise FileNotFoundError("XIDER.app не найден.")
+    else:
+        executable = Path(sys.executable).resolve()
+        arguments = [str(executable), str(Path(__file__).resolve())]
+    set_guardian_desired_running(True)
+    set_guardian_startup_enabled(True)
+    plist_path = write_mac_launch_agent(
+        label=label, program_arguments=arguments, working_directory=install_dir,
+        stdout_path=CONFIG_DIR / "xgent.log", keep_alive=False,
+    )
+    start_launch_agent(label, plist_path)
+    return True
+
 def _worker_launch_command() -> list[str]:
     if _BUNDLED_RUNTIME:
         return [sys.executable]
@@ -5829,6 +5895,21 @@ def _layer_health_snapshot() -> dict:
 
 
 def main() -> None:
+    if len(sys.argv) >= 2 and sys.argv[1] == "--service":
+        parser = argparse.ArgumentParser(description="XIDER macOS Agent LaunchAgent control")
+        parser.add_argument("--service", choices=("start", "stop", "status"), required=True)
+        args = parser.parse_args()
+        try:
+            running = _manage_agent_launch_agent(args.service)
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+            print(f"XIDER Agent {args.service}: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+        if args.service == "status":
+            print(f"[{'OK' if running else 'STOPPED'}] XIDER Agent LaunchAgent")
+            print(f"[LOG] {CONFIG_DIR / 'xgent.log'}")
+            raise SystemExit(0 if running else 1)
+        print(f"[OK] XIDER Agent: {args.service}")
+        raise SystemExit(0)
     if not acquire_instance_lock():
         sys.stderr.write("FATAL: XGENT-MCS уже запущен на этой машине! Второй экземпляр остановлен.\n")
         raise SystemExit(1)

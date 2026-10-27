@@ -144,16 +144,14 @@ jobs:
           cd XGENT-MCS
           mkdir -p dist
           cp .env.example dist/.env.example
-          cp start_agent.sh stop_agent.sh dist/
-          cp start_guardian.sh start_safari.sh start_siri.sh dist/
           ditto -c -k --sequesterRsrc --keepParent dist/nuitka/XIDER-Guard-Keeper.app dist/Guard-Keeper-macOS.zip
           ditto dist/nuitka/XIDER-Guard-Keeper.app dist/XIDER-Guard-Keeper.app
           ditto dist/nuitka/XIDER-Layers.app dist/XIDER-Layers.app
           ditto dist/nuitka/XIDER.app dist/XIDER.app
           cd dist
-          zip -r XGENT-MCS-macos-bundle.zip XIDER.app XIDER-Guard-Keeper.app XIDER-Layers.app .env.example start_agent.sh stop_agent.sh start_guardian.sh start_safari.sh start_siri.sh
-          if unzip -Z1 XGENT-MCS-macos-bundle.zip | grep -Eq '^(xider_layers|xider_guardian|xgent_mcs)\.py$'; then
-            echo 'Release bundle unexpectedly contains plaintext XIDER Python entrypoints.' >&2
+          zip -r XGENT-MCS-macos-bundle.zip XIDER.app XIDER-Guard-Keeper.app XIDER-Layers.app .env.example
+          if unzip -Z1 XGENT-MCS-macos-bundle.zip | grep -Eiq '\.(py[co]?|ps1|psm1|bat|cmd|sh)$'; then
+            echo 'Release bundle unexpectedly contains plaintext source or helper scripts.' >&2
             exit 1
           fi
           python ../../tools/verify_command_approval_bundle.py --public-only-zip XGENT-MCS-macos-bundle.zip
@@ -236,6 +234,11 @@ jobs:
           unzip -t artifacts/macos/XGENT-MCS-macos-bundle.zip
           unzip -Z1 artifacts/macos/XGENT-MCS-macos-bundle.zip | grep -Fq 'XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper'
           unzip -Z1 artifacts/macos/XGENT-MCS-macos-bundle.zip | grep -Fq 'XIDER-Layers.app/Contents/MacOS/XIDER-Layers'
+          unzip -Z1 artifacts/macos/XGENT-MCS-macos-bundle.zip | grep -Fq .env.example
+          if unzip -Z1 artifacts/macos/XGENT-MCS-macos-bundle.zip | grep -Eiq '\.(py[co]?|ps1|psm1|bat|cmd|sh)$'; then
+            echo 'macOS release package contains plaintext source or helper scripts.' >&2
+            exit 1
+          fi
           git archive --format=zip --output=artifacts/X-STAB-server.zip HEAD TG-BOT-SERVER deploy XGENT-MCS/release_signature.py
           python tools/verify_command_approval_bundle.py \
             --public-only-zip artifacts/XIDER-source.zip \
