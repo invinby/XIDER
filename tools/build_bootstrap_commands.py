@@ -97,7 +97,7 @@ def build_platform_commands(commit_id: str, release_tag: str) -> dict[str, str]:
         "$psi.Arguments='/d /s /c \"\"'+$c+'\"\"'; $psi.UseShellExecute=$false; "
         "$v=New-Object Diagnostics.Process; $v.StartInfo=$psi; [void]$v.Start(); "
         "$v.WaitForExit(); if($v.ExitCode -ne 0){throw 'XIDER bootstrap signature verification failed'}; "
-        f"& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p -Ref '{ref}'; "
+        f"& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p -Ref '{ref}' -ReleaseTag '{release_tag}'; "
         "if($LASTEXITCODE -ne 0){throw 'XIDER Windows agent bootstrap failed'} "
         "} finally { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue }"
     )

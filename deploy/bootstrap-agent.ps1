@@ -6,6 +6,7 @@ param(
     [string]$ServerUser = 'ubuntu',
     [string]$Branch = 'main',
     [string]$Ref = $env:XIDER_REF,
+    [string]$ReleaseTag = $env:XIDER_RELEASE_TAG,
     [string]$DockUrl = $env:XIDER_DOCK_URL,
     [ValidateRange(1, 120)][int]$HealthTimeoutSeconds = 30,
     [switch]$PreflightOnly,
@@ -18,6 +19,12 @@ if ($Branch -notmatch '^[A-Za-z0-9._/-]+$' -or $Branch.Split('/') -contains '..'
 }
 if ($Ref -and $Ref -notmatch '^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$') {
     throw 'XIDER_REF должен быть полным 40- или 64-символьным commit ID.'
+}
+if ($ReleaseTag -and $ReleaseTag -notmatch '^v\d{1,6}\.\d{1,6}\.\d{1,6}$') {
+    throw 'XIDER_RELEASE_TAG должен иметь вид v4.3.0.'
+}
+if ($ReleaseTag -and -not $Ref) {
+    throw 'Для подписанной сборки XIDER_RELEASE_TAG нужен полный XIDER_REF.'
 }
 
 function Assert-XiderBootstrapElevation {
@@ -72,6 +79,35 @@ function Remove-XiderStageEnvironment {
         Write-Warning "Не удалось удалить временную копию .env; она осталась в staging-каталоге: $StagePath"
     }
     return $removed
+}
+
+function Assert-XiderWindowsBundleArchive {
+    param([Parameter(Mandatory)][string]$ArchivePath)
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $expected = @(
+        '.env.example', 'install_agent.ps1', 'install_guardian.ps1',
+        'start_agent.bat', 'stop_agent.bat', 'start_guardian.bat', 'stop_guardian.bat',
+        'XGENT-WDS.exe', 'XIDER-Guard-Keeper.exe'
+    )
+    $archive = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try {
+        $seen = @{}
+        foreach ($entry in $archive.Entries) {
+            $name = ([string]$entry.FullName).Replace('\', '/')
+            if ($name.Contains('/') -or $name.EndsWith('/') -or $name -notin $expected) {
+                throw "Недопустимый путь или файл в подписанном Windows-бандле: $name"
+            }
+            if ($seen.ContainsKey($name)) { throw "Повторяющийся файл в Windows-бандле: $name" }
+            if ($entry.Length -le 0) { throw "Пустой файл в Windows-бандле: $name" }
+            $seen[$name] = $true
+        }
+        $missing = @($expected | Where-Object { -not $seen.ContainsKey($_) })
+        if ($missing.Count) {
+            throw ('В Windows-бандле отсутствуют обязательные файлы: ' + ($missing -join ', '))
+        }
+    }
+    finally { $archive.Dispose() }
 }
 
 $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -519,6 +555,44 @@ try {
         }
     }
 
+    $compiledPackage = $null
+    $releaseVersion = $null
+    if ($ReleaseTag) {
+        Write-Host "Проверяю подписанный Windows-пакет $ReleaseTag до изменения установки..."
+        $releaseVersion = $ReleaseTag.Substring(1)
+        $sourceVersionMatch = [regex]::Match(
+            (Get-Content -LiteralPath (Join-Path $downloaded.FullName 'XGENT-WDS\config.py') -Raw),
+            '(?m)^VERSION\s*=\s*"(?<version>[^"]+)"'
+        )
+        if (-not $sourceVersionMatch.Success -or $sourceVersionMatch.Groups['version'].Value -ne $releaseVersion) {
+            throw 'Тег релиза не совпадает с версией агента в закреплённом исходном commit.'
+        }
+
+        $verifierVenv = Join-Path $extract 'release-verifier-venv'
+        $pythonLauncher = (Get-Command py.exe -ErrorAction SilentlyContinue).Source
+        if ($pythonLauncher) { & $pythonLauncher -3 -m venv $verifierVenv }
+        else { & (Get-Command python.exe -ErrorAction Stop).Source -m venv $verifierVenv }
+        if ($LASTEXITCODE -ne 0) { throw 'Не удалось создать временную среду проверки подписанного релиза.' }
+        $releasePython = Join-Path $verifierVenv 'Scripts\python.exe'
+        & $releasePython -m pip install --disable-pip-version-check --no-input 'cryptography>=42.0'
+        if ($LASTEXITCODE -ne 0) { throw 'Не удалось установить криптографическую проверку подписанного релиза.' }
+
+        $previousPythonPath = $env:PYTHONPATH
+        try {
+            $env:PYTHONPATH = Join-Path $downloaded.FullName 'XGENT-MCS'
+            $manifestPath = Join-Path $extract 'windows-release-manifest.json'
+            $compiledPackage = Join-Path $extract 'XGENT-WDS-Windows.zip'
+            $verifyCode = "import sys; from pathlib import Path; from update_package import download_verified_release_asset; print(download_verified_release_asset(Path(sys.argv[1]), Path(sys.argv[2]), 'XGENT-WDS-Windows.zip', release_tag=sys.argv[3]))"
+            & $releasePython -c $verifyCode $manifestPath $compiledPackage $ReleaseTag
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $compiledPackage -PathType Leaf)) {
+                throw 'Подписанный Windows-пакет не прошёл проверку release manifest.'
+            }
+        }
+        finally { $env:PYTHONPATH = $previousPythonPath }
+
+        Assert-XiderWindowsBundleArchive -ArchivePath $compiledPackage
+    }
+
     $requiredSettings = @(
         'SHARED_KEY', 'MQTT_BROKER', 'MQTT_PORT', 'MQTT_PREFIX',
         'MQTT_TLS', 'MQTT_USERNAME', 'MQTT_PASSWORD', 'ENCRYPT_PAYLOAD'
@@ -599,24 +673,34 @@ try {
             throw "Недопустимый путь установки: $fullPath (parent=$fullParent; root=$resolvedRoot)"
         }
     }
-    Copy-Item -LiteralPath $downloaded.FullName -Destination $stage -Recurse -Force
     $stageAgent = Join-Path $stage 'XGENT-WDS'
+    if ($ReleaseTag) {
+        New-Item -ItemType Directory -Path $stageAgent -Force | Out-Null
+        Expand-XiderArchiveSafely -ArchivePath $compiledPackage -DestinationPath $stageAgent `
+            -MaxUncompressedBytes 1073741824 -MaxEntries 32
+    } else {
+        Copy-Item -LiteralPath $downloaded.FullName -Destination $stage -Recurse -Force
+    }
     $stageEnv = Join-Path $stageAgent '.env'
     # Copy instead of moving the original protected .env. The original stays
     # untouched inside the previous checkout until activation has succeeded.
     Copy-Item -LiteralPath $envSource -Destination $stageEnv -Force
 
-    Write-Host '[4/5] Собираю отдельное окружение Python и ставлю зависимости...'
-    $venv = Join-Path $stageAgent 'venv'
-    $pythonLauncher = (Get-Command py.exe -ErrorAction SilentlyContinue).Source
-    if ($pythonLauncher) { & $pythonLauncher -3 -m venv $venv }
-    else { & (Get-Command python.exe -ErrorAction Stop).Source -m venv $venv }
-    if ($LASTEXITCODE -ne 0) { throw 'Не удалось создать Python venv; рабочая версия не изменена.' }
-    $stagePython = Join-Path $venv 'Scripts\python.exe'
-    & $stagePython -m pip install --disable-pip-version-check --no-input -r (Join-Path $stageAgent 'requirements.txt')
-    if ($LASTEXITCODE -ne 0) { throw 'Не удалось установить зависимости Python.' }
-    & $stagePython -m py_compile (Join-Path $stageAgent 'xgent_wds.py') (Join-Path $stageAgent 'xider_guardian_wds.py')
-    if ($LASTEXITCODE -ne 0) { throw 'Код агента не компилируется; рабочая версия не изменена.' }
+    if ($ReleaseTag) {
+        Write-Host '[4/5] Подписанные Agent и Guard Keeper подготовлены; Python-исходники не устанавливаются.'
+    } else {
+        Write-Host '[4/5] Собираю отдельное окружение Python и ставлю зависимости...'
+        $venv = Join-Path $stageAgent 'venv'
+        $pythonLauncher = (Get-Command py.exe -ErrorAction SilentlyContinue).Source
+        if ($pythonLauncher) { & $pythonLauncher -3 -m venv $venv }
+        else { & (Get-Command python.exe -ErrorAction Stop).Source -m venv $venv }
+        if ($LASTEXITCODE -ne 0) { throw 'Не удалось создать Python venv; рабочая версия не изменена.' }
+        $stagePython = Join-Path $venv 'Scripts\python.exe'
+        & $stagePython -m pip install --disable-pip-version-check --no-input -r (Join-Path $stageAgent 'requirements.txt')
+        if ($LASTEXITCODE -ne 0) { throw 'Не удалось установить зависимости Python.' }
+        & $stagePython -m py_compile (Join-Path $stageAgent 'xgent_wds.py') (Join-Path $stageAgent 'xider_guardian_wds.py')
+        if ($LASTEXITCODE -ne 0) { throw 'Код агента не компилируется; рабочая версия не изменена.' }
+    }
 
     Write-Host '[5/5] Переключаю версию и регистрирую Agent + Guardian...'
     foreach ($taskName in @('XIDER Agent', 'XIDER Guardian')) {
@@ -650,15 +734,23 @@ try {
     }
     [IO.Directory]::Move($stage, $repo)
     $activationStarted = $true
-    $activePython = Join-Path $agent 'venv\Scripts\python.exe'
-    & $activePython -m pip --version | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Новое окружение Python не работает после переключения; выполняю откат.' }
-    $versionMatch = [regex]::Match(
-        (Get-Content -LiteralPath (Join-Path $agent 'config.py') -Raw),
-        '(?m)^VERSION\s*=\s*"(?<version>[^"]+)"'
-    )
-    if (-not $versionMatch.Success) { throw 'Не удалось определить версию агента для проверки здоровья; выполняю откат.' }
-    $expectedAgentVersion = $versionMatch.Groups['version'].Value
+    if ($ReleaseTag) {
+        $expectedAgentVersion = $releaseVersion
+        if (-not (Test-Path -LiteralPath (Join-Path $agent 'XGENT-WDS.exe') -PathType Leaf) -or
+            -not (Test-Path -LiteralPath (Join-Path $agent 'XIDER-Guard-Keeper.exe') -PathType Leaf)) {
+            throw 'В установленном релизном каталоге нет Agent.exe или Guard Keeper.exe; выполняю откат.'
+        }
+    } else {
+        $activePython = Join-Path $agent 'venv\Scripts\python.exe'
+        & $activePython -m pip --version | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Новое окружение Python не работает после переключения; выполняю откат.' }
+        $versionMatch = [regex]::Match(
+            (Get-Content -LiteralPath (Join-Path $agent 'config.py') -Raw),
+            '(?m)^VERSION\s*=\s*"(?<version>[^"]+)"'
+        )
+        if (-not $versionMatch.Success) { throw 'Не удалось определить версию агента для проверки здоровья; выполняю откат.' }
+        $expectedAgentVersion = $versionMatch.Groups['version'].Value
+    }
 
     # Task Scheduler's Running state only proves that a task was launched.
     # Clear per-process markers so a previous install cannot satisfy this one.
@@ -671,7 +763,9 @@ try {
     }
     $healthProbeStartedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0
     $taskInstallAttempted = $true
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $agent 'install_agent.ps1') -AgentDir $agent -PreferPython
+    $agentInstallerArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $agent 'install_agent.ps1'), '-AgentDir', $agent)
+    if (-not $ReleaseTag) { $agentInstallerArguments += '-PreferPython' }
+    & powershell.exe @agentInstallerArguments
     if ($LASTEXITCODE -ne 0) { throw 'Установка Windows-агента/Guardian завершилась ошибкой.' }
     $healthy = $false
     $healthySamples = 0
@@ -680,11 +774,21 @@ try {
         $guardianTask = Get-ScheduledTask -TaskName 'XIDER Guardian' -ErrorAction SilentlyContinue
         $componentsHealthy = $false
         if ($agentTask -and $guardianTask -and $agentTask.State -eq 'Running' -and $guardianTask.State -eq 'Running') {
-            $expectedAgent = Join-Path $agent 'venv\Scripts\pythonw.exe'
-            $expectedGuardian = Join-Path $agent 'venv\Scripts\python.exe'
+            if ($ReleaseTag) {
+                $expectedAgent = Join-Path $agent 'XGENT-WDS.exe'
+                $expectedGuardian = Join-Path $agent 'XIDER-Guard-Keeper.exe'
+            } else {
+                $expectedAgent = Join-Path $agent 'venv\Scripts\pythonw.exe'
+                $expectedGuardian = Join-Path $agent 'venv\Scripts\python.exe'
+            }
             $agentExecutable = [string]($agentTask.Actions | Select-Object -First 1 -ExpandProperty Execute)
             $guardianExecutable = [string]($guardianTask.Actions | Select-Object -First 1 -ExpandProperty Execute)
-            if ([string]::Equals($agentExecutable, $expectedAgent, [StringComparison]::OrdinalIgnoreCase) -and
+            $agentPathMatches = [string]::Equals($agentExecutable, $expectedAgent, [StringComparison]::OrdinalIgnoreCase)
+            if (-not $ReleaseTag) {
+                $agentAction = [string]($agentTask.Actions | Select-Object -First 1 -ExpandProperty Arguments)
+                $agentPathMatches = $agentPathMatches -and $agentAction -match 'xgent_wds\.py'
+            }
+            if ($agentPathMatches -and
                 [string]::Equals($guardianExecutable, $expectedGuardian, [StringComparison]::OrdinalIgnoreCase)) {
                 $healthStates = @{}
                 foreach ($component in @('agent', 'guardian')) {

@@ -32,6 +32,7 @@ def test_generated_commands_pin_script_and_source_to_the_same_commit(commit_id):
     assert f"releases/download/{RELEASE_TAG}/XIDER-bootstrap-windows.ps1.sig" in text
     assert f"releases/download/{RELEASE_TAG}/XIDER-bootstrap-macos.sh.sig" in text
     assert f"& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p -Ref '{ref}'" in text
+    assert f"-ReleaseTag '{RELEASE_TAG}'" in text
     assert "Set-ExecutionPolicy" not in text
     assert f"XIDER_REF='{ref}' bash" in text
     assert f"XIDER_RELEASE_TAG='{RELEASE_TAG}' XIDER_REF='{ref}'" in text
