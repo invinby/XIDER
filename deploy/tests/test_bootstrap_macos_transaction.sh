@@ -225,7 +225,10 @@ fi
   echo 'The old macOS checkout was not restored.' >&2; exit 1;
 }
 [[ -f "$ROLLBACK_ROOT/git-ver/XGENT-MCS/old-worker-restarted.marker" ]] || {
-  echo 'The old worker was not restarted after activation rollback.' >&2; exit 1;
+  echo 'The old worker was not restarted after activation rollback.' >&2
+  cat "$FIXTURE/rollback.log" >&2
+  find "$ROLLBACK_ROOT" -maxdepth 5 -print >&2
+  exit 1
 }
 if grep -Fq '/venv/bin/python3' "$XIDER_TEST_PIP_LOG" ||
    grep -Fq '/runtimes/old/' "$XIDER_TEST_PIP_LOG"; then
