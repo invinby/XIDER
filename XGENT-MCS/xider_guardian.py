@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import plistlib
+import re
 import signal
 import subprocess
 import sys
@@ -78,6 +79,36 @@ AGENT_STABLE_SECONDS = 60.0
 AGENT_HEALTH_STALE_SECONDS = 180.0
 MAX_LAUNCHAGENT_PLISTS = 512
 MAX_LAUNCHAGENT_PLIST_BYTES = 256 * 1024
+
+
+def _layer_health_snapshot() -> dict:
+    """Return bounded local Safari/Siri heartbeat records for Guardian status."""
+    result = {}
+    for role in ("safari", "siri"):
+        path = CONFIG_DIR / f"{role}-health.json"
+        try:
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > 4096:
+                continue
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict) or payload.get("schema") != 1 or payload.get("component") != role:
+            continue
+        version, stamp, pid, state = (
+            payload.get("version"), payload.get("updated_at"),
+            payload.get("pid"), payload.get("state"),
+        )
+        if (not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version)
+                or type(stamp) not in (int, float) or not 0 < stamp <= time.time() + 5
+                or type(pid) is not int or pid <= 0
+                or not isinstance(state, str)
+                or state not in {"running", "waiting", "error", "stopped"}):
+            continue
+        result[role] = {
+            "installed": True, "version": version, "version_source": role,
+            "state": state, "pid": pid, "last_seen": stamp,
+        }
+    return result
 
 
 def _load_state() -> dict:
@@ -324,12 +355,23 @@ class Guardian:
         pid = self.agent_pid()
         worker_launchd_loaded = self.launchd_loaded()
         guardian_launchd_loaded = self.guardian_launchd_loaded()
+        companions = _layer_health_snapshot()
         worker_registration_count = count_launchagent_registrations("com.xgent.agent")
         guardian_registration_count = count_launchagent_registrations("com.xider.guardian")
         duplicate_summary = (
             f"агент: {max(0, worker_registration_count - 1)}, "
             f"Guardian: {max(0, guardian_registration_count - 1)}"
         )
+
+        def layer_state(role: str) -> str:
+            record = companions.get(role)
+            if not isinstance(record, dict):
+                return "неизвестно"
+            age = time.time() - record["last_seen"]
+            if not 0 <= age < 150:
+                return "неизвестно (отчёт устарел)"
+            return f"{record['state']} · {max(0, int(age))} сек назад"
+
         return {
             "type": "guardian",
             "device_id": DEVICE_ID,
@@ -338,6 +380,7 @@ class Guardian:
             "guardian": "1.0",
             "agent_running": bool(pid),
             "agent_pid": pid,
+            "companions": companions,
             "launchd_loaded": worker_launchd_loaded,
             "guardian_task_registered": guardian_launchd_loaded,
             "launchagent_registration_counts": {
@@ -351,6 +394,7 @@ class Guardian:
                 f"Агент: {'онлайн' if pid else 'остановлен'}\n"
                 f"LaunchAgent агента: {'зарегистрирован' if worker_launchd_loaded else 'не зарегистрирован'}\n"
                 f"LaunchAgent Guardian: {'зарегистрирован' if guardian_launchd_loaded else 'не зарегистрирован'}\n"
+                f"Цепочка: Siri → Safari ({layer_state('siri')}) → Guardian ({layer_state('safari')}) → агент ({'онлайн' if pid else 'остановлен'})\n"
                 f"Дубликаты LaunchAgent: {duplicate_summary}\n"
                 f"Автовосстановление: {'включено' if self.state.get('auto_restart') else 'выключено'}\n"
                 f"Запуск агента: {'разрешён' if self.state.get('desired_running') else 'остановлен владельцем'}"

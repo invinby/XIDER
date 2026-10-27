@@ -1,8 +1,8 @@
 """Pure companion presentation; catalogue availability is not installation.
 
-Records are component-specific local inputs, not a new agent wire protocol.
-The current Guardian response supplies its own version and receive timestamp;
-it does not supply absence inventory or an owner-removal acknowledgement.
+Records are component-specific local inputs. The macOS Guardian may relay fresh
+local Safari/Siri health markers, but it does not claim absence inventory or an
+owner-removal acknowledgement for those layers.
 """
 
 from __future__ import annotations

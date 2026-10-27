@@ -10193,7 +10193,7 @@ def on_mqtt_message(topic: str, data: dict) -> None:
     elif msg_type == "guardian" and payload.get("type") == "guardian":
         # Храним только последний подписанный ответ Guardian без лишних
         # данных. Это позволяет показать его состояние в карточке устройства.
-        devices.upsert(device_id, {
+        guardian_update = {
             "guardian": {
                 # Guardian's `version` field belongs to the worker release.
                 # Only `guardian` identifies the supervisor's own version.
@@ -10205,7 +10205,12 @@ def on_mqtt_message(topic: str, data: dict) -> None:
                 "auto_restart": bool(payload.get("auto_restart")),
             },
             "guardian_last_seen": time.time(),
-        })
+        }
+        if "companions" in payload:
+            guardian_update["companion_records"] = companion_status.clean_layer_records(
+                payload.get("companions"), now=time.time(),
+            )
+        devices.upsert(device_id, guardian_update)
         fun_text_collector.submit(device_id, payload)
     elif msg_type == "ack" and payload.get("type") == "ack":
         status = payload.get("status")
@@ -18575,8 +18580,17 @@ async def on_cmd_capabilities(cq: CallbackQuery):
         return
     user_id = int(cq.from_user.id) if cq.from_user else 0
     device_record = devices.get(target) or {}
+    current_companions = companion_status.clean_layer_records(res.get("companions"), now=time.time())
+    cached_companions = companion_status.clean_layer_records(
+        device_record.get("companion_records"), now=time.time(),
+    )
+    for role, record in cached_companions.items():
+        current = current_companions.get(role)
+        if current is None or record["last_seen"] > current["last_seen"]:
+            current_companions[role] = record
     render_result = {
         **res,
+        "companions": current_companions,
         "_guardian_record": device_record.get("guardian"),
         "_guardian_last_seen": device_record.get("guardian_last_seen"),
     }
