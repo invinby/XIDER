@@ -183,6 +183,9 @@ try {
         $body = if ($name -eq 'config.py') { 'VERSION = "fixture"' } elseif ($name -eq 'requirements.txt') { '' } else { 'fixture' }
         [IO.File]::WriteAllText((Join-Path $agentSource $name), $body, $utf8)
     }
+    $dockClient = Join-Path $sourceRoot 'XIDER-fixture\deploy\x_dock_client.py'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $dockClient) -Force | Out-Null
+    [IO.File]::WriteAllText($dockClient, '# fixture client', $utf8)
     Compress-Archive -Path (Join-Path $sourceRoot 'XIDER-fixture') -DestinationPath $archive
 
     $currentPrincipal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
