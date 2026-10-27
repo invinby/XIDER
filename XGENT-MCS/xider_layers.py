@@ -1,8 +1,10 @@
 """Visible, owner-managed macOS recovery layers for XIDER.
 
 Siri supervises Safari, Safari supervises Guard Keeper, and Guard Keeper
-supervises the Agent. Each layer writes a small local health record and may
-start only its immediate child when the owner's persisted intent allows it.
+supervises the Agent. Safari also checks the Agent heartbeat; if it is stale,
+Safari restarts Guard Keeper so recovery still flows through the next layer.
+Each layer writes a local health record and starts only its immediate child
+when the owner's persisted intent allows it.
 """
 
 from __future__ import annotations
