@@ -125,7 +125,8 @@ def _start_child(role: str) -> str:
         guardian_running = _service_running("com.xider.guardian")
         guardian_healthy = guardian_running and _health_is_fresh("guardian")
         agent_running = _service_running("com.xgent.agent")
-        if guardian_healthy and agent_running:
+        agent_healthy = agent_running and _health_is_fresh("agent")
+        if guardian_healthy and agent_healthy:
             return "healthy"
         if guardian_running:
             result = subprocess.run(
