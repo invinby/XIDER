@@ -123,8 +123,9 @@ def _start_child(role: str) -> str:
             return "healthy"
     else:
         guardian_running = _service_running("com.xider.guardian")
+        guardian_healthy = guardian_running and _health_is_fresh("guardian")
         agent_running = _service_running("com.xgent.agent")
-        if guardian_running and agent_running:
+        if guardian_healthy and agent_running:
             return "healthy"
         if guardian_running:
             result = subprocess.run(
@@ -132,7 +133,7 @@ def _start_child(role: str) -> str:
                 capture_output=True, text=True, check=False, timeout=10,
             )
             if result.returncode == 0:
-                return "guardian_restarted_for_agent"
+                return "guardian_restarted_for_agent" if guardian_healthy else "stale_guardian_restarted"
     script = Path.cwd() / child["child_start"]
     if not script.is_file():
         raise FileNotFoundError(f"Missing visible XIDER service script: {script.name}")

@@ -39,6 +39,7 @@ from config import (
     set_guardian_desired_running,
     set_guardian_startup_enabled,
     update_guardian_state,
+    write_runtime_health,
 )
 from crypto import sign_message, verify_message
 from guardian_recovery import RECOVERY_FILES, restore_missing_agent_files
@@ -173,6 +174,7 @@ class Guardian:
         self._last_recovery_error: str | None = None
         self._observed_agent_pid: int | None = None
         self._observed_agent_since = 0.0
+        self._mqtt_connected = False
         self._intent_file_required = True
         self.client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
@@ -206,16 +208,28 @@ class Guardian:
         except Exception:
             pass
 
+    def _write_health(self, *, state: str = "running") -> None:
+        try:
+            write_runtime_health("guardian", self._mqtt_connected, state=state)
+        except OSError:
+            log.exception("Could not write Guardian health heartbeat")
+
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
         if reason_code != 0:
+            self._mqtt_connected = False
+            self._write_health(state="waiting")
             log.warning("Guardian MQTT connection failed: %s", reason_code)
             return
+        self._mqtt_connected = True
+        self._write_health()
         client.subscribe(f"{MQTT_PREFIX}/{DEVICE_ID}/cmd", qos=1)
         client.subscribe(f"{MQTT_PREFIX}/all/cmd", qos=1)
         self._publish(self.status_payload())
         log.info("Guardian connected to %s:%s", MQTT_BROKER, MQTT_PORT)
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
+        self._mqtt_connected = False
+        self._write_health(state="waiting")
         log.warning("Guardian MQTT disconnected: %s", reason_code)
 
     def _on_message(self, client, userdata, message):
@@ -551,6 +565,7 @@ class Guardian:
 
     def monitor(self) -> None:
         while not self.stop_event.wait(5):
+            self._write_health()
             with self.lock:
                 self._refresh_worker_intent()
                 if self.state.get("auto_restart") and self.state.get("desired_running"):
@@ -572,6 +587,7 @@ class Guardian:
                         self._record_recovery_failure(exc)
 
     def run(self) -> None:
+        self._write_health(state="waiting")
         self.client.connect_async(MQTT_BROKER, MQTT_PORT, keepalive=60)
         self.client.loop_start()
         threading.Thread(target=self.monitor, daemon=True).start()
@@ -579,6 +595,7 @@ class Guardian:
             while not self.stop_event.wait(1):
                 pass
         finally:
+            self._write_health(state="stopped")
             self.client.loop_stop()
             self.client.disconnect()
 

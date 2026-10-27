@@ -2,6 +2,7 @@ import json
 import hashlib
 import threading
 import sys
+import time
 import zipfile
 from pathlib import Path
 from unittest.mock import Mock
@@ -32,6 +33,38 @@ def guardian_module(monkeypatch, tmp_path_factory):
     monkeypatch.setattr(xider_guardian, "STATE_FILE", state_dir / "guardian.json")
 
     return xider_guardian
+
+
+def test_guardian_publishes_fresh_local_heartbeat(guardian_module):
+    import config
+
+    config.write_runtime_health("guardian", True)
+    record = json.loads((config.CONFIG_DIR / "guardian-health.json").read_text(encoding="utf-8"))
+    assert record["component"] == "guardian"
+    assert record["state"] == "running"
+    assert record["connected"] is True
+    assert record["updated_at"] <= time.time()
+
+
+def test_safari_restarts_a_stale_guardian_even_if_agent_pid_exists(guardian_module, monkeypatch):
+    import subprocess
+    import config
+    import xider_layers
+
+    health_dir = config.CONFIG_DIR
+    monkeypatch.setattr(xider_layers, "CONFIG_DIR", health_dir)
+    monkeypatch.setattr(xider_layers, "LAYER_STATE", health_dir / "layer-state.json")
+    monkeypatch.setitem(xider_layers.LAYERS["safari"], "child_state", health_dir / "guardian.json")
+    (health_dir / "layer-state.json").write_text(json.dumps({"safari": True}), encoding="utf-8")
+    (health_dir / "guardian.json").write_text(json.dumps({"desired_running": True}), encoding="utf-8")
+    (health_dir / "guardian-health.json").write_text(json.dumps({
+        "schema": 1, "component": "guardian", "state": "running",
+        "updated_at": time.time() - xider_layers.HEALTH_STALE_SECONDS - 1,
+    }), encoding="utf-8")
+    monkeypatch.setattr(xider_layers, "_service_running", lambda label: True)
+    monkeypatch.setattr(xider_layers.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "", ""))
+
+    assert xider_layers._start_child("safari") == "stale_guardian_restarted"
 
 
 def test_guardian_fails_closed_when_worker_or_env_is_missing(

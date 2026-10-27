@@ -179,6 +179,45 @@ def set_guardian_startup_enabled(enabled: bool) -> None:
         updates["desired_running"] = True
     update_guardian_state(**updates)
 
+
+def write_runtime_health(component: str, connected: bool, *, state: str = "running") -> Path:
+    """Publish a local process heartbeat used by the visible recovery layers."""
+    if component not in {"agent", "guardian"}:
+        raise ValueError("Unknown XIDER runtime health component.")
+    if not isinstance(connected, bool):
+        raise TypeError("Runtime health connectivity must be a bool.")
+    if state not in {"running", "waiting", "error", "stopped"}:
+        raise ValueError("Unknown XIDER runtime health state.")
+
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    destination = CONFIG_DIR / f"{component}-health.json"
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f"{component}-health.", suffix=".tmp", dir=CONFIG_DIR,
+    )
+    try:
+        if hasattr(os, "fchmod"):
+            os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump({
+                "schema": 1,
+                "component": component,
+                "connected": connected,
+                "device_id": DEVICE_ID,
+                "pid": os.getpid(),
+                "version": VERSION,
+                "updated_at": time.time(),
+                "state": state,
+            }, stream, separators=(",", ":"))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_name, destination)
+    finally:
+        try:
+            os.unlink(temporary_name)
+        except FileNotFoundError:
+            pass
+    return destination
+
 # Версия клиента и строка платформы для статусов.
 VERSION = "4.3.0"
 PLATFORM = f"macOS {platform.mac_ver()[0]}"
