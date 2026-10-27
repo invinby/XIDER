@@ -151,7 +151,10 @@ tests; they are not a live deployment.
 `deploy/x_dock_client.py` now creates short-lived request keys in memory, uses
 the signed approval/poll flow, decrypts the response, and writes the staged
 agent `.env` without printing secrets. Both platform bootstraps can call it when
-`XIDER_DOCK_URL` is configured. This is not yet an end-to-end first install:
+`XIDER_DOCK_URL` is configured. The release builder forwards the public HTTPS
+URL from the GitHub Actions repository variable into the signed Windows and
+macOS installer bodies; it does not embed enrollment or broker credentials.
+This is not yet an end-to-end first install:
 the current `broker/docker-compose.yml` still uses a static shared account and
 does not enable Dynamic Security. There is no bot MQTT role bootstrap, HTTPS
 reverse proxy, publicly trusted certificate, or automatic certificate-renewal/

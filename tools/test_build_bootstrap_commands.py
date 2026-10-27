@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from build_bootstrap_commands import build_commands
+from build_bootstrap_commands import build_commands, build_platform_commands
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -67,6 +67,38 @@ def test_quickstart_bootstrap_source_is_pinned_to_the_exact_git_commit():
     worktree = (ROOT / "deploy" / "bootstrap-agent.ps1").read_bytes()
     if worktree != blob:
         assert worktree != blob
+
+
+def test_configured_dock_url_is_embedded_in_both_signed_platform_commands():
+    dock_url = "https://enroll.example.net"
+    commands = build_platform_commands(CURRENT_COMMIT, RELEASE_TAG, dock_url)
+    assert f"-DockUrl '{dock_url}'" in commands["windows"]
+    assert f"XIDER_DOCK_URL='{dock_url}'" in commands["macos"]
+
+
+def test_quickstart_uses_public_dock_url_from_build_environment(monkeypatch):
+    dock_url = "https://enroll.example.net"
+    monkeypatch.setenv("XIDER_DOCK_URL", dock_url)
+    text = build_commands(CURRENT_COMMIT, RELEASE_TAG)
+    assert "owner-approved X-DOCK enrollment" in text
+    assert f"-DockUrl '{dock_url}'" in text
+    assert f"XIDER_DOCK_URL='{dock_url}'" in text
+
+
+@pytest.mark.parametrize(
+    "dock_url",
+    [
+        "http://enroll.example.net",
+        "https://user:pass@example.net",
+        "https://enroll.example.net/path?token=secret",
+        "https://enroll.example.net/#fragment",
+        "https://enroll.example.net/$(touch nope)",
+        "https://enroll.example.net/'; exit 1; #",
+    ],
+)
+def test_configured_dock_url_rejects_non_https_or_script_unsafe_values(dock_url):
+    with pytest.raises(ValueError, match="XIDER_DOCK_URL"):
+        build_platform_commands(CURRENT_COMMIT, RELEASE_TAG, dock_url)
 
 
 def test_generated_commands_require_the_pinned_commit_to_exist_locally():

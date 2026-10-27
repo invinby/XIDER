@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import argparse
 import base64
+import os
 import re
 import struct
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 COMMIT_ID = re.compile(r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
@@ -17,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RELEASE_TAG = re.compile(r"^v\d+\.\d+\.\d+$")
 SIGNER_IDENTITY = "xider-release"
 SIGNATURE_NAMESPACE = "xider-bootstrap@xider.link"
+DOCK_URL_ENV = "XIDER_DOCK_URL"
 
 RELEASE_MODULE_DIR = ROOT / "XGENT-MCS"
 if str(RELEASE_MODULE_DIR) not in sys.path:
@@ -59,7 +62,29 @@ def _committed_file(commit_id: str, relative_path: str) -> bytes:
         ) from exc
 
 
-def build_platform_commands(commit_id: str, release_tag: str) -> dict[str, str]:
+def _configured_dock_url(dock_url: str | None = None) -> str | None:
+    """Return a clean public HTTPS enrollment URL suitable for signed scripts."""
+    value = os.environ.get(DOCK_URL_ENV, "") if dock_url is None else dock_url
+    value = value.strip()
+    if not value:
+        return None
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or any(char.isspace() or char in "'\"`$\\" for char in value)
+    ):
+        raise ValueError("XIDER_DOCK_URL must be a clean HTTPS base URL without credentials, query, or fragment.")
+    return value.rstrip("/")
+
+
+def build_platform_commands(
+    commit_id: str, release_tag: str, dock_url: str | None = None
+) -> dict[str, str]:
     """Build the two verifier bodies used by quickstart and release installers."""
     if not isinstance(commit_id, str) or not COMMIT_ID.fullmatch(commit_id):
         raise ValueError("A full 40- or 64-character Git commit ID is required.")
@@ -67,6 +92,7 @@ def build_platform_commands(commit_id: str, release_tag: str) -> dict[str, str]:
         raise ValueError("A semantic version release tag such as v4.1.0 is required.")
 
     ref = commit_id.lower()
+    dock_url = _configured_dock_url(dock_url)
     raw_base = f"https://raw.githubusercontent.com/{REPOSITORY}/{ref}"
     release_base = f"https://github.com/{REPOSITORY}/releases/download/{release_tag}"
     # Require a locally available commit that contains both pinned bootstraps;
@@ -97,7 +123,8 @@ def build_platform_commands(commit_id: str, release_tag: str) -> dict[str, str]:
         "$psi.Arguments='/d /s /c \"\"'+$c+'\"\"'; $psi.UseShellExecute=$false; "
         "$v=New-Object Diagnostics.Process; $v.StartInfo=$psi; [void]$v.Start(); "
         "$v.WaitForExit(); if($v.ExitCode -ne 0){throw 'XIDER bootstrap signature verification failed'}; "
-        f"& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p -Ref '{ref}' -ReleaseTag '{release_tag}'; "
+        f"& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p -Ref '{ref}' -ReleaseTag '{release_tag}'"
+        + (f" -DockUrl '{dock_url}'" if dock_url else "") + "; "
         "if($LASTEXITCODE -ne 0){throw 'XIDER Windows agent bootstrap failed'} "
         "} finally { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue }"
     )
@@ -110,15 +137,18 @@ def build_platform_commands(commit_id: str, release_tag: str) -> dict[str, str]:
         f"h=\"$(shasum -a 256 \"$p\" | awk '{{print $1}}')\"; "
         f"printf 'XIDER-BOOTSTRAP-SHA256\\nmacos\\n{release_tag}\\n{ref}\\n%s\\n' \"$h\" | "
         f"ssh-keygen -Y verify -f \"$a\" -I {SIGNER_IDENTITY} -n {SIGNATURE_NAMESPACE} -s \"$s\"; "
-        f"XIDER_RELEASE_TAG='{release_tag}' XIDER_REF='{ref}' bash \"$p\""
+        + (f"XIDER_DOCK_URL='{dock_url}' " if dock_url else "")
+        + f"XIDER_RELEASE_TAG='{release_tag}' XIDER_REF='{ref}' bash \"$p\""
     )
     return {"windows": windows, "macos": macos}
 
 
 def build_commands(commit_id: str, release_tag: str) -> str:
-    commands = build_platform_commands(commit_id, release_tag)
+    dock_url = _configured_dock_url()
+    commands = build_platform_commands(commit_id, release_tag, dock_url)
+    install_mode = "owner-approved X-DOCK enrollment" if dock_url else "agent-only bootstrap"
     return (
-        "XIDER quick install (signed agent-only bootstrap; source pinned to this release commit)\n"
+        f"XIDER quick install (signed {install_mode}; source pinned to this release commit)\n"
         f"Commit: {commit_id.lower()}\n\n"
         "Windows PowerShell:\n"
         f"{commands['windows']}\n\n"

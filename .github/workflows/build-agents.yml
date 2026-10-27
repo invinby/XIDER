@@ -286,6 +286,8 @@ jobs:
       - name: "Build signed asset inventory"
         env:
           XIDER_RELEASE_PRIVATE_KEY_B64: ${{ secrets.XIDER_RELEASE_PRIVATE_KEY_B64 }}
+          # Public endpoint, embedded in signed installer bodies. Never put credentials here.
+          XIDER_DOCK_URL: ${{ vars.XIDER_DOCK_URL }}
         run: |
           cp artifacts/windows/XGENT-WDS.exe artifacts/XGENT-WDS.exe
           cp artifacts/windows/XGENT-WDS-Windows.zip artifacts/XGENT-WDS-Windows.zip
