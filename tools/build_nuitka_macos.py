@@ -93,6 +93,10 @@ def _command(
         f"--output-filename={output_name}",
         f"--company-name=XIDER",
         f"--product-name={bundle_name}",
+        # sounddevice ships Windows PortAudio DLLs in its macOS wheel too.
+        # Nuitka's DLL plugin otherwise tries to link those PE files into the
+        # macOS app and aborts the arm64 build. macOS uses the package's .dylib.
+        "--noinclude-dlls=*.dll",
     ]
     for key, description in (protected_resources or {}).items():
         if key not in NUITKA_PROTECTED_RESOURCE_KEYS:
