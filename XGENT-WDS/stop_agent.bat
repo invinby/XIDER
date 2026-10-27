@@ -6,11 +6,14 @@ echo ======================================
 echo    Ostanovka XGENT-WDS
 echo ======================================
 
-rem Persist an intentional stop before ending the worker, otherwise Guardian
-rem interprets the process exit as a crash and immediately starts it again.
-set "XIDER_PYTHON=%~dp0venv\Scripts\python.exe"
-if not exist "%XIDER_PYTHON%" set "XIDER_PYTHON=python.exe"
-"%XIDER_PYTHON%" "%~dp0xider_guardian_wds.py" --set-desired-running stop
+rem Persist owner intent using the compiled Keeper in source-free releases.
+if exist "%~dp0XIDER-Guard-Keeper.exe" (
+  "%~dp0XIDER-Guard-Keeper.exe" --set-desired-running stop
+) else (
+  set "XIDER_PYTHON=%~dp0venv\Scripts\python.exe"
+  if not exist "%XIDER_PYTHON%" set "XIDER_PYTHON=python.exe"
+  "%XIDER_PYTHON%" "%~dp0xider_guardian_wds.py" --set-desired-running stop
+)
 if errorlevel 1 (
   echo [ERROR] Не удалось сохранить команду остановки Guardian; агент не остановлен.
   exit /b 1

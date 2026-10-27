@@ -33,36 +33,38 @@ jobs:
           python-version: "3.12"
           cache: "pip"
 
-      - name: "Install dependencies"
+      - name: "Install dependencies and Nuitka"
         run: |
           python -m pip install --upgrade pip
           pip install -r XGENT-WDS/requirements.txt
-          pip install pyinstaller==6.22.3
+          pip install nuitka==4.3.1
 
-      - name: "Build Windows EXE via PyInstaller"
+      - name: "Build Windows Agent and Guard Keeper as compiled one-file apps"
         run: |
-          cd XGENT-WDS
-          pyinstaller --clean XGENT-WDS.spec
-          pyinstaller --clean --noconfirm --onefile --windowed `
-            --name XIDER-Guard-Keeper `
-            --distpath dist --workpath build/guardian `
-            xider_guardian_wds.py
-          python ..\tools\verify_command_approval_bundle.py --executable dist/XGENT-WDS.exe
-          Copy-Item .env.example dist/.env.example
-          Copy-Item install_agent.ps1 dist/install_agent.ps1
-          Copy-Item install_guardian.ps1 dist/install_guardian.ps1
-          Copy-Item start_agent.bat dist/start_agent.bat
-          Copy-Item stop_agent.bat dist/stop_agent.bat
+          python tools/build_nuitka_windows.py
+          Copy-Item XGENT-WDS/.env.example XGENT-WDS/dist/nuitka/.env.example
+          Copy-Item XGENT-WDS/install_agent.ps1 XGENT-WDS/dist/nuitka/install_agent.ps1
+          Copy-Item XGENT-WDS/install_guardian.ps1 XGENT-WDS/dist/nuitka/install_guardian.ps1
+          Copy-Item XGENT-WDS/start_agent.bat XGENT-WDS/dist/nuitka/start_agent.bat
+          Copy-Item XGENT-WDS/stop_agent.bat XGENT-WDS/dist/nuitka/stop_agent.bat
+          Copy-Item XGENT-WDS/start_guardian.bat XGENT-WDS/dist/nuitka/start_guardian.bat
+          Copy-Item XGENT-WDS/stop_guardian.bat XGENT-WDS/dist/nuitka/stop_guardian.bat
+          python tools/verify_command_approval_bundle.py --nuitka-executable XGENT-WDS/dist/nuitka/XGENT-WDS.exe
+          $unexpected = Get-ChildItem XGENT-WDS/dist/nuitka -Recurse -File | Where-Object {
+            $_.Name -match '\.py[co]?$' -or ($_.Name -eq '.env')
+          }
+          if ($unexpected) { throw ('Unexpected source or private .env in Windows release: ' + ($unexpected.FullName -join ', ')) }
+          $packageRoot = 'XGENT-WDS/dist/nuitka'
           $package = Join-Path $env:RUNNER_TEMP 'XGENT-WDS-Windows.zip'
-          Compress-Archive -Path .\dist\* -DestinationPath $package -Force
-          python ..\tools\verify_command_approval_bundle.py --public-only-zip $package
-          Copy-Item $package dist/XGENT-WDS-Windows.zip
+          Compress-Archive -Path "$packageRoot\*" -DestinationPath $package -Force
+          python tools/verify_command_approval_bundle.py --public-only-zip $package
+          Copy-Item $package XGENT-WDS/dist/nuitka/XGENT-WDS-Windows.zip
 
       - name: "Upload Windows EXE Artifact"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: XGENT-WDS-Windows
-          path: XGENT-WDS/dist/*
+          path: XGENT-WDS/dist/nuitka/*
 
   build-macos:
     name: "Build signed and notarized macOS app"

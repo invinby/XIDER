@@ -51,7 +51,27 @@ except ImportError:
     fcntl = None
 
 log = logging.getLogger("xider.guardian")
-SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+def _runtime_install_dir() -> Path:
+    """Resolve the directory beside the installed apps for source and bundles."""
+    if getattr(sys, "frozen", False):
+        runtime_dir = Path(sys.executable).resolve().parent
+    elif globals().get("__compiled__") is not None:
+        compiled = globals()["__compiled__"]
+        containing_dir = getattr(compiled, "containing_dir", None)
+        if not isinstance(containing_dir, (str, os.PathLike)) or not str(containing_dir):
+            raise RuntimeError("Compiled Guardian runtime directory is unavailable.")
+        runtime_dir = Path(containing_dir).resolve()
+    else:
+        return Path(__file__).resolve().parent
+
+    app_bundle = next((path for path in (runtime_dir, *runtime_dir.parents)
+                       if path.suffix == ".app"), None)
+    return app_bundle.parent if app_bundle is not None else runtime_dir
+
+
+SCRIPT_DIR = _runtime_install_dir()
 STATE_FILE = CONFIG_DIR / "guardian.json"
 AGENT_STABLE_SECONDS = 60.0
 MAX_LAUNCHAGENT_PLISTS = 512

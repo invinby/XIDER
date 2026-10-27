@@ -26,9 +26,16 @@ BUNDLED_RUNTIME = bool(getattr(sys, "frozen", False) or globals().get("__compile
 # Загружаем .env из каталога скрипта (с поддержкой UTF-8 BOM).
 _ENV_FILE = Path(__file__).resolve().parent / ".env"
 if BUNDLED_RUNTIME:
-    _bundle = next((path for path in Path(sys.executable).resolve().parents if path.suffix == ".app"), None)
-    if _bundle is not None:
-        _ENV_FILE = _bundle.parent / ".env"
+    if getattr(sys, "frozen", False):
+        _runtime_dir = Path(sys.executable).resolve().parent
+    else:
+        _compiled = globals().get("__compiled__")
+        _containing_dir = getattr(_compiled, "containing_dir", None)
+        if not isinstance(_containing_dir, (str, os.PathLike)) or not str(_containing_dir):
+            raise SystemExit("FATAL: Nuitka runtime directory is unavailable; refusing source/temp .env lookup.")
+        _runtime_dir = Path(_containing_dir).resolve()
+    _bundle = next((path for path in (_runtime_dir, *_runtime_dir.parents) if path.suffix == ".app"), None)
+    _ENV_FILE = (_bundle.parent if _bundle is not None else _runtime_dir) / ".env"
 try:
     load_dotenv(_ENV_FILE, encoding="utf-8-sig")
 except TypeError:

@@ -40,6 +40,11 @@ import winreg
 import winsound
 from logging.handlers import RotatingFileHandler
 from concurrent.futures import Future
+
+# Release build probe runs before importing device services or loading .env.
+if len(sys.argv) > 1 and sys.argv[1] == "--command-approval-bundle-smoke":
+    import command_approval_bundle_smoke  # noqa: F401 - exits after writing its report
+
 from energy_usage import parse_srum_energy_csv
 from sleep_wake_history import parse_windows_sleep_wake_events
 from startup_duration import parse_windows_startup_duration

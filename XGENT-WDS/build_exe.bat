@@ -1,17 +1,11 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title XGENT-WDS secure build
+title XIDER Windows compiled build
 
 echo ==========================================
-echo   XGENT-WDS: build without embedded secrets
+echo   XIDER: Nuitka build without embedded secrets
 echo ==========================================
-
-if not exist ".env" (
-  echo [FAIL] .env is required for local testing, but it is never embedded in the EXE.
-  echo        Copy .env.example to .env and fill it locally, then run this again.
-  exit /b 2
-)
 
 if not exist "venv\Scripts\python.exe" (
   echo [..] Creating virtual environment...
@@ -19,18 +13,23 @@ if not exist "venv\Scripts\python.exe" (
   if errorlevel 1 exit /b 1
 )
 
-echo [..] Installing dependencies and PyInstaller...
-venv\Scripts\python.exe -m pip install -q -r requirements.txt pyinstaller==6.22.3
+echo [..] Installing dependencies and Nuitka...
+venv\Scripts\python.exe -m pip install -q -r requirements.txt nuitka==4.3.1
 if errorlevel 1 exit /b 1
 
-echo [..] Building the sidecar-configured executable...
-venv\Scripts\python.exe -m PyInstaller --clean --noconfirm XGENT-WDS.spec
+echo [..] Building Agent and Guard Keeper one-file binaries...
+venv\Scripts\python.exe ..\tools\build_nuitka_windows.py
 if errorlevel 1 exit /b 1
 
-copy /y "dist\XGENT-WDS.exe" "XGENT-WDS.exe" >nul
-copy /y ".env.example" "dist\.env.example" >nul
+for %%F in (.env.example install_agent.ps1 install_guardian.ps1 start_agent.bat stop_agent.bat start_guardian.bat stop_guardian.bat) do (
+  copy /y "%%~F" "dist\nuitka\%%~F" >nul
+  if errorlevel 1 exit /b 1
+)
 
 echo.
-echo [OK] dist\XGENT-WDS.exe is ready.
-echo      Keep a real .env beside the EXE at runtime; secrets are not inside the binary.
+echo [OK] dist\nuitka\XGENT-WDS.exe is ready.
+echo [OK] dist\nuitka\XIDER-Guard-Keeper.exe is ready.
+echo      Install helpers and .env.example are in dist\nuitka.
+echo      Put the owner-provisioned .env beside both EXEs at runtime.
+echo      The .env file is not read during build and is never embedded.
 exit /b 0

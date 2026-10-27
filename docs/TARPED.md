@@ -112,8 +112,10 @@ X-LEDGER's read-only GitHub Release catalogue, a per-device version browser,
 and an in-bot handbook. They do **not** yet implement A/B installation,
 complete six-voice coverage, or live-verified updates. X-DOCK now has a separate
 proposed enrollment design: a stable public IP may replace a domain if
-short-lived IP-TLS certificates can be renewed and reloaded reliably. No
-enrollment endpoint, per-device credential issuer, or live pairing exists yet.
+short-lived IP-TLS certificates can be renewed and reloaded reliably. No live
+enrollment endpoint, publicly trusted certificate, or live pairing exists yet;
+the source endpoint, per-device credential issuer, and client are described
+under Backend progress below.
 The Windows installer now retires only the documented legacy `XGENT` scheduled
 task and `XGENT`/`XGentAgent` per-user Run entries before registering the single
 supported `XIDER Agent` task; preflight remains read-only and `.env` is untouched.

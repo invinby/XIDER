@@ -33,6 +33,11 @@ import uuid
 from urllib.parse import urlsplit
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
+
+# Release build probe runs before importing device services or loading .env.
+if len(sys.argv) > 1 and sys.argv[1] == "--command-approval-bundle-smoke":
+    import command_approval_bundle_smoke  # noqa: F401 - exits after writing its report
+
 from sleep_wake_history import parse_pmset_sleep_wake_log
 from sysinfo_schedule import load_schedule, save_schedule
 import camera_quality

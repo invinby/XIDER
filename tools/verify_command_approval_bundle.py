@@ -75,6 +75,24 @@ def verify_executable(path):
         return data
 
 
+def verify_nuitka_executable(path):
+    """Run the explicit service-free probe embedded in a Nuitka executable."""
+    with tempfile.TemporaryDirectory(prefix="xider-nuitka-report-") as temporary:
+        report = Path(temporary) / "probe.json"
+        result = subprocess.run(
+            [str(Path(path).resolve()), "--command-approval-bundle-smoke", str(report)],
+            timeout=90, capture_output=True,
+        )
+        if result.returncode != 0 or not report.is_file():
+            detail = report.read_text(encoding="utf-8") if report.is_file() else "no probe report"
+            raise ValueError("Nuitka bundle probe failed: " + detail)
+        data = json.loads(report.read_text(encoding="utf-8"))
+        expected = {"command_module_loader", "command_signing", "command_replay", "shell_execution"}
+        if data.get("ok") is not True or data.get("compiled") is not True or set(data.get("modules", [])) != expected:
+            raise ValueError("Invalid Nuitka bundle probe result")
+        return data
+
+
 def verify_public_only_zip(path):
     with zipfile.ZipFile(path) as archive:
         for member in archive.infolist():
@@ -100,9 +118,12 @@ def verify_public_only_zip(path):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--executable", type=Path)
+    parser.add_argument("--nuitka-executable", type=Path)
     parser.add_argument("--public-only-zip", type=Path, action="append", default=[])
     args = parser.parse_args()
     for path in args.public_only_zip:
         verify_public_only_zip(path)
     if args.executable:
         print(json.dumps(verify_executable(args.executable), sort_keys=True))
+    if args.nuitka_executable:
+        print(json.dumps(verify_nuitka_executable(args.nuitka_executable), sort_keys=True))

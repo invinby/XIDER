@@ -26,7 +26,14 @@ BUNDLED_RUNTIME = bool(getattr(sys, "frozen", False) or globals().get("__compile
 # В onefile-exe __file__ указывает во временную папку распаковки, поэтому
 # ориентируемся на расположение самого исполняемого файла.
 if BUNDLED_RUNTIME:
-    _BASE_DIR = Path(sys.executable).resolve().parent
+    if getattr(sys, "frozen", False):
+        _BASE_DIR = Path(sys.executable).resolve().parent
+    else:
+        _compiled = globals().get("__compiled__")
+        _containing_dir = getattr(_compiled, "containing_dir", None)
+        if not isinstance(_containing_dir, (str, os.PathLike)) or not str(_containing_dir):
+            raise SystemExit("FATAL: Nuitka runtime directory is unavailable; refusing source/temp .env lookup.")
+        _BASE_DIR = Path(_containing_dir).resolve()
 else:
     _BASE_DIR = Path(__file__).resolve().parent
 _ENV_FILE = _BASE_DIR / ".env"
