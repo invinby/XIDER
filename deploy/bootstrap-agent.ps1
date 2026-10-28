@@ -41,6 +41,89 @@ function Assert-XiderBootstrapElevation {
     }
 }
 
+function Get-XiderPythonExecutable {
+    # Prefer a known interpreter before downloading anything. The Windows
+    # launcher may point `py -3` at an untested newest runtime, so probe the
+    # versions exercised by CI explicitly.
+    $launcher = (Get-Command py.exe -ErrorAction SilentlyContinue).Source
+    if ($launcher) {
+        foreach ($version in @('3.14', '3.12', '3.11')) {
+            $candidate = @(& $launcher "-$version" -c 'import sys; print(sys.executable)' 2>$null)
+            if ($LASTEXITCODE -eq 0 -and $candidate.Count -eq 1 -and
+                (Test-Path -LiteralPath $candidate[0] -PathType Leaf)) {
+                return [string]$candidate[0]
+            }
+        }
+    }
+
+    $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
+    if ($pythonCommand) {
+        foreach ($command in @($pythonCommand)) {
+            $candidate = @(& $command.Source -c 'import sys; print(sys.executable); print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>$null)
+            if ($LASTEXITCODE -eq 0 -and $candidate.Count -ge 2 -and
+                $candidate[-1] -match '^3\.(?:11|12|14)$' -and
+                (Test-Path -LiteralPath $candidate[0] -PathType Leaf)) {
+                return [string]$candidate[0]
+            }
+        }
+    }
+
+    $version = '3.14.10'
+    $architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+    $installerName = switch ($architecture) {
+        'X64' { 'python-3.14.10-amd64.exe' }
+        'Arm64' { 'python-3.14.10-arm64.exe' }
+        'X86' { 'python-3.14.10.exe' }
+        default { throw "Для архитектуры Windows $architecture нет закреплённого установщика Python." }
+    }
+    $expectedHash = switch ($architecture) {
+        'X64' { '92480239264744fe0386a1bd8275786fefa126e3129e56a68e22b52c73329965' }
+        'Arm64' { '5b9547e4edae2f6fb2fbfec5e26cf91b4ea191e3b07f7727d5a2c5c2cca93ed3' }
+        'X86' { 'c8f1a16db9afd76ca74b5f8e28eeaad408bca10894c9d080443bde83def3ed09' }
+    }
+    $runtimeRoot = Join-Path $InstallRoot "bootstrap-runtime\python-$version"
+    $pythonExe = Join-Path $runtimeRoot 'python.exe'
+    if (Test-Path -LiteralPath $pythonExe -PathType Leaf) {
+        $versionCheck = @(& $pythonExe -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $versionCheck -contains '3.14') { return $pythonExe }
+        throw "Python runtime повреждён или имеет неверную версию: $pythonExe"
+    }
+
+    Write-Host "Python отсутствует. Устанавливаю Python $version в профиль пользователя..."
+    $installer = Join-Path $env:TEMP ("xider-python-$version-" + [guid]::NewGuid().ToString('N') + '.exe')
+    try {
+        Invoke-WebRequest -Uri "https://www.python.org/ftp/python/$version/$installerName" `
+            -OutFile $installer -UseBasicParsing -TimeoutSec 180
+        $actualHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actualHash -ne $expectedHash) {
+            throw 'Установщик Python не совпал с SHA-256 из закреплённого релизного манифеста.'
+        }
+        $signature = Get-AuthenticodeSignature -LiteralPath $installer
+        if ($signature.Status -ne 'Valid' -or
+            $signature.SignerCertificate.Subject -notmatch 'Python Software Foundation') {
+            throw 'Подпись установщика Python недействительна или издатель не совпал.'
+        }
+        New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
+        $arguments = @(
+            '/quiet', 'InstallAllUsers=0', 'Include_launcher=0', 'Include_pip=1',
+            'Include_test=0', 'Include_doc=0', 'Include_tcltk=0', 'Include_dev=0',
+            'PrependPath=0', 'Shortcuts=0', "TargetDir=`"$runtimeRoot`""
+        )
+        $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
+        if ($process.ExitCode -notin @(0, 3010) -or -not (Test-Path -LiteralPath $pythonExe -PathType Leaf)) {
+            throw "Установка Python завершилась с кодом $($process.ExitCode)."
+        }
+        $versionCheck = @(& $pythonExe -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $versionCheck -notcontains '3.14') {
+            throw 'Установленный Python не прошёл проверку версии.'
+        }
+        return $pythonExe
+    }
+    finally {
+        Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Remove-XiderPrivateFile {
     param([Parameter(Mandatory)][string]$Path)
 
@@ -462,11 +545,9 @@ try {
 
     if (-not $envSource -and $DockUrl) {
         Write-Host '[2/5] Запрашиваю X-DOCK-подключение; подтверди новое устройство в Telegram...'
-        $pythonLauncher = (Get-Command py.exe -ErrorAction SilentlyContinue).Source
-        $pythonExe = if ($pythonLauncher) { $pythonLauncher } else { (Get-Command python.exe -ErrorAction Stop).Source }
+        $pythonExe = Get-XiderPythonExecutable
         $pairingVenv = Join-Path $extract 'x-dock-venv'
-        if ($pythonLauncher) { & $pythonExe -3 -m venv $pairingVenv }
-        else { & $pythonExe -m venv $pairingVenv }
+        & $pythonExe -m venv $pairingVenv
         if ($LASTEXITCODE -ne 0) { throw 'Не удалось создать одноразовое окружение X-DOCK.' }
         $pairingPython = Join-Path $pairingVenv 'Scripts\python.exe'
         & $pairingPython -m pip install --disable-pip-version-check --no-input 'cryptography>=42.0'
@@ -569,9 +650,8 @@ try {
         }
 
         $verifierVenv = Join-Path $extract 'release-verifier-venv'
-        $pythonLauncher = (Get-Command py.exe -ErrorAction SilentlyContinue).Source
-        if ($pythonLauncher) { & $pythonLauncher -3 -m venv $verifierVenv }
-        else { & (Get-Command python.exe -ErrorAction Stop).Source -m venv $verifierVenv }
+        $pythonExe = Get-XiderPythonExecutable
+        & $pythonExe -m venv $verifierVenv
         if ($LASTEXITCODE -ne 0) { throw 'Не удалось создать временную среду проверки подписанного релиза.' }
         $releasePython = Join-Path $verifierVenv 'Scripts\python.exe'
         & $releasePython -m pip install --disable-pip-version-check --no-input 'cryptography>=42.0'
@@ -691,9 +771,8 @@ try {
     } else {
         Write-Host '[4/5] Собираю отдельное окружение Python и ставлю зависимости...'
         $venv = Join-Path $stageAgent 'venv'
-        $pythonLauncher = (Get-Command py.exe -ErrorAction SilentlyContinue).Source
-        if ($pythonLauncher) { & $pythonLauncher -3 -m venv $venv }
-        else { & (Get-Command python.exe -ErrorAction Stop).Source -m venv $venv }
+        $pythonExe = Get-XiderPythonExecutable
+        & $pythonExe -m venv $venv
         if ($LASTEXITCODE -ne 0) { throw 'Не удалось создать Python venv; рабочая версия не изменена.' }
         $stagePython = Join-Path $venv 'Scripts\python.exe'
         & $stagePython -m pip install --disable-pip-version-check --no-input -r (Join-Path $stageAgent 'requirements.txt')
