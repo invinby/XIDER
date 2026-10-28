@@ -1,0 +1,11 @@
+[Unit]
+Description=XIDER X-DOCK WebSocket ingress guard
+Before=xider-dock-mqtt.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/xider-ws-firewall
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

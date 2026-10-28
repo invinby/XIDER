@@ -40,7 +40,10 @@ Bootstrap не переносит `TG-BOT-SERVER\.env` и BOT_TOKEN на Windows
 клиент при заданном `XIDER_DOCK_URL`. `install-x-dock.sh` готовит отдельный
 broker с per-device Dynamic Security и HTTPS enrollment. MQTT WebSocket идёт
 через уже открытый HTTPS-порт 443; raw MQTT на 8884 привязан к loopback, так что
-AWS Security Group менять не нужно. На уже установленном X-DOCK VPS сначала
+AWS Security Group менять не нужно. Mosquitto/libwebsockets фактически
+слушает WebSocket на всех интерфейсах даже при `127.0.0.1` в конфиге; отдельное
+nftables-правило блокирует TCP/18885 на всех интерфейсах, кроме loopback, а
+systemd поднимает guard раньше брокера. На уже установленном X-DOCK VPS сначала
 обнови подписанный серверный исходник, затем выполни
 `sudo /bin/bash /opt/xider/deploy/enable-x-dock-websockets.sh`. Миграция хранит
 копии конфигов в `/var/backups/xider/` и откатывает изменённые файлы, если

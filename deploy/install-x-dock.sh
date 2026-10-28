@@ -14,6 +14,9 @@ DATA_DIR=/var/lib/xider-dock
 WEBROOT=/var/www/xider-dock-acme
 BROKER_SERVICE=xider-dock-mqtt.service
 BROKER_UNIT=/etc/systemd/system/$BROKER_SERVICE
+WS_GUARD_UNIT=/etc/systemd/system/xider-ws-firewall.service
+WS_GUARD_SCRIPT=/usr/local/sbin/xider-ws-firewall
+WS_BROKER_DROPIN=/etc/systemd/system/$BROKER_SERVICE.d/20-ws-firewall.conf
 NGINX_SITE=/etc/nginx/conf.d/xider-dock.conf
 BROKER_CONFIG=$DOCK_DIR/mosquitto.conf
 BOT_SERVICE=xider-bot.service
@@ -134,6 +137,7 @@ if [[ -e "$WEBROOT" && -n "$(find "$WEBROOT" -mindepth 1 -maxdepth 1 -print -qui
 fi
 if [[ -e "$BROKER_UNIT" || -e "$NGINX_SITE" || -L "$BROKER_UNIT" || -L "$NGINX_SITE" || \
       -e "$RENEW_SERVICE" || -e "$RENEW_TIMER" || -L "$RENEW_SERVICE" || -L "$RENEW_TIMER" || \
+      -e "$WS_GUARD_UNIT" || -e "$WS_GUARD_SCRIPT" || -e "$WS_BROKER_DROPIN" || \
       -e "$CERT_HOOK" || -L "$CERT_HOOK" || -e "$CERT_RENEWAL" || \
       -e "/etc/letsencrypt/live/$CERT_NAME" || -L "/etc/letsencrypt/live/$CERT_NAME" || \
       -e "/etc/letsencrypt/archive/$CERT_NAME" || -L "/etc/letsencrypt/archive/$CERT_NAME" ]]; then
@@ -219,6 +223,8 @@ cleanup_on_exit() {
   fi
   systemctl disable --now "$BROKER_SERVICE" >/dev/null 2>&1 || true
   rm -f -- "$BROKER_UNIT"
+  systemctl disable --now xider-ws-firewall.service >/dev/null 2>&1 || true
+  rm -f -- "$WS_GUARD_UNIT" "$WS_GUARD_SCRIPT" "$WS_BROKER_DROPIN"
   if [[ "$APPARMOR_OVERRIDE_CHANGED" -eq 1 ]]; then
     if [[ "$APPARMOR_LOCAL_PREEXISTED" -eq 1 && -f "$STAGE/apparmor-local.backup" ]]; then
       install -o root -g root -m 0644 "$STAGE/apparmor-local.backup" "$APPARMOR_LOCAL"
@@ -453,6 +459,8 @@ fi
 cat > "$STAGE/xider-dock-mqtt.service" <<EOF
 [Unit]
 Description=XIDER X-DOCK per-device MQTT broker
+Requires=xider-ws-firewall.service
+After=xider-ws-firewall.service
 After=network-online.target
 Wants=network-online.target
 
@@ -475,7 +483,11 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 WantedBy=multi-user.target
 EOF
 install -o root -g root -m 0644 "$STAGE/xider-dock-mqtt.service" "$BROKER_UNIT"
+install -o root -g root -m 0750 "$APP_DIR/deploy/xider-ws-firewall.sh" "$WS_GUARD_SCRIPT"
+install -o root -g root -m 0644 "$APP_DIR/deploy/xider-ws-firewall.service" "$WS_GUARD_UNIT"
 systemctl daemon-reload
+systemctl enable --now xider-ws-firewall.service
+"$WS_GUARD_SCRIPT"
 systemctl enable --now "$BROKER_SERVICE"
 
 for attempt in {1..20}; do
@@ -697,7 +709,8 @@ done
 systemctl is-active --quiet "$BOT_SERVICE"
 nginx -t
 ss -ltn | awk '{print $4}' | grep -q ':8884$'
-ss -ltn | awk '{print $4}' | grep -q '127.0.0.1:18885$'
+ss -ltn | awk '{print $4}' | grep -qE '(0\.0\.0\.0|\*):18885$'
+"$WS_GUARD_SCRIPT"
 ss -ltn | awk '{print $4}' | grep -q ':443$'
 rm -rf -- "$STAGE"
 STAGE=""

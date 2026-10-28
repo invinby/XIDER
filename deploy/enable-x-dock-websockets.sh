@@ -13,6 +13,7 @@ chmod 0750 "$STAGE"
 BROKER_CHANGED=0
 NGINX_CHANGED=0
 ENV_CHANGED=0
+UNIT_CHANGED=0
 
 cleanup() { rm -rf -- "$STAGE"; }
 rollback() {
@@ -30,6 +31,13 @@ rollback() {
     if [[ "$ENV_CHANGED" -eq 1 && -s "$BACKUP_DIR/bot.env" ]]; then
       install -o root -g xider -m 0640 "$BACKUP_DIR/bot.env" "$BOT_ENV"
       systemctl restart xider-bot || true
+    fi
+    if [[ "$UNIT_CHANGED" -eq 1 && -s "$BACKUP_DIR/xider-dock-mqtt-ws.conf" ]]; then
+      install -o root -g root -m 0644 "$BACKUP_DIR/xider-dock-mqtt-ws.conf" /etc/systemd/system/xider-dock-mqtt.service.d/20-ws-firewall.conf
+      systemctl daemon-reload || true
+    elif [[ "$UNIT_CHANGED" -eq 1 ]]; then
+      rm -f /etc/systemd/system/xider-dock-mqtt.service.d/20-ws-firewall.conf
+      systemctl daemon-reload || true
     fi
   fi
   cleanup
@@ -50,6 +58,7 @@ systemctl is-active --quiet xider-bot
 grep -Fq 'XIDER_DOCK_ENABLED=true' "$BOT_ENV"
 grep -Fq 'transport="websockets"' "$APP_DIR/TG-BOT-SERVER/bot.py"
 grep -Fq -- '--websocket-port' "$APP_DIR/broker/x_dock_config.py"
+[[ -x "$APP_DIR/deploy/xider-ws-firewall.sh" && -f "$APP_DIR/deploy/xider-ws-firewall.service" ]]
 ldd /usr/sbin/mosquitto | grep -q 'libwebsockets' || {
   echo "Mosquitto was built without WebSocket support." >&2; exit 4;
 }
@@ -58,6 +67,25 @@ install -d -o root -g root -m 0700 "$BACKUP_DIR"
 cp -a "$BROKER_CONFIG" "$BACKUP_DIR/mosquitto.conf"
 cp -a "$NGINX_SITE" "$BACKUP_DIR/nginx.conf"
 cp -a "$BOT_ENV" "$BACKUP_DIR/bot.env"
+
+# Mosquitto's libwebsockets listener binds all interfaces even when its
+# listener line names 127.0.0.1. Install an explicit host firewall guard before
+# starting that listener; nginx still reaches it through loopback.
+install -o root -g root -m 0750 "$APP_DIR/deploy/xider-ws-firewall.sh" /usr/local/sbin/xider-ws-firewall
+install -o root -g root -m 0644 "$APP_DIR/deploy/xider-ws-firewall.service" /etc/systemd/system/xider-ws-firewall.service
+install -d -o root -g root -m 0755 /etc/systemd/system/xider-dock-mqtt.service.d
+DROPIN=/etc/systemd/system/xider-dock-mqtt.service.d/20-ws-firewall.conf
+if [[ -e "$DROPIN" ]]; then cp -a "$DROPIN" "$BACKUP_DIR/xider-dock-mqtt-ws.conf"; fi
+UNIT_CHANGED=1
+cat > "$DROPIN" <<'EOF'
+[Unit]
+Requires=xider-ws-firewall.service
+After=xider-ws-firewall.service
+EOF
+chmod 0644 "$DROPIN"
+systemctl daemon-reload
+systemctl enable --now xider-ws-firewall.service
+"/usr/local/sbin/xider-ws-firewall"
 
 python3 "$APP_DIR/broker/x_dock_config.py" \
   --plugin /usr/lib/x86_64-linux-gnu/mosquitto_dynamic_security.so \
@@ -73,12 +101,13 @@ install -o root -g mosquitto -m 0640 "$STAGE/mosquitto.conf" "$BROKER_CONFIG"
 BROKER_CHANGED=1
 systemctl restart xider-dock-mqtt
 for attempt in {1..20}; do
-  if ss -ltn | awk '{print $4}' | grep -q '127.0.0.1:18885$' && \
+  if ss -ltn | awk '{print $4}' | grep -qE '(0\.0\.0\.0|\*):18885$' && \
      ss -ltn | awk '{print $4}' | grep -q '127.0.0.1:8884$'; then break; fi
   sleep 1
 done
-ss -ltn | awk '{print $4}' | grep -q '127.0.0.1:18885$'
+ss -ltn | awk '{print $4}' | grep -qE '(0\.0\.0\.0|\*):18885$'
 ss -ltn | awk '{print $4}' | grep -q '127.0.0.1:8884$'
+"/usr/local/sbin/xider-ws-firewall"
 
 python3 - "$NGINX_SITE" "$STAGE/nginx.conf" <<'PY'
 import pathlib, sys
@@ -165,8 +194,9 @@ HTTP_STATUS="$(curl --silent --show-error --max-time 8 \
   -H 'Content-Type: application/json' -d '{}' -o /dev/null -w '%{http_code}')"
 [[ "$HTTP_STATUS" != 000 && "$HTTP_STATUS" != 404 && "$HTTP_STATUS" != 502 ]]
 
-echo "[OK] X-DOCK now has a loopback-only MQTT WebSocket listener on 18885 behind HTTPS /mqtt:443."
+echo "[OK] X-DOCK MQTT WebSocket is behind HTTPS /mqtt:443; nftables drops non-loopback TCP/18885."
 echo "[OK] Raw MQTT listener 8884 is now loopback-only; no AWS port rule is needed."
 echo "[OK] Backups: $BACKUP_DIR"
 trap - EXIT INT TERM HUP
+UNIT_CHANGED=0
 cleanup
