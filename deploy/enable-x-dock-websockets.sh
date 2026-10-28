@@ -58,7 +58,8 @@ systemctl is-active --quiet xider-bot
 grep -Fq 'XIDER_DOCK_ENABLED=true' "$BOT_ENV"
 grep -Fq 'transport="websockets"' "$APP_DIR/TG-BOT-SERVER/bot.py"
 grep -Fq -- '--websocket-port' "$APP_DIR/broker/x_dock_config.py"
-[[ -x "$APP_DIR/deploy/xider-ws-firewall.sh" && -f "$APP_DIR/deploy/xider-ws-firewall.service" ]]
+[[ -f "$APP_DIR/deploy/xider-ws-firewall.sh" && ! -L "$APP_DIR/deploy/xider-ws-firewall.sh" && \
+   -f "$APP_DIR/deploy/xider-ws-firewall.service" && ! -L "$APP_DIR/deploy/xider-ws-firewall.service" ]]
 ldd /usr/sbin/mosquitto | grep -q 'libwebsockets' || {
   echo "Mosquitto was built without WebSocket support." >&2; exit 4;
 }
