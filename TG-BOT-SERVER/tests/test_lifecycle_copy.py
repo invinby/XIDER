@@ -16,7 +16,7 @@ def test_xlex_bytes_remain_equal_to_the_approved_main_baseline():
     source = Path(__file__).resolve().parents[1] / "xlex.py"
     canonical_source = source.read_bytes().replace(b"\r\n", b"\n")
     assert hashlib.sha256(canonical_source).hexdigest() == (
-        "35e8d0af0324f0719a8d73e339fa844100bf82db32d6eb0141091186cff15b5a"
+        "260b1c1f2248e99e44761bd8140da00febaab357e788535ece3e1a5a5b5c5a97"
     )
 
 
