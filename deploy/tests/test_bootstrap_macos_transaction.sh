@@ -29,6 +29,12 @@ fi
 exec "$XIDER_TEST_REAL_PYTHON" "$@"
 PYTHON
 chmod +x "$FAKE_BIN/python3"
+# The bootstrap prefers explicitly versioned interpreters. Route each supported
+# name through the fixture so dependency failures are deterministic even on CI
+# runners that already have python3.12/3.14 installed.
+for version in 3.14 3.12 3.11; do
+  ln -s python3 "$FAKE_BIN/python${version}"
+done
 
 printf '#!/usr/bin/env bash\nexit 0\n' > "$FAKE_BIN/launchctl"
 chmod +x "$FAKE_BIN/launchctl"
