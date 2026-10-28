@@ -169,8 +169,13 @@ Build run `40783360229` собрал macOS preview: артефакт `XGENT-MCS-
 113,180,739 байт, SHA-256
 `587545da2a18ad553e6d785a76f63252d5dd6360de348ae9979c496f81aac211`.
 Это неподписанная и ненотаризованная сборка для теста; официальный macOS-релиз
-из неё не публиковался. На последней проверке Windows Agent/Guard Keeper всё ещё
-компилировались, Windows-артефакт и общий `XIDER-Components` ещё не загружены.
+из неё не публиковался. Windows Agent/Guard Keeper собраны успешно в
+`XGENT-WDS-Windows` (152,094,212 байт; SHA-256
+`dce1fb531630c13eab900d42a719447496fd94b110017ca9d7194347aa55c3cf`). Общий
+`XIDER-Components` также прошёл упаковку и ZIP-проверки (203,771,328 байт;
+SHA-256 `311b94f63d4282accbf68241540a17cf3839e3970903c90c70ebcbbe47193163`).
+Это временные Actions-артефакты, а не официальный релиз; workflow не запускался
+на version tag, поэтому GitHub Release не создавался.
 
 Подписанный серверный bundle с tag `server-deploy-20261029-2409e35` применён к
 VPS `16.16.200.207`. `xider-bot.service`, `xider-dock-mqtt.service` и Nginx

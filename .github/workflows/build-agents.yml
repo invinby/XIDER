@@ -198,7 +198,7 @@ jobs:
           name: XGENT-WDS-Windows
           path: artifacts/windows
 
-      - name: "Download the signed macOS Guard Keeper build"
+      - name: "Download the macOS Guard Keeper build"
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: XGENT-MCS-macOS
