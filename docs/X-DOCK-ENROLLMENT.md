@@ -1,6 +1,12 @@
 # X-DOCK enrollment design
 
-Status: in progress; no enrollment endpoint or certificate has been deployed.
+Status (2026-10-28): HTTPS enrollment is deployed on the primary VPS at
+`https://16.16.200.207`; the public IP certificate validates. The agent MQTT
+WebSocket path is proxied through HTTPS port 443. Raw MQTT 8884 is loopback-only;
+the Mosquitto WebSocket listener on 18885 is protected by a persistent nftables
+host firewall rule that drops non-loopback traffic. Server-side service and
+endpoint health checks passed. A fresh device pairing through Telegram and a
+clean Windows/macOS install have not yet been verified end to end.
 Decision date: 2026-10-01.
 
 ## Goal
@@ -97,10 +103,9 @@ For X-DOCK, select one broker path before implementing credential issuance:
    provisioning interface. The checked-in Mosquitto example is not sufficient
    as-is: it currently defines one shared account and a static ACL.
 
-This is a release blocker for password-free first install, not a reason to
-fall back to SSH, share the bot `.env`, or weaken TLS. The one-command
-installer can only become end-to-end after this gate, the HTTPS endpoint, and
-owner approval flow are deployed together.
+This was the release blocker for password-free first install. The deployed
+X-DOCK path now supplies HTTPS and owner approval without SSH access or copying
+the bot `.env`; the remaining gate is live verification with a real new device.
 
 References checked 2026-10-26:
 
@@ -155,20 +160,19 @@ bot can route enrolled devices through a separate MQTT transport and uses the
 matching per-device message key. These are source changes with focused offline
 tests; they are not a live deployment.
 
-`deploy/x_dock_client.py` now creates short-lived request keys in memory, uses
+`deploy/x_dock_client.py` creates short-lived request keys in memory, uses
 the signed approval/poll flow, decrypts the response, and writes the staged
-agent `.env` without printing secrets. Both platform bootstraps can call it when
-`XIDER_DOCK_URL` is configured. The release builder forwards the public HTTPS
-URL from the GitHub Actions repository variable into the signed Windows and
-macOS installer bodies; it does not embed enrollment or broker credentials.
-This is not yet an end-to-end first install:
+agent `.env` without printing secrets. Both platform bootstraps default to the
+deployed HTTPS endpoint; `XIDER_DOCK_URL` can override it. The release builder
+does not embed enrollment or broker credentials. This is not yet an end-to-end
+first install:
 the current `broker/docker-compose.yml` still uses a static shared account and
-does not enable Dynamic Security. There is no bot MQTT role bootstrap, HTTPS
-reverse proxy, publicly trusted certificate, or automatic certificate-renewal/
-reload job. `XIDER_DOCK_ENABLED` therefore stays off. No live pairing or
-one-command no-SSH install is ready to publish.
+does not enable Dynamic Security. The deployed X-DOCK has its own broker, HTTPS
+reverse proxy, IP certificate, and renewal/reload job. `XIDER_DOCK_ENABLED` is
+enabled on the deployed bot. No live device pairing or clean-machine install
+has yet been confirmed.
 
-`deploy/install-x-dock.sh` is a preparation script for an already-installed bot
+`deploy/install-x-dock.sh` is the deployment script for an already-installed bot
 VPS. It creates a separate Mosquitto instance, bootstraps Dynamic Security on
 loopback, removes the demo identity, issues a short-lived IP certificate, and
 configures the TLS listener plus HTTPS enrollment proxy and renewal hook. It
@@ -186,12 +190,11 @@ UFW when no global IPv4 allow rule exists, and removes that temporary rule on
 rollback. On success, it opens 443 and 8884 too. It requires the bot's exact
 `MQTT_PREFIX=xgent/v1`.
 
-Live status (2026-10-27): the script has run successfully on the primary VPS.
+Historical live status (2026-10-27; superseded by the 2026-10-28 deployment
+record below): the script had run successfully on the primary VPS.
 The bot, dedicated Dynamic Security broker, Nginx, and AppArmor are active; the
-IP certificate was issued and HTTPS responds. External TCP/8884 currently times
-out because the AWS security group has not yet been opened. Certificate renewal
-is scheduled but has not yet been observed through a renewal cycle. No device
-has completed live enrollment.
+IP certificate was issued and HTTPS responded. At that snapshot, external
+TCP/8884 timed out because the AWS security group had not yet been opened.
 
 Next required sequence: review and run the VPS installer after SSH access and
 provider ports are available; verify certificate issuance and renewal; test
@@ -203,8 +206,11 @@ that full sequence succeeds on Windows and macOS.
 
 ## Current evidence and non-claims
 
-The latest server snapshot confirms HTTPS and the dedicated broker listeners.
-The blocked provider port and missing `XIDER_DOCK_URL` release setting prevent
-an end-to-end client installation. The design removes a domain purchase as a
-hard prerequisite, not the need to finish provider networking, observe renewal,
-and verify pairing on Windows and macOS.
+On 2026-10-28 the signed server artifact was verified and applied. The migration
+put X-DOCK MQTT WebSockets behind the existing HTTPS port 443, restricted raw
+MQTT 8884 to loopback, and installed an nftables guard for the broker's actual
+18885 bind behavior. Bot, X-DOCK broker, Nginx, and firewall guard services were
+active after migration. HTTPS enrollment health checks completed; an empty
+poll request returned the expected client error instead of a proxy failure.
+This proves service reachability, not successful first-time pairing. A real
+owner approval and clean Windows/macOS install remain the next live check.

@@ -113,10 +113,13 @@ and an in-bot handbook. They do **not** yet implement A/B installation,
 complete six-voice coverage, or live-verified updates. X-DOCK has a separate
 enrollment design and is now installed on the primary VPS. The broker, bot,
 Nginx, and AppArmor are active; HTTPS to the public IP responds with a valid IP
-certificate. AWS still blocks external TCP/8884, so device enrollment and live
-pairing are not yet verified. The GitHub `XIDER_DOCK_URL` release variable is
-also not configured, so signed installers do not yet contain the enrollment
-endpoint. X-DOCK is deployed but not ready to claim one-command enrollment.
+certificate. On 2026-10-28 X-DOCK MQTT WebSockets were moved behind the existing
+HTTPS port 443; raw MQTT 8884 is loopback-only, and a persistent nftables rule
+blocks external access to the broker's WebSocket listener. Bot, broker, Nginx,
+and firewall guard are active. Both bootstraps now default to the HTTPS
+enrollment endpoint, so first installs no longer require SSH or a copied `.env`.
+The service endpoint responds correctly, but a real owner-approved enrollment
+and clean Windows/macOS install still need live device confirmation.
 The Windows installer now retires only the documented legacy `XGENT` scheduled
 task and `XGENT`/`XGentAgent` per-user Run entries before registering the single
 supported `XIDER Agent` task; preflight remains read-only and `.env` is untouched.

@@ -33,12 +33,12 @@ Bootstrap не переносит `TG-BOT-SERVER\.env` и BOT_TOKEN на Windows
 используется `StrictHostKeyChecking=yes` (`-KnownHostsPath` или
 `$env:XIDER_SSH_KNOWN_HOSTS` задаёт другой файл). Первое автоматическое
 подтверждение неизвестного SSH-хоста отключено. Отдельный
-`bootstrap-agent.ps1` для установки только агента использует OpenSSH только в
-безынтерактивном режиме: парольный fallback отключён. Для первой установки
-без локального `.env` сейчас нужен заранее настроенный SSH-ключ/agent. Клиент
-и owner-approved X-DOCK flow уже есть в исходниках; оба bootstrap умеют вызвать
-клиент при заданном `XIDER_DOCK_URL`. `install-x-dock.sh` готовит отдельный
-broker с per-device Dynamic Security и HTTPS enrollment. MQTT WebSocket идёт
+`bootstrap-agent.ps1` для установки только агента использует owner-approved
+X-DOCK по умолчанию (`https://16.16.200.207`), когда локального `.env` нет.
+Устройство отправляет одноразовый запрос; конфигурация выдаётся только после
+подтверждения в Telegram. Для новой установки без локального `.env` bootstrap
+больше не читает секреты с VPS по SSH. `install-x-dock.sh` готовит отдельный broker с per-device
+Dynamic Security и HTTPS enrollment. MQTT WebSocket идёт
 через уже открытый HTTPS-порт 443; raw MQTT на 8884 привязан к loopback, так что
 AWS Security Group менять не нужно. Mosquitto/libwebsockets фактически
 слушает WebSocket на всех интерфейсах даже при `127.0.0.1` в конфиге; отдельное
@@ -48,7 +48,9 @@ systemd поднимает guard раньше брокера. На уже уст
 `sudo /bin/bash /opt/xider/deploy/enable-x-dock-websockets.sh`. Миграция хранит
 копии конфигов в `/var/backups/xider/` и откатывает изменённые файлы, если
 перезапуск службы не прошёл.
-Поэтому установка одной командой без `.env` и SSH пока не доступна.
+Путь HTTPS через 443 развернут; установщики теперь выбирают X-DOCK без
+SSH-пароля и без ручного копирования `.env`. Первую чистую установку всё ещё
+нужно подтвердить на реальном Windows/macOS устройстве через Telegram.
 Настройки остаются в защищённом sidecar `.env`; секреты не печатаются и не
 включаются в EXE. Перед SSH-записью локальный preflight требует MQTT TLS,
 шифрование payload и непустые broker credentials, затем собирает EXE. Если
@@ -187,21 +189,15 @@ removes the copied `.env` from the quarantined failed directory. The automated
 fixture uses a stub `launchctl`; only a real Mac can validate permissions,
 TCC prompts, sleep/wake, and actual LaunchAgent behavior.
 
-The macOS bootstrap downloads the repository and starts the agent. If a local
-sidecar `.env` is absent, it connects to the configured XIDER VPS
-(`XIDER_SERVER_HOST`, default `16.16.200.207`) over SSH using a pre-authorized
-key/agent only. Password and keyboard-interactive authentication are disabled;
-the bootstrap recognizes `~/.ssh/xider`, or an explicit `XIDER_SSH_KEY`.
-Without a local `.env` or an already authorized key, it stops before installation.
-The source tree also has an optional `XIDER_DOCK_URL` enrollment client path,
-but the owner-approved X-DOCK service has no deployed HTTPS endpoint, trusted
-certificate, or per-device broker yet; that path is not live and cannot replace
-SSH today. The bootstrap retrieves only the agent configuration keys from
-`/etc/xider/bot.env`; `BOT_TOKEN` is never copied. The generated local file is
-mode `0600`. Set `XIDER_ENV_ROOT` to use an existing local `.env`, or set
-`XIDER_SERVER_HOST`/`XIDER_SERVER_USER` for another VPS. This does not deploy
-the VPS bot; that remains the Windows/server deployment flow. The bootstrap also
-registers the visible macOS `XIDER Guardian` LaunchAgent.
+The macOS bootstrap uses the same owner-approved X-DOCK enrollment flow as
+Windows when a local sidecar `.env` is absent. It defaults to the deployed
+`https://16.16.200.207` endpoint (`XIDER_DOCK_URL` overrides it); approve the
+new device in Telegram before the installer receives its per-device settings.
+The device key is generated locally, and the bot token is never copied. The
+generated local file is mode `0600`. Set `XIDER_ENV_ROOT` to use an existing
+local `.env`. This does not deploy the VPS bot; that remains the
+Windows/server deployment flow. The bootstrap also registers the visible
+macOS `XIDER Guardian` LaunchAgent.
 
 ### XIDER Guardian
 

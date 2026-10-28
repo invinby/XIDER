@@ -10,6 +10,7 @@ SERVER_USER="${XIDER_SERVER_USER:-ubuntu}"
 TARGET="${INSTALL_ROOT}/git-ver"
 SOURCE_ARCHIVE="${XIDER_SOURCE_ARCHIVE:-}"
 RELEASE_TAG="${XIDER_RELEASE_TAG:-}"
+DOCK_URL="${XIDER_DOCK_URL:-https://16.16.200.207}"
 
 if [[ ! "$BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]; then
   echo "Invalid XIDER_BRANCH" >&2
@@ -169,7 +170,7 @@ PY
   else
     echo 'Публичный keyset сейчас недоступен; использую локальную конфигурацию.'
   fi
-elif [[ -n "${XIDER_DOCK_URL:-}" ]]; then
+elif [[ -n "$DOCK_URL" ]]; then
   echo 'Локальной конфигурации нет; подтверждаю X-DOCK-подключение через Telegram.'
   pairing_venv="$stage/x-dock-venv"
   if ! python3 -m venv "$pairing_venv" ||
@@ -178,7 +179,7 @@ elif [[ -n "${XIDER_DOCK_URL:-}" ]]; then
     exit 4
   fi
   if ! "$pairing_venv/bin/python3" "$stage/new/deploy/x_dock_client.py" \
-      --base-url "$XIDER_DOCK_URL" --env-output "$agent_env" --timeout 600; then
+      --base-url "$DOCK_URL" --env-output "$agent_env" --timeout 600; then
     echo 'X-DOCK не выдал настройки; действующая установка не менялась.' >&2
     exit 4
   fi
