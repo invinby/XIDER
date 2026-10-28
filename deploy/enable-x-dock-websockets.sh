@@ -190,9 +190,14 @@ systemctl is-active --quiet xider-dock-mqtt
 systemctl is-active --quiet nginx
 PUBLIC_IP="$(awk -F= '/^XIDER_DOCK_BROKER_HOST=/{print $2}' "$BOT_ENV" | tail -n 1)"
 [[ "$PUBLIC_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
-HTTP_STATUS="$(curl --silent --show-error --max-time 8 \
-  --resolve "$PUBLIC_IP:443:127.0.0.1" "https://$PUBLIC_IP/x-dock/v1/poll" \
-  -H 'Content-Type: application/json' -d '{}' -o /dev/null -w '%{http_code}')"
+HTTP_STATUS=000
+for attempt in {1..10}; do
+  HTTP_STATUS="$(curl --silent --show-error --max-time 3 \
+    --resolve "$PUBLIC_IP:443:127.0.0.1" "https://$PUBLIC_IP/x-dock/v1/poll" \
+    -H 'Content-Type: application/json' -d '{}' -o /dev/null -w '%{http_code}' || true)"
+  if [[ "$HTTP_STATUS" != 000 && "$HTTP_STATUS" != 502 ]]; then break; fi
+  sleep 1
+done
 [[ "$HTTP_STATUS" != 000 && "$HTTP_STATUS" != 404 && "$HTTP_STATUS" != 502 ]]
 
 echo "[OK] X-DOCK MQTT WebSocket is behind HTTPS /mqtt:443; nftables drops non-loopback TCP/18885."
