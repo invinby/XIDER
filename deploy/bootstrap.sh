@@ -29,7 +29,68 @@ if [[ -n "$RELEASE_TAG" && ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; the
 fi
 command -v curl >/dev/null || { echo "curl is required" >&2; exit 2; }
 command -v unzip >/dev/null || { echo "unzip is required" >&2; exit 2; }
-command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 2; }
+
+resolve_xider_python() {
+  local candidate version pkg expected_hash actual_hash signature status
+  for candidate in python3.14 python3.12 python3.11 python3; do
+    candidate="$(command -v "$candidate" 2>/dev/null || true)"
+    [[ -n "$candidate" && -x "$candidate" ]] || continue
+    if version="$("$candidate" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null)" &&
+       [[ "$version" == 3.14 || "$version" == 3.12 || "$version" == 3.11 ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  if [[ "$(uname -s)" != Darwin ]]; then
+    echo 'Поддерживаемый Python 3.11/3.12/3.14 не найден; автоустановка доступна только на macOS.' >&2
+    return 1
+  fi
+  command -v shasum >/dev/null || { echo 'shasum is required to verify the Python installer.' >&2; return 1; }
+  command -v pkgutil >/dev/null || { echo 'pkgutil is required to verify the Python installer signature.' >&2; return 1; }
+
+  expected_hash='286c7018aa2730f6747ca433dccdc2b31be45f078a9ea0ffa44d5f06368fd2d7'
+  pkg="$(mktemp "${TMPDIR:-/tmp}/xider-python-3.14.10.XXXXXXXX")" || return 1
+  echo 'Python 3.11/3.12/3.14 не найден. Проверяю и ставлю официальный Python 3.14.10...' >&2
+  if ! curl --fail --silent --show-error --location --max-time 180 \
+      'https://www.python.org/ftp/python/3.14.10/python-3.14.10-macos11.pkg' -o "$pkg"; then
+    rm -f "$pkg"
+    echo 'Не удалось скачать официальный установщик Python.' >&2
+    return 1
+  fi
+  actual_hash="$(shasum -a 256 "$pkg" | awk '{print tolower($1)}')"
+  if [[ "$actual_hash" != "$expected_hash" ]]; then
+    rm -f "$pkg"
+    echo 'SHA-256 установщика Python не совпал с закреплённым значением.' >&2
+    return 1
+  fi
+  if ! signature="$(pkgutil --check-signature "$pkg" 2>&1)" ||
+     ! grep -Fq 'Python Software Foundation' <<<"$signature"; then
+    rm -f "$pkg"
+    echo 'Подпись установщика Python не прошла проверку издателя.' >&2
+    return 1
+  fi
+  if sudo /usr/sbin/installer -pkg "$pkg" -target / >&2; then
+    :
+  else
+    status=$?
+    rm -f "$pkg"
+    echo "Установка Python завершилась с ошибкой (код $status)." >&2
+    return 1
+  fi
+  rm -f "$pkg"
+  candidate='/Library/Frameworks/Python.framework/Versions/3.14/bin/python3'
+  if [[ ! -x "$candidate" ]] || ! "$candidate" -c 'import sys; assert sys.version_info[:2] == (3, 14)' 2>/dev/null; then
+    echo 'Установленный Python 3.14 не прошёл проверку запуска.' >&2
+    return 1
+  fi
+  printf '%s\n' "$candidate"
+}
+
+PYTHON_BIN="$(resolve_xider_python)" || {
+  echo 'Не удалось подготовить поддерживаемый Python; существующая установка не менялась.' >&2
+  exit 2
+}
 mkdir -p "$INSTALL_ROOT"
 INSTALL_ROOT="$(cd "$INSTALL_ROOT" && pwd -P)"
 TARGET="${INSTALL_ROOT}/git-ver"
@@ -53,7 +114,7 @@ else
   curl --fail --silent --show-error --location --max-time 90 \
     "$archive_url" -o "$stage/source.zip"
 fi
-if ! python3 - "$stage/source.zip" <<'PY'
+if ! "$PYTHON_BIN" - "$stage/source.zip" <<'PY'
 from pathlib import PurePosixPath
 from stat import S_IFDIR, S_IFREG, S_IFLNK
 from unicodedata import normalize
@@ -156,7 +217,7 @@ if [[ -f "$preserved_env" ]]; then
       2>"$stage/public-ssh.err" | tr -d '\r' | awk '/^XIDER_COMMAND_VERIFY_KEYSET_B64=/ { print }' > "$public_env"; then
     # Merge only public verification data into the staged copy. Existing
     # device credentials and rollback configuration stay authoritative.
-    python3 - "$agent_env" "$public_env" <<'PY'
+    "$PYTHON_BIN" - "$agent_env" "$public_env" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -176,7 +237,7 @@ PY
 elif [[ -n "$DOCK_URL" ]]; then
   echo 'Локальной конфигурации нет; подтверждаю X-DOCK-подключение через Telegram.'
   pairing_venv="$stage/x-dock-venv"
-  if ! python3 -m venv "$pairing_venv" ||
+  if ! "$PYTHON_BIN" -m venv "$pairing_venv" ||
      ! "$pairing_venv/bin/python3" -m pip install --disable-pip-version-check --quiet 'cryptography>=42.0'; then
     echo 'Не удалось подготовить криптографию X-DOCK; действующая установка не менялась.' >&2
     exit 4
@@ -314,7 +375,7 @@ else
   runtime="$(mktemp -d "$INSTALL_ROOT/runtimes/macos.XXXXXX")"
 fi
 echo "Подготавливаю временные инструменты проверки; действующий агент пока не останавливаю."
-if ! python3 -m venv "$runtime"; then
+if ! "$PYTHON_BIN" -m venv "$runtime"; then
   echo "Подготовка окружения не прошла; прежняя установка не менялась." >&2
   echo "Диагностическое окружение сохранено: $runtime" >&2
   exit 5
@@ -409,7 +470,7 @@ fi
 # Keep the prior install for rollback; never recursively delete the live checkout.
 backup="${INSTALL_ROOT}/git-ver.previous.$(date +%Y%m%d%H%M%S).$$"
 layer_state_snapshot="$stage/layer-state-preserved.json"
-python3 - "$HOME/.xgent/layer-state.json" "$layer_state_snapshot" <<'PY'
+"$PYTHON_BIN" - "$HOME/.xgent/layer-state.json" "$layer_state_snapshot" <<'PY'
 import json, pathlib, sys
 source, destination = map(pathlib.Path, sys.argv[1:])
 if source.is_symlink():

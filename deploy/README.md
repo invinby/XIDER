@@ -172,6 +172,11 @@ An existing installed `.env` takes precedence over older Desktop copies.
 curl -fsSL https://raw.githubusercontent.com/invinby/XIDER/main/deploy/bootstrap.sh | bash
 ```
 
+The bootstrap uses Python 3.11, 3.12, or 3.14 if already installed. Otherwise,
+it downloads the pinned official Python 3.14.10 macOS package, checks its SHA-256
+and Python Software Foundation package signature, then installs it with macOS's
+standard administrator prompt before continuing. This does not use SSH passwords.
+
 For a test branch, set `XIDER_BRANCH` before running the same installer. The installer stages the archive and preserves the local agent `.env` and previous install for rollback. `XIDER_REF` can instead pin the archive to a full 40- or 64-character commit ID. The branch selector affects this bootstrap archive only; agent self-updates use the release protocol:
 
 ```bash
