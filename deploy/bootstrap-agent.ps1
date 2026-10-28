@@ -14,7 +14,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-if (-not $DockUrl) { $DockUrl = 'https://16.16.200.207' }
+if (-not $DockUrl -and -not $SourceArchive) { $DockUrl = 'https://16.16.200.207' }
 if ($Branch -notmatch '^[A-Za-z0-9._/-]+$' -or $Branch.Split('/') -contains '..') {
     throw 'Недопустимое имя ветки XIDER_BRANCH.'
 }

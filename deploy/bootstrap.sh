@@ -10,7 +10,10 @@ SERVER_USER="${XIDER_SERVER_USER:-ubuntu}"
 TARGET="${INSTALL_ROOT}/git-ver"
 SOURCE_ARCHIVE="${XIDER_SOURCE_ARCHIVE:-}"
 RELEASE_TAG="${XIDER_RELEASE_TAG:-}"
-DOCK_URL="${XIDER_DOCK_URL:-https://16.16.200.207}"
+DOCK_URL="${XIDER_DOCK_URL:-}"
+if [[ -z "$DOCK_URL" && -z "$SOURCE_ARCHIVE" ]]; then
+  DOCK_URL='https://16.16.200.207'
+fi
 
 if [[ ! "$BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]; then
   echo "Invalid XIDER_BRANCH" >&2
