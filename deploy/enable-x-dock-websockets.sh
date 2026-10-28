@@ -60,7 +60,7 @@ grep -Fq 'transport="websockets"' "$APP_DIR/TG-BOT-SERVER/bot.py"
 grep -Fq -- '--websocket-port' "$APP_DIR/broker/x_dock_config.py"
 [[ -f "$APP_DIR/deploy/xider-ws-firewall.sh" && ! -L "$APP_DIR/deploy/xider-ws-firewall.sh" && \
    -f "$APP_DIR/deploy/xider-ws-firewall.service" && ! -L "$APP_DIR/deploy/xider-ws-firewall.service" ]]
-ldd /usr/sbin/mosquitto | grep -q 'libwebsockets' || {
+ldd /usr/sbin/mosquitto | grep 'libwebsockets' >/dev/null || {
   echo "Mosquitto was built without WebSocket support." >&2; exit 4;
 }
 
