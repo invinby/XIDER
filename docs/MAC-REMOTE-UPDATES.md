@@ -138,11 +138,23 @@ VPS `16.16.200.207` на 2026-10-27: TCP/22, 80 и 443 отвечают, TCP/888
 Серверный signed artifact применён к VPS. Бот, X-DOCK broker, Nginx и nftables
 guard активны. Agent WebSocket идёт через HTTPS/443; сырой MQTT/8884 закрыт на
 loopback, а listener 18885 отсекается на хосте для внешнего трафика. TLS для
-публичного IP проверяется; enrollment endpoint отвечает ожидаемым HTTP-кодом.
-Публичная ветка и приватный backup-ref синхронизированы на `fd51b8e`.
-PR #32 остаётся draft, официальный release — `v4.2.1`. Реальная заявка нового
-устройства, подтверждение в Telegram и чистая установка Windows/macOS ещё не
-проверены; сертификат также не прошёл полный фактический renewal cycle.
+публичного IP проверяется; пустой запрос к enrollment poll endpoint отвечает
+ожидаемым HTTP 400. Сервисы `xider-bot`, `xider-dock-mqtt`, Nginx и firewall
+guard повторно проверены активными 2026-10-28.
+
+Публичная ветка и приватный backup-ref `codex/tarped-resume-20261026`
+синхронизированы на `8d3e0ce14a9f5261b484003f33c8282d4136ae34`; `main` пока
+остаётся на `9fba6b9`. CI run `40743405681` завершился успешно для Python 3.11,
+Python 3.12 и Unix installer/bootstrap проверок. Pages source validation прошёл;
+публикация Pages из PR была пропущена условиями workflow.
+
+PR #32 остаётся draft. Последний опубликованный релиз — `v4.2.1`; tag build
+`v4.3.0` не выпустил релиз, потому что в GitHub Environment отсутствуют Apple
+signing/notarization credentials. Поэтому короткие команды Pages пока не
+устанавливают HEAD этой ветки как новый официальный релиз. Реальная заявка,
+подтверждение pairing в Telegram и чистая установка/обновление на Windows и Mac
+ещё требуют проверки на устройствах; полный фактический renewal cycle TLS также
+не подтверждён.
 
 ## Непроверенное на реальном устройстве
 
