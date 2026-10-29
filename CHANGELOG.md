@@ -1,5 +1,17 @@
 # XIDER release history
 
+## X4.3.3-TARPED+20261030 — Windows Python bootstrap recovery
+
+### English
+
+- Treat a missing Python version from `py.exe` / `python.exe` as a normal probe miss under Windows PowerShell 5.1, then install the pinned official runtime.
+- Keep the signed Windows Agent + Guard Keeper enrollment flow unchanged.
+
+### Русский
+
+- Ошибку «подходящий Python не найден» от `py.exe` / `python.exe` считаем обычным промахом поиска и продолжаем установку закреплённого Python под Windows PowerShell 5.1.
+- Подписанный поток установки Agent + Guard Keeper и подключение через X-Dock сохранены.
+
 ## X4.3.2-TARPED+20261029 — X-Dock install diagnostics
 
 ### English

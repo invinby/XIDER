@@ -41,6 +41,25 @@ function Assert-XiderBootstrapElevation {
     }
 }
 
+function Invoke-XiderNativeProbe {
+    param(
+        [Parameter(Mandatory)][string]$Executable,
+        [Parameter(Mandatory)][string[]]$Arguments
+    )
+
+    # PowerShell 5 can promote a native executable's stderr text to a
+    # terminating NativeCommandError when ErrorActionPreference is Stop.
+    # An absent Python runtime is a normal probe miss, not a bootstrap failure.
+    try {
+        $output = @(& $Executable @Arguments 2>$null)
+        $exitCode = $LASTEXITCODE
+    } catch {
+        $output = @()
+        $exitCode = 1
+    }
+    return [pscustomobject]@{ Output = @($output); ExitCode = [int]$exitCode }
+}
+
 function Get-XiderPythonExecutable {
     # Prefer a known interpreter before downloading anything. The Windows
     # launcher may point `py -3` at an untested newest runtime, so probe the
@@ -48,8 +67,9 @@ function Get-XiderPythonExecutable {
     $launcher = (Get-Command py.exe -ErrorAction SilentlyContinue).Source
     if ($launcher) {
         foreach ($version in @('3.14', '3.12', '3.11')) {
-            $candidate = @(& $launcher "-$version" -c 'import sys; print(sys.executable)' 2>$null)
-            if ($LASTEXITCODE -eq 0 -and $candidate.Count -eq 1 -and
+            $probe = Invoke-XiderNativeProbe -Executable $launcher -Arguments @("-$version", '-c', 'import sys; print(sys.executable)')
+            $candidate = @($probe.Output)
+            if ($probe.ExitCode -eq 0 -and $candidate.Count -eq 1 -and
                 (Test-Path -LiteralPath $candidate[0] -PathType Leaf)) {
                 return [string]$candidate[0]
             }
@@ -59,8 +79,9 @@ function Get-XiderPythonExecutable {
     $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
     if ($pythonCommand) {
         foreach ($command in @($pythonCommand)) {
-            $candidate = @(& $command.Source -c 'import sys; print(sys.executable); print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>$null)
-            if ($LASTEXITCODE -eq 0 -and $candidate.Count -ge 2 -and
+            $probe = Invoke-XiderNativeProbe -Executable $command.Source -Arguments @('-c', 'import sys; print(sys.executable); print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+            $candidate = @($probe.Output)
+            if ($probe.ExitCode -eq 0 -and $candidate.Count -ge 2 -and
                 $candidate[-1] -match '^3\.(?:11|12|14)$' -and
                 (Test-Path -LiteralPath $candidate[0] -PathType Leaf)) {
                 return [string]$candidate[0]

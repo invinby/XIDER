@@ -98,6 +98,19 @@ try {
 
     $tokens = $null; $parseErrors = $null
     $bootstrapAst = [Management.Automation.Language.Parser]::ParseFile($bootstrap, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count) { throw 'Windows bootstrap has a PowerShell syntax error.' }
+    $nativeProbeFunction = $bootstrapAst.Find({ param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Invoke-XiderNativeProbe'
+    }, $true)
+    if (-not $nativeProbeFunction) { throw 'Native Python probe helper is missing.' }
+    Invoke-Expression $nativeProbeFunction.Extent.Text
+    $nativeProbe = Invoke-XiderNativeProbe -Executable $env:ComSpec -Arguments @(
+        '/d', '/s', '/c', 'echo No suitable Python runtime found. 1>&2 & exit /b 1'
+    )
+    if ($nativeProbe.ExitCode -eq 0 -or $nativeProbe.Output.Count -ne 0) {
+        throw 'A missing Python runtime must be treated as a probe miss, not as a bootstrap-stopping error.'
+    }
     $elevationFunction = $bootstrapAst.Find({ param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
             $node.Name -eq 'Assert-XiderBootstrapElevation'
