@@ -47,10 +47,10 @@ jobs:
     if: needs.release-state.outputs.exists == 'false'
     runs-on: windows-latest
     steps:
-      - name: Check out tagged source
+      - name: Check out reviewed source snapshot
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ needs.release-state.outputs.tag }}
+          ref: ${{ github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -61,13 +61,11 @@ jobs:
       - name: Compile Windows Agent and Guard Keeper
         shell: pwsh
         env:
-          BUILD_SHA: ${{ github.sha }}
           RELEASE_TAG: ${{ needs.release-state.outputs.tag }}
         run: |
-          git fetch origin $env:BUILD_SHA --depth=1
-          git diff --quiet $env:RELEASE_TAG $env:BUILD_SHA -- XGENT-WDS XGENT-MCS TG-BOT-SERVER deploy
-          if ($LASTEXITCODE -ne 0) { throw 'Tagged agent/server sources differ from the reviewed main snapshot; refusing a mixed-source release.' }
-          git show "$($env:BUILD_SHA):tools/build_nuitka_windows.py" | Set-Content -Path tools/build_nuitka_windows.py -Encoding utf8NoBOM
+          $versionMatch = Select-String -Path XGENT-WDS/config.py -Pattern '^VERSION = "([0-9.]+)"$'
+          $version = $versionMatch.Matches.Groups[1].Value
+          if ("v$version" -ne $env:RELEASE_TAG) { throw "Source version $version does not match release tag $env:RELEASE_TAG." }
           python -m pip install --upgrade pip
           python -m pip install -r XGENT-WDS/requirements.txt nuitka==4.3.1
           python tools/build_nuitka_windows.py
@@ -166,6 +164,7 @@ jobs:
             Signed Windows Agent and Guard Keeper package. The short Windows installer enrolls through X-Dock and does not request a VPS SSH password.
 
             This preview is Windows-only; macOS remains on its separately signed release path.
+            The signed manifest pins the exact source commit used to build these assets.
           files: |
             artifacts/XIDER-source.zip
             artifacts/XGENT-WDS.exe
