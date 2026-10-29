@@ -128,6 +128,26 @@ def test_source_update_uses_stable_release_and_checks_manifest_hash(tmp_path, mo
     assert all(timeout == package.DOWNLOAD_TIMEOUT_SECONDS for _, timeout in observed)
 
 
+def test_explicit_pinned_preview_is_allowed_but_latest_preview_is_rejected(monkeypatch):
+    tag = "v4.3.3"
+    routes = _release_routes(tag)
+    preview = json.loads(routes[f"{package.RELEASE_API}/latest"])
+    preview["prerelease"] = True
+    routes[f"{package.RELEASE_API}/tags/{tag}"] = json.dumps(preview).encode()
+    observed = _use_routes(monkeypatch, routes)
+
+    release, assets = package._fetch_release(tag)
+
+    assert release == tag
+    assert assets == frozenset({package.MANIFEST_ASSET, package.SOURCE_ASSET})
+    assert observed[0][0] == f"{package.RELEASE_API}/tags/{tag}"
+
+    routes[f"{package.RELEASE_API}/latest"] = json.dumps(preview).encode()
+    _use_routes(monkeypatch, routes)
+    with pytest.raises(ValueError, match="prerelease"):
+        package._fetch_release(None)
+
+
 def test_changed_signed_manifest_at_same_tag_rejected_before_zip(tmp_path, monkeypatch):
     original = _release_routes()
     manifest_url = package._release_asset_url('v4.0.1', package.MANIFEST_ASSET)

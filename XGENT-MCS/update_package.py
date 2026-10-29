@@ -412,7 +412,11 @@ def _fetch_release(release_tag: str | None) -> tuple[str, frozenset[str]]:
         data = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("GitHub вернул некорректные данные релиза.") from exc
-    if not isinstance(data, dict) or data.get("draft") or data.get("prerelease"):
+    if (
+        not isinstance(data, dict)
+        or data.get("draft")
+        or (data.get("prerelease") and requested_tag is None)
+    ):
         raise ValueError("Релиз отсутствует, является черновиком или prerelease.")
     tag = _release_tag(data.get("tag_name"))
     if requested_tag and tag != requested_tag:

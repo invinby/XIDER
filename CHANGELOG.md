@@ -1,5 +1,17 @@
 # XIDER release history
 
+## X4.3.4-TARPED+20261030 — Windows preview release verification
+
+### English
+
+- Permit the installer to verify a prerelease only when the exact release tag is pinned; automatic latest-release selection still ignores previews.
+- Keep package download gated by the signed manifest and its asset hashes.
+
+### Русский
+
+- Разрешена проверка preview-релиза только по явно закреплённому тегу; автоматический поиск последней версии по-прежнему пропускает preview.
+- Скачивание пакета по-прежнему проходит только после проверки подписанного manifest и хешей assets.
+
 ## X4.3.3-TARPED+20261030 — Windows Python bootstrap recovery
 
 ### English
