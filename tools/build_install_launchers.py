@@ -34,9 +34,17 @@ def build_installers(
     commands = build_platform_commands(commit_id, release_tag)
     installers = {
         INSTALLERS["windows"]: (
+            "param([string]$LogPath)\n"
+            "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'\n"
+            "if(-not $LogPath){$LogPath=Join-Path $env:TEMP ('xider-install-'+[guid]::NewGuid().ToString('N')+'.log')}\n"
+            "New-Item -ItemType Directory -Path (Split-Path -Parent $LogPath) -Force | Out-Null\n"
+            "Start-Transcript -Path $LogPath -Force | Out-Null\n"
+            "try {\n"
             f"# XIDER {release_tag}: agent-only installer; commit {commit_id.lower()}\n"
             "Write-Host 'XIDER: verifying the signed Windows bootstrap...'\n"
             + commands["windows"] + "\n"
+            "} catch { Write-Host ('XIDER installer error: ' + $_.Exception.Message) -ForegroundColor Red; throw }\n"
+            "finally { Stop-Transcript | Out-Null }\n"
         ),
         INSTALLERS["macos"]: (
             "#!/bin/bash\n"
@@ -119,9 +127,11 @@ def build_pages_launchers() -> dict[str, str]:
         "  $v=New-Object Diagnostics.Process; $v.StartInfo=$psi; [void]$v.Start(); $v.WaitForExit()\n"
         "  if($v.ExitCode -ne 0){throw 'XIDER installer signature verification failed'}\n"
         "  Write-Host 'XIDER: requesting administrator approval (UAC)...'\n"
-        "  $args=@('-NoProfile','-ExecutionPolicy','Bypass','-File',\"`\"$p`\"\")\n"
+        "  $logRoot=Join-Path $env:LOCALAPPDATA 'XIDER\\logs'; New-Item -ItemType Directory -Path $logRoot -Force|Out-Null\n"
+        "  $log=Join-Path $logRoot ('install-'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'.log')\n"
+        "  $args=@('-NoProfile','-ExecutionPolicy','Bypass','-File',\"`\"$p`\"\",'-LogPath',\"`\"$log`\"\")\n"
         "  $installer=Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ArgumentList $args\n"
-        "  if($installer.ExitCode -ne 0){throw ('XIDER Windows installer failed with exit code '+$installer.ExitCode)}\n"
+        "  if($installer.ExitCode -ne 0){ Write-Host ('XIDER install log: '+$log) -ForegroundColor Yellow; if(Test-Path -LiteralPath $log){Get-Content -LiteralPath $log -Tail 80}; throw ('XIDER Windows installer failed with exit code '+$installer.ExitCode) }\n"
         "} catch { Write-Host ('XIDER launcher failed: '+$_.Exception.Message) -ForegroundColor Red; throw } finally { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue }\n"
     )
     # Keep the bot's one-line `irm .../win.txt | iex` route as well as the

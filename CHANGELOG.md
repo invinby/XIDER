@@ -1,5 +1,19 @@
 # XIDER release history
 
+## X4.3.2-TARPED+20261029 — X-Dock install diagnostics
+
+### English
+
+- Windows one-line installer now saves the elevated install transcript and prints the last 80 lines if setup fails.
+- Windows executable file/product metadata now matches agent version 4.3.2.
+- Windows Agent and Guard Keeper enroll through owner-approved X-Dock; VPS SSH credentials are not requested.
+
+### Русский
+
+- Установщик Windows сохраняет журнал elevated-установки и показывает последние 80 строк при ошибке.
+- Метаданные Windows-бинарника синхронизированы с версией агента 4.3.2.
+- Агент и Guard Keeper подключаются через подтверждение X-Dock; SSH-пароль VPS не нужен.
+
 ## X4.3.1-TARPED+20261029 — X-DOCK: Windows quick enrollment
 
 ### English

@@ -30,6 +30,10 @@ def test_release_installers_reuse_the_exact_commit_pinned_bootstrap_verifiers():
         assert bodies[platform] in installers[name]
         assert COMMIT in installers[name]
         assert TAG in installers[name]
+    windows_installer = installers[INSTALLERS["windows"]]
+    assert "Start-Transcript -Path $LogPath" in windows_installer
+    assert "Stop-Transcript" in windows_installer
+    assert "XIDER installer error:" in windows_installer
     assert "/deploy/bootstrap-agent.ps1" in installers[INSTALLERS["windows"]]
     assert "/deploy/bootstrap.ps1" not in installers[INSTALLERS["windows"]]
     assert f"XIDER_RELEASE_TAG='{TAG}'" in installers[INSTALLERS["macos"]]
@@ -66,6 +70,8 @@ def test_pages_launchers_authenticate_latest_installer_before_running_it():
     assert "-Verb RunAs" in pages["win.ps1"]
     assert "-Wait -PassThru" in pages["win.ps1"]
     assert "XIDER Windows installer failed" in pages["win.ps1"]
+    assert "XIDER install log:" in pages["win.ps1"]
+    assert "'-LogPath'" in pages["win.ps1"]
     assert "requesting administrator approval (UAC)" in pages["win.ps1"]
     assert "OpenSSH.Client~~~~0.0.1.0" in pages["win.ps1"]
     assert "OpenSSH Client is still unavailable" in pages["win.ps1"]
