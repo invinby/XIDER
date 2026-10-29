@@ -52,7 +52,7 @@ jobs:
 
       - name: "Generate signed installer entry points"
         env:
-          XIDER_WINDOWS_INSTALLER_TAG: v4.3.2
+          XIDER_WINDOWS_INSTALLER_TAG: v4.3.1
         run: python tools/build_pages_entrypoints.py site
 
       - name: "Check static site links and accessibility basics"
