@@ -164,7 +164,7 @@ The Windows installer creates visible per-user Scheduled Tasks named Agent and G
 IP-based location is approximate, not GPS.
 ## License
 ## Status
-XIDER 4.3.0 for Windows and macOS uses Telegram and MQTT. TG-BOT-SERVER, XGENT-WDS and XGENT-MCS. Guard Keeper cannot make an offline computer available. X-LEX changes wording, not permissions. Python 3.11 and Docker Compose are required. Signed updates support rollback. ENCRYPT_PAYLOAD encryption is conditional. Offline fixtures do not connect to Telegram, MQTT or a VPS. MIT. Release: https://github.com/invinby/XIDER/releases.
+XIDER 4.3.1 for Windows and macOS uses Telegram and MQTT. TG-BOT-SERVER, XGENT-WDS and XGENT-MCS. Guard Keeper cannot make an offline computer available. X-LEX changes wording, not permissions. Python 3.11 and Docker Compose are required. Signed updates support rollback. ENCRYPT_PAYLOAD encryption is conditional. Offline fixtures do not connect to Telegram, MQTT or a VPS. MIT. Release: https://github.com/invinby/XIDER/releases.
 Live acceptance remains unverified.
 """
 RU = """## Назначение
@@ -188,7 +188,7 @@ flowchart TD
 Геолокация по IP приблизительна и не является GPS.
 ## Лицензия
 ## Статус
-XIDER 4.3.0 для Windows и macOS использует Telegram и MQTT. TG-BOT-SERVER, XGENT-WDS и XGENT-MCS. Guard Keeper не сделает компьютер без сети доступным. X-LEX меняет текст, но не права. Нужны Python 3.11 и Docker Compose. Подписанные обновления поддерживают откат. Шифрование ENCRYPT_PAYLOAD включается настройкой. Офлайн-фикстуры не подключаются к Telegram, MQTT или VPS. MIT. Релизы: https://github.com/invinby/XIDER/releases.
+XIDER 4.3.1 для Windows и macOS использует Telegram и MQTT. TG-BOT-SERVER, XGENT-WDS и XGENT-MCS. Guard Keeper не сделает компьютер без сети доступным. X-LEX меняет текст, но не права. Нужны Python 3.11 и Docker Compose. Подписанные обновления поддерживают откат. Шифрование ENCRYPT_PAYLOAD включается настройкой. Офлайн-фикстуры не подключаются к Telegram, MQTT или VPS. MIT. Релизы: https://github.com/invinby/XIDER/releases.
 Приёмка на реальных устройствах не подтверждена.
 """
 
