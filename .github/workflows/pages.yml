@@ -51,6 +51,8 @@ jobs:
         run: python -m pytest tools/test_site.py tools/test_pages_workflow.py -q
 
       - name: "Generate signed installer entry points"
+        env:
+          XIDER_WINDOWS_INSTALLER_TAG: v4.3.1
         run: python tools/build_pages_entrypoints.py site
 
       - name: "Check static site links and accessibility basics"
