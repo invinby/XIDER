@@ -2,13 +2,13 @@ name: XIDER Windows passwordless installer
 
 on:
   push:
-    branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       release_tag:
         description: Existing XIDER source tag to package (must match agent VERSION).
         required: true
-        default: v4.3.0
+        default: v4.3.1
 
 permissions:
   contents: read
@@ -22,7 +22,7 @@ jobs:
     steps:
       - id: check
         env:
-          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || 'v4.3.0' }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
           GH_TOKEN: ${{ github.token }}
         run: |
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then

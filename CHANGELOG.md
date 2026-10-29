@@ -1,5 +1,19 @@
 # XIDER release history
 
+## X4.3.1-TARPED+20261029 — X-DOCK: Windows quick enrollment
+
+### English
+
+- Ship the current signed Windows Agent and Guard Keeper bundle from a tag-pinned source snapshot.
+- Enroll a fresh Windows installation through X-Dock without asking for VPS SSH credentials.
+- Keep the short PowerShell launcher pinned to the signed Windows release; macOS remains on its separately signed path.
+
+### Русский
+
+- Добавлен подписанный комплект Windows Agent и Guard Keeper из закреплённого снимка исходников.
+- Новая установка Windows регистрируется через X-Dock без запроса SSH-данных VPS.
+- Короткая команда PowerShell закрепляется за подписанным Windows-релизом; macOS пока остаётся на отдельном пути подписи.
+
 ## X4.3.0-TARPED+20261012 — X-PANE: Mac-разрешения по команде владельца
 
 ### English
