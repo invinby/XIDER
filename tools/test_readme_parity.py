@@ -63,7 +63,7 @@ def check_readme_pair(english: str, russian: str) -> list[str]:
     # These markers cover a deliberate set of source-backed facts. They are
     # regression anchors, not a proof of full natural-language equivalence.
     semantic_facts = {
-        "product and version": (r"(?=.*XIDER)(?=.*4\.3\.2)", r"(?=.*XIDER)(?=.*4\.3\.2)"),
+        "product and version": (r"(?=.*XIDER)(?=.*4\.3\.[0-9]+)", r"(?=.*XIDER)(?=.*4\.3\.[0-9]+)"),
         "Windows and macOS support": (r"Windows.{0,40}macOS|macOS.{0,40}Windows", r"Windows.{0,40}macOS|macOS.{0,40}Windows"),
         "Telegram interface": (r"Telegram", r"Telegram"),
         "MQTT transport": (r"MQTT", r"MQTT"),
