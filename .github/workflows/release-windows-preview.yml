@@ -60,7 +60,14 @@ jobs:
 
       - name: Compile Windows Agent and Guard Keeper
         shell: pwsh
+        env:
+          BUILD_SHA: ${{ github.sha }}
+          RELEASE_TAG: ${{ needs.release-state.outputs.tag }}
         run: |
+          git fetch origin $env:BUILD_SHA --depth=1
+          git diff --quiet $env:RELEASE_TAG $env:BUILD_SHA -- XGENT-WDS XGENT-MCS TG-BOT-SERVER deploy
+          if ($LASTEXITCODE -ne 0) { throw 'Tagged agent/server sources differ from the reviewed main snapshot; refusing a mixed-source release.' }
+          git show "$($env:BUILD_SHA):tools/build_nuitka_windows.py" | Set-Content -Path tools/build_nuitka_windows.py -Encoding utf8NoBOM
           python -m pip install --upgrade pip
           python -m pip install -r XGENT-WDS/requirements.txt nuitka==4.3.1
           python tools/build_nuitka_windows.py
@@ -116,9 +123,10 @@ jobs:
       - name: Build and sign Windows-only release inventory
         env:
           TAG: ${{ needs.release-state.outputs.tag }}
+          BUILD_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          COMMIT=$(git rev-parse "${TAG}^{commit}")
+          COMMIT=$(git rev-parse "${BUILD_SHA}^{commit}")
           mkdir -p artifacts
           git archive --format=zip --prefix=XIDER-source/ "$COMMIT" > artifacts/XIDER-source.zip
           git show "${COMMIT}:deploy/bootstrap-agent.ps1" > artifacts/XIDER-bootstrap-windows.ps1
