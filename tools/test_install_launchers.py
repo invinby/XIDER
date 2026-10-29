@@ -77,6 +77,23 @@ def test_pages_launchers_authenticate_latest_installer_before_running_it():
     assert "Set-ExecutionPolicy" not in pages["win.ps1"]
 
 
+def test_windows_pages_launcher_can_pin_a_windows_only_preview_release(monkeypatch):
+    monkeypatch.setenv("XIDER_WINDOWS_INSTALLER_TAG", "v4.3.0")
+
+    pages = build_pages_launchers()
+
+    assert "releases/download/v4.3.0/XIDER-install-windows.ps1" in pages["win.ps1"]
+    assert "releases/download/v4.3.0/XIDER-install-windows.ps1.sig" in pages["win.ps1"]
+    assert "releases/latest/download/XIDER-install-macos.sh" in pages["mac"]
+
+
+def test_windows_pages_launcher_rejects_an_invalid_release_tag(monkeypatch):
+    monkeypatch.setenv("XIDER_WINDOWS_INSTALLER_TAG", "main")
+
+    with pytest.raises(ValueError, match="XIDER_WINDOWS_INSTALLER_TAG"):
+        build_pages_launchers()
+
+
 def test_installer_message_is_platform_bound_and_exact_ascii():
     digest = "a" * 64
     assert signed_installer_message("macos", digest) == f"XIDER-INSTALLER-SHA256\nmacos\n{digest}\n".encode("ascii")

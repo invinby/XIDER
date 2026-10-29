@@ -33,6 +33,7 @@ def sign_installers(
     *,
     trusted_keys: dict[str, bytes] | None = None,
     ssh_keygen: str | None = None,
+    platforms: set[str] | None = None,
 ) -> list[Path]:
     private = serialization.load_pem_private_key(signing_key_pem, password=None)
     if not isinstance(private, Ed25519PrivateKey):
@@ -46,7 +47,10 @@ def sign_installers(
         raise RuntimeError("OpenSSH ssh-keygen is required to sign installers.")
     directory = Path(directory)
     # Validate every input/output before making any signature files.
-    for filename in INSTALLERS.values():
+    selected = {platform: filename for platform, filename in INSTALLERS.items() if platforms is None or platform in platforms}
+    if not selected or (platforms is not None and not platforms <= set(INSTALLERS)):
+        raise ValueError("platforms must be a non-empty subset of windows, macos")
+    for filename in selected.values():
         if not (directory / filename).is_file():
             raise FileNotFoundError(directory / filename)
         if (directory / f"{filename}.sig").exists():
@@ -60,7 +64,7 @@ def sign_installers(
             serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH, serialization.NoEncryption()
         ), private=True)
         _write_exclusive(allowed, f"{SIGNER_IDENTITY} {_openssh_public_key_line(public)}\n".encode("ascii"))
-        for platform, filename in INSTALLERS.items():
+        for platform, filename in selected.items():
             digest = hashlib.sha256((directory / filename).read_bytes()).hexdigest()
             message = signed_installer_message(platform, digest)
             path = root / platform
@@ -89,12 +93,13 @@ def sign_installers(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
+    parser.add_argument("--platform", action="append", choices=tuple(INSTALLERS), dest="platforms")
     args = parser.parse_args()
     encoded_key = os.environ.get("XIDER_RELEASE_PRIVATE_KEY_B64", "")
     if not encoded_key:
         parser.error("XIDER_RELEASE_PRIVATE_KEY_B64 is required for signed installers.")
     try:
-        outputs = sign_installers(args.directory, base64.b64decode(encoded_key, validate=True))
+        outputs = sign_installers(args.directory, base64.b64decode(encoded_key, validate=True), platforms=set(args.platforms) if args.platforms else None)
     except (OSError, RuntimeError, TypeError, ValueError, subprocess.SubprocessError) as exc:
         parser.error(str(exc))
     for path in outputs:

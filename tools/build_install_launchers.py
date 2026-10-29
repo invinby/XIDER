@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import base64
+import os
+import re
 from pathlib import Path
 
 from build_bootstrap_commands import (
@@ -26,9 +28,11 @@ INSTALLERS = {
 INSTALLER_NAMESPACE = "xider-installer@xider.link"
 
 
-def build_installers(commit_id: str, release_tag: str) -> dict[str, str]:
+def build_installers(
+    commit_id: str, release_tag: str, platforms: set[str] | None = None
+) -> dict[str, str]:
     commands = build_platform_commands(commit_id, release_tag)
-    return {
+    installers = {
         INSTALLERS["windows"]: (
             f"# XIDER {release_tag}: agent-only installer; commit {commit_id.lower()}\n"
             "Write-Host 'XIDER: verifying the signed Windows bootstrap...'\n"
@@ -41,12 +45,24 @@ def build_installers(commit_id: str, release_tag: str) -> dict[str, str]:
             + commands["macos"] + "\n"
         ),
     }
+    if platforms is None:
+        return installers
+    if not platforms or not platforms <= set(INSTALLERS):
+        raise ValueError("platforms must be a non-empty subset of windows, macos")
+    return {filename: body for platform, filename in INSTALLERS.items() if platform in platforms for body in (installers[filename],)}
 
 
 def build_pages_launchers() -> dict[str, str]:
     """Static, pinned-key entry points; fail closed if latest assets are absent."""
     allowed_b64 = base64.b64encode(_openssh_allowed_signers().encode("ascii")).decode("ascii")
     base = f"https://github.com/{REPOSITORY}/releases/latest/download"
+    windows_tag = os.environ.get("XIDER_WINDOWS_INSTALLER_TAG", "").strip()
+    if windows_tag and not re.fullmatch(r"v\d+\.\d+\.\d+", windows_tag):
+        raise ValueError("XIDER_WINDOWS_INSTALLER_TAG must be a semantic release tag.")
+    windows_base = (
+        f"https://github.com/{REPOSITORY}/releases/download/{windows_tag}"
+        if windows_tag else base
+    )
     mac = (
         "#!/bin/bash\nset -eu\n"
         "for tool in curl base64 shasum ssh-keygen; do\n"
@@ -90,8 +106,8 @@ def build_pages_launchers() -> dict[str, str]:
         "  }\n"
         "  $ssh=$sshCommand.Source\n"
         "  Write-Host 'XIDER: downloading the latest signed Windows installer...'\n"
-        f"  iwr -UseBasicParsing -TimeoutSec 90 -Uri '{base}/{INSTALLERS['windows']}' -OutFile $p\n"
-        f"  iwr -UseBasicParsing -TimeoutSec 90 -Uri '{base}/{INSTALLERS['windows']}.sig' -OutFile $s\n"
+        f"  iwr -UseBasicParsing -TimeoutSec 90 -Uri '{windows_base}/{INSTALLERS['windows']}' -OutFile $p\n"
+        f"  iwr -UseBasicParsing -TimeoutSec 90 -Uri '{windows_base}/{INSTALLERS['windows']}.sig' -OutFile $s\n"
         f"  [IO.File]::WriteAllBytes($a,[Convert]::FromBase64String('{allowed_b64}'))\n"
         "  $f=[IO.File]::OpenRead($p); $sha=[Security.Cryptography.SHA256]::Create()\n"
         "  try{$hash=[BitConverter]::ToString($sha.ComputeHash($f)).Replace('-','').ToLowerInvariant()} finally{$f.Dispose();$sha.Dispose()}\n"

@@ -42,6 +42,17 @@ def test_manifest_includes_an_immutable_source_bundle(tmp_path):
     assert source["sha256"] == hashlib.sha256(b"XIDER-source.zip").hexdigest()
 
 
+def test_windows_preview_manifest_contains_shared_and_windows_assets_only(tmp_path):
+    selected = {name: item for name, item in COMPONENTS.items() if item[1] in {"all", "windows"}}
+    for name in selected:
+        (tmp_path / name).write_bytes(name.encode())
+
+    manifest = build("v4.3.0", tmp_path, platforms={"windows"})
+
+    assert {item["name"] for item in manifest["assets"]} == set(selected)
+    assert all(item["platform"] in {"all", "windows"} for item in manifest["assets"])
+
+
 def test_manifest_includes_exact_bootstrap_and_quickstart_assets(tmp_path):
     for name in COMPONENTS:
         (tmp_path / name).write_bytes(name.encode())

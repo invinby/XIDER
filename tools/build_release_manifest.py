@@ -44,11 +44,23 @@ if str(MAC_AGENT_DIR) not in sys.path:
 from release_signature import TRUSTED_RELEASE_KEYS, release_key_id, sign_manifest
 
 
-def build(tag: str, directory: Path, *, signing_key_pem: bytes | None = None) -> dict:
+def build(
+    tag: str,
+    directory: Path,
+    *,
+    signing_key_pem: bytes | None = None,
+    platforms: set[str] | None = None,
+) -> dict:
     if not TAG.fullmatch(tag):
         raise ValueError("tag must be vMAJOR.MINOR.PATCH")
     assets = []
-    for name, (component, platform) in COMPONENTS.items():
+    selected = {
+        name: value for name, value in COMPONENTS.items()
+        if platforms is None or value[1] in platforms or value[1] == "all"
+    }
+    if not selected or (platforms is not None and not platforms <= {"windows", "macos", "linux"}):
+        raise ValueError("platforms must be a non-empty subset of windows, macos, linux")
+    for name, (component, platform) in selected.items():
         path = directory / name
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -76,6 +88,7 @@ def main() -> None:
         action="store_true",
         help="Require a pinned Ed25519 key from XIDER_RELEASE_PRIVATE_KEY_B64.",
     )
+    parser.add_argument("--platform", action="append", choices=("windows", "macos", "linux"), dest="platforms")
     args = parser.parse_args()
     signing_key_pem = None
     if args.require_signature:
@@ -84,14 +97,14 @@ def main() -> None:
             parser.error("XIDER_RELEASE_PRIVATE_KEY_B64 is required for signed releases.")
         try:
             signing_key_pem = base64.b64decode(encoded_key, validate=True)
-            manifest = build(args.tag, args.directory, signing_key_pem=signing_key_pem)
+            manifest = build(args.tag, args.directory, signing_key_pem=signing_key_pem, platforms=set(args.platforms) if args.platforms else None)
         except (ValueError, TypeError) as exc:
             parser.error(str(exc))
         key_id = manifest["signature"]["key_id"]
         if key_id not in TRUSTED_RELEASE_KEYS:
             parser.error("Signing key does not match a public key pinned in XGENT-MCS/release_signature.py.")
     else:
-        manifest = build(args.tag, args.directory)
+        manifest = build(args.tag, args.directory, platforms=set(args.platforms) if args.platforms else None)
     destination = args.directory / "release-manifest.json"
     destination.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(destination)

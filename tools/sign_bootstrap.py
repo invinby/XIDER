@@ -127,6 +127,7 @@ def sign_bootstrap_assets(
     *,
     trusted_keys: dict[str, bytes] | None = None,
     ssh_keygen: str | None = None,
+    platforms: set[str] | None = None,
 ) -> list[Path]:
     """Sign and self-verify both bootstrap hashes; refuse unpinned keys."""
     if not TAG.fullmatch(tag):
@@ -174,7 +175,10 @@ def sign_bootstrap_assets(
             f"{SIGNER_IDENTITY} {public_line}\n".encode("ascii"),
         )
 
-        for platform, filename in BOOTSTRAPS.items():
+        selected = {name: filename for name, filename in BOOTSTRAPS.items() if platforms is None or name in platforms}
+        if not selected or (platforms is not None and not platforms <= set(BOOTSTRAPS)):
+            raise ValueError("platforms must be a non-empty subset of windows, macos")
+        for platform, filename in selected.items():
             bootstrap_path = artifact_root / filename
             if not bootstrap_path.is_file():
                 raise FileNotFoundError(bootstrap_path)
@@ -239,13 +243,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("tag")
     parser.add_argument("commit_id")
     parser.add_argument("artifacts_dir", type=Path)
+    parser.add_argument("--platform", action="append", choices=tuple(BOOTSTRAPS), dest="platforms")
     args = parser.parse_args(argv)
     encoded_key = os.environ.get("XIDER_RELEASE_PRIVATE_KEY_B64", "")
     if not encoded_key:
         parser.error("XIDER_RELEASE_PRIVATE_KEY_B64 is required for signed bootstraps.")
     try:
         key_pem = base64.b64decode(encoded_key, validate=True)
-        outputs = sign_bootstrap_assets(args.artifacts_dir, args.tag, args.commit_id, key_pem)
+        outputs = sign_bootstrap_assets(args.artifacts_dir, args.tag, args.commit_id, key_pem, platforms=set(args.platforms) if args.platforms else None)
     except (OSError, RuntimeError, TypeError, ValueError, subprocess.SubprocessError) as exc:
         parser.error(str(exc))
     for path in outputs:
