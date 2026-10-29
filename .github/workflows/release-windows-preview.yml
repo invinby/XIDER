@@ -135,6 +135,7 @@ jobs:
           python - "$COMMIT" "$TAG" artifacts/XIDER-QUICKSTART.txt <<'PY'
           import sys
           from pathlib import Path
+          sys.path.insert(0, str(Path("tools").resolve()))
           from build_bootstrap_commands import build_platform_commands
           commit, tag, output = sys.argv[1:]
           command = build_platform_commands(commit, tag)["windows"]
