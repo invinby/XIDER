@@ -1909,7 +1909,7 @@ class XgentClient:
             payload["agent_update"] = receipt
         body = encrypt_payload(payload) if ENCRYPT_PAYLOAD else payload
         envelope = sign_message(body)
-        self._client.publish(f"{MQTT_PREFIX}/{DEVICE_ID}/status", json.dumps(envelope, ensure_ascii=False), qos=1)
+        self._client.publish(f"{MQTT_PREFIX}/{DEVICE_ID}/status", json.dumps(envelope, ensure_ascii=False), qos=0)
 
     def _write_local_health(self, *, state: str = "running") -> None:
         try:
