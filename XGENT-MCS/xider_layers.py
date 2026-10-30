@@ -413,7 +413,7 @@ def main() -> int:
                 and health.get("state") == "running" and 0 <= age < HEALTH_STALE_SECONDS
                 and type(health.get("pid")) is int and health["pid"] > 0
                 and isinstance(health.get("version"), str)
-                and re.fullmatch(r"[0-9]+\\.[0-9]+\\.[0-9]+", health["version"])
+                and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", health["version"])
             )
             if running and fresh:
                 print(f"[OK] XIDER {role.title()} v{health['version']}; PID={health['pid']}; process=LaunchAgent-running; MQTT=n/a (local layer); Telegram=not-confirmed")
