@@ -116,9 +116,11 @@ try {
         throw 'Python version checks must use the PowerShell 5.1-safe, quote-free probe.'
     }
     $pythonCandidates = @(
-        (Join-Path $PSScriptRoot '..\..\.venv312\Scripts\python.exe'),
-        (Get-Command python.exe -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })
-    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -Unique
+        @(
+            (Join-Path $PSScriptRoot '..\..\.venv312\Scripts\python.exe'),
+            (Get-Command python.exe -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })
+        ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -Unique
+    )
     if ($pythonCandidates.Count -gt 0) {
         $versionProbe = Invoke-XiderNativeProbe -Executable $pythonCandidates[0] -Arguments @('-c', $safeVersionProbe)
         if ($versionProbe.ExitCode -ne 0 -or $versionProbe.Output.Count -ne 1 -or
