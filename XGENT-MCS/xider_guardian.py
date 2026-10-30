@@ -1044,8 +1044,29 @@ def main() -> int:
         try:
             if args.service == "status":
                 running = launch_agent_running(label)
-                print(f"[{'OK' if running else 'STOPPED'}] XIDER Guard Keeper LaunchAgent")
-                print(f"[LOG] {SCRIPT_DIR / 'guardian.log'}")
+                health_path = CONFIG_DIR / "guardian-health.json"
+                try:
+                    health = json.loads(health_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError, json.JSONDecodeError):
+                    health = {}
+                age = time.time() - health.get("updated_at", 0) if type(health.get("updated_at")) in (int, float) else float("inf")
+                fresh = (
+                    health.get("schema") == 1 and health.get("component") == "guardian"
+                    and health.get("state") == "running" and 0 <= age < 180
+                    and type(health.get("pid")) is int and health["pid"] > 0
+                    and isinstance(health.get("version"), str)
+                    and type(health.get("connected")) is bool
+                )
+                if running and fresh:
+                    mqtt_state = "connected" if health["connected"] else "disconnected"
+                    print(f"[OK] Guard Keeper v{health['version']}; PID={health['pid']}; process=LaunchAgent-running; MQTT={mqtt_state}; Telegram=not-confirmed")
+                    print(f"[HEALTH] fresh; age={age:.1f}s")
+                elif running:
+                    print("[WARN] Guard Keeper process=LaunchAgent-running; version=unknown; PID=unknown; MQTT=unknown; Telegram=not-confirmed")
+                    print("[HEALTH] missing, stale, or invalid guardian-health.json")
+                else:
+                    print("[STOPPED] Guard Keeper process=LaunchAgent-stopped; MQTT=unknown; Telegram=not-confirmed")
+                print(f"[LOG] {CONFIG_DIR / 'guardian.log'}")
                 return 0 if running else 1
             if args.service == "stop":
                 set_guardian_desired_running(False)
