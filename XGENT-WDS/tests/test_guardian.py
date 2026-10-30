@@ -121,7 +121,7 @@ def _frozen_update_guardian(module, monkeypatch, tmp_path, health_results):
     progress = []
     results = []
     monkeypatch.setattr(guardian, "_publish_update_progress", lambda *args: progress.append(args[-1]))
-    monkeypatch.setattr(guardian, "_publish", results.append)
+    monkeypatch.setattr(guardian, "_publish", lambda payload, **_kwargs: results.append(payload))
     monkeypatch.setattr(guardian, "_stop_agent_for_update", lambda: None)
     monkeypatch.setattr(guardian, "start_agent", lambda: 321)
     health_iter = iter(health_results)
@@ -192,7 +192,7 @@ def test_frozen_update_terminal_receipt_survives_restart_and_replays_duplicate(
     guardian.state = {"desired_running": True}
     guardian.status_payload = lambda: {"type": "guardian", "ok": True}
     published = []
-    guardian._publish = published.append
+    guardian._publish = lambda payload, **_kwargs: published.append(payload)
     monkeypatch.setattr(module.threading, "Thread", lambda **_kwargs: pytest.fail("duplicate update must not start"))
 
     guardian.handle({
@@ -222,7 +222,7 @@ def test_guardian_replays_latest_terminal_update_receipt_on_mqtt_reconnect(
     guardian.client = Mock()
     guardian.status_payload = Mock(return_value={"type": "guardian", "ok": True})
     published = []
-    guardian._publish = published.append
+    guardian._publish = lambda payload, **_kwargs: published.append(payload)
     monkeypatch.setattr(module, "write_runtime_health", lambda *_args: None)
 
     guardian._on_connect(guardian.client, None, None, 0)
@@ -374,7 +374,7 @@ def test_guardian_periodically_publishes_fresh_update_capability(guardian_module
     guardian._refresh_worker_intent = Mock()
     guardian.status_payload = Mock(return_value={"agent_update_protocol": 1})
     published = []
-    guardian._publish = published.append
+    guardian._publish = lambda payload, **_kwargs: published.append(payload)
     monkeypatch.setattr(module.time, "monotonic", lambda: 100.0)
 
     guardian.monitor()
@@ -619,7 +619,7 @@ def test_recovery_toggle_does_not_override_explicit_worker_stop(
     guardian = object.__new__(module.Guardian)
     guardian.state = {"state_version": 2, "auto_restart": True, "desired_running": False}
     monkeypatch.setattr(guardian, "status_payload", lambda: {"ok": True})
-    monkeypatch.setattr(guardian, "_publish", lambda _payload: None)
+    monkeypatch.setattr(guardian, "_publish", lambda _payload, **_kwargs: None)
 
     guardian.handle({"command": "auto_restart", "enabled": False})
 
@@ -684,7 +684,7 @@ def test_monitor_backs_off_when_recovered_agent_exits_immediately(
     monkeypatch.setattr(guardian, "agent_process", Mock(return_value=None))
     monkeypatch.setattr(guardian, "start_agent", Mock(return_value=4321))
     published = []
-    monkeypatch.setattr(guardian, "_publish", lambda payload: published.append(payload))
+    monkeypatch.setattr(guardian, "_publish", lambda payload, **_kwargs: published.append(payload))
     ticks = iter((100.0, 100.0, 105.0, 105.0))
     monkeypatch.setattr(module.time, "monotonic", lambda: next(ticks))
 
