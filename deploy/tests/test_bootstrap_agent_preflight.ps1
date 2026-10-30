@@ -425,7 +425,9 @@ finally {
 ) {
             $diagnosticOutput = @(& $pythonCandidates[0] -c $safeVersionProbe 2>&1)
             $diagnosticExit = $LASTEXITCODE
-            throw ("The PowerShell 5.1 Python version probe did not return a supported runtime version. Executable=[$($pythonCandidates[0])]; HelperExit=$($versionProbe.ExitCode); HelperOutput=[$(@($versionProbe.Output) -join '|')]; DirectExit=$diagnosticExit; DirectOutput=[$($diagnosticOutput -join '|')]")
+            $diagnosticText = $diagnosticOutput -join '|'
+            $helperText = @($versionProbe.Output) -join '|'
+            throw ('The PowerShell 5.1 Python version probe did not return a supported runtime version. Executable=[{0}]; HelperExit={1}; HelperOutput=[{2}]; DirectExit={3}; DirectOutput=[{4}]' -f $pythonCandidates[0], $versionProbe.ExitCode, $helperText, $diagnosticExit, $diagnosticText)
         }
     }
     $elevationFunction = $bootstrapAst.Find({ param($node)
