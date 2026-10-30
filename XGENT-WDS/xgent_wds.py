@@ -2624,7 +2624,7 @@ class XgentClient:
         self._client.publish(
             f"{MQTT_PREFIX}/{DEVICE_ID}/status",
             json.dumps(envelope, ensure_ascii=False),
-            qos=1,
+            qos=0,
         )
 
     def _publish_response(self, topic_suffix: str, payload: dict) -> bool:
