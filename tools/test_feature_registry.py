@@ -156,6 +156,20 @@ def test_terminal_runbook_template_navigation_renderer_is_registered(tmp_path: P
     assert not has_error(errors, "INVALID_NAVIGATION")
 
 
+def test_device_tools_navigation_renderer_is_registered(tmp_path: Path) -> None:
+    data = valid_registry()
+    data["navigation"].append(
+        {
+            "page_id": "device.tools", "parent": "device", "label_id": "device_tools_button",
+            "callback": "device:tools", "roles": ["owner", "user"],
+            "grants": [], "platforms": ["windows", "macos"], "permissions": [],
+            "support_state": "implemented", "style": "primary", "presentation": "device_tools",
+        }
+    )
+
+    assert validate_feature_registry(write_registry(tmp_path, data)) == []
+
+
 def test_d05_f26_builder_evidence_resolves_and_navigation_validates(tmp_path: Path) -> None:
     registry = build_feature_registry(ROOT / SPEC, "6d20370a06eb157428627f9002852514615e8ee2")
     feature = next(row for row in registry["features"] if row["feature_id"] == "D05-F26")

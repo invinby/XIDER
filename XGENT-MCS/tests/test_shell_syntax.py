@@ -18,9 +18,33 @@ SHELL_SCRIPTS = (
 )
 
 
+def _usable_bash():
+    candidates = [shutil.which("bash")]
+    if os.name == "nt":
+        candidates.extend((
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files\Git\usr\bin\bash.exe",
+        ))
+    seen = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen or not Path(candidate).is_file():
+            continue
+        seen.add(candidate)
+        try:
+            result = subprocess.run(
+                [candidate, "--version"], capture_output=True, check=False, timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        output = (result.stdout + result.stderr).decode("utf-8", errors="replace")
+        if result.returncode == 0 and "GNU bash" in output:
+            return candidate
+    return None
+
+
 @pytest.mark.parametrize("script_name", SHELL_SCRIPTS)
 def test_mac_shell_script_parses_with_bash(script_name):
-    bash = shutil.which("bash")
+    bash = _usable_bash()
     if bash is None:
         pytest.skip("Bash is unavailable; shell syntax validation needs Bash.")
 
@@ -36,7 +60,7 @@ def test_mac_shell_script_parses_with_bash(script_name):
 
 @pytest.mark.parametrize("version,accepted", [("4.2.1", True), ("4.2", False)])
 def test_make_app_executes_real_version_preflight(tmp_path, version, accepted):
-    bash = shutil.which("bash")
+    bash = _usable_bash()
     if bash is None:
         pytest.skip("Bash is unavailable; executable version preflight needs Bash.")
     (tmp_path / "make_app.sh").write_text(
@@ -73,7 +97,7 @@ def test_make_app_executes_real_version_preflight(tmp_path, version, accepted):
 def test_mac_agent_status_falls_back_when_launchd_job_is_waiting(tmp_path):
     if os.name == "nt":
         pytest.skip("The process/launchd status fixture requires a Unix process table.")
-    bash = shutil.which("bash")
+    bash = _usable_bash()
     if bash is None:
         pytest.skip("Bash is unavailable; shell behavior validation needs Bash.")
 

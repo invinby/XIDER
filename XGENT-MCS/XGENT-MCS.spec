@@ -17,7 +17,9 @@ a = Analysis(
                    'cryptography.hazmat.primitives.ciphers.aead',
                    'cryptography.hazmat.primitives.asymmetric.ed25519',
                    'command_module_loader', 'command_signing', 'command_replay', 'shell_execution',
-                   'fake_update_screen', 'AppKit', 'Foundation', 'CoreLocation', 'Quartz', 'location_adapter',
+                   'agent_file_inventory',
+                   'fake_update_screen', 'AppKit', 'Foundation', 'CoreLocation', 'Quartz', 'AVFoundation',
+                   'ApplicationServices', 'location_adapter',
                    'display_contact_sheet', 'cv2_enumerate_cameras', 'camera_series', 'microphone_devices', 'microphone_level', 'audio_output_control', 'media_history', 'media_request_control', 'dns_diagnostics', 'dns_settings', 'dns_comparison', 'dnssec_check', 'gateway_probe', 'route_trace', 'path_mtu', 'captive_portal', 'ipv6_connectivity', 'tls_certificate', 'service_probe', 'latency_series', 'packet_loss_history', 'jitter_measurement', 'network_throughput', 'network_link_speed', 'route_lookup', 'endpoint_batch', 'wifi_quality', 'wifi_channel', 'wifi_connection_history', 'proxy_status', 'vpn_route', 'network_traffic', 'network_traffic_schedule', 'interface_status_history'],
     hookspath=[], hooksconfig={},
     runtime_hooks=[str(Path(SPECPATH).resolve().parent / 'tools' / 'command_approval_bundle_smoke.py')],
@@ -41,6 +43,7 @@ app = BUNDLE(
         'NSLocationWhenInUseUsageDescription': 'XIDER checks one current location only after an explicit XIDER request and your local OS permission. It does not track location in the background.',
         'NSCameraUsageDescription': 'XIDER takes a camera snapshot after an explicit request.',
         'NSMicrophoneUsageDescription': 'XIDER records audio after an explicit request.',
+        'NSScreenCaptureUsageDescription': 'XIDER captures a screen image only after an explicit request.',
         'NSAppleEventsUsageDescription': 'XIDER runs owner-requested scripts.',
     },
 )

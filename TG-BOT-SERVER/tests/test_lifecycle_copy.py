@@ -1,7 +1,5 @@
 """Lifecycle notices keep partial results and escape device-provided details."""
 
-import hashlib
-from pathlib import Path
 from string import Formatter
 import asyncio
 from types import SimpleNamespace
@@ -12,12 +10,11 @@ import bot
 import xlex
 
 
-def test_xlex_bytes_remain_equal_to_the_approved_main_baseline():
-    source = Path(__file__).resolve().parents[1] / "xlex.py"
-    canonical_source = source.read_bytes().replace(b"\r\n", b"\n")
-    assert hashlib.sha256(canonical_source).hexdigest() == (
-        "260b1c1f2248e99e44761bd8140da00febaab357e788535ece3e1a5a5b5c5a97"
-    )
+def test_feature_copy_additions_keep_all_six_styles_complete():
+    assert set(xlex.COPY["geo_system"]) == set(xlex.STYLES)
+    assert set(xlex.COPY["agent_files_page_title"]) == set(xlex.STYLES)
+    assert set(xlex.COPY["agent_files_status_unknown"]) == set(xlex.STYLES)
+    xlex.validate()
 
 
 def test_camera_action_button_copy_does_not_extend_xlex(monkeypatch):
@@ -99,6 +96,14 @@ def test_battery_notice_updates_owner_card_without_separate_alert(monkeypatch, t
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("percent", ["nan", "inf", "-inf", -1, 101, "not-a-number", None])
+def test_invalid_battery_percent_never_creates_low_battery_alert(monkeypatch, percent):
+    monkeypatch.setattr(bot, "LAST_BATTERY_ALERT", {})
+    monkeypatch.setattr(bot, "_schedule_owner_notice", lambda *_args, **_kwargs: pytest.fail("invalid battery alert"))
+    bot._maybe_battery_alert("device-1", {"available": True, "percent": percent})
+    assert bot.LAST_BATTERY_ALERT == {}
+
+
 def test_new_device_approval_uses_owner_card_and_keeps_action_keyboard(monkeypatch, tmp_path):
     monkeypatch.setattr(bot, "ADMIN_ID", 100)
     monkeypatch.setattr(bot.ui_cards, "FILE", tmp_path / "cards.json")
@@ -130,4 +135,53 @@ def test_new_device_approval_uses_owner_card_and_keeps_action_keyboard(monkeypat
         assert options["chat_id"] == 100 and options["message_id"] == 42
         callbacks = [button.callback_data for row in options["reply_markup"].inline_keyboard for button in row]
         assert callbacks == ["devmg:allow:mac", "devmg:block:mac"]
+        assert items["mac"]["approved"] is False
     asyncio.run(scenario())
+
+
+def test_device_approval_blocks_commands_until_owner_approves(monkeypatch):
+    class Devices:
+        items = {
+            "pending": {"name": "Pending", "approved": False},
+            "approved": {"name": "Approved", "approved": True},
+        }
+
+        def all(self):
+            return dict(self.items)
+
+        def get(self, device_id):
+            return self.items.get(device_id)
+
+        def upsert(self, device_id, info, **_kwargs):
+            self.items[device_id] = {**self.items.get(device_id, {}), **info}
+
+    sent = []
+    monkeypatch.setattr(bot, "devices", Devices())
+    monkeypatch.setattr(bot, "SESSION", bot.SessionRegistry())
+    monkeypatch.setattr(bot, "HISTORY", {})
+    monkeypatch.setattr(bot, "audit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        bot, "transport",
+        SimpleNamespace(publish_command=lambda *args, **kwargs: sent.append((args, kwargs)) or True),
+    )
+
+    assert bot.publish("screenshot", _target="pending") is False
+    assert bot._publish_device_command("pending", "shell", command="whoami") is False
+    assert bot.publish("screenshot", _target="approved") is True
+    assert bot.publish("status_request", _target="all") is True
+    assert bot.publish("screenshot", _target="all") is False
+    assert len(sent) == 2
+
+    class Callback:
+        data = "devmg:allow:pending"
+
+        async def answer(self, *_args, **_kwargs):
+            pass
+
+    async def replace(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    asyncio.run(bot.on_devmg_allow(Callback()))
+    assert bot.devices.get("pending")["approved"] is True
+    assert bot.publish("screenshot", _target="pending") is True

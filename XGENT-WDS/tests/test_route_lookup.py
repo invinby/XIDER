@@ -1,4 +1,5 @@
 import json
+import pytest
 
 import route_lookup as routes
 import xgent_wds as agent
@@ -62,3 +63,15 @@ def test_agent_publishes_correlated_route_lookup(monkeypatch):
     assert topic == "route_lookup"
     assert response["feature_id"] == "D04-F22" and response["request_id"] == "route-1"
     assert response["data"]["interface"] == "Wi-Fi"
+
+
+@pytest.mark.parametrize("request_id", [None, 7, "r" * 129])
+def test_agent_does_not_coerce_or_truncate_invalid_route_lookup_id(monkeypatch, request_id):
+    published = []
+    client = object.__new__(agent.XgentClient)
+    client._publish_response = lambda topic, payload: published.append((topic, payload))
+    monkeypatch.setattr(routes, "lookup_route", lambda destination: {"state": "available", "destination": destination})
+
+    client._do_route_lookup({"id": request_id, "destination": "203.0.113.8"})
+
+    assert published[0][1]["request_id"] is None

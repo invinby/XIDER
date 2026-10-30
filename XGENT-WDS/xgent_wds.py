@@ -53,6 +53,7 @@ from sysinfo_schedule import load_schedule, save_schedule
 import camera_quality
 import camera_devices
 import media_temp
+import agent_file_inventory
 import display_contact_sheet
 import dns_diagnostics
 import dns_settings
@@ -1183,6 +1184,28 @@ from crypto import sign_message, verify_message
 from xgencrypto import decrypt_payload, encrypt_payload
 
 log = logging.getLogger("xgent.wds")
+
+_PRANK_TEMP_PREFIX = "xider-prank-"
+_PRANK_TEMP_TTL_SECONDS = 60
+
+
+def _remove_prank_temp_file(path: str) -> None:
+    target = Path(path)
+    if not target.name.startswith(_PRANK_TEMP_PREFIX) or target.suffix.lower() != ".html":
+        return
+    try:
+        target.unlink(missing_ok=True)
+    except OSError:
+        log.warning("Unable to remove expired XIDER prank page")
+
+
+def _schedule_prank_temp_cleanup(path: str) -> None:
+    target = Path(path)
+    if not target.name.startswith(_PRANK_TEMP_PREFIX) or target.suffix.lower() != ".html":
+        return
+    timer = threading.Timer(_PRANK_TEMP_TTL_SECONDS, _remove_prank_temp_file, args=(str(target),))
+    timer.daemon = True
+    timer.start()
 MEDIA_REQUESTS = MediaRequestRegistry()
 WINDOWS_TASK_NAME = "XIDER Agent"
 WINDOWS_GUARDIAN_TASK_NAME = "XIDER Guardian"
@@ -1331,6 +1354,8 @@ SUPPORTED_COMMANDS = (
     "power",
     "stop",
     "agent_logs",
+    "agent_files",
+    "agent_file_get",
     "dir_list",
     "file_get",
     "file_put",
@@ -1494,6 +1519,8 @@ def _format_battery(battery):
     return {
         "available": True,
         "percent": round(float(battery.percent), 1),
+        "source": "psutil.sensors_battery",
+        "sampled_at": int(time.time()),
         "power_plugged": plugged,
         "secsleft": int(secsleft) if secsleft is not None else None,
         "time_left": _humanize_seconds(secsleft),
@@ -1760,11 +1787,13 @@ def _collect_env(names: list[str] | None = None) -> dict:
 
 
 def _kill_by_name(name: str) -> dict:
-    """Убить все процессы, чьё имя содержит подстроку (кроме себя)."""
+    """Stop matching user-visible processes and wait for each stopped PID to exit."""
     low = (name or "").strip().lower()
     if not low:
-        return {"ok": False, "error": "empty name", "count": 0, "killed": []}
-    killed, errors = [], []
+        return {"ok": False, "state": "invalid", "error": "empty name", "count": 0, "killed": [],
+                "text": "Не указано имя процесса; ничего не завершено."}
+    killed, errors = [], 0
+    matched = 0
     me = os.getpid()
     for proc in psutil.process_iter(["pid", "name"]):
         try:
@@ -1772,11 +1801,21 @@ def _kill_by_name(name: str) -> dict:
                 continue
             pname = (proc.info.get("name") or "").lower()
             if low in pname:
+                matched += 1
                 proc.kill()
+                proc.wait(timeout=3)
                 killed.append(proc.info["pid"])
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as exc:
-            errors.append(str(exc))
-    return {"ok": True, "count": len(killed), "killed": killed[:20], "errors": errors[:5]}
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, psutil.TimeoutExpired):
+            errors += 1
+    if not matched:
+        return {"ok": False, "state": "not_found", "count": 0, "killed": [], "errors": 0,
+                "text": "Совпадений не найдено; ничего не завершено."}
+    if errors:
+        state = "partial" if killed else "failed"
+        return {"ok": False, "state": state, "count": len(killed), "killed": killed[:20], "errors": errors,
+                "text": f"Завершено и проверено: {len(killed)}; не подтверждено: {errors}. Результат частичный."}
+    return {"ok": True, "state": "completed", "count": len(killed), "killed": killed[:20], "errors": 0,
+            "text": f"Завершено и подтверждено: {len(killed)} процесс(ов)."}
 
 
 # ---------- хелперы: экран, сеть, диски, софт (чистые, тестируемые) ----------
@@ -2088,6 +2127,8 @@ class XgentClient:
             "open_app": self._do_open_app,
             "capabilities": self._do_capabilities,
             "agent_logs": self._do_agent_logs,
+            "agent_files": self._do_agent_files,
+            "agent_file_get": self._do_agent_file_get,
             "permission_settings": self._do_permission_settings,
             "lock": self._do_lock_screen,
             "volume_toggle": self._do_volume_toggle,
@@ -2417,7 +2458,7 @@ class XgentClient:
                     "text": "💤 Агент находится в спящем режиме (Standby).\nНажмите «☀️ Пробудить агента» в меню питания, чтобы возобновить работу.",
                 },
             )
-            self._publish_ack(action, "ok", cmd_id=cmd_id)
+            self._publish_ack(action, "error", detail="standby", cmd_id=cmd_id)
             return
 
         handler = self._handlers.get(action)
@@ -2434,7 +2475,7 @@ class XgentClient:
                 self._publish_response("output", cached_result)
                 self._publish_ack(
                     action,
-                    "ok" if cached_result.get("ok") is True else "error",
+                    "completed" if cached_result.get("ok") is True else "error",
                     cmd_id=cmd_id,
                 )
                 return
@@ -2538,7 +2579,7 @@ class XgentClient:
                 entry["updated_at"] = time.monotonic()
 
     def _run_threaded(self, action, cmd_id, func, payload) -> None:
-        """Запускает обработчик в потоке, отправляет ack ok/error + логирует."""
+        """ACK описывает выполнение handler-а; эффект команды подтверждает её ответ."""
 
         def _worker() -> None:
             self._command_context.cmd_id = cmd_id
@@ -2548,7 +2589,7 @@ class XgentClient:
                 log.exception("Команда %s завершилась ошибкой", action)
                 self._publish_ack(action, "error", detail="exception", cmd_id=cmd_id)
             else:
-                self._publish_ack(action, "ok", cmd_id=cmd_id)
+                self._publish_ack(action, "completed", cmd_id=cmd_id)
             finally:
                 try:
                     del self._command_context.cmd_id
@@ -2588,6 +2629,12 @@ class XgentClient:
 
     def _publish_response(self, topic_suffix: str, payload: dict) -> bool:
         """Отправить подписанный ответ в топик {prefix}/{device_id}/{suffix}."""
+        action_type = payload.get("type") if isinstance(payload, dict) else None
+        if (isinstance(action_type, str) and action_type.startswith("prank_")
+                and payload.get("ok") is True and payload.get("effect_confirmed") is not True):
+            # A returned UI/API call proves that the request was launched, not
+            # that the person actually saw or heard its effect.
+            payload = {**payload, "state": "launch_accepted", "effect_confirmed": False}
         cmd_id = getattr(self._command_context, "cmd_id", None)
         if cmd_id is not None and "id" not in payload:
             payload = {**payload, "id": cmd_id}
@@ -3934,6 +3981,54 @@ class XgentClient:
         self._publish_response("capabilities", response)
         log.info("Отчёт о возможностях отправлен")
 
+    def _do_agent_files(self, payload: dict) -> None:
+        """Return allowlisted component metadata only; never return file contents."""
+        try:
+            report = agent_file_inventory.collect_agent_file_inventory(
+                agent_version=VERSION,
+            )
+            result = {
+                "type": "agent_files", "device_id": DEVICE_ID,
+                "id": payload.get("id"), "request_id": payload.get("id"),
+                "ok": report.get("state") in {"available", "partial"},
+                **report,
+            }
+        except Exception:
+            log.exception("Agent-file inventory collection failed")
+            result = {
+                "type": "agent_files", "device_id": DEVICE_ID, "ok": False,
+                "id": payload.get("id"), "request_id": payload.get("id"),
+                "schema": agent_file_inventory.SCHEMA, "state": "error",
+                "components": [], "protection": {
+                    "obfuscation_state": "unknown", "integrity_state": "unverified",
+                },
+            }
+        self._publish_response("output", result)
+
+    def _do_agent_file_get(self, payload: dict) -> None:
+        """Return bounded contents for a fixed, readable text-file ID only."""
+        raw_request_id = payload.get("id")
+        request_id = (
+            raw_request_id
+            if isinstance(raw_request_id, str)
+            and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", raw_request_id)
+            else None
+        )
+        requested_file_id = payload.get("file_id")
+        result = agent_file_inventory.read_allowlisted_text_file(requested_file_id)
+        response = {
+            "type": "agent_file_get",
+            "schema": agent_file_inventory.TEXT_FILE_SCHEMA,
+            "device_id": DEVICE_ID,
+            "id": request_id,
+            "request_id": request_id,
+            "file_id": result.get("file_id"),
+            "state": result.get("state", "unavailable"),
+            "content": result.get("content", ""),
+            "truncated": bool(result.get("truncated", False)),
+        }
+        self._publish_response("output", response)
+
     def _do_agent_logs(self, payload: dict) -> None:
         """Return a bounded, redacted tail of the local agent log on owner request."""
         result = {
@@ -3995,7 +4090,7 @@ class XgentClient:
         self._publish_response("output", result)
 
     def _do_permission_settings(self, payload: dict) -> dict:
-        """Open one fixed Windows privacy page; this never changes a grant."""
+        """Request Windows location consent locally, or open a fixed privacy page."""
         settings = {
             "camera": "ms-settings:privacy-webcam",
             "microphone": "ms-settings:privacy-microphone",
@@ -4013,16 +4108,64 @@ class XgentClient:
         if isinstance(command_id, str) and command_id:
             result["id"] = command_id
         opener = getattr(os, "startfile", None)
+        if permission == "location":
+            try:
+                from location_adapter import native_backend
+                permission_state, _enabled = native_backend().diagnose()
+            except Exception:
+                permission_state = "unknown"
+            if permission_state in {"granted", "denied"}:
+                # Windows does not repeat a decision prompt; let the owner
+                # change or revoke it in the system Privacy page instead.
+                try:
+                    if callable(opener):
+                        opener(uri)
+                        result.update(
+                            ok=True, state="settings_opened", permission_state=permission_state,
+                            text="Открыл настройки геолокации Windows. Там можно изменить или отозвать решение; координаты не запрашивались.",
+                        )
+                    else:
+                        result.update(state="unavailable", text="Не удалось открыть настройки геолокации Windows.")
+                except OSError:
+                    result.update(state="unknown", text="Windows не подтвердила открытие настроек геолокации.")
+                self._publish_response("permission_settings", result)
+                return result
+            try:
+                from permission_prompt import request_windows_location_consent
+                outcome = request_windows_location_consent()
+                state = outcome.get("state") if isinstance(outcome, dict) else "unknown"
+                result["state"] = state if state in {"granted", "denied", "cancelled", "unknown", "unavailable", "unsupported"} else "unknown"
+                result["ok"] = result["state"] in {"granted", "denied", "cancelled", "unknown"}
+                result["text"] = str(outcome.get("text", "Состояние разрешения неизвестно."))[:500]
+                if result["state"] in {"unavailable", "unsupported"} and callable(opener):
+                    opener(uri)
+                    result["settings_opened"] = True
+                    result["ok"] = True
+                    result["text"] += " Открыл системные настройки; выдачу доступа нужно подтвердить там вручную."
+            except Exception:
+                result["state"] = "unavailable"
+                result["text"] = "Локальный запрос Windows недоступен; разрешение не выдано. Открой настройки геолокации вручную."
+                try:
+                    if callable(opener):
+                        opener(uri)
+                        result["settings_opened"] = True
+                        result["ok"] = True
+                except OSError:
+                    pass
+            self._publish_response("permission_settings", result)
+            return result
         if uri and callable(opener):
             try:
                 opener(uri)
                 result["ok"] = True
+                result["state"] = "settings_opened"
                 result["text"] = (
-                    "Переход к Параметрам конфиденциальности запущен. Разреши доступ вручную; "
-                    "для камеры и микрофона проверь доступ классических приложений. "
+                    "Открыл Параметры конфиденциальности. Для камеры и микрофона включи доступ "
+                    "классических приложений; отдельного окна Allow/Don't Allow у этого desktop-агента нет. "
                     "Агент сам разрешения не меняет."
                 )
             except OSError:
+                result["state"] = "unknown"
                 result["text"] = "Не удалось открыть Параметры Windows; открой нужный раздел вручную."
         elif uri:
             result["text"] = "Открытие Параметров Windows доступно только в Windows-сеансе; ничего не изменено."
@@ -4144,8 +4287,13 @@ class XgentClient:
                                                 "ok": False, "error": str(exc)})
 
     def _do_file_del(self, payload: dict) -> None:
-        path = (payload.get("path") or "").strip()
+        raw_path = payload.get("path")
+        path = raw_path.strip() if isinstance(raw_path, str) else ""
         if not path:
+            self._publish_response("file_del", {
+                "type": "file_del", "device_id": DEVICE_ID, "ok": False,
+                "state": "failed", "error": "invalid_or_missing_path",
+            })
             return
         try:
             os.remove(os.path.expanduser(os.path.expandvars(path)))
@@ -4162,8 +4310,13 @@ class XgentClient:
         self._publish_response("find_file", {"type": "find_file", "device_id": DEVICE_ID, **result})
 
     def _do_path_open(self, payload: dict) -> None:
-        path = (payload.get("path") or "").strip()
+        raw_path = payload.get("path")
+        path = raw_path.strip() if isinstance(raw_path, str) else ""
         if not path:
+            self._publish_response("path_open", {
+                "type": "path_open", "device_id": DEVICE_ID, "ok": False,
+                "state": "failed", "error": "invalid_or_missing_path",
+            })
             return
         try:
             os.startfile(os.path.expanduser(path))  # type: ignore[attr-defined]
@@ -4218,33 +4371,65 @@ class XgentClient:
 
     def _do_volume_set(self, payload: dict) -> None:
         """Установить общую громкость 0-100 (pycaw)."""
-        level = max(0, min(100, int(payload.get("level", 50) or 50)))
+        try:
+            requested = payload.get("level", 50)
+            if isinstance(requested, bool):
+                raise ValueError("boolean volume")
+            level = max(0, min(100, int(requested)))
+        except (TypeError, ValueError, OverflowError):
+            result = {
+                "type": "volume_set", "device_id": DEVICE_ID, "ok": False,
+                "state": "failed", "level": None, "current": None,
+                "source": "pycaw.IAudioEndpointVolume",
+                "text": "⚠️ Не удалось изменить громкость: запрос содержит некорректное значение.",
+            }
+            self._publish_response("volume_set", result)
+            self._publish_response("output", result)
+            return
+
+        volume = None
+        setter_error = None
         try:
             volume = self._get_master_volume()
             volume.SetMasterVolumeLevelScalar(level / 100.0, None)
-            current = round(float(volume.GetMasterVolumeLevelScalar()) * 100)
-            text = f"🎚 Громкость установлена: {current}%"
-            ok = True
         except Exception as exc:
             log.warning("Ошибка установки громкости: %s", exc)
-            current = level
-            text = f"⚠️ Ошибка изменения громкости: {exc}"
-            ok = False
+            setter_error = exc
 
-        self._publish_response("volume_set", {
+        current = None
+        try:
+            if volume is None:
+                volume = self._get_master_volume()
+            observed = float(volume.GetMasterVolumeLevelScalar())
+            if math.isfinite(observed) and 0.0 <= observed <= 1.0:
+                current = round(observed * 100)
+        except Exception as exc:
+            log.warning("Ошибка чтения фактической громкости: %s", exc)
+
+        if current == level:
+            ok, state = True, "confirmed"
+            text = f"🎚 Громкость {current}%; уровень подтверждён системой."
+        elif current is None:
+            ok, state = False, "unknown"
+            text = "⚠️ Запрос громкости отправлен, но система не вернула проверяемый уровень. Результат неизвестен."
+        else:
+            ok, state = False, "failed"
+            text = f"⚠️ Запрошено {level}%, но система сообщила {current}%; изменение не подтверждено."
+        if setter_error is not None and current != level and current is not None:
+            log.debug("Volume setter failed and readback differs from requested value: %s", setter_error)
+
+        result = {
             "type": "volume_set",
             "device_id": DEVICE_ID,
             "ok": ok,
+            "state": state,
             "level": level,
             "current": current,
+            "source": "pycaw.IAudioEndpointVolume",
             "text": text,
-        })
-        self._publish_response("output", {
-            "type": "volume_set",
-            "device_id": DEVICE_ID,
-            "ok": ok,
-            "text": text,
-        })
+        }
+        self._publish_response("volume_set", result)
+        self._publish_response("output", result)
         log.info("Громкость: %s", text)
 
     def _do_microphone_catalog(self, payload: dict) -> None:
@@ -4479,14 +4664,17 @@ class XgentClient:
                 kwargs["device"] = input_index
             recording = sd.rec(int(duration * fs), **kwargs)
             sd.wait()
-            with media_temp.create_media_temp_file(".ogg") as tmp:
-                tmp_path = tmp.name
+            temp_file = media_temp.create_media_temp_file(".ogg")
+            tmp_path = temp_file.name
+            temp_file.close(retain_reservation=True)
             try:
                 sf.write(tmp_path, recording, fs)
+                temp_file.release()
                 with open(tmp_path, "rb") as f:
                     b64 = base64.b64encode(f.read()).decode("ascii")
             finally:
                 os.unlink(tmp_path)
+                temp_file.release()
             self._publish_response("mic", {"type": "mic", "device_id": DEVICE_ID, "audio": b64})
             log.info("Аудиозапись отправлена")
         except Exception as exc:
@@ -4496,15 +4684,20 @@ class XgentClient:
 
     def _do_shell(self, payload: dict) -> None:
         """Выполнить shell-команду и вернуть вывод (лимит 20 сек)."""
+        cmd = payload.get("command")
+        if not isinstance(cmd, str) or not cmd.strip():
+            self._publish_response("shell", {
+                "type": "shell", "device_id": DEVICE_ID, "ok": False,
+                "state": "failed", "error": "empty_or_invalid_command",
+                "returncode": -1, "status": "rejected",
+            })
+            return
         if not _reserve_shell_approval(self, payload):
             self._publish_response("shell", {
                 "type": "shell", "device_id": DEVICE_ID, "ok": False,
                 "error": "approval_invalid_or_replayed", "returncode": -1, "status": "rejected",
             })
             log.warning("Shell request rejected by approval or replay guard")
-            return
-        cmd = payload["command"]
-        if not cmd.strip():
             return
         try:
             execution = _load_command_approval_component("shell_execution")
@@ -4765,71 +4958,152 @@ class XgentClient:
 
     def _do_lock_screen(self, payload: dict) -> None:
         """Заблокировать экран Windows."""
-        ctypes.windll.user32.LockWorkStation()
-        log.info("Экран заблокирован")
+        ok = bool(ctypes.windll.user32.LockWorkStation())
+        self._publish_response("lock", {
+            "type": "lock", "device_id": DEVICE_ID, "action": "lock",
+            "id": payload.get("id") if isinstance(payload.get("id"), str) else None,
+            "ok": ok,
+            "error": None if ok else "LockWorkStation returned false",
+        })
+        log.info("LockWorkStation result: %s", ok)
 
     def _do_volume_toggle(self, payload: dict) -> None:
         """Mute/Unmute системного звука Windows через pycaw."""
+        source = "pycaw.IAudioEndpointVolume"
         try:
             volume = self._get_master_volume()
-            current_mute = volume.GetMute()
-            volume.SetMute(not current_mute, None)
-            new_mute = bool(volume.GetMute())
-            state = "muted" if new_mute else "unmuted"
-            text = "🔇 Звук выключен (MUTE)" if new_mute else "🔊 Звук включен (UNMUTE)"
-            ok = True
-            log.info("Звук: %s", state)
+            previous_mute = bool(volume.GetMute())
         except Exception as exc:
-            ok, text = False, f"⚠️ Ошибка переключения звука: {exc}"
-            new_mute = False
-            log.error("volume_toggle error: %s", exc)
+            log.warning("Не удалось прочитать состояние звука: %s", exc)
+            result = {
+                "type": "volume_toggle", "device_id": DEVICE_ID, "ok": False,
+                "state": "unknown", "muted": None, "source": source,
+                "text": "⚠️ Не удалось прочитать состояние звука; переключение не выполнялось.",
+            }
+            self._publish_response("volume_toggle", result)
+            self._publish_response("output", result)
+            return
 
-        self._publish_response("volume_toggle", {
+        setter_error = None
+        try:
+            volume.SetMute(not previous_mute, None)
+        except Exception as exc:
+            setter_error = exc
+            log.warning("Ошибка команды переключения звука: %s", exc)
+        try:
+            current_mute = bool(volume.GetMute())
+        except Exception as exc:
+            current_mute = None
+            log.warning("Не удалось проверить новое состояние звука: %s", exc)
+
+        if current_mute is None:
+            ok, state = False, "unknown"
+            text = "⚠️ Запрос переключения звука отправлен, но система не подтвердила состояние. Результат неизвестен."
+        elif current_mute != previous_mute:
+            ok, state = True, "confirmed"
+            text = "🔇 Звук выключен; состояние подтверждено системой." if current_mute else "🔊 Звук включён; состояние подтверждено системой."
+        else:
+            ok, state = False, "failed"
+            text = "⚠️ Состояние звука не изменилось; переключение не выполнено."
+        if setter_error is not None and current_mute == previous_mute:
+            log.debug("Mute setter failed and readback stayed unchanged: %s", setter_error)
+
+        result = {
             "type": "volume_toggle",
             "device_id": DEVICE_ID,
             "ok": ok,
-            "muted": new_mute,
+            "state": state,
+            "muted": current_mute,
+            "source": source,
             "text": text,
-        })
-        self._publish_response("output", {
-            "type": "volume_toggle",
-            "device_id": DEVICE_ID,
-            "ok": ok,
-            "text": text,
-        })
+        }
+        self._publish_response("volume_toggle", result)
+        self._publish_response("output", result)
+        log.info("Volume toggle state=%s", state)
 
     def _do_power(self, payload: dict) -> None:
         """Выключить, перезагрузить или отправить машину в сон."""
         action = payload.get("power_action") or payload.get("action", "")
+
+        request_id = payload.get("id") or payload.get("request_id")
+        request_id = request_id if isinstance(request_id, str) and 1 <= len(request_id) <= 128 else None
+
+        def publish(state: str, ok: bool, text: str, *, effect_confirmed: bool) -> None:
+            result = {
+                "type": "power", "device_id": DEVICE_ID, "action": action,
+                "ok": ok, "state": state, "effect_confirmed": effect_confirmed,
+                "source": "SetSuspendState" if action == "sleep" else "shutdown.exe",
+                "text": text,
+            }
+            if request_id is not None:
+                result["id"] = request_id
+                result["request_id"] = request_id
+            self._publish_response("power", result)
+            self._publish_response("output", result)
+
         if action == "shutdown":
             log.info("Выключение машины…")
-            text = "⚡ Выключение ПК инициировано (через 3 сек)..."
-            self._publish_response("power", {"type": "power", "device_id": DEVICE_ID, "action": "shutdown", "ok": True})
-            self._publish_response("output", {"type": "power", "device_id": DEVICE_ID, "ok": True, "text": text})
-            subprocess.Popen(["shutdown.exe", "/s", "/f", "/t", "3", "/c", "XGENT: Выключение"])
+            try:
+                subprocess.Popen(["shutdown.exe", "/s", "/f", "/t", "3", "/c", "XGENT: Выключение"],
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            except OSError as exc:
+                log.warning("Не удалось запустить shutdown.exe: %s", exc)
+                publish("failed", False, "⚠️ Windows не приняла команду выключения.", effect_confirmed=False)
+                return
+            publish("launch_accepted", True,
+                    "⚡ Windows приняла команду выключения с задержкой 3 секунды; итоговое выключение не подтверждено.",
+                    effect_confirmed=False)
         elif action == "reboot":
             log.info("Перезагрузка машины…")
-            text = "🔄 Перезагрузка ПК инициирована (через 3 сек)..."
-            self._publish_response("power", {"type": "power", "device_id": DEVICE_ID, "action": "reboot", "ok": True})
-            self._publish_response("output", {"type": "power", "device_id": DEVICE_ID, "ok": True, "text": text})
-            subprocess.Popen(["shutdown.exe", "/r", "/f", "/t", "3", "/c", "XGENT: Перезагрузка"])
+            try:
+                subprocess.Popen(["shutdown.exe", "/r", "/f", "/t", "3", "/c", "XGENT: Перезагрузка"],
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            except OSError as exc:
+                log.warning("Не удалось запустить shutdown.exe: %s", exc)
+                publish("failed", False, "⚠️ Windows не приняла команду перезагрузки.", effect_confirmed=False)
+                return
+            publish("launch_accepted", True,
+                    "🔄 Windows приняла команду перезагрузки с задержкой 3 секунды; итоговая перезагрузка не подтверждена.",
+                    effect_confirmed=False)
         elif action == "sleep":
             log.info("Устройство уходит в сон…")
-            text = "😴 ПК переводится в спящий режим..."
-            self._publish_response("power", {"type": "power", "device_id": DEVICE_ID, "action": "sleep", "ok": True})
-            self._publish_response("output", {"type": "power", "device_id": DEVICE_ID, "ok": True, "text": text})
             def _sleep():
                 time.sleep(1.0)
                 try:
-                    ctypes.windll.powrprof.SetSuspendState(0, 1, 0)
+                    suspended = bool(ctypes.windll.powrprof.SetSuspendState(0, 1, 0))
                 except Exception as exc:
-                    log.warning("SetSuspendState ctypes failed: %s, fallback to powershell", exc)
-                    subprocess.run(["powershell", "-Command", "Add-Type -Assembly System.Windows.Forms; [System.Windows.Forms.Application]::SetSuspendState([System.Windows.Forms.PowerState]::Suspend, $false, $false)"], shell=True)
-            threading.Thread(target=_sleep, daemon=True).start()
+                    log.warning("SetSuspendState ctypes failed: %s, fallback to PowerShell", exc)
+                    suspended = False
+                if suspended:
+                    publish("confirmed", True, "😴 Windows подтвердила переход в спящий режим.", effect_confirmed=True)
+                    return
+                try:
+                    fallback = subprocess.run(
+                        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                         "Add-Type -AssemblyName System.Windows.Forms; "
+                         "$r=[System.Windows.Forms.Application]::SetSuspendState("
+                         "[System.Windows.Forms.PowerState]::Suspend, $false, $false); "
+                         "[Console]::Out.Write([string]$r)"],
+                        capture_output=True, text=True, timeout=15, check=False,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    )
+                    if fallback.returncode == 0 and fallback.stdout.strip().casefold() == "true":
+                        publish("confirmed", True, "😴 Windows подтвердила переход в спящий режим.", effect_confirmed=True)
+                    elif fallback.returncode == 0 and fallback.stdout.strip().casefold() == "false":
+                        publish("failed", False, "⚠️ Windows отказалась перейти в спящий режим.", effect_confirmed=False)
+                    else:
+                        publish("unknown", False, "⚠️ Запрос сна отправлен, но Windows не подтвердила результат.", effect_confirmed=False)
+                except Exception as exc:
+                    log.warning("PowerShell sleep fallback failed: %s", exc)
+                    publish("unknown", False, "⚠️ Запрос сна отправлен, но результат неизвестен.", effect_confirmed=False)
+            try:
+                threading.Thread(target=_sleep, name="xgent-power-sleep", daemon=True).start()
+            except RuntimeError as exc:
+                log.warning("Не удалось запустить sleep worker: %s", exc)
+                publish("failed", False, "⚠️ Не удалось запустить обработчик перехода в сон.", effect_confirmed=False)
         else:
             log.warning("Неизвестное действие power: %s", action)
-            text = f"⚠️ Неизвестное действие power: {action}"
-            self._publish_response("output", {"type": "power", "device_id": DEVICE_ID, "ok": False, "text": text})
+            publish("unsupported", False, "⚠️ Это действие питания не поддерживается.", effect_confirmed=False)
 
     def _do_stop(self, payload: dict) -> None:
         log.info("Получена команда остановки")
@@ -4853,19 +5127,37 @@ class XgentClient:
         self._publish_response("prank_screamer", {"type": "prank_screamer", "device_id": DEVICE_ID, "ok": True})
 
     def _do_prank_rickroll(self, payload: dict) -> None:
-        tabs = min(int(payload.get("tabs", 10) or 10), 50)
+        try:
+            tabs = min(max(int(payload.get("tabs", 10) or 10), 1), 50)
+        except (TypeError, ValueError, OverflowError):
+            tabs = 10
         url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-        def _run():
-            for _ in range(tabs):
-                webbrowser.open_new_tab(url)
+        accepted = 0
+        for _ in range(tabs):
+            try:
+                accepted += int(bool(webbrowser.open_new_tab(url)))
+            except Exception:
+                log.info("Windows browser rejected a prank tab request", exc_info=True)
+            if _ + 1 < tabs:
                 time.sleep(0.08)
-        threading.Thread(target=_run, name="xgent-rickroll", daemon=True).start()
-        self._publish_response("prank_rickroll", {"type": "prank_rickroll", "device_id": DEVICE_ID, "ok": True, "tabs": tabs})
+        failed = tabs - accepted
+        ok = accepted > 0
+        request_id = payload.get("id") if isinstance(payload.get("id"), str) else None
+        self._publish_response("prank_rickroll", {
+            "type": "prank_rickroll", "device_id": DEVICE_ID, "id": request_id,
+            "ok": ok, "state": "launch_accepted" if ok else "failed",
+            "tabs_requested": tabs, "tabs_accepted": accepted, "tabs_failed": failed,
+            "text": (f"Браузер принял запрос на {accepted}/{tabs} вкладок; это не подтверждает показ страниц."
+                     if ok else "Браузер не принял ни одного запроса на открытие вкладки."),
+        })
 
     def _do_prank_matrix(self, payload: dict) -> None:
         cmd = 'start cmd /k "color 0a && title MATRIX && mode con: cols=120 lines=40 && @echo off && :loop && echo %random% %random% %random% %random% %random% %random% %random% %random% %random% && goto loop"'
         subprocess.Popen(cmd, shell=True)
-        self._publish_response("prank_matrix", {"type": "prank_matrix", "device_id": DEVICE_ID, "ok": True})
+        self._publish_response("prank_matrix", {
+            "type": "prank_matrix", "device_id": DEVICE_ID, "id": payload.get("id"),
+            "ok": True, "state": "launch_accepted", "effect_confirmed": False,
+        })
 
     def _do_prank_siren(self, payload: dict) -> None:
         duration = min(int(payload.get("duration", 10) or 10), 30)
@@ -4961,8 +5253,28 @@ class XgentClient:
         SC_MONITORPOWER = 0xF170
         WM_SYSCOMMAND = 0x0112
         HWND_BROADCAST = 0xFFFF
-        ctypes.windll.user32.SendMessageW(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 2)
-        self._publish_response("prank_black_screen", {"type": "prank_black_screen", "device_id": DEVICE_ID, "ok": True})
+        try:
+            result = ctypes.c_size_t()
+            accepted = bool(ctypes.windll.user32.SendMessageTimeoutW(
+                HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 2,
+                0x0002, 3000, ctypes.byref(result),
+            ))
+            self._publish_response("prank_black_screen", {
+                "type": "prank_black_screen", "device_id": DEVICE_ID,
+                "ok": accepted,
+                "state": "launch_accepted" if accepted else "failed",
+                "effect_confirmed": False,
+                "text": (
+                    "🌑 Windows приняла запрос погасить дисплей; визуальный результат не подтверждён."
+                    if accepted else "⚠️ Windows не приняла запрос погасить дисплей."
+                ),
+            })
+        except Exception as exc:
+            self._publish_response("prank_black_screen", {
+                "type": "prank_black_screen", "device_id": DEVICE_ID,
+                "ok": False, "state": "failed", "effect_confirmed": False,
+                "text": f"⚠️ Не удалось отправить запрос дисплею ({type(exc).__name__}).",
+            })
 
     def _do_prank_random_site(self, payload: dict) -> None:
         SITES = [
@@ -4973,76 +5285,152 @@ class XgentClient:
             "https://zoomquilt.org/",
         ]
         site = random.choice(SITES)
-        webbrowser.open_new_tab(site)
-        self._publish_response("prank_random_site", {"type": "prank_random_site", "device_id": DEVICE_ID, "ok": True, "url": site})
+        try:
+            accepted = bool(webbrowser.open_new_tab(site))
+        except Exception as exc:
+            self._publish_response("prank_random_site", {
+                "type": "prank_random_site", "device_id": DEVICE_ID, "ok": False,
+                "state": "failed", "effect_confirmed": False, "url": site,
+                "text": f"⚠️ Не удалось передать ссылку браузеру ({type(exc).__name__}).",
+            })
+            return
+        self._publish_response("prank_random_site", {
+            "type": "prank_random_site", "device_id": DEVICE_ID, "ok": accepted,
+            "state": "launch_accepted" if accepted else "failed",
+            "effect_confirmed": False, "url": site,
+            "text": (
+                "🌐 Браузер принял запрос открыть ссылку; отображение страницы не подтверждено."
+                if accepted else "⚠️ Браузер не принял запрос открыть ссылку."
+            ),
+        })
 
     def _do_display_brightness(self, payload: dict) -> None:
         """Установить яркость экрана 0-100 через WMI WmiSetBrightness."""
         lvl = _clamp(payload.get("level"), 0, 100, 50)
-        try:
-            out = subprocess.check_output(
-                ["powershell", "-NoProfile", "-Command",
-                 "(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightness).CurrentBrightness"],
-                text=True, stderr=subprocess.DEVNULL, timeout=8,
+        ps_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+        def powershell(script: str):
+            return subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                capture_output=True, text=True, timeout=8, check=False,
+                creationflags=ps_flags,
             )
-            before = (out.strip() or "?").splitlines()[-1]
-        except Exception:
-            before = "?"
+
+        def parse_level(value: str) -> int | None:
+            lines = str(value or "").strip().splitlines()
+            if not lines or not re.fullmatch(r"\s*\d{1,3}\s*", lines[-1]):
+                return None
+            parsed = int(lines[-1])
+            return parsed if 0 <= parsed <= 100 else None
+
+        observed = None
+        source = "WMI.WmiMonitorBrightness"
+        failure_text = None
         try:
-            ps = f"(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, {lvl})"
-            subprocess.check_output(
-                ["powershell", "-NoProfile", "-Command", ps],
-                text=True, stderr=subprocess.DEVNULL, timeout=8,
+            setter = powershell(
+                f"$m=Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods; "
+                f"$r=$m.WmiSetBrightness(1, {lvl}); [Console]::Out.Write([string]$r.ReturnValue)"
             )
-            ok, text = True, f"🔆 Яркость: {before}% → {lvl}%"
+            raw_code = (setter.stdout or "").strip()
+            if setter.returncode == 0 and re.fullmatch(r"\d+", raw_code) and int(raw_code) == 0:
+                readback = powershell(
+                    "(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightness).CurrentBrightness"
+                )
+                if readback.returncode == 0:
+                    observed = parse_level(readback.stdout)
+            elif setter.returncode == 0 and re.fullmatch(r"\d+", raw_code):
+                failure_text = f"WMI returned {raw_code}"
+            else:
+                failure_text = "WMI did not return a usable method result"
         except Exception as exc:
+            failure_text = type(exc).__name__
+
+        if observed == lvl:
+            ok, state = True, "confirmed"
+            text = f"🔆 Яркость {observed}%; значение подтверждено системой."
+        else:
+            fallback_error = None
             try:
                 import screen_brightness_control as sbc
                 sbc.set_brightness(lvl)
-                ok, text = True, f"🔆 Яркость (sbc): {lvl}%"
-            except Exception:
-                ok, text = False, f"⚠️ Не удалось изменить яркость: {exc}"
-        self._publish_response("display_brightness", {
+                raw_values = sbc.get_brightness()
+                values = raw_values if isinstance(raw_values, list) else [raw_values]
+                parsed_values = [parse_level(str(value)) for value in values]
+                valid = [value for value in parsed_values if value is not None]
+                if valid and len(valid) == len(values) and all(value == lvl for value in valid):
+                    observed = valid[0] if len(valid) == 1 else valid
+                    source = "screen_brightness_control"
+                elif valid:
+                    observed = valid[0] if len(valid) == 1 else valid
+                    source = "screen_brightness_control"
+                else:
+                    fallback_error = "brightness readback unavailable"
+            except Exception as exc:
+                fallback_error = type(exc).__name__
+
+            if observed == lvl or isinstance(observed, list) and observed and all(value == lvl for value in observed):
+                ok, state = True, "confirmed"
+                text = f"🔆 Яркость {lvl}%; значение подтверждено системой."
+            elif observed is not None:
+                ok, state = False, "failed"
+                text = f"⚠️ Запрошено {lvl}%, но система сообщила другое значение ({observed}); изменение не подтверждено."
+            else:
+                ok, state = False, "unknown"
+                text = "⚠️ Запрос яркости отправлен, но система не вернула проверяемый результат."
+            if failure_text:
+                log.debug("WMI brightness request was not confirmed: %s", failure_text)
+            if fallback_error:
+                log.debug("Brightness fallback unavailable: %s", fallback_error)
+
+        result = {
             "type": "display_brightness", "device_id": DEVICE_ID,
-            "ok": ok, "level": lvl, "text": text,
-        })
-        self._publish_response("output", {
-            "type": "display_brightness", "device_id": DEVICE_ID,
-            "ok": ok, "text": text,
-        })
+            "ok": ok, "state": state, "level": lvl, "current": observed,
+            "source": source, "text": text,
+        }
+        self._publish_response("display_brightness", result)
+        self._publish_response("output", result)
 
     def _do_display_night_light(self, payload: dict) -> None:
         """Вкл/выкл «Ночной свет» через CloudStore-реестр (winreg)."""
         import winreg
 
         wanted = bool(payload.get("enabled", True))
+        key = None
         try:
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, NL_STATE_SUBKEY, 0, winreg.KEY_READ | winreg.KEY_SET_VALUE)
             data, _ = winreg.QueryValueEx(key, "Data")
-        except FileNotFoundError:
-            self._publish_response("display_night_light", {
-                "type": "display_night_light", "device_id": DEVICE_ID, "ok": False,
-                "text": "⚠️ Ключ Night Light (CloudStore) не найден — функция недоступна на этой системе.",
-            })
-            return
-        except Exception as exc:
-            self._publish_response("display_night_light", {
-                "type": "display_night_light", "device_id": DEVICE_ID, "ok": False,
-                "text": f"⚠️ Ошибка доступа к реестру: {exc}",
-            })
-            return
-        try:
             current = _night_light_enabled(data)
             if current != wanted:
                 winreg.SetValueEx(key, "Data", 0, winreg.REG_BINARY, _night_light_toggle_bytes(data))
-            winreg.CloseKey(key)
-            state = "включён" if wanted else "выключен"
-            ok, text = True, f"🌙 Ночной свет {state}"
+            readback, _ = winreg.QueryValueEx(key, "Data")
+            observed = _night_light_enabled(readback)
+            if observed is not wanted:
+                ok, state = False, "unknown"
+                text = "⚠️ Запрос Night Light записан, но повторное чтение реестра не подтвердило нужное состояние."
+            else:
+                ok, state = True, "success"
+                state_text = "включён" if wanted else "выключен"
+                text = (
+                    f"🌙 Значение Night Light в CloudStore {state_text}; "
+                    "визуальное изменение экрана не проверено."
+                )
+        except FileNotFoundError:
+            ok, state = False, "unsupported"
+            text = "⚠️ Ключ Night Light (CloudStore) не найден — функция недоступна на этой системе."
         except Exception as exc:
-            ok, text = False, f"⚠️ Ошибка переключения Night Light: {exc}"
+            ok, state = False, "failed"
+            text = f"⚠️ Ошибка проверки/переключения Night Light: {type(exc).__name__}"
+        finally:
+            if key is not None:
+                try:
+                    winreg.CloseKey(key)
+                except Exception:
+                    log.debug("Night Light registry handle close failed", exc_info=True)
         self._publish_response("display_night_light", {
             "type": "display_night_light", "device_id": DEVICE_ID,
-            "ok": ok, "enabled": wanted, "text": text,
+            "ok": ok, "state": state, "visual_effect_confirmed": False,
+            "enabled": wanted, "observed": wanted if ok else None,
+            "source": "HKCU CloudStore Data readback", "text": text,
         })
 
     def _do_display_rotate(self, payload: dict) -> None:
@@ -5328,42 +5716,34 @@ class XgentClient:
         })
 
     def _do_sys_clean_temp(self, payload: dict) -> None:
-        """Очистка временных файлов TEMP/TMP (безопасное удаление)."""
-        try:
-            temp_dirs = [os.environ.get("TEMP"), os.environ.get("TMP"), r"C:\Windows\Temp"]
-            cleaned_files = 0
-            freed_bytes = 0
-            for tdir in temp_dirs:
-                if not tdir or not os.path.exists(tdir):
-                    continue
-                for root, dirs, files in os.walk(tdir, topdown=False):
-                    for f in files:
-                        fp = os.path.join(root, f)
-                        try:
-                            sz = os.path.getsize(fp)
-                            os.remove(fp)
-                            cleaned_files += 1
-                            freed_bytes += sz
-                        except Exception:
-                            pass
-                    for d in dirs:
-                        dp = os.path.join(root, d)
-                        try:
-                            os.rmdir(dp)
-                        except Exception:
-                            pass
-            freed_mb = freed_bytes / (1024 * 1024)
+        """Remove expired regular files from XIDER's private media-temp namespace only."""
+        report = media_temp.cleanup_stale_media_temp()
+        state = report.get("state")
+        deleted = int(report.get("deleted", 0) or 0)
+        skipped = int(report.get("skipped", 0) or 0)
+        failed = int(report.get("failed", 0) or 0)
+        if state == "success":
             text = (
-                f"🧹 Очистка временных файлов завершена!\n"
-                f"• Удалено файлов: {cleaned_files}\n"
-                f"• Освобождено места: {freed_mb:.2f} МБ"
+                "🧹 Очистка временных файлов XIDER завершена.\n"
+                f"• Удалено просроченных файлов: {deleted}\n"
+                f"• Пропущено (активные или неподходящие): {skipped}"
             )
             ok = True
-        except Exception as exc:
-            text = f"⚠️ Ошибка очистки: {exc}"
+        elif state == "partial":
+            text = (
+                "⚠️ Очистка временных файлов XIDER завершилась частично.\n"
+                f"• Удалено просроченных файлов: {deleted}\n"
+                f"• Пропущено: {skipped}\n"
+                f"• Не удалось обработать: {failed}"
+            )
+            ok = False
+        else:
+            text = "⚠️ Не удалось безопасно проверить временную папку XIDER; файлы не очищены."
             ok = False
         self._publish_response("output", {
-            "type": "sys_clean_temp", "device_id": DEVICE_ID, "ok": ok, "text": text,
+            "type": "sys_clean_temp", "device_id": DEVICE_ID, "ok": ok,
+            "state": state if state in {"success", "partial"} else "error",
+            "deleted": deleted, "skipped": skipped, "failed": failed, "text": text,
         })
 
     def _do_net_ping(self, payload: dict) -> None:
@@ -5750,7 +6130,9 @@ class XgentClient:
         })
 
     def _do_route_lookup(self, payload: dict) -> None:
-        request_id = str(payload.get("id", ""))[:128]
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
         destination = payload.get("destination")
         try:
             normalized = route_lookup.normalize_destination(destination)
@@ -6391,7 +6773,7 @@ class XgentClient:
         self._publish_response("output", {"type": "prank_slow_mouse", "device_id": DEVICE_ID, "ok": True, "text": "🐌 Мышь замедлена до минимальной скорости на 8 секунд!"})
 
     def _do_prank_random_clicks(self, payload: dict) -> None:
-        """Случайные подёргивания курсора мыши на 5 секунд."""
+        """Request random cursor movement for five seconds; does not synthesize clicks."""
         def _jiggle():
             user32 = ctypes.windll.user32
             class POINT(ctypes.Structure):
@@ -6401,8 +6783,21 @@ class XgentClient:
                 user32.GetCursorPos(ctypes.byref(pt))
                 user32.SetCursorPos(pt.x + random.randint(-15, 15), pt.y + random.randint(-15, 15))
                 time.sleep(0.2)
-        threading.Thread(target=_jiggle, daemon=True).start()
-        self._publish_response("output", {"type": "prank_random_clicks", "device_id": DEVICE_ID, "ok": True, "text": "🤹 Случайные подёргивания мыши активированы на 5 секунд!"})
+        try:
+            worker = threading.Thread(target=_jiggle, daemon=True, name="xider-prank-cursor-jiggle")
+            worker.start()
+        except Exception as exc:
+            self._publish_response("output", {
+                "type": "prank_random_clicks", "device_id": DEVICE_ID, "ok": False,
+                "state": "failed", "effect_confirmed": False,
+                "text": f"⚠️ Не удалось запустить движение курсора: {type(exc).__name__}",
+            })
+            return
+        self._publish_response("output", {
+            "type": "prank_random_clicks", "device_id": DEVICE_ID, "ok": True,
+            "state": "launch_accepted", "effect_confirmed": False,
+            "text": "🤹 Запуск движения курсора принят на 5 секунд; клики не выполняются, перемещение не подтверждено.",
+        })
 
     def _do_prank_paste_clipboard_spam(self, payload: dict) -> None:
         """Подмена буфера обмена на забавную фразу."""
@@ -6832,9 +7227,12 @@ function b(){let o=a.createOscillator();o.connect(a.destination);o.frequency.val
 setInterval(b,600);
 setTimeout(()=>window.close(),15000);
 </script></body></html>"""
-            tf = tempfile.NamedTemporaryFile("w", suffix=".html", delete=False, encoding="utf-8")
+            tf = tempfile.NamedTemporaryFile(
+                "w", prefix=_PRANK_TEMP_PREFIX, suffix=".html", delete=False, encoding="utf-8"
+            )
             tf.write(html)
             tf.close()
+            _schedule_prank_temp_cleanup(tf.name)
             subprocess.Popen(f'explorer "{tf.name}"', shell=True)
             ok, text = True, "🎰 Экран с выигрышем $1,000,000 открыт!"
         except Exception as exc:

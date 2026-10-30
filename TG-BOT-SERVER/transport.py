@@ -75,6 +75,7 @@ class MQTTTransport:
             client.subscribe(f"{self.prefix}/+/processes", qos=0)
             client.subscribe(f"{self.prefix}/+/clipboard", qos=0)
             client.subscribe(f"{self.prefix}/+/battery", qos=0)
+            client.subscribe(f"{self.prefix}/+/lock", qos=0)
             client.subscribe(f"{self.prefix}/+/network", qos=0)
             client.subscribe(f"{self.prefix}/+/services", qos=0)
             client.subscribe(f"{self.prefix}/+/capabilities", qos=0)

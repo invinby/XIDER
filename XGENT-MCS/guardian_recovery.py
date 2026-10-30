@@ -13,6 +13,7 @@ import hmac
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -24,6 +25,7 @@ from update_package import (
     MAX_ARCHIVE_BYTES,
     MAX_MANIFEST_BYTES,
     SOURCE_ASSET,
+    UPDATE_STATE_NAME,
     extract_agent_files,
 )
 
@@ -195,6 +197,94 @@ def activate_recovery_package(recovery_root: Path, slot_name: str) -> str:
     finally:
         temporary_path.unlink(missing_ok=True)
     return release
+
+
+def prune_recovery_slots(
+    recovery_root: Path, *, keep: int = 2, protected_slots: tuple[str, ...] = (),
+) -> int:
+    """Prune verified old slots while retaining current and active rollback inputs."""
+    if isinstance(keep, bool) or not isinstance(keep, int) or keep < 1:
+        raise ValueError("At least one signed recovery slot must be retained.")
+    try:
+        recovery_root = _plain_path(recovery_root)
+        slots_root = _plain_path(recovery_root / "slots")
+        if not slots_root.is_dir():
+            return 0
+        candidates = list(slots_root.iterdir())
+    except (OSError, ValueError):
+        return 0
+
+    pinned: set[str] = set()
+    pointer = recovery_root / "current.json"
+    if pointer.is_symlink():
+        return 0
+    if pointer.exists():
+        try:
+            current = json.loads(_read_bounded(pointer, 4096))
+            if (
+                not isinstance(current, dict) or type(current.get("schema")) is not int
+                or current.get("schema") != 1 or not isinstance(current.get("slot"), str)
+                or not _SLOT.fullmatch(current["slot"])
+            ):
+                return 0
+            pinned.add(current["slot"])
+        except (OSError, ValueError, UnicodeDecodeError):
+            return 0
+
+    journal = recovery_root.parent / UPDATE_STATE_NAME
+    if journal.is_symlink():
+        return 0
+    if journal.exists():
+        try:
+            active = json.loads(_read_bounded(journal, 65536))
+            if not isinstance(active, dict) or active.get("status") not in {"installing", "awaiting_health"}:
+                return 0
+            for name in ("recovery_slot", "recovery_previous_slot"):
+                slot_name = active.get(name)
+                if slot_name is not None:
+                    if not isinstance(slot_name, str) or not _SLOT.fullmatch(slot_name):
+                        return 0
+                    pinned.add(slot_name)
+        except (OSError, ValueError, UnicodeDecodeError):
+            return 0
+
+    for slot_name in protected_slots:
+        if not isinstance(slot_name, str) or not _SLOT.fullmatch(slot_name):
+            return 0
+        pinned.add(slot_name)
+
+    valid: list[tuple[int, str, Path]] = []
+    for slot in candidates:
+        if not _SLOT.fullmatch(slot.name):
+            continue
+        if slot.is_symlink():
+            return 0
+        try:
+            if not slot.is_dir() or slot.resolve(strict=True).parent != slots_root:
+                return 0
+            release, digest, _manifest, _archive = _verified_inputs(
+                slot / MANIFEST_ASSET, slot / SOURCE_ASSET,
+            )
+            if slot.name != f"{release}-{digest}":
+                continue
+            valid.append((slot.stat().st_mtime_ns, slot.name, slot))
+        except (OSError, ValueError):
+            # Preserve damaged/unreadable material for owner diagnosis.
+            continue
+    valid.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    keep_names = {item[1] for item in valid[:keep]} | pinned
+    removed = 0
+    for _mtime, name, slot in valid:
+        if name in keep_names:
+            continue
+        try:
+            if slot.is_symlink() or slot.resolve(strict=True).parent != slots_root:
+                return removed
+            shutil.rmtree(slot)
+            removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 def validate_recovery_install(install_dir: Path, recovery_root: Path, slot_name: str) -> str:

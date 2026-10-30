@@ -67,6 +67,51 @@ def test_creation_rejects_symlinked_xider_app_root_before_writing(tmp_path, monk
     assert not (outside / "media-temp").exists()
 
 
+def test_media_temp_creation_enforces_file_and_total_byte_limits(tmp_path, monkeypatch):
+    monkeypatch.setattr(media_temp, "_media_temp_root", lambda create=True: tmp_path)
+    monkeypatch.setattr(media_temp, "_MAX_FILE_BYTES", 4)
+    monkeypatch.setattr(media_temp, "_MAX_TOTAL_BYTES", 8)
+
+    with media_temp.create_media_temp_file(".wav") as first:
+        assert first.write(b"1234") == 4
+        try:
+            first.write(b"5")
+        except OSError as exc:
+            assert "quota" in str(exc).lower()
+        else:
+            raise AssertionError("a media file must not exceed its per-file byte limit")
+
+    with media_temp.create_media_temp_file(".png") as second:
+        second.write(b"5678")
+
+    try:
+        media_temp.create_media_temp_file(".ogg")
+    except OSError as exc:
+        assert "quota" in str(exc).lower()
+    else:
+        raise AssertionError("new files must reserve space within the XIDER media-temp byte limit")
+
+
+def test_external_writer_reservation_catches_oversized_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(media_temp, "_media_temp_root", lambda create=True: tmp_path)
+    monkeypatch.setattr(media_temp, "_MAX_FILE_BYTES", 4)
+    monkeypatch.setattr(media_temp, "_MAX_TOTAL_BYTES", 8)
+
+    temp = media_temp.create_media_temp_file(".png")
+    path = Path(temp.name)
+    temp.close(retain_reservation=True)
+    path.write_bytes(b"12345")
+
+    try:
+        temp.release()
+    except OSError as exc:
+        assert "quota" in str(exc).lower()
+    else:
+        raise AssertionError("an external writer must not leave an oversized XIDER media file")
+
+    assert not path.exists()
+
+
 def test_cleanup_command_is_advertised_and_returns_only_bounded_report(monkeypatch):
     sent = []
     monkeypatch.setattr(media_temp, "cleanup_stale_media_temp", lambda: {

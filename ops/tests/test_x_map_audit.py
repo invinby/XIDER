@@ -167,8 +167,8 @@ def test_current_repo_has_no_declared_worker_action_gaps():
     assert report["dynamic_action_calls_not_classified"] == 0
     assert report["dynamic_action_sites"] == []
     assert [item["classification"] for item in report["dynamic_action_wrappers"]] == [
-        "shared_publish_dispatch", "history_replay",
-        "prompted_text_prank_dispatch", "simple_command_dispatch", "xlex_prank_dispatch",
+        "admission_guarded_dispatch", "prompted_text_prank_dispatch",
+        "simple_command_dispatch", "xlex_prank_dispatch",
     ]
     assert report["feature_status"]["expected_features"] == sorted({
         "screenshot", "webcam", "microphone", "geolocation", "battery", "clipboard", "shell", "open_app",
@@ -209,6 +209,8 @@ def test_command_matrix_records_source_support_permissions_and_stability_for_eve
             }
             assert platform_row["source_behavior"]["state"]
             assert platform_row["source_behavior"]["evidence"]
+            assert platform_row["expected_result"]["state"]
+            assert platform_row["expected_result"]["evidence"]
             assert platform_row["stability"]["evidence"]
 
     assert "screen_capture" in rows["screenshot"]["platforms"]["macos"]["permission_profile_ids"]
@@ -230,11 +232,16 @@ def test_command_matrix_records_source_support_permissions_and_stability_for_eve
     assert rows["prank_random_clicks"]["platforms"]["macos"]["stability"]["state"] == "known_source_limited"
     assert rows["prank_invert_screen"]["platforms"]["macos"]["source_behavior"]["state"] == "fallback_only"
     assert rows["display_brightness"]["platforms"]["macos"]["stability"]["state"] == "dependency_gated_unverified"
+    assert rows["screenshot"]["platforms"]["windows"]["expected_result"]["state"] == "correlated_media_payload_with_success_state"
+    assert rows["screen_off"]["platforms"]["windows"]["expected_result"]["state"] == "correlated_request_acceptance_only"
+    assert rows["open_url"]["platforms"]["macos"]["expected_result"]["state"] == "correlated_launch_acceptance_only"
+    assert rows["permission_settings"]["platforms"]["windows"]["expected_result"]["state"] == "correlated_os_request_outcome_not_grant"
+    assert rows["lock"]["platforms"]["macos"]["expected_result"]["state"] == "explicit_unsupported_result"
     permission_settings = rows["permission_settings"]
     for platform in ("windows", "macos"):
         assert permission_settings["platforms"][platform]["source_support"] == "declared_and_handler"
         assert "permission_settings_ui" in permission_settings["platforms"][platform]["permission_profile_ids"]
-        assert "fixed, allowlisted settings target" in permission_settings["platforms"][platform]["source_behavior"]["evidence"]
+        assert "fixed, allowlisted" in permission_settings["platforms"][platform]["source_behavior"]["evidence"]
 
     guardian_rows = {row["command"]: row for row in matrix["guardian_commands"]}
     assert set(guardian_rows) == {
@@ -252,12 +259,22 @@ def test_source_limitation_overrides_still_match_mac_handlers():
         "Ночной свет macOS не имеет стабильного публичного CLI",
         "Для движения курсора нужен PyObjC Quartz и разрешение Accessibility",
         "Реальная инверсия экрана не применена",
-        "Случайные клики не выполняются: функция не реализована безопасно",
+        "Подёргивание курсора не реализовано на macOS",
         "Смена кнопок мыши отключена",
         "Глючный курсор отключён",
         "Кружение курсора недоступно в текущей сборке macOS",
     ):
         assert marker in source
+
+
+def test_macos_lock_is_marked_unsupported_in_command_matrix():
+    report = build_report(ROOT)
+    lock = next(row for row in report["command_matrix"]["worker_commands"] if row["command"] == "lock")
+    macos = lock["platforms"]["macos"]
+
+    assert macos["source_behavior"]["state"] == "explicitly_unsupported"
+    assert "session lock" in macos["source_behavior"]["evidence"]
+    assert macos["stability"]["state"] == "known_source_limited"
 
 
 def test_committed_command_matrix_snapshot_matches_current_sources():

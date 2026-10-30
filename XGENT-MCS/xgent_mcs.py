@@ -44,6 +44,7 @@ from sysinfo_schedule import load_schedule, save_schedule
 import camera_quality
 import camera_devices
 import media_temp
+import agent_file_inventory
 import display_contact_sheet
 import window_capture
 import dns_diagnostics
@@ -764,7 +765,10 @@ if __name__ == "__main__" and not _BUNDLED_RUNTIME:
         sys.stderr.write(message)
         os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]])
 
-from guardian_recovery import activate_recovery_package, stage_recovery_package, validate_recovery_install
+from guardian_recovery import (
+    activate_recovery_package, prune_recovery_slots, stage_recovery_package,
+    validate_recovery_install,
+)
 
 import paho.mqtt.client as mqtt
 import psutil
@@ -792,6 +796,28 @@ from config import (
 from crypto import sign_message, verify_message
 from xgencrypto import decrypt_payload, encrypt_payload
 log = logging.getLogger("xgent.mcs")
+
+_PRANK_TEMP_PREFIX = "xider-prank-"
+_PRANK_TEMP_TTL_SECONDS = 60
+
+
+def _remove_prank_temp_file(path: str) -> None:
+    target = Path(path)
+    if not target.name.startswith(_PRANK_TEMP_PREFIX) or target.suffix.lower() != ".html":
+        return
+    try:
+        target.unlink(missing_ok=True)
+    except OSError:
+        log.warning("Unable to remove expired XIDER prank page")
+
+
+def _schedule_prank_temp_cleanup(path: str) -> None:
+    target = Path(path)
+    if not target.name.startswith(_PRANK_TEMP_PREFIX) or target.suffix.lower() != ".html":
+        return
+    timer = threading.Timer(_PRANK_TEMP_TTL_SECONDS, _remove_prank_temp_file, args=(str(target),))
+    timer.daemon = True
+    timer.start()
 MEDIA_REQUESTS = MediaRequestRegistry()
 
 _lock_file = None
@@ -822,7 +848,7 @@ SUPPORTED_COMMANDS = (
     "clipboard_set", "kill_process", "disks", "volume_set",
     "mic", "shell", "shell_cancel", "open_app", "capabilities", "permission_settings", "lock", "volume_toggle",
     "display_catalog", "display_resolution", "display_contact_sheet", "display_screenshot", "display_region_screenshot", "window_catalog", "window_screenshot",
-    "power", "stop", "agent_logs",
+    "power", "stop", "agent_logs", "agent_files", "agent_file_get",
     "dir_list", "file_get", "file_put", "file_del", "find_file", "path_open",
     "ext_ip", "geo_location", "screen_off", "screensaver_on", "wallpaper_set",
     "msgbox_spam", "type_text", "hotkey",
@@ -1093,7 +1119,7 @@ def _detect_feature_status() -> dict[str, str]:
 
 
 def _capability_snapshot(feature_status: dict[str, str]) -> dict:
-    """Passive diagnostics only: prerequisites are never an OS permission grant."""
+    """Passively query OS status where available; never infer grants from prerequisites."""
     items = []
     for capability_id, legacy_id, settings_uri in (
         ("screen_recording", "screenshot", "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"),
@@ -1115,12 +1141,10 @@ def _capability_snapshot(feature_status: dict[str, str]) -> dict:
         if capability_id == "location":
             from location_adapter import location_capability
             state, detail = location_capability()
-        elif capability_id == "accessibility":
-            detail = ("TCC Accessibility status not queried; owner must allow the actual app on the device. "
-                      "Only an authorized UI trial confirms access.")
-        elif capability_id == "file_access":
-            detail = ("TCC Files and Folders is path-specific; Full Disk Access is not inferred. "
-                      "Only an authorized trial for the chosen path confirms access.")
+        elif capability_id in {"screen_recording", "camera", "microphone", "accessibility", "file_access"} \
+                and prerequisite not in {"dependency_missing", "unavailable"}:
+            from location_adapter import permission_capability
+            state, detail = permission_capability(capability_id)
         items.append({"id": capability_id, "state": state, "detail": detail, "settings_uri": settings_uri})
     return {"schema": 1, "platform": PLATFORM,
             "checked_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()), "items": items}
@@ -1145,6 +1169,8 @@ def _format_battery(battery):
     return {
         "available": True,
         "percent": round(float(battery.percent), 1),
+        "source": "psutil.sensors_battery",
+        "sampled_at": int(time.time()),
         "power_plugged": plugged,
         "secsleft": int(secsleft) if secsleft is not None else None,
         "time_left": _humanize_seconds(secsleft),
@@ -1382,6 +1408,8 @@ class XgentClient:
             "open_app": self._do_open_app,
             "capabilities": self._do_capabilities,
             "agent_logs": self._do_agent_logs,
+            "agent_files": self._do_agent_files,
+            "agent_file_get": self._do_agent_file_get,
             "permission_settings": self._do_permission_settings,
             "lock": self._do_lock_screen,
             "volume_toggle": self._do_volume_toggle,
@@ -1632,6 +1660,7 @@ class XgentClient:
                 root = CONFIG_DIR / "recovery"
                 validate_recovery_install(Path(__file__).resolve().parent, root, slot)
                 activate_recovery_package(root, slot)
+                prune_recovery_slots(root, keep=2)
 
             with self._lifecycle_lock:
                 if self._update_cancelled.is_set() or self._command_subscriptions_failed or self._pending_command_subacks:
@@ -1727,7 +1756,7 @@ class XgentClient:
                     "text": "💤 Агент находится в спящем режиме (Standby).\nНажмите «☀️ Пробудить агента» в меню питания, чтобы возобновить работу.",
                 },
             )
-            self._publish_ack(action, "ok", cmd_id=cmd_id)
+            self._publish_ack(action, "error", detail="standby", cmd_id=cmd_id)
             return
 
         handler = self._handlers.get(action)
@@ -1744,7 +1773,7 @@ class XgentClient:
                 self._publish_response("output", cached_result)
                 self._publish_ack(
                     action,
-                    "ok" if cached_result.get("ok") is True else "error",
+                    "completed" if cached_result.get("ok") is True else "error",
                     cmd_id=cmd_id,
                 )
                 return
@@ -1845,6 +1874,7 @@ class XgentClient:
                 entry["updated_at"] = time.monotonic()
 
     def _run_threaded(self, action, cmd_id, func, payload) -> None:
+        """ACK records handler completion; the action response carries its outcome."""
         def _worker() -> None:
             self._command_context.cmd_id = cmd_id
             try:
@@ -1853,7 +1883,7 @@ class XgentClient:
                 log.exception("Команда %s завершилась ошибкой", action)
                 self._publish_ack(action, "error", detail="exception", cmd_id=cmd_id)
             else:
-                self._publish_ack(action, "ok", cmd_id=cmd_id)
+                self._publish_ack(action, "completed", cmd_id=cmd_id)
             finally:
                 try:
                     del self._command_context.cmd_id
@@ -1888,6 +1918,12 @@ class XgentClient:
             log.exception("Could not write Agent health heartbeat")
 
     def _publish_response(self, topic_suffix: str, payload: dict) -> bool:
+        action_type = payload.get("type") if isinstance(payload, dict) else None
+        if (isinstance(action_type, str) and action_type.startswith("prank_")
+                and payload.get("ok") is True and payload.get("effect_confirmed") is not True):
+            # A returned UI/API call proves that the request was launched, not
+            # that the person actually saw or heard its effect.
+            payload = {**payload, "state": "launch_accepted", "effect_confirmed": False}
         cmd_id = getattr(self._command_context, "cmd_id", None)
         if cmd_id is not None and "id" not in payload:
             payload = {**payload, "id": cmd_id}
@@ -2233,6 +2269,7 @@ class XgentClient:
         result = {"type": "screenshot", "device_id": DEVICE_ID, "platform": "macOS",
                   "state": "command_failed", "detail": "Capture failed", "image": None}
         tmp_path = None
+        temp_file = None
         capture_completed = False
         try:
             capture_command = _resolve_command("screencapture", ("/usr/sbin/screencapture",))
@@ -2241,8 +2278,9 @@ class XgentClient:
             elif not capture_command:
                 result.update(state="tool_missing", detail="screencapture is unavailable")
             else:
-                with media_temp.create_media_temp_file(".png") as tmp:
-                    tmp_path = tmp.name
+                temp_file = media_temp.create_media_temp_file(".png")
+                tmp_path = temp_file.name
+                temp_file.close(retain_reservation=True)
                 res = subprocess.run([capture_command, "-x", tmp_path], capture_output=True, timeout=10)
                 capture_completed = True
                 if res.returncode != 0:
@@ -2293,6 +2331,11 @@ class XgentClient:
                 except OSError:
                     result.update(state="file_unreadable", detail="Temporary capture cleanup failed", image=None)
                     log.warning("Could not unlink temporary screenshot")
+            if temp_file is not None:
+                try:
+                    temp_file.release()
+                except OSError:
+                    result.update(state="file_oversized", detail="Temporary capture exceeded its reserved size", image=None)
         try:
             delivered = self._publish_response("screenshot", result)
         except Exception:
@@ -3214,15 +3257,56 @@ class XgentClient:
 
     def _do_volume_set(self, payload: dict) -> None:
         """Установить общую громкость 0-100 (osascript)."""
-        level = max(0, min(100, int(payload.get("level", 50) or 50)))
-        subprocess.run(["osascript", "-e", f"set volume output volume {level}"], check=False)
-        result = subprocess.run(["osascript", "-e", "output volume of (get volume settings)"], capture_output=True, text=True, check=False)
         try:
-            current = int(result.stdout.strip())
-        except ValueError:
-            current = level
-        self._publish_response("volume_set", {"type": "volume_set", "device_id": DEVICE_ID, "level": level, "current": current})
-        log.info("Громкость установлена: %d%% (стало %d%%)", level, current)
+            requested = payload.get("level", 50)
+            if isinstance(requested, bool):
+                raise ValueError("boolean volume")
+            level = max(0, min(100, int(requested)))
+        except (TypeError, ValueError, OverflowError):
+            self._publish_response("volume_set", {
+                "type": "volume_set", "device_id": DEVICE_ID, "ok": False,
+                "state": "failed", "level": None, "current": None,
+                "source": "osascript.volume_settings",
+                "text": "⚠️ Не удалось изменить громкость: запрос содержит некорректное значение.",
+            })
+            return
+        try:
+            setter = subprocess.run(
+                ["osascript", "-e", f"set volume output volume {level}"],
+                capture_output=True, text=True, check=False, timeout=10,
+            )
+            readback = subprocess.run(
+                ["osascript", "-e", "output volume of (get volume settings)"],
+                capture_output=True, text=True, check=False, timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            log.exception("macOS volume set/readback failed")
+            setter = None
+            readback = None
+        try:
+            current = int(readback.stdout.strip()) if readback and readback.returncode == 0 else None
+            if current is not None and not 0 <= current <= 100:
+                current = None
+        except (AttributeError, TypeError, ValueError):
+            current = None
+        if current == level:
+            ok, state = True, "confirmed"
+            text = f"🎚 Громкость {current}%; фактический уровень подтверждён системой."
+        elif current is None:
+            ok, state = False, "unknown"
+            text = "⚠️ Запрос громкости отправлен, но система не вернула проверяемый уровень. Результат неизвестен."
+        else:
+            ok, state = False, "failed"
+            text = f"⚠️ Запрошено {level}%, но система сообщила {current}%; изменение не подтверждено."
+        if setter is None or setter.returncode != 0:
+            if current != level and current is not None:
+                ok, state = False, "failed"
+                text = f"⚠️ Система оставила громкость на {current}%; запрос на {level}% не выполнен."
+        self._publish_response("volume_set", {
+            "type": "volume_set", "device_id": DEVICE_ID, "ok": ok, "state": state,
+            "level": level, "current": current, "source": "osascript.volume_settings", "text": text,
+        })
+        log.info("macOS volume set result: requested=%d current=%s state=%s", level, current, state)
 
     def _do_microphone_catalog(self, payload: dict) -> None:
         request_id = payload.get("id")
@@ -3453,16 +3537,19 @@ class XgentClient:
                 kwargs["device"] = input_index
             recording = sd.rec(int(duration * fs), **kwargs)
             sd.wait()
-            with media_temp.create_media_temp_file(".ogg") as tmp:
-                tmp_path = tmp.name
+            temp_file = media_temp.create_media_temp_file(".ogg")
+            tmp_path = temp_file.name
+            temp_file.close(retain_reservation=True)
             try:
                 sf.write(tmp_path, recording, fs)
+                temp_file.release()
                 with open(tmp_path, "rb") as f:
                     b64 = base64.b64encode(f.read()).decode("ascii")
                 self._publish_response("mic", {"type": "mic", "device_id": DEVICE_ID, "audio": b64})
                 log.info("Запись микрофона отправлена (%d сек)", duration)
             finally:
                 if os.path.exists(tmp_path): os.unlink(tmp_path)
+                temp_file.release()
         except Exception as exc:
             log.exception("Ошибка микрофона")
             self._publish_response("mic", {
@@ -3515,7 +3602,7 @@ class XgentClient:
         if app: subprocess.run(["open", app], check=False)
 
     def _do_permission_settings(self, payload: dict) -> dict:
-        """Open one fixed macOS privacy pane; this never grants permission."""
+        """Request OS consent where macOS exposes an API; otherwise open the fixed pane."""
         settings = {
             "screen_recording": "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
             "camera": "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera",
@@ -3532,12 +3619,79 @@ class XgentClient:
             "permission": permission if uri else "unknown",
             "ok": False,
         }
+        command_id = payload.get("id") or getattr(self._command_context, "cmd_id", None)
+        if isinstance(command_id, str) and command_id:
+            result["id"] = command_id
+        if isinstance(permission, str) and permission in {
+            "camera", "microphone", "location", "screen_recording", "accessibility"
+        }:
+            # macOS only shows Allow/Don't Allow the first time an app asks.
+            # Once a decision exists, take the owner to the exact TCC pane so
+            # they can change it instead of returning a misleading repeat prompt.
+            try:
+                from location_adapter import permission_capability
+                previous_state, _detail = permission_capability(permission)
+            except Exception:
+                previous_state = "unknown"
+            if previous_state in {"granted", "denied"} and uri:
+                try:
+                    opened = subprocess.run(
+                        ["open", uri], check=False, capture_output=True, text=True, timeout=10
+                    )
+                    result["permission_state"] = previous_state
+                    result["settings_opened"] = opened.returncode == 0
+                    result["state"] = "settings_opened" if result["settings_opened"] else "unknown"
+                    result["ok"] = result["settings_opened"]
+                    result["text"] = (
+                        "Открыл точный раздел Системных настроек. Там можно включить или выключить доступ; "
+                        "после изменения вернись и нажми «Проверить статус»."
+                        if result["settings_opened"] else
+                        "macOS не подтвердила открытие настроек. Открой этот раздел вручную."
+                    )
+                except (OSError, subprocess.SubprocessError):
+                    result["permission_state"] = previous_state
+                    result["state"] = "unknown"
+                    result["settings_opened"] = False
+                    result["text"] = "Не удалось открыть настройки macOS. Открой нужный раздел вручную."
+                self._publish_response("permission_settings", result)
+                return result
+            try:
+                from location_adapter import request_permission
+                outcome = request_permission(permission, timeout=90)
+                state = outcome.get("state") if isinstance(outcome, dict) else "unknown"
+                result["state"] = state if state in {
+                    "granted", "denied", "prompt_requested", "unavailable", "unsupported", "unknown"
+                } else "unknown"
+                result["ok"] = result["state"] in {"granted", "denied", "prompt_requested"}
+                result["text"] = str(outcome.get("text", "Состояние разрешения неизвестно."))[:500]
+            except Exception:
+                log.info("macOS permission request unavailable for %s", permission, exc_info=True)
+                result["state"] = "unavailable"
+                result["text"] = "Системный запрос не запустился; открой соответствующий раздел Системных настроек."
+            # A denied native prompt cannot grant access again. Take the owner
+            # straight to the exact pane where macOS lets them change that decision.
+            if result["state"] in {"denied", "unavailable", "unsupported"} and uri:
+                try:
+                    opened = subprocess.run(
+                        ["open", uri], check=False, capture_output=True, text=True, timeout=10
+                    )
+                    result["settings_opened"] = opened.returncode == 0
+                    if result["settings_opened"]:
+                        result["ok"] = True
+                        if result["state"] != "denied":
+                            result["state"] = "settings_opened"
+                        result["text"] += " Открыл точный раздел Системных настроек; разрешение нужно включить там вручную."
+                except (OSError, subprocess.SubprocessError):
+                    result["settings_opened"] = False
+            self._publish_response("permission_settings", result)
+            return result
         if uri:
             try:
                 opened = subprocess.run(
                     ["open", uri], check=False, capture_output=True, text=True, timeout=10
                 )
                 result["ok"] = opened.returncode == 0
+                result["state"] = "settings_opened" if result["ok"] else "unknown"
                 result["text"] = (
                     "Открыл нужный раздел Системных настроек. Выдай разрешение приложению XIDER вручную; агент сам его не включает."
                     if result["ok"] else
@@ -3547,9 +3701,6 @@ class XgentClient:
                 result["text"] = "Не удалось открыть настройки macOS. Проверь активный сеанс пользователя и открой раздел вручную."
         else:
             result["text"] = "Неизвестный раздел настроек; команда отклонена."
-        command_id = payload.get("id") or getattr(self._command_context, "cmd_id", None)
-        if isinstance(command_id, str) and command_id:
-            result["id"] = command_id
         self._publish_response("permission_settings", result)
         return result
 
@@ -3576,6 +3727,77 @@ class XgentClient:
         if _command_approval_protocol_enabled(self):
             response["command_approval_protocol"] = 1
         self._publish_response("capabilities", response)
+
+    def _do_agent_files(self, payload: dict) -> None:
+        """Report bounded metadata for known XIDER files; never return contents."""
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        try:
+            report = agent_file_inventory.collect_agent_file_inventory(
+                _agent_install_dir(),
+                agent_version=VERSION,
+                guardian_version="1.0",
+            )
+            result = {
+                "type": "agent_files",
+                "schema": report.get("schema", agent_file_inventory.SCHEMA),
+                "device_id": DEVICE_ID,
+                "id": request_id,
+                "request_id": request_id,
+                "ok": report.get("state") in {"available", "partial"},
+                **report,
+            }
+        except Exception:
+            log.exception("Не удалось собрать безопасный список файлов XIDER")
+            result = {
+                "type": "agent_files",
+                "schema": agent_file_inventory.SCHEMA,
+                "device_id": DEVICE_ID,
+                "id": request_id,
+                "request_id": request_id,
+                "ok": False,
+                "state": "unavailable",
+                "components": [],
+                "protection": {
+                    "obfuscation_state": "unknown",
+                    "integrity_state": "unverified",
+                    "evidence": "inventory_collection_failed",
+                },
+            }
+        self._publish_response("output", result)
+
+    def _do_agent_file_get(self, payload: dict) -> None:
+        """Return a small, explicitly allowlisted text file on owner request."""
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        file_id = payload.get("file_id")
+        try:
+            report = agent_file_inventory.read_allowlisted_text_file(
+                file_id, _agent_install_dir(),
+            )
+        except Exception as exc:
+            # Never put file content or exception details in logs.
+            log.warning("agent_file_get unavailable (%s)", type(exc).__name__)
+            report = {
+                "file_id": file_id if isinstance(file_id, str) else None,
+                "state": "unavailable", "relative_path": None,
+                "content": "", "truncated": False,
+            }
+        result = {
+            "type": "agent_file_get",
+            "schema": "xider.agent-file-content.v1",
+            "device_id": DEVICE_ID,
+            "id": request_id,
+            "request_id": request_id,
+            "file_id": report.get("file_id"),
+            "state": report.get("state", "unavailable"),
+            "relative_path": report.get("relative_path"),
+            "content": report.get("content", ""),
+            "truncated": bool(report.get("truncated", False)),
+        }
+        self._publish_response("output", result)
 
     def _do_agent_logs(self, payload: dict) -> None:
         """Return bounded tails of both macOS agent log streams on owner request."""
@@ -3638,13 +3860,68 @@ class XgentClient:
         self._publish_response("output", result)
 
     def _do_lock_screen(self, payload: dict) -> None:
-        subprocess.run(["pmset", "displaysleepnow"], check=False)
+        # Sleeping the display is not equivalent to locking the user session.
+        self._publish_response("lock", {
+            "type": "lock", "device_id": DEVICE_ID, "action": "lock",
+            "id": payload.get("id") if isinstance(payload.get("id"), str) else None,
+            "ok": False, "state": "unsupported",
+            "error": "macOS session lock is not implemented; display sleep is a separate action",
+        })
 
     def _do_volume_toggle(self, payload: dict) -> None:
-        result = subprocess.run(["osascript", "-e", "output muted of (get volume settings)"], capture_output=True, text=True, check=False)
-        is_muted = result.stdout.strip().lower() == "true"
-        new_state = "false" if is_muted else "true"
-        subprocess.run(["osascript", "-e", f"set volume output muted {new_state}"], check=False)
+        source = "osascript.volume_settings"
+
+        def read_muted() -> bool | None:
+            try:
+                result = subprocess.run(
+                    ["osascript", "-e", "output muted of (get volume settings)"],
+                    capture_output=True, text=True, check=False, timeout=10,
+                )
+                if result.returncode != 0:
+                    return None
+                value = result.stdout.strip().lower()
+                return True if value == "true" else False if value == "false" else None
+            except (OSError, subprocess.TimeoutExpired):
+                log.exception("macOS volume mute readback failed")
+                return None
+
+        previous = read_muted()
+        if previous is None:
+            self._publish_response("volume_toggle", {
+                "type": "volume_toggle", "device_id": DEVICE_ID, "ok": False,
+                "state": "unknown", "muted": None, "source": source,
+                "text": "⚠️ Не удалось прочитать состояние звука; переключение не выполнялось.",
+            })
+            return
+
+        requested = not previous
+        try:
+            setter = subprocess.run(
+                ["osascript", "-e", f"set volume output muted {'true' if requested else 'false'}"],
+                capture_output=True, text=True, check=False, timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            log.exception("macOS volume mute command failed")
+            setter = None
+        current = read_muted()
+        if current is requested:
+            ok, state = True, "confirmed"
+            text = "🔇 Звук выключен; состояние подтверждено системой." if current else "🔊 Звук включён; состояние подтверждено системой."
+        elif current is None:
+            ok, state = False, "unknown"
+            text = "⚠️ Запрос переключения звука отправлен, но система не подтвердила состояние. Результат неизвестен."
+        else:
+            ok, state = False, "failed"
+            text = "⚠️ Состояние звука не изменилось; переключение не выполнено."
+        if setter is None or setter.returncode != 0:
+            if current is not requested and current is not None:
+                ok, state = False, "failed"
+                text = "⚠️ Система не подтвердила переключение звука."
+        self._publish_response("volume_toggle", {
+            "type": "volume_toggle", "device_id": DEVICE_ID, "ok": ok,
+            "state": state, "muted": current, "source": source, "text": text,
+        })
+        log.info("macOS volume toggle result: requested_muted=%s current=%s state=%s", requested, current, state)
 
     def _do_proc_kill_name(self, payload: dict) -> None:
         low = (payload.get("name") or "").strip().lower()
@@ -3921,23 +4198,47 @@ class XgentClient:
     def _do_power(self, payload: dict) -> None:
         action = payload.get("power_action") or payload.get("action", "")
         commands = {
-            "shutdown": (["osascript", "-e", 'tell app "System Events" to shut down'], "⚡ Выключение Mac инициировано..."),
-            "reboot": (["osascript", "-e", 'tell app "System Events" to restart'], "🔄 Перезагрузка Mac инициирована..."),
-            "sleep": (["pmset", "sleepnow"], "😴 Mac переводится в режим сна..."),
+            "shutdown": (["osascript", "-e", 'tell app "System Events" to shut down'],
+                         "⚡ macOS приняла команду выключения; итоговое выключение не подтверждено."),
+            "reboot": (["osascript", "-e", 'tell app "System Events" to restart'],
+                       "🔄 macOS приняла команду перезагрузки; итоговая перезагрузка не подтверждена."),
+            "sleep": (["pmset", "sleepnow"],
+                      "😴 macOS приняла запрос сна; фактический переход не подтверждён."),
         }
         if action not in commands:
-            self._publish_response("power", {"type": "power", "device_id": DEVICE_ID, "action": action, "ok": False, "error": "unknown power action"})
+            self._publish_response("power", {
+                "type": "power", "device_id": DEVICE_ID, "action": action,
+                "ok": False, "state": "unsupported", "effect_confirmed": False,
+                "source": "macOS power command dispatcher", "error": "unknown power action",
+                "text": "⚠️ Это действие питания не поддерживается.",
+            })
             return
-        command, text = commands[action]
+        command, accepted_text = commands[action]
+        source = "pmset" if action == "sleep" else "osascript.SystemEvents"
         try:
             result = subprocess.run(command, capture_output=True, text=True, timeout=8, check=False)
-            ok = result.returncode == 0
-            if not ok:
-                text = (result.stderr or result.stdout or "команда macOS завершилась с ошибкой").strip()[:600]
+            if result.returncode == 0:
+                ok, state, effect_confirmed = True, "launch_accepted", False
+                text, error = accepted_text, None
+            else:
+                ok, state, effect_confirmed = False, "failed", False
+                error = (result.stderr or result.stdout or "macOS power command failed").strip()[:600]
+                text = f"⚠️ macOS не приняла команду питания: {error}"
         except Exception as exc:
-            ok, text = False, str(exc)
-        self._publish_response("power", {"type": "power", "device_id": DEVICE_ID, "action": action, "ok": ok, "error": None if ok else text})
-        self._publish_response("output", {"type": "power", "device_id": DEVICE_ID, "ok": ok, "text": text})
+            ok, state, effect_confirmed = False, "failed", False
+            error = type(exc).__name__
+            text = "⚠️ macOS не смогла запустить команду питания."
+        response = {
+            "type": "power", "device_id": DEVICE_ID, "action": action,
+            "ok": ok, "state": state, "effect_confirmed": effect_confirmed,
+            "source": source, "error": error, "text": text,
+        }
+        request_id = payload.get("id") or payload.get("request_id")
+        if isinstance(request_id, str) and 1 <= len(request_id) <= 128:
+            response["id"] = request_id
+            response["request_id"] = request_id
+        self._publish_response("power", response)
+        self._publish_response("output", response)
 
     def _do_stop(self, payload: dict) -> None:
         try:
@@ -4093,7 +4394,7 @@ class XgentClient:
             "ok": value["state"] == "granted", **value, "text": location_text(value),
         })
 
-    def _do_wallpaper_set(self, payload: dict) -> None:
+    def _do_wallpaper_set(self, payload: dict) -> bool:
         url = (payload.get("url") or "").strip()
         b64 = (payload.get("b64") or "").strip()
         random_meme = payload.get("random_meme", False)
@@ -4122,14 +4423,16 @@ class XgentClient:
                 with urllib.request.urlopen(req, timeout=12) as resp, open(tmp, "wb") as out:
                     out.write(resp.read())
             script = f'tell application "System Events" to tell every desktop to set picture to POSIX file "{tmp}"'
-            result = subprocess.run(["osascript", "-e", script], check=False, capture_output=True, text=True)
+            result = subprocess.run(["osascript", "-e", script], check=False, capture_output=True, text=True, timeout=15)
             ok = result.returncode == 0
             text = "🖼 Обои успешно обновлены на Mac!" if ok else (result.stderr.strip() or "Не удалось установить обои")
             self._publish_response("wallpaper_set", {"type": "wallpaper_set", "device_id": DEVICE_ID, "ok": ok, "error": None if ok else text})
             self._publish_response("output", {"type": "wallpaper_set", "device_id": DEVICE_ID, "ok": ok, "text": text})
+            return ok
         except Exception as exc:
             self._publish_response("wallpaper_set", {"type": "wallpaper_set", "device_id": DEVICE_ID, "ok": False, "error": str(exc)})
             self._publish_response("output", {"type": "wallpaper_set", "device_id": DEVICE_ID, "ok": False, "text": f"⚠️ Ошибка: {exc}"})
+            return False
 
     def _do_msgbox_spam(self, payload: dict) -> None:
         count = min(int(payload.get("count", 5) or 5), 20)
@@ -4190,19 +4493,40 @@ class XgentClient:
         self._publish_response("prank_screamer", {"type": "prank_screamer", "device_id": DEVICE_ID, "ok": True})
 
     def _do_prank_rickroll(self, payload: dict) -> None:
-        tabs = min(int(payload.get("tabs", 10) or 10), 50)
+        try:
+            tabs = min(max(int(payload.get("tabs", 10) or 10), 1), 50)
+        except (TypeError, ValueError, OverflowError):
+            tabs = 10
         url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-        def _run():
-            for _ in range(tabs):
-                subprocess.Popen(["open", url])
+        accepted = 0
+        for index in range(tabs):
+            try:
+                result = subprocess.run(
+                    ["open", url], check=False, capture_output=True, text=True, timeout=10,
+                )
+                accepted += int(result.returncode == 0)
+            except (OSError, subprocess.SubprocessError):
+                log.info("macOS Launch Services rejected a prank tab request", exc_info=True)
+            if index + 1 < tabs:
                 time.sleep(0.1)
-        threading.Thread(target=_run, name="xgent-rickroll", daemon=True).start()
-        self._publish_response("prank_rickroll", {"type": "prank_rickroll", "device_id": DEVICE_ID, "ok": True, "tabs": tabs})
+        failed = tabs - accepted
+        ok = accepted > 0
+        request_id = payload.get("id") if isinstance(payload.get("id"), str) else None
+        self._publish_response("prank_rickroll", {
+            "type": "prank_rickroll", "device_id": DEVICE_ID, "id": request_id,
+            "ok": ok, "state": "launch_accepted" if ok else "failed",
+            "tabs_requested": tabs, "tabs_accepted": accepted, "tabs_failed": failed,
+            "text": (f"Launch Services принял запрос на {accepted}/{tabs} вкладок; это не подтверждает показ страниц."
+                     if ok else "Launch Services не принял ни одного запроса на открытие вкладки."),
+        })
 
     def _do_prank_matrix(self, payload: dict) -> None:
         script = 'tell application "Terminal" to do script "clear; echo -e \\"\\\\033[32m\\"; while true; do echo -n \\"1 0 1 1 0 0 1 0 1 0 1 \\"; done"'
         subprocess.Popen(["osascript", "-e", script])
-        self._publish_response("prank_matrix", {"type": "prank_matrix", "device_id": DEVICE_ID, "ok": True})
+        self._publish_response("prank_matrix", {
+            "type": "prank_matrix", "device_id": DEVICE_ID, "id": payload.get("id"),
+            "ok": True, "state": "launch_accepted", "effect_confirmed": False,
+        })
 
     def _do_prank_siren(self, payload: dict) -> None:
         duration = min(int(payload.get("duration", 10) or 10), 30)
@@ -4254,15 +4578,36 @@ class XgentClient:
         self._publish_response("prank_crazy_cursor", {"type": "prank_crazy_cursor", "device_id": DEVICE_ID, "ok": True, "duration": duration})
 
     def _do_prank_hide_desktop(self, payload: dict) -> None:
+        hide = bool(payload.get("hide", True))
         try:
-            hide = bool(payload.get("hide", True))
             val = "false" if hide else "true"
-            subprocess.run(["defaults", "write", "com.apple.finder", "CreateDesktop", "-bool", val], check=False)
-            subprocess.run(["killall", "Finder"], check=False)
-            ok = True
-        except Exception:
-            ok = False
-        self._publish_response("prank_hide_desktop", {"type": "prank_hide_desktop", "device_id": DEVICE_ID, "ok": ok})
+            write = subprocess.run(
+                ["defaults", "write", "com.apple.finder", "CreateDesktop", "-bool", val],
+                check=False, capture_output=True, text=True, timeout=10,
+            )
+            if write.returncode != 0:
+                raise RuntimeError("Finder rejected the desktop preference")
+            restart = subprocess.run(
+                ["killall", "Finder"], check=False, capture_output=True, text=True, timeout=10,
+            )
+            if restart.returncode != 0:
+                self._publish_response("prank_hide_desktop", {
+                    "type": "prank_hide_desktop", "device_id": DEVICE_ID, "ok": False,
+                    "state": "partial", "effect_confirmed": False,
+                    "text": "⚠️ Настройка рабочего стола записана, но Finder не перезапущен; результат не подтверждён.",
+                })
+                return
+            self._publish_response("prank_hide_desktop", {
+                "type": "prank_hide_desktop", "device_id": DEVICE_ID, "ok": True,
+                "state": "completed", "effect_confirmed": False,
+                "text": "✅ Команда Finder выполнена; видимый эффект на рабочем столе не проверен.",
+            })
+        except Exception as exc:
+            self._publish_response("prank_hide_desktop", {
+                "type": "prank_hide_desktop", "device_id": DEVICE_ID, "ok": False,
+                "state": "failed", "effect_confirmed": False,
+                "text": f"⚠️ Не удалось обновить настройку рабочего стола ({type(exc).__name__}).",
+            })
 
     def _do_prank_dancing_windows(self, payload: dict) -> None:
         script = '''
@@ -4288,8 +4633,28 @@ class XgentClient:
         self._publish_response("prank_dancing_windows", {"type": "prank_dancing_windows", "device_id": DEVICE_ID, "ok": True})
 
     def _do_prank_black_screen(self, payload: dict) -> None:
-        subprocess.run(["pmset", "displaysleepnow"], check=False)
-        self._publish_response("prank_black_screen", {"type": "prank_black_screen", "device_id": DEVICE_ID, "ok": True})
+        try:
+            result = subprocess.run(
+                ["pmset", "displaysleepnow"], check=False,
+                capture_output=True, text=True, timeout=10,
+            )
+            accepted = result.returncode == 0
+            self._publish_response("prank_black_screen", {
+                "type": "prank_black_screen", "device_id": DEVICE_ID,
+                "ok": accepted,
+                "state": "launch_accepted" if accepted else "failed",
+                "effect_confirmed": False,
+                "text": (
+                    "🌑 macOS приняла запрос погасить дисплей; визуальный результат не подтверждён."
+                    if accepted else "⚠️ macOS не приняла запрос погасить дисплей."
+                ),
+            })
+        except Exception as exc:
+            self._publish_response("prank_black_screen", {
+                "type": "prank_black_screen", "device_id": DEVICE_ID,
+                "ok": False, "state": "failed", "effect_confirmed": False,
+                "text": f"⚠️ Не удалось отправить запрос дисплею ({type(exc).__name__}).",
+            })
 
     def _do_prank_random_site(self, payload: dict) -> None:
         SITES = [
@@ -4510,22 +4875,32 @@ class XgentClient:
 
     def _do_sys_clean_temp(self, payload: dict) -> None:
         try:
-            cache_dir = os.path.expanduser("~/Library/Caches")
-            cleaned_files = 0
-            freed_bytes = 0
-            for root, dirs, files in os.walk(cache_dir, topdown=False):
-                for f in files:
-                    fp = os.path.join(root, f)
-                    try:
-                        sz = os.path.getsize(fp)
-                        os.remove(fp)
-                        cleaned_files += 1
-                        freed_bytes += sz
-                    except Exception:
-                        pass
-            freed_mb = freed_bytes / (1024 * 1024)
-            text = f"🧹 Очистка кэша macOS завершена!\n• Удалено файлов: {cleaned_files}\n• Освобождено: {freed_mb:.2f} МБ"
-            ok = True
+            # Never clear the user's whole ~/Library/Caches. The shared helper
+            # only removes expired, regular XIDER-owned media-temp files under
+            # ~/Library/Caches/XIDER/media-temp and rejects redirected roots.
+            report = media_temp.cleanup_stale_media_temp()
+            state = report.get("state")
+            deleted = int(report.get("deleted", 0))
+            skipped = int(report.get("skipped", 0))
+            failed = int(report.get("failed", 0))
+            scanned = int(report.get("scanned", 0))
+            if state == "success":
+                text = (
+                    "🧹 Очистка временных файлов XIDER завершена.\n"
+                    f"• Проверено: {scanned}\n• Удалено просроченных файлов XIDER: {deleted}\n"
+                    f"• Пропущено: {skipped}\n• Ошибок: {failed}"
+                )
+                ok = True
+            elif state == "partial":
+                text = (
+                    "⚠️ Очистка временных файлов XIDER завершена частично.\n"
+                    f"• Проверено: {scanned}\n• Удалено просроченных файлов XIDER: {deleted}\n"
+                    f"• Пропущено: {skipped}\n• Ошибок: {failed}"
+                )
+                ok = False
+            else:
+                text = "⚠️ Не удалось безопасно проверить временную папку XIDER; файлы не очищены."
+                ok = False
         except Exception as exc:
             text = f"⚠️ Ошибка очистки: {exc}"
             ok = False
@@ -4995,9 +5370,12 @@ class XgentClient:
 <p>Mac OS version: 24.1.0</p><p>System uptime in nanoseconds: 129481928412</p>
 <script>setTimeout(()=>window.close(),4000);document.addEventListener('click',()=>window.close());</script>
 </body></html>"""
-            tf = tempfile.NamedTemporaryFile("w", suffix=".html", delete=False, encoding="utf-8")
+            tf = tempfile.NamedTemporaryFile(
+                "w", prefix=_PRANK_TEMP_PREFIX, suffix=".html", delete=False, encoding="utf-8"
+            )
             tf.write(html)
             tf.close()
+            _schedule_prank_temp_cleanup(tf.name)
             subprocess.Popen(["open", tf.name])
             text = "💀 Фейковый экран Kernel Panic открыт на экране Mac!"
             ok = True
@@ -5154,7 +5532,11 @@ end tell'''
                                             "text": "🐌 Скорость мыши снижена на 8 секунд; остановка восстановит исходное значение."})
 
     def _do_prank_random_clicks(self, payload: dict) -> None:
-        self._publish_response("output", {"type": "prank_random_clicks", "device_id": DEVICE_ID, "ok": False, "text": "⚠️ Случайные клики не выполняются: функция не реализована безопасно."})
+        self._publish_response("output", {
+            "type": "prank_random_clicks", "device_id": DEVICE_ID,
+            "ok": False, "state": "unsupported", "effect_confirmed": False,
+            "text": "ℹ️ Подёргивание курсора не реализовано на macOS.",
+        })
 
     def _do_prank_paste_clipboard_spam(self, payload: dict) -> None:
         meme = "( ͡° ͜ʖ ͡°) Взлом жопы завершен на 99.9%"
@@ -5221,7 +5603,8 @@ end tell'''
             if not paths:
                 raise RuntimeError("macOS не вернула текущие обои")
             backup.write_text(json.dumps(paths, ensure_ascii=False), encoding="utf-8")
-            self._do_wallpaper_set({"random_meme": True})
+            if self._do_wallpaper_set({"random_meme": True}) is not True:
+                raise RuntimeError("команда установки обоев завершилась ошибкой")
             self._publish_response("output", {"type": "prank_change_wallpaper", "device_id": DEVICE_ID, "ok": True, "text": "🖼️ Обои заменены; исходные сохранены для восстановления."})
         except Exception as exc:
             self._publish_response("output", {"type": "prank_change_wallpaper", "device_id": DEVICE_ID, "ok": False, "text": f"⚠️ Обои не изменены: {exc}"})
@@ -5270,10 +5653,26 @@ end tell'''
 
     def _do_prank_open_browser_memes(self, payload: dict) -> None:
         urls = ["https://www.youtube.com/watch?v=dQw4w9WgXcQ", "https://cat-bounce.com/", "https://heeeeeeeey.com/"]
+        accepted = 0
+        failures = []
         for u in urls:
-            subprocess.Popen(["open", u])
+            try:
+                subprocess.Popen(["open", u], start_new_session=True)
+                accepted += 1
+            except Exception as exc:
+                failures.append(type(exc).__name__)
             time.sleep(0.3)
-        self._publish_response("output", {"type": "prank_open_browser_memes", "device_id": DEVICE_ID, "ok": True, "text": "🌐 3 вкладки с мемами открыты в Safari/браузере!"})
+        complete = accepted == len(urls)
+        self._publish_response("output", {
+            "type": "prank_open_browser_memes", "device_id": DEVICE_ID,
+            "ok": complete, "state": "launch_accepted" if complete else ("partial" if accepted else "failed"),
+            "effect_confirmed": False, "accepted_count": accepted,
+            "requested_count": len(urls), "error_types": failures,
+            "text": (
+                f"🌐 macOS приняла {accepted} из {len(urls)} запросов на открытие страниц; "
+                "появление вкладок не подтверждено."
+            ),
+        })
 
     def _do_prank_glitch_cursor(self, payload: dict) -> None:
         self._publish_response("output", {"type": "prank_glitch_cursor", "device_id": DEVICE_ID, "ok": False, "text": "⚠️ Глючный курсор отключён: macOS не даёт безопасно рисовать курсор без Quartz/Accessibility."})

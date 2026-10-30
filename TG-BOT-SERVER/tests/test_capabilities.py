@@ -87,13 +87,15 @@ def test_older_agent_is_unknown_even_with_true_legacy_features():
     assert "разрешено" not in text
 
 
-@pytest.mark.parametrize("platform,route,instruction", [
-    ("macOS", "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera", "Конфиденциальность и безопасность"),
-    ("Windows", "ms-settings:privacy-webcam", "Разрешить классическим приложениям"),
+@pytest.mark.parametrize("platform,instruction", [
+    ("macOS", "Конфиденциальность и безопасность"),
+    ("Windows", "Разрешить классическим приложениям"),
 ])
-def test_settings_are_platform_allowlisted_and_owner_local(platform, route, instruction):
+def test_settings_summary_uses_human_steps_without_raw_system_uris(platform, instruction):
     text = bot._format_capabilities(snapshot("denied", platform))
-    assert route in text and instruction in text
+    assert instruction in text
+    assert "ms-settings:" not in text
+    assert "x-apple.systempreferences:" not in text
     assert "evil.invalid" not in text
     assert "на самом устройстве" in text
 
@@ -151,7 +153,7 @@ def test_recheck_uses_existing_callback_and_no_agent_uri_buttons():
     assert all(button.url is None for button in buttons)
 
 
-def test_mac_capability_card_shows_remote_settings_buttons_only_for_unresolved_permissions():
+def test_mac_capability_card_keeps_permission_settings_available_after_grant():
     result = snapshot("needs_live_test")
     result["commands"] = ["capabilities", "permission_settings"]
     result["items"] = [
@@ -168,11 +170,40 @@ def test_mac_capability_card_shows_remote_settings_buttons_only_for_unresolved_p
     assert "permsettings:location" in callbacks
     assert "permsettings:accessibility" in callbacks
     assert "permsettings:file_access" in callbacks
-    assert "permsettings:camera" not in callbacks
+    assert "permsettings:camera" in callbacks
     assert all(button.url is None for button in buttons)
 
 
-def test_owner_capability_card_has_per_permission_help_but_other_roles_do_not(monkeypatch):
+def test_owner_can_reopen_permission_settings_after_grant_to_revoke_access():
+    result = snapshot("granted", platform="Windows 11")
+    result["commands"] = ["capabilities", "permission_settings"]
+    result["items"] = [
+        {**item, "state": "granted"} if item["id"] == "camera" else item
+        for item in result["items"]
+    ]
+
+    kb = bot._capabilities_keyboard(result, user_id=bot.ADMIN_ID)
+    buttons = [button for row in kb.inline_keyboard for button in row]
+
+    assert any(button.callback_data == "permsettings:camera" for button in buttons)
+
+
+def test_permission_card_has_one_action_per_permission_and_hides_raw_settings_uris():
+    result = snapshot("needs_live_test", platform="Windows 11")
+    result["commands"] = ["capabilities", "permission_settings"]
+
+    text = bot._format_capabilities(result)
+    kb = bot._capabilities_keyboard(result, user_id=bot.ADMIN_ID)
+    callbacks = [button.callback_data for row in kb.inline_keyboard for button in row]
+
+    assert "ms-settings:" not in text
+    assert "x-apple.systempreferences:" not in text
+    assert callbacks.count("permsettings:camera") == 1
+    assert "permhelp:camera" not in callbacks
+    assert "permhelp:screen_recording" in callbacks
+
+
+def test_owner_capability_card_has_direct_settings_actions_and_other_roles_do_not(monkeypatch):
     result = snapshot()
     result["commands"] = ["capabilities", "permission_settings"]
 
@@ -182,7 +213,8 @@ def test_owner_capability_card_has_per_permission_help_but_other_roles_do_not(mo
         for row in owner_kb.inline_keyboard
         for button in row
     }
-    assert {f"permhelp:{permission}" for permission in bot._SNAPSHOT_LABELS} <= owner_callbacks
+    assert "permsettings:camera" in owner_callbacks
+    assert not any(callback.startswith("permhelp:") for callback in owner_callbacks)
 
     monkeypatch.setattr(bot, "get_user_role", lambda _uid: bot.Role.USER)
     user_kb = bot._capabilities_keyboard(result, user_id=200)
@@ -192,6 +224,7 @@ def test_owner_capability_card_has_per_permission_help_but_other_roles_do_not(mo
         for button in row
     }
     assert not any(callback.startswith("permhelp:") for callback in user_callbacks)
+    assert not any(callback.startswith("permsettings:") for callback in user_callbacks)
 
 
 def test_mac_capability_card_hides_remote_settings_buttons_until_agent_supports_them():
@@ -208,7 +241,7 @@ def test_mac_capability_card_hides_remote_settings_buttons_until_agent_supports_
     assert not any(callback.startswith("permsettings:") for callback in callbacks)
 
 
-def test_windows_capability_card_offers_only_allowlisted_unresolved_settings_to_owner():
+def test_windows_capability_card_offers_allowlisted_settings_even_after_grant():
     result = snapshot("needs_live_test", platform="Windows 11")
     result["commands"] = ["capabilities", "permission_settings"]
     result["items"] = [
@@ -219,7 +252,7 @@ def test_windows_capability_card_offers_only_allowlisted_unresolved_settings_to_
     kb = bot._capabilities_keyboard(result, user_id=bot.ADMIN_ID)
     callbacks = {button.callback_data for row in kb.inline_keyboard for button in row}
 
-    assert "permsettings:camera" not in callbacks
+    assert "permsettings:camera" in callbacks
     assert "permsettings:microphone" in callbacks
     assert "permsettings:location" in callbacks
     assert "permsettings:screen_recording" not in callbacks
@@ -245,7 +278,7 @@ def test_permission_settings_button_uses_neutral_copy_without_changing_xlex(styl
         if button.callback_data == "permsettings:camera"
     )
 
-    assert button.text == "↗️ Попробовать открыть: Камера"
+    assert button.text == "⚙️ Разрешить в настройках: Камера"
 
 
 def test_windows_permission_settings_dispatch_requires_owner_and_known_permission(monkeypatch):
@@ -303,7 +336,7 @@ def test_remote_permission_settings_callback_dispatches_only_known_mac_permissio
     asyncio.run(bot.on_permission_settings(cq))
 
     assert called == [((cq, "permission_settings", "⚙️", "Камера"), {
-        "timeout": 15.0,
+        "timeout": 100.0,
         "permission": "camera",
     })]
 
@@ -333,7 +366,12 @@ def test_remote_permission_settings_callback_rejects_untrusted_permission_value(
     assert alerts and alerts[0].get("show_alert") is True
 
 
-def test_permission_settings_success_offers_one_shot_fresh_check_bound_to_permission(monkeypatch):
+@pytest.mark.parametrize(("fresh_state", "expected_state"), [
+    ("denied", "Камера: отказано"),
+    ("granted", "Камера: разрешено"),
+])
+def test_permission_settings_success_offers_one_shot_fresh_check_bound_to_permission(
+        monkeypatch, fresh_state, expected_state):
     rendered = []
     published = []
     alerts = []
@@ -350,7 +388,7 @@ def test_permission_settings_success_offers_one_shot_fresh_check_bound_to_permis
     class Collector:
         async def wait_for(self, target, action, timeout, command_id):
             assert (target, action, command_id) == ("mac-1", "capabilities", "fresh-ticket")
-            return snapshot("denied")
+            return snapshot(fresh_state)
 
     monkeypatch.setattr(bot, "SESSION", {"target": "mac-1"})
     monkeypatch.setattr(bot.devices, "get", lambda _target: {
@@ -372,7 +410,7 @@ def test_permission_settings_success_offers_one_shot_fresh_check_bound_to_permis
         ))
         assert len(rendered) == 1
         text, markup = rendered[0]
-        assert "Настройки открыты" in text
+        assert "Открываю раздел системных настроек." in text
         check_button = next(
             button for row in markup.inline_keyboard for button in row
             if button.callback_data.startswith("permverify:")
@@ -394,7 +432,7 @@ def test_permission_settings_success_offers_one_shot_fresh_check_bound_to_permis
     asyncio.run(exercise())
 
     assert published == [("capabilities", {"_target": "mac-1"})]
-    assert "Камера: отказано" in rendered[-1][0]
+    assert expected_state in rendered[-1][0]
     assert "2026-10-08T10:00:00+00:00" in rendered[-1][0]
     assert any("show_alert" in kwargs for kwargs in alerts)
 
@@ -472,7 +510,9 @@ def test_capabilities_handler_displays_recheck_after_correlated_response(monkeyp
     class Collector:
         async def wait_for(self, target, action, timeout, command_id):
             assert (target, action, command_id) == ("dev", "capabilities", "ticket")
-            return snapshot()
+            result = snapshot()
+            result["commands"] = ["capabilities", "permission_settings"]
+            return result
 
     def publish(action, **kwargs):
         published.append((action, kwargs))
@@ -488,7 +528,8 @@ def test_capabilities_handler_displays_recheck_after_correlated_response(monkeyp
     assert "2026-10-08T10:00:00+00:00" in rendered[0][0]
     callbacks = {button.callback_data for row in rendered[0][1].inline_keyboard for button in row}
     assert {"cmd:capabilities", "back:device"} <= callbacks
-    assert {f"permhelp:{permission}" for permission in bot._SNAPSHOT_LABELS} <= callbacks
+    assert "permsettings:camera" in callbacks
+    assert not any(callback.startswith("permhelp:") for callback in callbacks)
 
 
 def test_capabilities_timeout_keeps_retry_on_the_same_card(monkeypatch):

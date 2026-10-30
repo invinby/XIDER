@@ -529,6 +529,31 @@ start_runtime_services() {
   [[ -f "$directory/start_agent.sh" && -f "$directory/start_guardian.sh" ]] || return 1
   (cd "$directory" && XIDER_RUNTIME_PREPARED=1 bash ./start_agent.sh && bash ./start_guardian.sh)
 }
+
+# XIDER_RETENTION_HELPERS_BEGIN
+prune_previous_checkouts() {
+  local root="$1" current_backup="$2" candidate name index=0
+  local -a backups=()
+  [[ -d "$root" && ! -L "$root" ]] || return 0
+  for candidate in "$root"/git-ver.previous.*; do
+    [[ -d "$candidate" && ! -L "$candidate" ]] || continue
+    [[ "$(dirname "$candidate")" == "$root" ]] || continue
+    name="${candidate##*/}"
+    [[ "$name" =~ ^git-ver\.previous\.[0-9]{14}\.[0-9]+$ ]] || continue
+    backups+=("$candidate")
+  done
+  ((${#backups[@]} > 2)) || return 0
+  mapfile -t backups < <(printf '%s\n' "${backups[@]}" | sort -r)
+  for candidate in "${backups[@]}"; do
+    if [[ "$candidate" == "$current_backup" || $index -lt 2 ]]; then
+      ((index+=1))
+      continue
+    fi
+    [[ -d "$candidate" && ! -L "$candidate" && "$(dirname "$candidate")" == "$root" ]] || continue
+    rm -rf -- "$candidate" || echo "Не удалось удалить старую резервную копию XIDER: $candidate" >&2
+  done
+}
+# XIDER_RETENTION_HELPERS_END
 runtime_services_status() {
   local directory="$1"
   local agent_binary="$directory/XIDER.app/Contents/MacOS/XGENT-MCS"
@@ -611,6 +636,7 @@ PY
 fi
 
 echo "Установка завершена: $TARGET"
+prune_previous_checkouts "$INSTALL_ROOT" "$backup"
 [[ ! -e "$backup" ]] || echo "Предыдущая установка сохранена: $backup"
 echo "Проверка: \"$TARGET/XGENT-MCS/XIDER.app/Contents/MacOS/XGENT-MCS\" --service status; \"$TARGET/XGENT-MCS/XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper\" --service status"
 echo "Запуск процессов подтверждён. Связь MQTT и системные разрешения проверь в карточке устройства в боте."

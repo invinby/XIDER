@@ -104,7 +104,7 @@ def test_duplicate_operation_id_launches_once(monkeypatch):
         return True
 
     def publish_ack(*args, **kwargs):
-        if len(args) > 1 and args[1] in {"ok", "error"}:
+        if len(args) > 1 and args[1] in {"completed", "error"}:
             final_ack_count[0] += 1
             if final_ack_count[0] == 1:
                 first_completed.set()

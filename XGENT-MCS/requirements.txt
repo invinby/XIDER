@@ -1,5 +1,7 @@
 paho-mqtt>=2.0,<3
 pyobjc-framework-Cocoa>=10.0
+pyobjc-framework-AVFoundation>=10.0
+pyobjc-framework-ApplicationServices>=10.0
 pyobjc-framework-CoreLocation>=10.0
 pyobjc-framework-Quartz>=10.0
 Pillow>=10.0

@@ -67,6 +67,7 @@ DEVICE_NAVIGATION = (
     ("device.versions", "versions", "versions:device", "success", "versions"),
     ("device.permissions", "permissions", "cmd:capabilities", "primary", "capabilities"),
     ("device.pranks", "pranks", "cat:pranks", "success", "nav"),
+    ("device.tools", "device_tools_button", "device:tools", "primary", "device_tools"),
 )
 ADMIN_NAVIGATION = (
     ("admin.users", "admin_users", "admin:users", "primary", "nav"),
@@ -120,6 +121,7 @@ EVENTS_NAVIGATION = (
     ("events.digest", "events_digest_button", "ev:digest", "primary"),
     ("events.admins", "events_admins_button", "ev:admins", "primary"),
     ("events.server_autostart", "events_server_autostart_button", "ev:server_autostart:toggle", "primary"),
+    ("events.hide_command_inputs", "events_hide_command_inputs_button", "ev:toggle:hide_command_inputs", "primary"),
     ("events.home", "home", "menu:main", "primary"),
 )
 QUIET_NAVIGATION = (
@@ -155,7 +157,7 @@ SCREEN_NAVIGATION = (
     ("screen.saver", "screen_saver_button", "fun:screensaver", "primary"),
     ("screen.wallpaper", "screen_wallpaper_button", "menu:wallpaper", "success"),
     ("screen.brightness", "screen_brightness_button", "cmd:brightness", "success"),
-    ("screen.nightlight", "screen_nightlight_disabled_button", "cmd:nightlight", "primary"),
+    ("screen.nightlight", "screen_nightlight_disabled_button", "cmd:nightlight", "primary", ["owner", "user"], "screen_action"),
     ("screen.rotate", "screen_rotate_button", "cmd:rotate", "primary"),
 )
 INPUT_NAVIGATION = (
@@ -175,6 +177,9 @@ SYSTEM_NAVIGATION = (
     ("system.clean_temp", "system_clean_temp_button", "cmd:sys_clean_temp", "danger"),
     ("system.apps", "system_apps_button", "cmd:apps", "primary"),
     ("system.status", "system_refresh_status_button", "cmd:status", "success"),
+    ("system.filevault", "feature.m01.f01.title", "filevault:status", "primary", ["owner"], "filevault_status"),
+    ("system.sip", "feature.m01.f02.title", "sip:status", "primary", ["owner"], "sip_status"),
+    ("system.gatekeeper", "feature.m01.f03.title", "gatekeeper:status", "primary", ["owner"], "gatekeeper_status"),
 )
 NETWORK_NAVIGATION = (
     ("network.external_ip", "network_external_ip_button", "fun:extip", "success"),
@@ -335,6 +340,19 @@ HOME_NAVIGATION = (
     ("home.about", "about", "menu:about", ["owner", "user", "guest"], "home_about"),
 )
 FEATURE_IMPLEMENTATION_OVERRIDES = {
+    "D03-F27": {
+        # The inbox has source and integration coverage; a real device placement
+        # flow is still required before this can be called fully verified.
+        "support_state": "needs_device_test",
+        "handler_id": "d03.f27.files.owner_staged_inbox",
+        "acceptance_level": ["unit", "integration", "device", "live"],
+        "test_refs": [
+            "TG-BOT-SERVER/tests/test_file_inbox.py::test_staged_file_is_owner_only_and_returns_metadata_not_storage_path",
+            "TG-BOT-SERVER/tests/test_file_inbox.py::test_staged_file_limits_expiry_and_owner_scoped_delete",
+            "TG-BOT-SERVER/tests/test_bot_ui.py::test_file_inbox_is_owner_only_and_uses_registered_actions",
+            "TG-BOT-SERVER/tests/test_bot_ui.py::test_staged_file_placement_requires_preview_and_explicit_confirmation",
+        ],
+    },
     "D05-F18": {
         "support_state": "needs_device_test",
         "handler_id": "d05.f18.terminal.owner_task_capacity",
@@ -2931,7 +2949,7 @@ def build_feature_registry(spec_path: Path | None = None, baseline_commit: str =
     for page_id, label_id, callback, style in (
         ("all.status", "all_status_button", "all:status", "primary"),
         ("all.screenshot", "all_screenshot_button", "all:screenshot", "success"),
-        ("all.location", "geo_beta", "cmd:geo_location", "primary"),
+        ("all.location", "geo_system", "cmd:geo_location", "primary"),
         ("all.lock", "all_lock_button", "cmd:lock", "danger"),
         ("all.mute", "all_mute_button", "cmd:volume", "primary"),
         ("all.stop", "all_stop_button", "cfm:stop_all", "danger"),
@@ -2976,7 +2994,13 @@ def build_feature_registry(spec_path: Path | None = None, baseline_commit: str =
             presentation = next((value for value in optional if isinstance(value, str)), "screen_action")
             if callback in {"camera:quality", "camera:catalog"}:
                 roles = ("owner",)
-            add_nav(page_id, parent, label_id, callback, style, roles=roles, presentation=presentation)
+            platforms = ("windows",) if callback == "cmd:nightlight" else ("windows", "macos")
+            if callback in {"filevault:status", "sip:status", "gatekeeper:status"}:
+                platforms = ("macos",)
+            add_nav(
+                page_id, parent, label_id, callback, style, roles=roles,
+                platforms=platforms, presentation=presentation,
+            )
     add_nav(
         "files.inbox", "files", "feature.d03.f27.title", "files:inbox", "success",
         roles=("owner",), platforms=("windows", "macos"), presentation="file_inbox",
@@ -3595,7 +3619,13 @@ def build_feature_registry(spec_path: Path | None = None, baseline_commit: str =
         roles=("owner",), platforms=("telegram",), presentation="nav",
     )
     for parent, label_id, callback, style in PRANK_NAVIGATION:
-        add_nav(f"{parent}.{callback.replace(':', '.')}", parent, label_id, callback, style)
+        supported_platforms = ("windows",) if callback == "cmd:prank_random_clicks" else ("windows", "macos")
+        add_nav(
+            f"{parent}.{callback.replace(':', '.')}", parent, label_id, callback, style,
+            platforms=supported_platforms,
+        )
+        if callback == "prank:matrix":
+            navigation[-1]["support_state"] = "needs_device_test"
     for page_id, label_id, callback in PRANK_TABS:
         add_nav(page_id, "prank.tabs", label_id, callback, "primary")
 

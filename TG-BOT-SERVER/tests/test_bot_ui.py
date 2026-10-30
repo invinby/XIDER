@@ -2392,11 +2392,10 @@ def test_photo_wallpaper_upload_publishes_to_bound_device_when_access_is_live(mo
         photo = [SimpleNamespace(file_id="photo-id")]
 
     class FakeCollector:
-        def reset(self):
-            pass
-
-        async def wait(self, _timeout):
-            return {"ok": True}
+        async def wait_for(self, target, action, timeout=20.0, command_id=None):
+            return {
+                "type": action, "device_id": target, "id": command_id, "ok": True,
+            }
 
     async def replace(_message, text, reply_markup=None):
         cards.append((text, reply_markup))
@@ -2407,9 +2406,8 @@ def test_photo_wallpaper_upload_publishes_to_bound_device_when_access_is_live(mo
     monkeypatch.setattr(bot, "wallpaper_menu", lambda: "wallpaper-menu")
     monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
     monkeypatch.setattr(
-        bot,
-        "publish",
-        lambda action, **kwargs: published.append((action, kwargs)) or True,
+        bot, "publish_tracked",
+        lambda action, **kwargs: published.append((action, kwargs)) or (True, "wallpaper-ticket"),
     )
 
     asyncio.run(bot.on_photo_wallpaper_message(FakeMessage(), FakeState()))
@@ -2520,11 +2518,12 @@ def test_random_wallpaper_updates_one_card_and_escapes_device_data(
     answered = []
 
     class FakeCollector:
-        def reset(self):
-            pass
-
-        async def wait(self, _timeout):
-            return result
+        async def wait_for(self, target, action, timeout=15.0, command_id=None):
+            if result is None:
+                return None
+            return {
+                "type": action, "device_id": target, "id": command_id, **result,
+            }
 
     class FakeMessage:
         chat = SimpleNamespace(id=1)
@@ -2547,7 +2546,10 @@ def test_random_wallpaper_updates_one_card_and_escapes_device_data(
     monkeypatch.setitem(bot.SESSION, "target", "device-1")
     monkeypatch.setattr(bot, "target_label", lambda _target: "Laptop <test>")
     monkeypatch.setattr(bot, "wallpaper_menu", lambda: "wallpaper-menu")
-    monkeypatch.setattr(bot, "publish", lambda *_args, **_kwargs: publish_ok)
+    monkeypatch.setattr(
+        bot, "publish_tracked",
+        lambda *_args, **_kwargs: (publish_ok, "wallpaper-ticket"),
+    )
     monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
     monkeypatch.setattr(bot, "_replace_callback_message", replace)
     monkeypatch.setattr(
@@ -2576,6 +2578,99 @@ def test_random_wallpaper_updates_one_card_and_escapes_device_data(
             ]
         )
     assert answered == [((), {})]
+
+
+@pytest.mark.parametrize(
+    ("callback", "initial_standby", "result", "expected_standby"),
+    [
+        ("cmd:standby_sleep", False, None, False),
+        ("cmd:standby_sleep", False, {"type": "standby_sleep", "device_id": "other", "id": "ticket-1", "ok": True}, False),
+        ("cmd:standby_sleep", False, {"type": "standby_sleep", "device_id": "device-1", "id": "stale", "ok": True}, False),
+        ("cmd:standby_sleep", False, {"type": "standby_sleep", "device_id": "device-1", "id": "ticket-1", "ok": True}, True),
+        ("cmd:wake", True, None, True),
+        ("cmd:wake", True, {"type": "wake", "device_id": "other", "id": "ticket-1", "ok": True}, True),
+        ("cmd:wake", True, {"type": "wake", "device_id": "device-1", "id": "ticket-1", "ok": True}, False),
+    ],
+)
+def test_standby_and_wake_only_change_device_state_after_exact_ack(
+    monkeypatch, callback, initial_standby, result, expected_standby,
+):
+    from types import SimpleNamespace
+
+    rendered = []
+    devices = {"device-1": {"standby": initial_standby}}
+
+    class FakeCallback:
+        data = callback
+        from_user = SimpleNamespace(id=1)
+        message = SimpleNamespace(chat=SimpleNamespace(id=1), message_id=2)
+        async def answer(self, *_args, **_kwargs):
+            pass
+
+    class FakeCollector:
+        async def wait_for(self, target, action, timeout=None, command_id=None):
+            assert target == "device-1"
+            assert command_id == "ticket-1"
+            assert action == ("standby_sleep" if callback.endswith("standby_sleep") else "wake")
+            return result
+
+    async def replace(_cq, text, **_kwargs):
+        rendered.append(text)
+
+    monkeypatch.setitem(bot.SESSION, "target", "device-1")
+    monkeypatch.setattr(bot, "devices", devices)
+    monkeypatch.setattr(bot, "target_label", lambda target: target)
+    monkeypatch.setattr(bot, "publish_tracked", lambda *_args, **_kwargs: (True, "ticket-1"))
+    monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
+    monkeypatch.setattr(bot, "back_to_device_kb", lambda: "back")
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+
+    handler = bot.on_cmd_standby_sleep if callback.endswith("standby_sleep") else bot.on_cmd_wake
+    asyncio.run(handler(FakeCallback()))
+
+    assert devices["device-1"]["standby"] is expected_standby
+    if result is None or result.get("device_id") != "device-1" or result.get("id") != "ticket-1":
+        assert "подтверждённый результат не получен" in rendered[0]
+
+
+def test_external_ip_button_rejects_unmatched_response(monkeypatch):
+    from types import SimpleNamespace
+
+    rendered = []
+    wait_calls = []
+    now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+
+    class FakeCallback:
+        data = "cmd:extip"
+        from_user = SimpleNamespace(id=1)
+        message = SimpleNamespace(chat=SimpleNamespace(id=1), message_id=2)
+        async def answer(self, *_args, **_kwargs):
+            pass
+
+    class FakeCollector:
+        async def wait_for(self, target, action, timeout=None, command_id=None):
+            wait_calls.append((target, action, timeout, command_id))
+            return {
+                "type": "ext_ip", "schema": "xider.external-ip.v1", "feature_id": "D04-F30",
+                "device_id": target, "request_id": "stale-ticket", "state": "available",
+                "source": "ipify", "ip": "8.8.8.8", "checked_at": now.isoformat(),
+            }
+
+    async def replace(_cq, text, **_kwargs):
+        rendered.append(text)
+
+    monkeypatch.setitem(bot.SESSION, "target", "device-1")
+    monkeypatch.setattr(bot, "target_label", lambda target: target)
+    monkeypatch.setattr(bot, "publish_tracked", lambda *_args, **_kwargs: (True, "ticket-1"))
+    monkeypatch.setattr(bot, "external_ip_collector", FakeCollector())
+    monkeypatch.setattr(bot, "back_to_device_kb", lambda: "back")
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+
+    asyncio.run(bot.on_fun_extip(FakeCallback()))
+
+    assert wait_calls == [("device-1", "ext_ip", 10.0, "ticket-1")]
+    assert "не подтверждён" in rendered[0]
+    assert "8.8.8.8" not in rendered[0]
 
 
 def test_text_command_flows_reuse_the_existing_chat_card():
@@ -2728,7 +2823,10 @@ def test_text_command_inputs_keep_the_device_chosen_when_prompt_opened(
         async def wait_for(self, _target, _action, *, timeout, command_id):
             assert timeout > 0
             assert command_id
-            return {"text": "done"}
+            return {
+                "type": _action, "device_id": _target, "id": command_id,
+                "ok": True, "text": "done",
+            }
 
     monkeypatch.setattr(bot, "SESSION", {"target": "selected-later"})
     monkeypatch.setattr(bot, "target_label", lambda device: device)
@@ -3217,6 +3315,25 @@ def test_simple_command_labels_follow_selected_xlex_voice(monkeypatch):
             assert label == bot.xlex.render(copy_key, style, **expected_values), action
 
 
+def test_system_geo_callback_uses_system_location_copy_not_ip_copy(monkeypatch):
+    calls = []
+
+    async def simple_command(cq, action, emoji, label, timeout=12.0, **kwargs):
+        calls.append((action, emoji, label, timeout, kwargs))
+
+    class FakeCallback:
+        data = "cmd:geo_location"
+
+    monkeypatch.setattr(bot, "simple_command", simple_command)
+    monkeypatch.setattr(bot.bot_settings, "get", lambda key, default=None: "xperson" if key == "ui_style" else default)
+
+    asyncio.run(bot.on_cmd_geo_location(FakeCallback()))
+
+    assert calls == [(
+        "geo_location", "⚠️", bot.xlex.render("geo_system", "xperson"), 16.0, {},
+    )]
+
+
 def test_all_stateless_prank_menu_commands_have_xlex_labels():
     actions = {
         callback[4:]
@@ -3231,6 +3348,44 @@ def test_all_stateless_prank_menu_commands_have_xlex_labels():
         bot._SIMPLE_COMMAND_LABELS[action][0] in bot.xlex.COPY
         for action in actions
     )
+
+
+@pytest.mark.parametrize("result,key", [
+    ({"ok": "true", "text": "Действие выполнено"}, "action_result_unknown"),
+    ({"ok": True, "state": "failed", "text": "Действие выполнено"}, "action_result_failed"),
+    ({"ok": True, "state": "launch_accepted", "effect_confirmed": False, "text": "Уже готово"}, "action_result_unconfirmed"),
+    ({"ok": True, "state": "unsupported", "text": "Работает"}, "action_result_unsupported"),
+    ({"ok": True, "state": {"malformed": True}, "text": "Действие выполнено"}, "action_result_unknown"),
+])
+def test_simple_action_result_rejects_malformed_or_contradictory_success(result, key):
+    rendered = bot._simple_action_result_text(result)
+    assert bot._lex(key) in rendered
+    assert "Действие выполнено" not in rendered
+    assert "Уже готово" not in rendered
+    assert "Работает" not in rendered
+
+
+def test_simple_action_result_accepts_explicit_legacy_boolean_success():
+    assert bot._simple_action_result_text({"ok": True, "text": "Громкость установлена."}) == "Громкость установлена."
+
+
+def test_simple_action_result_preserves_typed_source():
+    rendered = bot._simple_action_result_text({
+        "ok": True, "state": "success", "text": "Night Light stored state matches.",
+        "source": "HKCU CloudStore Data readback",
+    })
+    assert "Night Light stored state matches." in rendered
+    assert "Источник: HKCU CloudStore Data readback" in rendered
+
+
+def test_random_cursor_prank_button_describes_cursor_motion_for_every_voice():
+    labels = [
+        bot.xlex.render("prank_random_clicks_button", style)
+        for style in bot.xlex.STYLES
+    ]
+    assert len(set(labels)) == len(bot.xlex.STYLES)
+    assert all("клик" not in label.lower() and "щелч" not in label.lower() for label in labels)
+    assert all(any(word in label.lower() for word in ("курсор", "указател")) for label in labels)
 
 
 def test_generic_prank_callback_uses_single_card_command_flow(monkeypatch):
@@ -3258,7 +3413,7 @@ def test_generic_prank_callback_uses_single_card_command_flow(monkeypatch):
     )]
 
 
-def test_simple_command_shows_success_when_agent_ack_has_no_text(monkeypatch):
+def test_prank_ack_without_effect_confirmation_is_not_rendered_as_success(monkeypatch):
     from types import SimpleNamespace
 
     edits = []
@@ -3293,8 +3448,85 @@ def test_simple_command_shows_success_when_agent_ack_has_no_text(monkeypatch):
     ))
 
     assert len(edits) == 2
-    assert bot._lex("device_command_completed") in edits[-1]
+    assert bot._lex("prank_effect_unconfirmed") in edits[-1]
+    assert bot._lex("device_command_completed") not in edits[-1]
     assert bot._lex("device_no_response") not in edits[-1]
+
+
+def test_matrix_launch_ack_does_not_claim_visual_effect_completed(monkeypatch):
+    from types import SimpleNamespace
+
+    edits = []
+
+    class FakeMessage:
+        chat = SimpleNamespace(id=1)
+        message_id = 9
+
+        async def edit_text(self, text, **kwargs):
+            edits.append(text)
+
+    class FakeCallback:
+        data = "prank:matrix"
+        from_user = SimpleNamespace(id=1)
+        message = FakeMessage()
+
+        async def answer(self, *args, **kwargs):
+            pass
+
+    class FakeCollector:
+        async def wait_for(self, *args, **kwargs):
+            return {"ok": True, "state": "launch_accepted", "effect_confirmed": False, "id": "cmd-1"}
+
+    monkeypatch.setitem(bot.SESSION, "target", "device-1")
+    monkeypatch.setattr(bot, "target_label", lambda _target: "Test device")
+    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: True)
+    monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (True, "cmd-1"))
+    monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
+
+    asyncio.run(bot._simple_command_unlocked(
+        FakeCallback(), "prank_matrix", "🌈", "Терминальная Матрица", timeout=1.0
+    ))
+
+    assert len(edits) == 2
+    assert bot._lex("prank_matrix_unconfirmed") in edits[-1]
+    assert bot._lex("device_command_completed") not in edits[-1]
+
+
+def test_prank_launch_ack_without_confirmed_effect_uses_unconfirmed_copy(monkeypatch):
+    from types import SimpleNamespace
+    edits = []
+
+    class FakeMessage:
+        chat = SimpleNamespace(id=1)
+        message_id = 9
+        async def edit_text(self, text, **_kwargs):
+            edits.append(text)
+
+    class FakeCallback:
+        data = "cmd:prank_open_browser_memes"
+        from_user = SimpleNamespace(id=1)
+        message = FakeMessage()
+        async def answer(self, *_args, **_kwargs):
+            pass
+
+    class FakeCollector:
+        async def wait_for(self, *_args, **_kwargs):
+            return {"ok": True, "state": "launch_accepted", "effect_confirmed": False,
+                    "text": "🌐 3 вкладки открыты!", "id": "cmd-1"}
+
+    monkeypatch.setitem(bot.SESSION, "target", "device-1")
+    monkeypatch.setattr(bot, "target_label", lambda _target: "Test device")
+    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: True)
+    monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (True, "cmd-1"))
+    monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
+
+    asyncio.run(bot._simple_command_unlocked(
+        FakeCallback(), "prank_open_browser_memes", "🌐", "Мемы", timeout=1.0
+    ))
+
+    assert len(edits) == 2
+    assert bot._lex("prank_effect_unconfirmed") in edits[-1]
+    assert "3 вкладки открыты" not in edits[-1]
 
 
 def test_simple_command_does_not_create_duplicate_after_transient_edit_errors(monkeypatch):
@@ -3324,7 +3556,7 @@ def test_simple_command_does_not_create_duplicate_after_transient_edit_errors(mo
             return self
 
     class FakeCallback:
-        data = "cmd:prank_fake_update"
+        data = "cmd:brightness"
         from_user = SimpleNamespace(id=bot.ADMIN_ID)
         message = FakeMessage()
 
@@ -3342,7 +3574,7 @@ def test_simple_command_does_not_create_duplicate_after_transient_edit_errors(mo
     monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
 
     asyncio.run(bot._simple_command_unlocked(
-        FakeCallback(), "prank_screamer", "🎬", "Скример", timeout=1.0
+        FakeCallback(), "brightness_set", "🔆", "Яркость", timeout=1.0
     ))
 
     assert edit_attempts == 4
@@ -3350,6 +3582,47 @@ def test_simple_command_does_not_create_duplicate_after_transient_edit_errors(mo
     assert bot._lex("device_command_completed") in successful_edits[-1]
     assert deleted == []
     assert answered == []
+
+
+def test_simple_command_waits_for_result_when_mqtt_publish_state_is_unknown(monkeypatch):
+    from types import SimpleNamespace
+
+    edits = []
+    waits = []
+
+    class FakeMessage:
+        chat = SimpleNamespace(id=1)
+        message_id = 46
+
+        async def edit_text(self, text, **_kwargs):
+            edits.append(text)
+
+    class FakeCallback:
+        data = "cmd:wifi"
+        from_user = SimpleNamespace(id=bot.ADMIN_ID)
+        message = FakeMessage()
+
+        async def answer(self, *_args, **_kwargs):
+            pass
+
+    class FakeCollector:
+        async def wait_for(self, *args, **kwargs):
+            waits.append((args, kwargs))
+            return None
+
+    monkeypatch.setitem(bot.SESSION, "target", "device-1")
+    monkeypatch.setattr(bot, "target_label", lambda _target: "Test device")
+    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: True)
+    monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (None, "ticket-unknown"))
+    monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
+
+    asyncio.run(bot._simple_command_unlocked(
+        FakeCallback(), "net_wifi_passwords", "📶", "Wi-Fi", timeout=0.01
+    ))
+
+    assert waits == [(('device-1', 'net_wifi_passwords'), {'timeout': 0.01, 'command_id': 'ticket-unknown'})]
+    assert bot._lex("mqtt_publish_unknown") in edits[-1]
+    assert bot._lex("mqtt_disconnected") not in edits[-1]
 
 
 def test_simple_command_serializes_different_actions_for_same_card(monkeypatch):
@@ -3735,6 +4008,33 @@ def test_simple_command_keeps_owner_all_device_volume_action_available(monkeypat
     assert "All devices muted" in edits[-1]
 
 
+def test_volume_result_types_are_routed_to_the_text_collector():
+    assert {"volume_set", "volume_toggle"} <= bot.FUN_RESPONSE_TYPES
+
+
+@pytest.mark.parametrize("action", ["volume_set", "volume_toggle"])
+@pytest.mark.parametrize("topic_suffix", ["action", "output"])
+def test_volume_response_topics_reach_correlated_text_collector(monkeypatch, action, topic_suffix):
+    submitted = []
+
+    class Collector:
+        def submit(self, device_id, payload):
+            submitted.append((device_id, payload))
+
+    payload = {"type": action, "device_id": "volume-device", "id": "volume-request-1", "ok": True}
+    topic = f"{bot.MQTT_PREFIX}/volume-device/{action if topic_suffix == 'action' else 'output'}"
+    monkeypatch.setattr(bot, "key_for_device", lambda _device: b"fixture")
+    monkeypatch.setattr(bot, "verify_message_detailed", lambda _data, key=None: (payload, "ok"))
+    monkeypatch.setattr(bot, "ENCRYPT_PAYLOAD", False)
+    monkeypatch.setattr(bot, "fun_text_collector", Collector())
+    monkeypatch.setattr(bot.server_ops, "observe", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bot, "_schedule_lifecycle_failure_notice", lambda *_args, **_kwargs: None)
+
+    bot.on_mqtt_message(topic, {})
+
+    assert submitted == [("volume-device", payload)]
+
+
 def test_simple_command_rejects_non_owner_all_device_target(monkeypatch):
     from types import SimpleNamespace
 
@@ -4054,6 +4354,56 @@ def test_device_menu_has_nine_category_buttons(monkeypatch):
     assert "cat:input" not in cbs
 
 
+def test_device_catalog_tools_move_off_the_main_device_card(monkeypatch):
+    _setup(monkeypatch, {"dev1": {"name": "Dev", "os": "Windows"}})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "get_effective_grants", lambda _user: {"callbacks": [], "devices": []})
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args, **_kwargs: True)
+
+    primary = set(_callback_data(bot.device_menu("dev1", 100)))
+    tools = set(_callback_data(bot.device_menu("dev1", 100, include_tools=True)))
+
+    assert "device:tools" in primary
+    assert "catalog:tags:list" not in primary
+    assert "cmd:agent_files" not in primary
+    assert "catalog:tags:list" in tools
+    assert "cmd:agent_files" in tools
+    assert "cat:system" not in tools
+
+
+def test_device_tools_callback_opens_owner_submenu_with_return_to_device(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    _setup(monkeypatch, {"dev1": {"name": "Desk PC", "os": "Windows"}})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user: bot.Role.OWNER)
+    monkeypatch.setattr(bot, "SESSION", {"target": "dev1"})
+    monkeypatch.setattr(bot.access_store, "get_effective_grants", lambda _user: {"callbacks": [], "devices": []})
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args, **_kwargs: True)
+    rendered, answers = [], []
+
+    class Callback:
+        from_user = SimpleNamespace(id=100)
+        message = SimpleNamespace(chat=SimpleNamespace(id=100), message_id=900)
+        data = "device:tools"
+        async def answer(self, *args, **_kwargs):
+            answers.append(args)
+
+    async def replace(_source, text, reply_markup=None, **_kwargs):
+        rendered.append((text, reply_markup))
+
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    asyncio.run(bot.on_device_tools(Callback()))
+
+    assert len(rendered) == 1
+    text, markup = rendered[0]
+    callbacks = _callback_data(markup)
+    assert "Инструменты устройства" in text and "Desk PC" in text
+    assert "catalog:tags:list" in callbacks and "cmd:agent_files" in callbacks
+    assert "cat:system" not in callbacks
+    assert "back:device" in callbacks and "menu:main" in callbacks
+
+
 def test_device_tags_entry_is_owner_only_and_registry_backed(monkeypatch):
     _setup(monkeypatch, {"dev1": {"name": "Dev", "os": "Windows"}})
     roles = {100: bot.Role.OWNER, 200: bot.Role.USER}
@@ -4062,7 +4412,7 @@ def test_device_tags_entry_is_owner_only_and_registry_backed(monkeypatch):
     monkeypatch.setattr(bot.access_store, "get_effective_grants", lambda _user: {"callbacks": [], "devices": []})
     monkeypatch.setattr(bot.access_store, "can_use_callback", lambda user_id, callback, *_args, **_kwargs: user_id == 100)
 
-    owner_callbacks = _callback_data(bot.device_menu("dev1", 100))
+    owner_callbacks = _callback_data(bot.device_menu("dev1", 100, include_tools=True))
     user_callbacks = _callback_data(bot.device_menu("dev1", 200))
 
     assert "catalog:tags:list" in owner_callbacks
@@ -4077,10 +4427,10 @@ def test_pinned_device_entry_and_toggle_are_owner_only_and_registry_backed(monke
     monkeypatch.setattr(bot.access_store, "can_use_callback", lambda user_id, *_args, **_kwargs: user_id == 100)
     monkeypatch.setattr(bot.devices, "list_pinned_devices", lambda actor_id, owner_id: ["dev1"] if actor_id == 100 else [], raising=False)
 
-    owner_device = _callback_data(bot.device_menu("dev1", 100))
+    owner_device = _callback_data(bot.device_menu("dev1", 100, include_tools=True))
     user_device = _callback_data(bot.device_menu("dev1", 200))
-    owner_list = _callback_data(bot.devices_menu(100))
-    user_list = _callback_data(bot.devices_menu(200))
+    owner_list = _callback_data(bot.device_tools_menu(100))
+    user_list = _callback_data(bot.device_tools_menu(200))
 
     assert "catalog:pinned:toggle:dev1" in owner_device
     assert "catalog:pinned:toggle:dev1" not in user_device
@@ -4095,7 +4445,7 @@ def test_device_menu_never_emits_oversized_pinned_toggle_callback(monkeypatch):
     monkeypatch.setattr(bot.access_store, "get_effective_grants", lambda _user: {"callbacks": [], "devices": []})
     monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args, **_kwargs: True)
 
-    callbacks = _callback_data(bot.device_menu(device_id, 100))
+    callbacks = _callback_data(bot.device_menu(device_id, 100, include_tools=True))
 
     assert all(len(callback.encode("utf-8")) <= 64 for callback in callbacks)
     assert not any(callback.startswith("catalog:pinned:toggle:") for callback in callbacks)
@@ -4192,7 +4542,7 @@ def test_navigation_uses_the_approved_root_and_device_hierarchy(monkeypatch):
     assert expected_owner_sections <= owner_device
     assert "cat:device" not in owner_device
     assert "cfm:stop" not in owner_device
-    assert "dev:all" in _callback_data(bot.devices_menu(100))
+    assert "dev:all" in _callback_data(bot.device_tools_menu(100))
     assert "ev:menu" in _callback_data(bot.admin_menu())
     user_device = set(_callback_data(bot.device_menu("dev1", 200)))
     assert {
@@ -4924,7 +5274,7 @@ def test_device_catalog_os_filter_entry_is_owner_only(monkeypatch):
     monkeypatch.setattr(bot.access_store, "get_effective_grants", lambda _user: {"callbacks": [], "devices": []})
     monkeypatch.setattr(bot.access_store, "can_use_callback", lambda user, *_args, **_kwargs: user == 100)
 
-    menus = {user_id: _callback_data(bot.devices_menu(user_id)) for user_id in roles}
+    menus = {user_id: _callback_data(bot.device_tools_menu(user_id)) for user_id in roles}
     assert "devices:filter-os" in menus[100]
     assert "devices:filter-os" not in menus[200]
     assert "devices:filter-os" not in menus[300]
@@ -5010,7 +5360,7 @@ def test_device_catalog_heartbeat_filter_entry_is_owner_only(monkeypatch):
     monkeypatch.setattr(bot.access_store, "get_effective_grants", lambda _user: {"callbacks": [], "devices": []})
     monkeypatch.setattr(bot.access_store, "can_use_callback", lambda user, *_args, **_kwargs: user == 100)
 
-    menus = {user_id: _callback_data(bot.devices_menu(user_id)) for user_id in roles}
+    menus = {user_id: _callback_data(bot.device_tools_menu(user_id)) for user_id in roles}
     assert "devices:filter-heartbeat" in menus[100]
     assert "devices:filter-heartbeat" not in menus[200]
     assert "devices:filter-heartbeat" not in menus[300]
@@ -5157,7 +5507,7 @@ def test_device_catalog_component_version_filter_entry_is_owner_only(monkeypatch
     monkeypatch.setattr(bot.access_store, "get_effective_grants", lambda _user: {"callbacks": [], "devices": []})
     monkeypatch.setattr(bot.access_store, "can_use_callback", lambda user, *_args, **_kwargs: user == 100)
 
-    menus = {user_id: _callback_data(bot.devices_menu(user_id)) for user_id in roles}
+    menus = {user_id: _callback_data(bot.device_tools_menu(user_id)) for user_id in roles}
     assert "devices:filter-version" in menus[100]
     assert all("devices:filter-version" not in menus[user_id] for user_id in (200, 300, 400))
 
@@ -5185,7 +5535,7 @@ def test_device_catalog_capability_filter_menu_is_owner_only(monkeypatch):
     monkeypatch.setattr(bot.access_store, "get_effective_grants", lambda _user: {"callbacks": [], "devices": []})
     monkeypatch.setattr(bot.access_store, "can_use_callback", lambda user, *_args, **_kwargs: user == 100)
 
-    menus = {user_id: _callback_data(bot.devices_menu(user_id)) for user_id in roles}
+    menus = {user_id: _callback_data(bot.device_tools_menu(user_id)) for user_id in roles}
     assert "devices:filter-capability" in menus[100]
     assert all("devices:filter-capability" not in menus[user_id] for user_id in (200, 300, 400))
 
@@ -5334,16 +5684,17 @@ def test_device_catalog_search_entry_respects_roles_and_existing_device_visibili
             user == 100 or callback in {"devices:search", "dev:device-1"},
     )
 
-    owner = _callback_data(bot.devices_menu(100))
-    user = _callback_data(bot.devices_menu(200))
-    guest = _callback_data(bot.devices_menu(300))
-    blocked = _callback_data(bot.devices_menu(400))
+    owner = _callback_data(bot.device_tools_menu(100))
+    user = _callback_data(bot.device_tools_menu(200))
+    user_devices = _callback_data(bot.devices_menu(200))
+    guest = _callback_data(bot.device_tools_menu(300))
+    blocked = _callback_data(bot.device_tools_menu(400))
 
     assert "devices:search" in owner
     assert "devices:search" in user
     assert "devices:search" not in guest
     assert "devices:search" not in blocked
-    assert "dev:device-1" in user and "dev:device-2" not in user
+    assert "dev:device-1" in user_devices and "dev:device-2" not in user_devices
 
 
 def test_device_catalog_search_edits_one_card_and_never_includes_ungranted_matches(monkeypatch):
@@ -5410,6 +5761,128 @@ def test_device_catalog_search_edits_one_card_and_never_includes_ungranted_match
     assert any("Studio Mac" in label for label in labels)
     assert all("Studio Backup" not in label for label in labels)
     assert _callback_data(edits[-1][1]) == ["dev:device-visible", "menu:devices", "menu:main"]
+
+
+def test_device_catalog_paginates_large_primary_list_and_keeps_back_navigation(monkeypatch, tmp_path):
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    devices = {
+        f"device-{index:02d}": {"name": f"Lab device {index:02d}", "os": "Windows", "online": True}
+        for index in range(45)
+    }
+    monkeypatch.setattr(bot, "ADMIN_ID", 20)
+    monkeypatch.setattr(bot, "get_user_role", lambda _user: bot.Role.OWNER)
+    monkeypatch.setattr(bot, "_visible_device_items", lambda _user: devices)
+
+    first_callbacks = _callback_data(bot.devices_menu(20))
+
+    assert sum(value.startswith("dev:") or value.startswith("devref:") for value in first_callbacks) == 10
+    next_page = next(value for value in first_callbacks if value.startswith("devices:list:"))
+    assert len(next_page.encode("utf-8")) <= 64
+
+    async def scenario():
+        await bot.on_menu_devices(telegram.callback("menu:devices"))
+        assert len(telegram.cards[30]["text"]) < 4096
+        await bot.on_devices_list_page(telegram.callback(next_page))
+
+    asyncio.run(scenario())
+    second_callbacks = _callback_data(telegram.cards[30]["markup"])
+    assert "dev:device-10" in second_callbacks
+    assert "dev:device-00" not in second_callbacks
+    assert "devices:tools" in second_callbacks
+    assert "menu:main" in second_callbacks
+
+
+def test_device_search_results_paginate_all_matches(monkeypatch, tmp_path):
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    devices = {
+        f"device-{index:02d}": {"name": f"Lab device {index:02d}", "os": "Windows", "online": True}
+        for index in range(25)
+    }
+    monkeypatch.setattr(bot, "ADMIN_ID", 20)
+    monkeypatch.setattr(bot, "get_user_role", lambda _user: bot.Role.OWNER)
+    monkeypatch.setattr(bot, "_visible_device_items", lambda _user: devices)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args, **_kwargs: True)
+
+    class State:
+        async def clear(self):
+            pass
+
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=20), chat=SimpleNamespace(id=10),
+        message_id=30, text="Lab",
+    )
+
+    async def scenario():
+        await bot.on_device_search_input(message, State())
+        first = telegram.cards[30]
+        next_page = next(value for value in _callback_data(first["markup"]) if value.startswith("devices:results:"))
+        assert "25" in first["text"]
+        await bot.on_devices_results_page(telegram.callback(next_page))
+        second = telegram.cards[30]
+        callbacks = _callback_data(second["markup"])
+        assert "dev:device-20" in callbacks
+        assert "dev:device-24" in callbacks
+        assert "dev:device-00" not in callbacks
+        assert "menu:devices" in callbacks
+
+    asyncio.run(scenario())
+
+
+def test_long_device_id_uses_short_callback_reference_and_bounded_text(monkeypatch, tmp_path):
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    device_id = "device-" + "x" * 240
+    devices = {device_id: {"name": "<&" * 800, "os": "Windows", "online": True}}
+    monkeypatch.setattr(bot, "ADMIN_ID", 20)
+    monkeypatch.setattr(bot, "get_user_role", lambda _user: bot.Role.OWNER)
+    monkeypatch.setattr(bot, "_visible_device_items", lambda _user: devices)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(bot, "device_card", lambda _device_id: "Device details")
+    monkeypatch.setattr(bot, "device_menu", lambda *_args, **_kwargs: "device-actions")
+
+    callbacks = _callback_data(bot.devices_menu(20))
+    selection = next(value for value in callbacks if value.startswith("devref:"))
+    assert len(selection.encode("utf-8")) <= 64
+
+    async def scenario():
+        await bot.on_menu_devices(telegram.callback("menu:devices"))
+        assert len(telegram.cards[30]["text"]) < 4096
+        await bot.on_dev(telegram.callback(selection))
+
+    asyncio.run(scenario())
+    assert bot.SESSION["target"] == device_id
+    assert telegram.cards[30]["text"] == "Device details"
+
+
+def test_device_result_pagination_rechecks_search_grant(monkeypatch, tmp_path):
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    devices = {f"dev-{index:02d}": {"name": f"Device {index:02d}"} for index in range(25)}
+    monkeypatch.setattr(bot, "ADMIN_ID", 20)
+    monkeypatch.setattr(bot, "get_user_role", lambda _user: bot.Role.USER)
+    monkeypatch.setattr(bot, "_visible_device_items", lambda _user: devices)
+    granted = {"value": True}
+    monkeypatch.setattr(
+        bot.access_store, "can_use_callback",
+        lambda _user, callback, *_args, **_kwargs: callback == "devices:search" and granted["value"],
+    )
+    edits = []
+
+    async def replace(_cq, text, reply_markup=None, **_kwargs):
+        edits.append((text, reply_markup))
+
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    token, _ids = bot._save_device_result_view(
+        20, devices, title="Search results", note="Scoped search.", required_callback="devices:search",
+    )
+    callback = telegram.callback(f"devices:results:{token}:1")
+
+    async def scenario():
+        await bot.on_devices_results_page(callback)
+        assert "2/2" in edits[-1][0]
+        granted["value"] = False
+        await bot.on_devices_results_page(callback)
+
+    asyncio.run(scenario())
+    assert len(edits) == 1
 
 
 def test_feature_catalog_detail_explains_access_state_and_test_requirements(monkeypatch):
@@ -5714,6 +6187,11 @@ def test_nightlight_is_hidden_and_direct_callback_rejected_on_macos(monkeypatch)
     monkeypatch.setattr(bot.fun_text_collector, "wait_for", FakeCollector().wait_for)
     monkeypatch.setattr(bot, "_replace_callback_message", lambda *args, **kwargs: asyncio.sleep(0))
     assert "cmd:nightlight" not in _callback_data(bot.screen_menu("mac1"))
+    nightlight = next(
+        row for row in bot.feature_catalog.load_registry()["navigation"]
+        if row.get("page_id") == "screen.nightlight"
+    )
+    assert nightlight["platforms"] == ["windows"]
 
     asyncio.run(bot.on_cmd_nightlight(FakeCallback()))
 
@@ -5773,8 +6251,8 @@ def test_manual_install_is_owner_only_and_uses_published_one_line_commands(monke
         bot.access_store, "can_use_callback",
         lambda user_id, _callback, _owner_id, _target=None: user_id == 100,
     )
-    assert "install:manual" in _callback_data(bot.devices_menu(100))
-    assert "install:manual" not in _callback_data(bot.devices_menu(200))
+    assert "install:manual" in _callback_data(bot.device_tools_menu(100))
+    assert "install:manual" not in _callback_data(bot.device_tools_menu(200))
 
     expected = {
         "windows": "irm https://invinby.github.io/XIDER/win.txt | iex",
@@ -5790,6 +6268,18 @@ def test_manual_install_is_owner_only_and_uses_published_one_line_commands(monke
         assert f"install:{selected_os}" not in callbacks
     with pytest.raises(ValueError, match="Unsupported XIDER installer OS"):
         bot.manual_install_command_screen("linux")
+
+
+def test_manual_install_command_can_pin_a_selected_signed_release():
+    windows = bot.manual_install_command_screen("windows", release_tag="v4.2.0")
+    macos = bot.manual_install_command_screen("macos", release_tag="v4.2.0")
+
+    assert "$env:XIDER_INSTALL_TAG=&#x27;v4.2.0&#x27;;" in windows
+    assert "irm https://invinby.github.io/XIDER/win.txt | iex" in windows
+    assert "export XIDER_INSTALL_TAG=&#x27;v4.2.0&#x27;;" in macos
+    assert "curl -fsSL https://invinby.github.io/XIDER/mac | bash" in macos
+    with pytest.raises(ValueError, match="Unsupported XIDER release tag"):
+        bot.manual_install_command_screen("windows", release_tag="main")
 
 
 def test_manual_install_os_picker_uses_owner_only_registry_navigation(monkeypatch):
@@ -5834,7 +6324,7 @@ def test_devices_menu_uses_registry_actions_and_keeps_owner_controls_private(mon
         bot.access_store, "can_use_callback",
         lambda user_id, callback, _owner_id, target=None: (
             user_id == 100
-            or (user_id == 200 and callback in {"devices:search", "dev:dev-a", "menu:devices", "menu:main"})
+            or (user_id == 200 and callback in {"devices:search", "devices:tools", "dev:dev-a", "menu:devices", "menu:main"})
         ),
     )
     original = bot.feature_catalog.visible_navigation_pages
@@ -5848,25 +6338,56 @@ def test_devices_menu_uses_registry_actions_and_keeps_owner_controls_private(mon
     monkeypatch.setattr(bot.feature_catalog, "visible_navigation_pages", observe)
 
     owner_markup = bot.devices_menu(100)
+    owner_tools_markup = bot.device_tools_menu(100)
     user_markup = bot.devices_menu(200)
+    user_tools_markup = bot.device_tools_menu(200)
     owner_callbacks = _callback_data(owner_markup)
+    owner_tool_callbacks = _callback_data(owner_tools_markup)
     user_callbacks = _callback_data(user_markup)
+    user_tool_callbacks = _callback_data(user_tools_markup)
     owner_buttons = {
         button.callback_data: button
-        for row in owner_markup.inline_keyboard
+        for row in owner_tools_markup.inline_keyboard
         for button in row
     }
 
-    assert seen == [("owner", "telegram"), ("user", "telegram")]
-    assert owner_callbacks == [
-        "dev:dev-a", "devices:search", "devices:filter-os", "devices:filter-heartbeat", "devices:filter-version", "devices:filter-capability", "devices:filter-inventory-age", "catalog:snapshot:list", "catalog:collection:list", "catalog:saved-filter:list", "devices:sort", "catalog:order:edit", "catalog:pinned:list", "catalog:inactivity:list", "catalog:export", "catalog:import", "catalog:archive:list", "dev:all",
-        "devmg:manualadd", "install:manual", "devmg:blocked", "devmg:clear_all",
-        "menu:devices", "menu:main",
+    assert seen == [
+        ("owner", "telegram"), ("owner", "telegram"),
+        ("user", "telegram"), ("user", "telegram"),
     ]
-    assert user_callbacks == ["dev:dev-a", "devices:search", "menu:devices", "menu:main"]
+    assert owner_callbacks == ["dev:dev-a", "devices:tools", "menu:main"]
+    assert owner_tool_callbacks == [
+        "devices:search", "devices:filter-os", "devices:filter-heartbeat", "devices:filter-version", "devices:filter-capability", "devices:filter-inventory-age", "catalog:snapshot:list", "catalog:collection:list", "catalog:saved-filter:list", "devices:sort", "catalog:order:edit", "catalog:pinned:list", "catalog:inactivity:list", "catalog:export", "catalog:import", "catalog:archive:list", "dev:all",
+        "devmg:manualadd", "install:manual", "devmg:blocked", "devmg:clear_all", "menu:devices", "menu:main",
+    ]
+    assert user_callbacks == ["dev:dev-a", "devices:tools", "menu:main"]
+    assert user_tool_callbacks == ["devices:search", "menu:devices", "menu:main"]
     assert owner_buttons["install:manual"].style == "success"
     assert owner_buttons["devmg:blocked"].style == "danger"
     assert owner_buttons["devmg:clear_all"].style == "danger"
+
+
+def test_devices_menu_groups_catalog_controls_in_tools_submenu(monkeypatch):
+    _setup(monkeypatch, {})
+    monkeypatch.setattr(bot, "ADMIN_ID", 100)
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(
+        bot, "_visible_device_items",
+        lambda _user_id: {"dev-a": {"name": "Mac", "os": "macOS", "online": True}},
+    )
+
+    device_callbacks = _callback_data(bot.devices_menu(100))
+    tools_callbacks = _callback_data(bot.device_tools_menu(100))
+
+    assert "dev:dev-a" in device_callbacks
+    assert "devices:tools" in device_callbacks
+    assert "devices:filter-os" not in device_callbacks
+    assert "catalog:import" not in device_callbacks
+    assert "devices:filter-os" in tools_callbacks
+    assert "catalog:import" in tools_callbacks
+    assert "dev:dev-a" not in tools_callbacks
+    assert "menu:devices" in tools_callbacks
+    assert "menu:main" in tools_callbacks
 
 
 def test_all_devices_menu_uses_owner_only_registry_actions(monkeypatch):
@@ -6098,8 +6619,8 @@ def test_selected_device_snapshot_ui_entry_is_owner_only(monkeypatch):
         lambda user_id, _callback, _owner_id, _target=None: user_id == 100,
     )
 
-    assert "catalog:snapshot:list" in _callback_data(bot.devices_menu(100))
-    assert "catalog:snapshot:list" not in _callback_data(bot.devices_menu(200))
+    assert "catalog:snapshot:list" in _callback_data(bot.device_tools_menu(100))
+    assert "catalog:snapshot:list" not in _callback_data(bot.device_tools_menu(200))
 
 
 def test_device_archive_controls_are_owner_only_and_registry_backed(monkeypatch):
@@ -6111,10 +6632,10 @@ def test_device_archive_controls_are_owner_only_and_registry_backed(monkeypatch)
     monkeypatch.setattr(bot, "_device_compare_inventory", lambda _user: ([("device-1", {"name": "Laptop", "os": "Windows"})], "aabbccdd"))
     monkeypatch.setattr(bot.devices, "list_archived_devices", lambda **_kwargs: [], raising=False)
     monkeypatch.setattr(bot.devices, "get_device_archive", lambda *_args: None, raising=False)
-    owner_device = _callback_data(bot.device_menu("device-1", 100))
+    owner_device = _callback_data(bot.device_menu("device-1", 100, include_tools=True))
     user_device = _callback_data(bot.device_menu("device-1", 200))
-    owner_catalog = _callback_data(bot.devices_menu(100))
-    user_catalog = _callback_data(bot.devices_menu(200))
+    owner_catalog = _callback_data(bot.device_tools_menu(100))
+    user_catalog = _callback_data(bot.device_tools_menu(200))
 
     assert "catalog:archive:set:aabbccdd:0" in owner_device
     assert not any(value.startswith("catalog:archive:") for value in user_device)
@@ -6177,8 +6698,8 @@ def test_device_collection_entry_is_owner_only_and_registry_backed(monkeypatch):
     monkeypatch.setattr(bot.devices, "list_device_collections", lambda **_kwargs: [], raising=False)
     monkeypatch.setattr(bot, "get_user_role", lambda user_id: bot.Role.OWNER if user_id == 100 else bot.Role.USER)
     monkeypatch.setattr(bot.access_store, "can_use_callback", lambda user_id, *_args, **_kwargs: user_id == 100)
-    assert "catalog:collection:list" in _callback_data(bot.devices_menu(100))
-    assert "catalog:collection:list" not in _callback_data(bot.devices_menu(200))
+    assert "catalog:collection:list" in _callback_data(bot.device_tools_menu(100))
+    assert "catalog:collection:list" not in _callback_data(bot.device_tools_menu(200))
     rows, markup = bot.device_collection_catalog(100)
     assert rows == []
     assert _callback_data(markup) == ["catalog:collection:create", "menu:devices", "menu:main"]
@@ -6189,8 +6710,8 @@ def test_saved_device_filter_entry_is_owner_only_and_registry_backed(monkeypatch
     monkeypatch.setattr(bot.devices, "list_saved_device_filters", lambda **_kwargs: [], raising=False)
     monkeypatch.setattr(bot, "get_user_role", lambda user_id: bot.Role.OWNER if user_id == 100 else bot.Role.USER)
     monkeypatch.setattr(bot.access_store, "can_use_callback", lambda user_id, *_args, **_kwargs: user_id == 100)
-    assert "catalog:saved-filter:list" in _callback_data(bot.devices_menu(100))
-    assert "catalog:saved-filter:list" not in _callback_data(bot.devices_menu(200))
+    assert "catalog:saved-filter:list" in _callback_data(bot.device_tools_menu(100))
+    assert "catalog:saved-filter:list" not in _callback_data(bot.device_tools_menu(200))
     rows, markup = bot.device_saved_filter_catalog(100)
     assert rows == []
     assert _callback_data(markup) == ["catalog:saved-filter:create", "menu:devices", "menu:main"]
@@ -6201,8 +6722,8 @@ def test_device_catalog_sort_entry_is_owner_only_and_registry_backed(monkeypatch
     monkeypatch.setattr(bot, "get_user_role", lambda user_id: bot.Role.OWNER if user_id == 100 else bot.Role.USER)
     monkeypatch.setattr(bot.access_store, "can_use_callback", lambda user_id, *_args, **_kwargs: user_id == 100)
     monkeypatch.setattr(bot.devices, "get_device_catalog_sort", lambda *_args: "name", raising=False)
-    assert "devices:sort" in _callback_data(bot.devices_menu(100))
-    assert "devices:sort" not in _callback_data(bot.devices_menu(200))
+    assert "devices:sort" in _callback_data(bot.device_tools_menu(100))
+    assert "devices:sort" not in _callback_data(bot.device_tools_menu(200))
     keyboard = bot.device_sort_keyboard(100)
     assert _callback_data(keyboard) == [
         "devices:sort:name", "devices:sort:platform", "devices:sort:version", "devices:sort:last_seen",
@@ -6215,8 +6736,8 @@ def test_device_catalog_custom_order_is_owner_only_and_registry_backed(monkeypat
     monkeypatch.setattr(bot, "get_user_role", lambda user_id: bot.Role.OWNER if user_id == 100 else bot.Role.USER)
     monkeypatch.setattr(bot.access_store, "can_use_callback", lambda user_id, *_args, **_kwargs: user_id == 100)
     monkeypatch.setattr(bot.devices, "get_device_catalog_sort", lambda *_args: "custom", raising=False)
-    assert "catalog:order:edit" in _callback_data(bot.devices_menu(100))
-    assert "catalog:order:edit" not in _callback_data(bot.devices_menu(200))
+    assert "catalog:order:edit" in _callback_data(bot.device_tools_menu(100))
+    assert "catalog:order:edit" not in _callback_data(bot.device_tools_menu(200))
 
 
 def test_device_catalog_custom_order_move_updates_same_card_and_rejects_stale_callback(monkeypatch, tmp_path):
@@ -6346,6 +6867,7 @@ def test_owner_can_create_and_apply_saved_device_filter_in_one_card(monkeypatch,
     class Callback:
         from_user = SimpleNamespace(id=100)
         data = "catalog:saved-filter:create"
+        message = SimpleNamespace(from_user=SimpleNamespace(id=100), chat=SimpleNamespace(id=100), message_id=30)
         async def answer(self, *_args, **_kwargs): pass
 
     class Message:
@@ -6447,8 +6969,8 @@ def test_inactivity_history_entry_is_owner_only(monkeypatch):
         lambda user_id, _callback, _owner_id, _target=None: user_id == 100,
     )
 
-    assert "catalog:inactivity:list" in _callback_data(bot.devices_menu(100))
-    assert "catalog:inactivity:list" not in _callback_data(bot.devices_menu(200))
+    assert "catalog:inactivity:list" in _callback_data(bot.device_tools_menu(100))
+    assert "catalog:inactivity:list" not in _callback_data(bot.device_tools_menu(200))
 
 
 def test_typed_inventory_editor_entry_is_owner_only(monkeypatch, tmp_path):
@@ -6457,7 +6979,7 @@ def test_typed_inventory_editor_entry_is_owner_only(monkeypatch, tmp_path):
     bot.access_store.set_role(100, 200, bot.Role.USER, 100)
     monkeypatch.setattr(bot, "_filter_device_keyboard", lambda markup, *_args, **_kwargs: markup)
 
-    owner_callbacks = _callback_data(bot.device_menu("a", 100))
+    owner_callbacks = _callback_data(bot.device_menu("a", 100, include_tools=True))
     user_callbacks = _callback_data(bot.device_menu("a", 200))
 
     assert "catalog:fields:list" in owner_callbacks
@@ -6850,11 +7372,8 @@ def test_primary_navigation_is_grouped_into_compact_dashboard_rows(monkeypatch):
         ["cat:files", "cat:network"],
         ["cat:terminal", "cat:power"],
         ["versions:device", "cmd:capabilities"],
-        ["cat:pranks", "catalog:tags:list"],
+        ["cat:pranks", "device:tools"],
     ]
-    assert device_rows[5] == ["catalog:pinned:toggle:dev1"]
-    assert device_rows[6] == ["catalog:fields:list"]
-    assert device_rows[7] == ["cmd:agent_logs"]
     assert device_rows[-1] == ["menu:target", "menu:main"]
 
 
@@ -8376,7 +8895,8 @@ def test_event_settings_use_compact_rows_without_changing_callbacks():
         ["ev:toggle:notify_online", "ev:toggle:notify_offline"],
         ["ev:toggle:notify_battery_low", "ev:quiet"],
         ["ev:digest", "ev:admins"],
-        ["ev:server_autostart:toggle", "menu:main"],
+        ["ev:server_autostart:toggle", "ev:toggle:hide_command_inputs"],
+        ["menu:main"],
     ]
     assert [
         [button.callback_data for button in row]
@@ -8386,6 +8906,41 @@ def test_event_settings_use_compact_rows_without_changing_callbacks():
         ["quiet:22:7", "quiet:0:6"],
         ["ev:menu"],
     ]
+
+
+def test_owner_command_input_deletion_is_opt_in_and_only_deletes_owner_message(monkeypatch):
+    from types import SimpleNamespace
+
+    deleted = []
+    monkeypatch.setattr(bot, "ADMIN_ID", 100)
+    monkeypatch.setattr(
+        bot.bot_settings,
+        "get",
+        lambda key, default=None: key == "hide_command_inputs" and True,
+    )
+
+    async def delete():
+        deleted.append(True)
+
+    owner_message = SimpleNamespace(from_user=SimpleNamespace(id=100), delete=delete)
+    other_admin_message = SimpleNamespace(from_user=SimpleNamespace(id=200), delete=delete)
+
+    assert asyncio.run(bot._delete_command_input_if_enabled(owner_message)) is True
+    assert asyncio.run(bot._delete_command_input_if_enabled(other_admin_message)) is False
+    assert deleted == [True]
+
+
+def test_owner_command_input_deletion_failure_does_not_raise(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(bot, "ADMIN_ID", 100)
+    monkeypatch.setattr(bot.bot_settings, "get", lambda key, default=None: True)
+
+    async def delete():
+        raise RuntimeError("Telegram rejected deletion")
+
+    message = SimpleNamespace(from_user=SimpleNamespace(id=100), delete=delete)
+    assert asyncio.run(bot._delete_command_input_if_enabled(message)) is False
 
 
 def test_guardian_stop_requires_confirmation():
@@ -8476,6 +9031,425 @@ def test_agent_logs_falls_back_to_guardian_when_agent_lacks_log_command(monkeypa
     assert "Источник: <code>Guardian</code>" in rendered[-1]
 
 
+def test_agent_files_owner_view_requires_exact_response_and_renders_only_metadata(monkeypatch):
+    rendered, published, waited = [], [], []
+
+    async def answer(*_args, **_kwargs):
+        return None
+
+    async def replace(_cq, text, **kwargs):
+        rendered.append((text, kwargs))
+
+    async def allowed(*_args, **_kwargs):
+        return True
+
+    async def wait_for(target, action, timeout, command_id):
+        waited.append((target, action, timeout, command_id))
+        return {
+            "type": "agent_files", "device_id": "mac-1", "id": command_id,
+            "schema": "xider.agent-files.v1", "state": "partial",
+            "generated_at": "2026-10-30T01:15:00Z",
+            "components": [{
+                "id": "agent", "state": "available", "version": "4.3.3",
+                "install_path": "/Users/test/XIDER", "files": [{
+                    "file_id": "agent-version",
+                    "path": "/Users/test/XIDER/xgent_mcs.py", "size_bytes": 321,
+                    "sha256": "a" * 64, "signature_state": "not_applicable",
+                    "integrity_state": "unverified", "evidence": "no_signed_per_file_manifest",
+                    "contents": "SHOULD_NOT_APPEAR",
+                }],
+            }],
+            "protection": {"obfuscation_state": "unknown", "integrity_state": "unverified"},
+            "secret": "SHOULD_NOT_APPEAR",
+        }
+
+    monkeypatch.setattr(bot, "SESSION", {"target": "mac-1"})
+    monkeypatch.setattr(bot, "_callback_result_access_or_report", allowed)
+    monkeypatch.setattr(bot, "_callback_delivery_guard", lambda *_args: lambda: True)
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    monkeypatch.setattr(bot, "publish_tracked", lambda action, **kwargs: (published.append((action, kwargs)) or (True, "request-1")))
+    monkeypatch.setattr(bot.fun_text_collector, "wait_for", wait_for)
+    monkeypatch.setattr(bot.access_store, "append_audit", lambda *_args, **_kwargs: None)
+    bot._AGENT_FILES_VIEWS.clear()
+    cq = SimpleNamespace(
+        from_user=SimpleNamespace(id=bot.ADMIN_ID), data="cmd:agent_files",
+        answer=answer, message=SimpleNamespace(chat=SimpleNamespace(id=1), message_id=2),
+    )
+
+    asyncio.run(bot.on_cmd_agent_files(cq))
+
+    assert published == [("agent_files", {"_target": "mac-1"})]
+    assert waited == [("mac-1", "agent_files", 12.0, "request-1")]
+    text, kwargs = rendered[-1]
+    assert "xgent_mcs.py" in text
+    assert "unverified" in text
+    assert "2026-10-30T01:15:00Z" in text
+    assert "SHOULD_NOT_APPEAR" not in text
+    buttons = [button.callback_data for row in kwargs["reply_markup"].inline_keyboard for button in row]
+    assert any(value.startswith("agentfiles:component:") for value in buttons)
+    assert not any(value.startswith("agentfiles:file:") for value in buttons)
+    assert "back:device" in buttons
+
+
+def test_agent_files_pagination_is_owner_and_ttl_scoped():
+    bot._AGENT_FILES_VIEWS.clear()
+    report = {
+        "state": "available", "generated_at": "2026-10-30T01:15:00Z",
+        "obfuscation_state": "unknown", "integrity_state": "unverified",
+        "components": [{"id": "agent", "state": "available", "version": "1.0",
+                        "install_path": "/x", "files": [
+                            {"path": f"/x/{i}", "size_bytes": i, "sha256": "b" * 64,
+                             "signature_state": "unknown", "integrity_state": "unverified", "evidence": ""}
+                            for i in range(5)
+                        ]}],
+    }
+    token = bot._agent_files_store_view(bot.ADMIN_ID, "device-1", report, now=100)
+
+    first, _ = bot._agent_files_render_page(token, 0, owner_id=bot.ADMIN_ID, now=101)
+    second, _ = bot._agent_files_render_page(token, 1, owner_id=bot.ADMIN_ID, now=101)
+    assert "/x/0" in first and "/x/4" not in first
+    assert "/x/4" in second
+    assert bot._agent_files_render_page(token, 0, owner_id=bot.ADMIN_ID + 1, now=101) == (None, None)
+    assert bot._agent_files_render_page(token, 0, owner_id=bot.ADMIN_ID, now=401) == (None, None)
+
+
+def test_agent_files_component_view_is_bounded_metadata_only():
+    bot._AGENT_FILES_VIEWS.clear()
+    report = {
+        "state": "available", "generated_at": "2026-10-30T01:15:00Z",
+        "obfuscation_state": "unknown", "integrity_state": "unverified",
+        "components": [{"id": "agent", "state": "available", "version": "4.3.3",
+                        "install_path": "/Users/test/XIDER", "files": [
+                            {"file_id": f"agent-file-{i}", "path": f"/Users/test/XIDER/{i}.py", "size_bytes": i,
+                             "sha256": "c" * 64, "signature_state": "not_applicable",
+                             "integrity_state": "unverified", "evidence": "ignored evidence",
+                             "contents": "MUST_NOT_RENDER"}
+                            for i in range(5)
+                        ]}],
+    }
+    token = bot._agent_files_store_view(bot.ADMIN_ID, "mac-1", report, now=100)
+    first, markup = bot._agent_files_render_component(token, 0, 0, owner_id=bot.ADMIN_ID, now=101)
+    second, _ = bot._agent_files_render_component(token, 0, 1, owner_id=bot.ADMIN_ID, now=101)
+
+    assert "4.3.3" in first and "/Users/test/XIDER" in first
+    assert "/0.py" in first and "/4.py" not in first
+    assert "/4.py" in second
+    assert "MUST_NOT_RENDER" not in first
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert f"agentfiles:page:{token}:0" in callbacks
+    assert f"agentfiles:file:{token}:0:0:agent-file-0" in callbacks
+    assert bot._agent_files_render_component(token, 1, 0, owner_id=bot.ADMIN_ID, now=101) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("style", "expected_page", "expected_component", "expected_file", "expected_buttons"),
+    [
+        (
+            "xtech",
+            ("Agent files", "Status:", "Agent snapshot:", "List integrity:", "signed manifest", "Files · page", "Size:", "signature:", "integrity:"),
+            ("Agent · device-1", "Version:", "Install path:", "Files · page"),
+            ("Agent · XIDER file", "Path:", "Result:", "content received"),
+            ("🔎 Agent", "📄 View", "← To list", "← Back to device", "← Component files"),
+        ),
+        (
+            "xperson",
+            ("Файлы агента", "Состояние:", "Снимок агента:", "Подпись списка:", "подписанного манифеста", "Файлы · страница", "Размер:", "подпись:", "целостность:"),
+            ("Агент · device-1", "Версия:", "Путь установки:", "Файлы · страница"),
+            ("Агент · файл XIDER", "Путь:", "Результат:", "содержимое получено"),
+            ("🔎 Агент", "📄 Просмотреть", "← К списку", "← К устройству", "← К файлам компонента"),
+        ),
+        (
+            "xpikmi",
+            ("Файлики компонентов", "Статус:", "Снимок агентчика:", "Целостность списка:", "подписанного манифеста", "Файлики · страница", "Размер:", "подпись:", "целостность:"),
+            ("Агент ♡ · device-1", "Версия:", "Где установлен:", "Файлики · страница"),
+            ("Агент ♡ · файлик XIDER", "Путь:", "Результат:", "содержимое получено ♡"),
+            ("🔎 Агент ♡", "📄 Посмотреть ♡", "← К списочку ♡", "← К устройству ♡", "← К файликам компонента ♡"),
+        ),
+        (
+            "xtarped",
+            ("Файлы XIDER", "Состояние:", "Снимок агента:", "Целостность списка:", "подписанного манифеста", "Файлы · страница", "Размер:", "подпись:", "целостность:"),
+            ("Агент · device-1", "Версия:", "Путь установки:", "Файлы · страница"),
+            ("Агент · файл XIDER", "Путь:", "Результат:", "содержимое получено"),
+            ("🔎 Агент", "📄 Просмотреть", "← К списку", "← К устройству", "← К файлам компонента"),
+        ),
+        (
+            "xcore",
+            ("Инвентарь файлов", "Статус:", "Снимок:", "Целостность:", "подписанного манифеста", "Файлы · страница", "Размер:", "подпись:", "целостность:"),
+            ("Агент · device-1", "Версия:", "Путь:", "Файлы · страница"),
+            ("Агент · файл XIDER", "Путь:", "Результат:", "получено"),
+            ("🔎 Агент", "📄 Открыть", "← К списку", "← К устройству", "← Файлы компонента"),
+        ),
+        (
+            "xadam",
+            ("Файлы агента", "Состояние:", "Снимок агента:", "Проверка целостности:", "подписанного манифеста", "Файлы · страница", "Размер:", "подпись:", "целостность:"),
+            ("Агент · device-1", "Версия:", "Расположение:", "Файлы · страница"),
+            ("Агент · файл XIDER", "Путь:", "Итог:", "содержимое получено"),
+            ("🔎 Агент", "📄 Посмотреть", "← К списку", "← К устройству", "← К файлам компонента"),
+        ),
+    ],
+)
+def test_agent_files_cards_render_real_copy_in_selected_style(
+    monkeypatch, style, expected_page, expected_component, expected_file, expected_buttons,
+):
+    monkeypatch.setattr(
+        bot.bot_settings, "get",
+        lambda key, default=None: style if key == "ui_style" else default,
+    )
+    bot._AGENT_FILES_VIEWS.clear()
+    report = {
+        "state": "available", "generated_at": "2026-10-30T01:15:00Z",
+        "obfuscation_state": "unknown", "integrity_state": "unverified",
+        "components": [{
+            "id": "agent", "state": "available", "version": "4.3.3",
+            "install_path": "/xider/agent", "files": [{
+                "file_id": "agent-file-0", "path": "/xider/agent/xgent.py",
+                "size_bytes": 42, "sha256": "b" * 64,
+                "signature_state": "unknown", "integrity_state": "unverified",
+                "evidence": "",
+            }],
+        }],
+    }
+    now = time.time()
+    token = bot._agent_files_store_view(bot.ADMIN_ID, "device-1", report, now=now)
+
+    page, page_markup = bot._agent_files_render_page(token, 0, owner_id=bot.ADMIN_ID, now=now + 1)
+    component, component_markup = bot._agent_files_render_component(
+        token, 0, 0, owner_id=bot.ADMIN_ID, now=now + 1,
+    )
+    file_card, file_markup = bot._agent_file_content_card(
+        token, 0, 0, "agent-file-0",
+        {"state": "available", "content": "safe", "truncated": False},
+        owner_id=bot.ADMIN_ID,
+    )
+
+    assert all(fragment in page for fragment in expected_page)
+    assert all(fragment in component for fragment in expected_component)
+    assert all(fragment in file_card for fragment in expected_file)
+    page_buttons = [button.text for row in page_markup.inline_keyboard for button in row]
+    component_buttons = [button.text for row in component_markup.inline_keyboard for button in row]
+    file_buttons = [button.text for row in file_markup.inline_keyboard for button in row]
+    component_button, view_button, list_button, device_button, files_button = expected_buttons
+    assert component_button in page_buttons
+    assert view_button in component_buttons
+    assert list_button in component_buttons
+    assert device_button in page_buttons and device_button in component_buttons
+    assert files_button in file_buttons and device_button in file_buttons
+
+
+def test_agent_files_component_shows_no_view_action_without_stable_file_id():
+    bot._AGENT_FILES_VIEWS.clear()
+    report = {
+        "state": "available", "generated_at": "2026-10-30T01:15:00Z",
+        "obfuscation_state": "unknown", "integrity_state": "unverified",
+        "components": [{"id": "agent", "state": "available", "version": None,
+                        "install_path": "/x", "files": [{"path": "/x/unknown", "file_id": None,
+                            "size_bytes": None, "sha256": None, "signature_state": "unknown",
+                            "integrity_state": "unknown", "evidence": ""}]}],
+    }
+    token = bot._agent_files_store_view(bot.ADMIN_ID, "device-1", report, now=100)
+    _body, markup = bot._agent_files_render_component(token, 0, 0, owner_id=bot.ADMIN_ID, now=101)
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert not any(value.startswith("agentfiles:file:") for value in callbacks)
+
+
+def test_agent_files_component_keeps_long_dotted_stable_id_within_telegram_limit():
+    bot._AGENT_FILES_VIEWS.clear()
+    file_id = "agent.source.xider_layers"
+    report = bot._agent_files_normalize_report({
+        "type": "agent_files", "device_id": "device-1", "id": "request-1",
+        "schema": "xider.agent-files.v1", "state": "available",
+        "generated_at": "2026-10-30T01:15:00Z",
+        "components": [{"id": "agent", "state": "available", "version": None,
+                        "install_path": "/x", "files": [{"file_id": file_id, "path": "/x/layers.py",
+                            "size_bytes": 10, "sha256": None, "signature_state": "unknown",
+                            "integrity_state": "unknown", "evidence": ""}]}],
+        "protection": {},
+    }, target="device-1", command_id="request-1")
+    assert report is not None
+    token = bot._agent_files_store_view(bot.ADMIN_ID, "device-1", report, now=100)
+    _body, markup = bot._agent_files_render_component(token, 0, 0, owner_id=bot.ADMIN_ID, now=101)
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    callback = next(value for value in callbacks if value.startswith("agentfiles:file:"))
+    assert callback.endswith(file_id)
+    assert len(callback.encode("utf-8")) <= 64
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"schema": "wrong-schema"},
+        {"type": "agent_files"},
+        {"id": "stale-request"},
+        {"request_id": "stale-request"},
+        {"file_id": "other-file"},
+        {"state": []},
+        {"content": "x" * 8193},
+        {"truncated": 1},
+    ],
+)
+def test_agent_file_content_response_rejects_invalid_schema_correlation_and_bounds(changes):
+    response = {
+        "type": "agent_file_get", "schema": "xider.agent-file-content.v1",
+        "device_id": "device-1", "id": "request-1", "request_id": "request-1",
+        "file_id": "agent-version", "state": "available", "content": "safe",
+        "truncated": False,
+    }
+    response.update(changes)
+    assert bot._agent_file_content_response(
+        response, target="device-1", command_id="request-1", file_id="agent-version",
+    ) is None
+
+
+def test_agent_file_content_view_is_owner_only_correlated_and_escaped(monkeypatch):
+    published, waited, rendered, answers = [], [], [], []
+    bot._AGENT_FILES_VIEWS.clear()
+    report = {
+        "state": "available", "generated_at": "2026-10-30T01:15:00Z",
+        "obfuscation_state": "unknown", "integrity_state": "unverified",
+        "components": [{"id": "agent", "state": "available", "version": "4.3.3",
+                        "install_path": "/x", "files": [{
+                            "file_id": "agent-version", "path": "/x/version_info.txt", "size_bytes": 10,
+                            "sha256": None, "signature_state": "unknown", "integrity_state": "unverified",
+                            "evidence": "",
+                        }]}],
+    }
+    token = bot._agent_files_store_view(bot.ADMIN_ID, "device-1", report)
+
+    async def answer(*args, **kwargs):
+        answers.append((args, kwargs))
+
+    async def replace(_cq, body, **kwargs):
+        rendered.append((body, kwargs))
+
+    async def allowed(_cq, target, **kwargs):
+        assert target == "device-1"
+        return True
+
+    async def wait_for(target, action, timeout, command_id):
+        waited.append((target, action, timeout, command_id))
+        return {
+            "type": "agent_file_get", "schema": "xider.agent-file-content.v1",
+            "device_id": target, "id": command_id, "request_id": command_id,
+            "file_id": "agent-version", "state": "available",
+            "content": "<script>& hello", "truncated": False,
+        }
+
+    monkeypatch.setattr(bot, "SESSION", {"target": "device-1"})
+    monkeypatch.setattr(bot, "_callback_result_access_or_report", allowed)
+    monkeypatch.setattr(bot, "_callback_delivery_guard", lambda *_args: lambda: True)
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    monkeypatch.setattr(bot, "publish_tracked", lambda action, **kwargs: (published.append((action, kwargs)) or (True, "request-9")))
+    monkeypatch.setattr(bot.fun_text_collector, "wait_for", wait_for)
+    monkeypatch.setattr(bot.access_store, "append_audit", lambda *_args, **_kwargs: pytest.fail("raw file content must not be audited"))
+    cq = SimpleNamespace(
+        from_user=SimpleNamespace(id=bot.ADMIN_ID), data=f"agentfiles:file:{token}:0:0:agent-version",
+        answer=answer, message=SimpleNamespace(chat=SimpleNamespace(id=1), message_id=2),
+    )
+
+    asyncio.run(bot.on_agent_file_content(cq))
+
+    assert published == [("agent_file_get", {"file_id": "agent-version", "_target": "device-1"})]
+    assert waited == [("device-1", "agent_file_get", 12.0, "request-9")]
+    assert "&lt;script&gt;&amp; hello" in rendered[-1][0]
+    assert "<script>" not in rendered[-1][0]
+    callbacks = [button.callback_data for row in rendered[-1][1]["reply_markup"].inline_keyboard for button in row]
+    assert f"agentfiles:component:{token}:0:0" in callbacks
+
+
+def test_agent_file_content_rejects_stale_response_and_reports_unsupported(monkeypatch):
+    bot._AGENT_FILES_VIEWS.clear()
+    report = {
+        "state": "available", "generated_at": "2026-10-30T01:15:00Z",
+        "obfuscation_state": "unknown", "integrity_state": "unverified",
+        "components": [{"id": "agent", "state": "available", "version": None,
+                        "install_path": None, "files": [{"file_id": "agent-version", "path": "/x/v.txt",
+                            "size_bytes": 1, "sha256": None, "signature_state": "unknown",
+                            "integrity_state": "unknown", "evidence": ""}]}],
+    }
+    token = bot._agent_files_store_view(bot.ADMIN_ID, "device-1", report)
+    calls, rendered, alerts = [], [], []
+
+    async def answer(text=None, **kwargs):
+        alerts.append((text, kwargs))
+
+    async def replace(_cq, body, **kwargs):
+        rendered.append(body)
+
+    async def allowed(*_args, **_kwargs):
+        return True
+
+    async def wait_for(*_args, **_kwargs):
+        return {"type": "agent_file_get", "schema": "xider.agent-file-content.v1",
+                "device_id": "wrong-device", "id": "request-1", "request_id": "request-1",
+                "file_id": "agent-version", "state": "available", "content": "must not show",
+                "truncated": False}
+
+    monkeypatch.setattr(bot, "SESSION", {"target": "device-1"})
+    monkeypatch.setattr(bot, "_callback_result_access_or_report", allowed)
+    monkeypatch.setattr(bot, "_callback_delivery_guard", lambda *_args: lambda: True)
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    monkeypatch.setattr(bot, "publish_tracked", lambda *_args, **_kwargs: (calls.append(1) or (True, "request-1")))
+    monkeypatch.setattr(bot.fun_text_collector, "wait_for", wait_for)
+    cq = SimpleNamespace(from_user=SimpleNamespace(id=bot.ADMIN_ID),
+                         data=f"agentfiles:file:{token}:0:0:agent-version", answer=answer,
+                         message=SimpleNamespace(chat=SimpleNamespace(id=1), message_id=2))
+
+    asyncio.run(bot.on_agent_file_content(cq))
+
+    assert calls == [1]
+    assert bot._lex("agent_files_content_invalid") in rendered[-1]
+    assert "must not show" not in rendered[-1]
+
+
+@pytest.mark.parametrize(
+    ("callback", "handler"),
+    [
+        ("agentfiles:page:{token}:0", bot.on_agent_files_page),
+        ("agentfiles:component:{token}:0:0", bot.on_agent_files_component),
+    ],
+)
+def test_agent_files_callbacks_reject_changed_device_session(monkeypatch, callback, handler):
+    bot._AGENT_FILES_VIEWS.clear()
+    report = {
+        "state": "available", "generated_at": "2026-10-30T01:15:00Z",
+        "obfuscation_state": "unknown", "integrity_state": "unverified",
+        "components": [],
+    }
+    token = bot._agent_files_store_view(bot.ADMIN_ID, "mac-1", report)
+    alerts = []
+
+    async def answer(text=None, **kwargs):
+        alerts.append((text, kwargs))
+
+    async def should_not_be_called(*_args, **_kwargs):
+        raise AssertionError("device access should be checked only after session matches")
+
+    monkeypatch.setattr(bot, "SESSION", {"target": "windows-2"})
+    monkeypatch.setattr(bot, "_callback_result_access_or_report", should_not_be_called)
+    cq = SimpleNamespace(
+        data=callback.format(token=token), from_user=SimpleNamespace(id=bot.ADMIN_ID), answer=answer,
+    )
+
+    asyncio.run(handler(cq))
+
+    assert alerts and alerts[0][0] == bot._lex("agent_files_view_expired")
+
+
+def test_agent_files_rejects_stale_or_malformed_responses():
+    base = {
+        "type": "agent_files", "device_id": "device-1", "id": "request-1",
+        "schema": "xider.agent-files.v1", "state": "available", "components": [],
+        "generated_at": "2026-10-30T01:15:00Z",
+        "protection": {},
+    }
+    assert bot._agent_files_normalize_report(base, target="device-1", command_id="request-1") is not None
+    assert bot._agent_files_normalize_report(base, target="device-1", command_id="request-2") is None
+    assert bot._agent_files_normalize_report({**base, "device_id": "device-2"}, target="device-1", command_id="request-1") is None
+    assert bot._agent_files_normalize_report({**base, "state": []}, target="device-1", command_id="request-1") is None
+    assert bot._agent_files_normalize_report({**base, "generated_at": "yesterday"}, target="device-1", command_id="request-1") is None
+    assert bot._agent_files_normalize_report({**base, "generated_at": "2026-10-30T01:15:00+03:00"}, target="device-1", command_id="request-1") is None
+
+
 def test_power_confirmation_dispatches_action_payload_without_duplicate_callback_answer(monkeypatch):
     from types import SimpleNamespace
 
@@ -8487,8 +9461,10 @@ def test_power_confirmation_dispatches_action_payload_without_duplicate_callback
         def reset(self):
             pass
 
-        async def wait(self, _timeout):
-            return None
+        async def wait_for(self, target, action, *, timeout, command_id):
+            assert (target, action, timeout, command_id) == ("device-A", "power", 5.0, "a" * 12)
+            return {"type": "power", "device_id": "other-device", "action": "reboot", "ok": True,
+                    "id": "unrelated-request", "text": "wrong result"}
 
     class FakeMessage:
         chat = SimpleNamespace(id=10)
@@ -8511,6 +9487,7 @@ def test_power_confirmation_dispatches_action_payload_without_duplicate_callback
 
     monkeypatch.setitem(bot.SESSION, "target", "device-A")
     monkeypatch.setattr(bot, "target_label", lambda target: target)
+    monkeypatch.setattr(bot.uuid, "uuid4", lambda: SimpleNamespace(hex="a" * 32))
     monkeypatch.setattr(bot, "audit", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(bot, "HISTORY", {})
     monkeypatch.setattr(bot.transport, "publish_command", fake_transport_publish)
@@ -8519,9 +9496,191 @@ def test_power_confirmation_dispatches_action_payload_without_duplicate_callback
 
     asyncio.run(bot.on_power_confirm(FakeCallback()))
 
-    assert published == [("device-A", "power", {"action": "reboot"})]
+    assert published == [("device-A", "power", {"id": "a" * 12, "action": "reboot"})]
     assert len(answers) == 1
     assert len(edits) == 1
+    assert "подтверждённый результат не получен" in edits[0][0]
+    assert "wrong result" not in edits[0][0]
+
+
+def test_power_confirmation_reports_only_matching_positive_ack_as_confirmed(monkeypatch):
+    from types import SimpleNamespace
+
+    rendered = []
+    class Collector:
+        async def wait_for(self, target, action, *, timeout, command_id):
+            return {
+                "type": "power", "device_id": target, "action": "reboot",
+                "id": command_id, "ok": True, "state": "confirmed", "effect_confirmed": True,
+                "text": "reboot state confirmed by device",
+            }
+    class Callback:
+        data = "power_confirm:reboot"
+        from_user = SimpleNamespace(id=20)
+        message = SimpleNamespace(chat=SimpleNamespace(id=10), message_id=30)
+        async def answer(self, *_args, **_kwargs):
+            pass
+    monkeypatch.setitem(bot.SESSION, "target", "device-A")
+    monkeypatch.setattr(bot, "target_label", lambda target: target)
+    monkeypatch.setattr(bot.uuid, "uuid4", lambda: SimpleNamespace(hex="b" * 32))
+    monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (True, "b" * 12))
+    monkeypatch.setattr(bot, "fun_text_collector", Collector())
+    monkeypatch.setattr(bot, "back_to_device_kb", lambda: "back")
+    async def replace(_cq, text, reply_markup=None):
+        rendered.append(text)
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+
+    asyncio.run(bot.on_power_confirm(Callback()))
+    assert rendered and "reboot state confirmed by device" in rendered[0]
+
+
+def test_power_confirmation_does_not_promote_launch_ack_to_completed_action(monkeypatch):
+    from types import SimpleNamespace
+
+    rendered = []
+
+    class Collector:
+        async def wait_for(self, target, action, *, timeout, command_id):
+            return {
+                "type": "power", "device_id": target, "action": "shutdown",
+                "id": command_id, "ok": True, "state": "launch_accepted",
+                "effect_confirmed": False, "text": "Windows accepted request; final transition unconfirmed",
+            }
+
+    class Callback:
+        data = "power_confirm:shutdown"
+        from_user = SimpleNamespace(id=20)
+        message = SimpleNamespace(chat=SimpleNamespace(id=10), message_id=30)
+
+        async def answer(self, *_args, **_kwargs):
+            pass
+
+    monkeypatch.setitem(bot.SESSION, "target", "device-A")
+    monkeypatch.setattr(bot, "target_label", lambda target: target)
+    monkeypatch.setattr(bot.uuid, "uuid4", lambda: SimpleNamespace(hex="c" * 32))
+    monkeypatch.setattr(bot, "publish_tracked", lambda *args, **kwargs: (True, "c" * 12))
+    monkeypatch.setattr(bot, "fun_text_collector", Collector())
+    monkeypatch.setattr(bot, "back_to_device_kb", lambda: "back")
+
+    async def replace(_cq, text, reply_markup=None):
+        rendered.append(text)
+
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    asyncio.run(bot.on_power_confirm(Callback()))
+
+    assert rendered and "Windows accepted request; final transition unconfirmed" in rendered[0]
+    assert "final transition unconfirmed" in rendered[0]
+
+
+def test_screen_lock_publish_is_never_reported_as_confirmed(monkeypatch):
+    from types import SimpleNamespace
+
+    rendered = []
+    class Callback:
+        data = "cmd:lock"
+        from_user = SimpleNamespace(id=20)
+        message = SimpleNamespace(chat=SimpleNamespace(id=10), message_id=30)
+        async def answer(self, *_args, **_kwargs):
+            pass
+    monkeypatch.setitem(bot.SESSION, "target", "device-A")
+    monkeypatch.setattr(bot, "target_label", lambda target: target)
+    monkeypatch.setattr(bot, "publish_tracked", lambda *_args, **_kwargs: (True, "op-1"))
+    class NoAck:
+        async def wait_for(self, *_args, **_kwargs):
+            return None
+    monkeypatch.setattr(bot, "fun_text_collector", NoAck())
+    monkeypatch.setattr(bot, "back_to_device_kb", lambda: "back")
+    async def replace(_cq, text, reply_markup=None):
+        rendered.append(text)
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+
+    asyncio.run(bot.on_cmd_lock(Callback()))
+    assert rendered and "Фактическая блокировка не подтверждена" in rendered[0]
+    assert "Экран заблокирован:" not in rendered[0]
+
+
+def test_all_device_lock_tracks_and_renders_each_online_device(monkeypatch):
+    from types import SimpleNamespace
+
+    rendered = []
+    published = []
+    devices_by_id = {
+        "win-1": {"name": "Windows", "online": True, "approved": True},
+        "mac-1": {"name": "Mac", "online": True, "approved": True},
+        "offline-1": {"name": "Offline", "online": False, "approved": True},
+    }
+
+    class Callback:
+        data = "cmd:lock"
+        from_user = SimpleNamespace(id=20)
+        message = SimpleNamespace(chat=SimpleNamespace(id=10), message_id=30)
+        async def answer(self, *_args, **_kwargs):
+            pass
+
+    class Collector:
+        async def wait_for(self, device_id, action, timeout, command_id):
+            assert action == "lock" and timeout == 8.0
+            if device_id == "mac-1":
+                return {"type": "lock", "device_id": device_id, "id": command_id,
+                        "ok": False, "state": "unsupported", "error": "unsupported"}
+            return {"type": "lock", "device_id": device_id, "id": command_id, "ok": True}
+
+    monkeypatch.setitem(bot.SESSION, "target", "all")
+    monkeypatch.setattr(bot.devices, "all", lambda: devices_by_id)
+    monkeypatch.setattr(bot, "_status_dot", lambda info: "🟢" if info.get("online") else "⚪")
+    monkeypatch.setattr(bot, "target_label", lambda target: devices_by_id[target]["name"])
+    monkeypatch.setattr(bot, "publish", lambda action, *, _target=None, **kwargs:
+                        published.append((action, _target, kwargs["id"])) or True)
+    monkeypatch.setattr(bot, "fun_text_collector", Collector())
+    monkeypatch.setattr(bot, "back_to_device_kb", lambda: "back")
+
+    async def replace(_cq, text, reply_markup=None):
+        rendered.append(text)
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+
+    asyncio.run(bot.on_cmd_lock(Callback()))
+
+    assert {target for _action, target, _request_id in published} == {"win-1", "mac-1"}
+    assert all(action == "lock" and request_id for action, _target, request_id in published)
+    assert "<b>Windows</b>: подтверждено" in rendered[0]
+    assert "<b>Mac</b>: не поддерживается" in rendered[0]
+    assert "Offline" not in rendered[0]
+
+
+@pytest.mark.parametrize(("percent", "expected"), [(42.5, "42.5%"), (float("nan"), "некорректное значение"), (101, "некорректное значение")])
+def test_battery_result_validates_percent_and_shows_provenance(monkeypatch, percent, expected):
+    from types import SimpleNamespace
+
+    rendered = []
+    class Collector:
+        async def wait_for(self, *_args, **_kwargs):
+            return {
+                "available": True, "percent": percent, "state": "on_battery",
+                "time_left": "2ч", "source": "psutil.sensors_battery", "sampled_at": 1_800_000_000,
+            }
+    class Callback:
+        data = "cmd:battery"
+        from_user = SimpleNamespace(id=20)
+        message = SimpleNamespace(chat=SimpleNamespace(id=10), message_id=30)
+        async def answer(self, *_args, **_kwargs):
+            pass
+    monkeypatch.setitem(bot.SESSION, "target", "device-A")
+    monkeypatch.setattr(bot, "target_label", lambda target: target)
+    async def allowed(*_args, **_kwargs):
+        return True
+    monkeypatch.setattr(bot, "_callback_result_access_or_report", allowed)
+    monkeypatch.setattr(bot, "publish_tracked", lambda *_args, **_kwargs: (True, "ticket-1"))
+    monkeypatch.setattr(bot, "battery_collector", Collector())
+    monkeypatch.setattr(bot, "back_to_device_kb", lambda: "back")
+    async def replace(_cq, text, reply_markup=None, **_kwargs):
+        rendered.append(text)
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+
+    asyncio.run(bot.on_cmd_battery(Callback()))
+    assert rendered and expected in rendered[0]
+    if percent == 42.5:
+        assert "psutil.sensors_battery" in rendered[0]
+        assert "2027-01-15" in rendered[0]
 
 
 def test_sleep_confirmation_uses_captured_target_and_replaces_current_card(monkeypatch):
@@ -8857,6 +10016,7 @@ def test_legacy_agent_version_page_offers_owner_bootstrap_command(monkeypatch):
     assert "подписан" in body
     assert "не" in body and "v4.2.0" in body
     assert "Old Mac" in body and "терминал" in body
+    assert "export XIDER_INSTALL_TAG=&#x27;v4.2.0&#x27;;" in body
     assert "curl -fsSL https://invinby.github.io/XIDER/mac | bash" in body
     assert keyboard.inline_keyboard[0][0].callback_data == "versions:detail:agent:v4.2.0"
 
@@ -8958,7 +10118,7 @@ def test_guardian_broadcast_stop_uses_guardian_protocol():
     import inspect
 
     source = inspect.getsource(bot.on_stopall_ok)
-    assert 'publish_command("all", "guardian", action="guardian", command="stop")' in source
+    assert 'publish("guardian", _target="all", action="guardian", command="stop")' in source
 
 
 def test_screenshot_displays_agent_error_without_html_injection(monkeypatch):
@@ -9012,7 +10172,7 @@ def test_photo_response_becomes_current_navigation_card(monkeypatch):
 
     class FakeCollector:
         async def wait_for(self, *args, **kwargs):
-            return {"image": _jpeg_test_image_b64(),
+            return {"state": "success", "image": _jpeg_test_image_b64(),
                     "audio": base64.b64encode(b"fixture-audio").decode("ascii")}
 
     async def send_photo(*args, **kwargs):
@@ -9374,6 +10534,15 @@ def test_response_collector_accepts_typed_request_id_correlation():
     assert asyncio.run(get_result()) == {"device_id": "device-1", **response}
 
 
+def test_response_collector_keeps_authenticated_topic_device_identity():
+    collector = bot.ResponseCollector()
+    collector.submit("device-from-topic", {
+        "type": "sysinfo", "id": "ticket-1", "device_id": "forged-device",
+    })
+    result = asyncio.run(collector.wait_for("device-from-topic", "sysinfo", timeout=0.1, command_id="ticket-1"))
+    assert result["device_id"] == "device-from-topic"
+
+
 def test_external_ip_watch_scheduler_baselines_then_notifies_and_acks(monkeypatch, tmp_path):
     from types import SimpleNamespace
     from device_store import DeviceStore
@@ -9474,13 +10643,13 @@ def _expected_callback_gate(callback):
     """Independent route contract: never inferred from the installed filter."""
     if callback.startswith(("cmd:shell-page:", "cmd:shell-preview:", "cmd:shell-json:", "cmd:shell-source:", "cmd:shell-compare-select:", "cmd:shell-repeat:", "cmd:shell-dryrun:", "cmd:shell-runbook-confirm:", "cmd:shell-runbook-cancel:", "cmd:shell-template-", "cmd:shell-tpl-")):
         return "OwnerFilter"
-    if callback in {"cmd:shell_late_results", "cmd:shell_runbook_templates", "cmd:shell_metadata_export", "cmd:shell_runbook", "cmd:route_trace", "cmd:route_lookup", "cmd:shell_timing_report", "cmd:shell_runner_diagnostic", "cmd:shell_approval_inbox", "cmd:path_mtu", "cmd:path_diagnostic", "cmd:network_check_sets", "cmd:external_ip_watch", "network-set:create", "network-ip-watch:set:900", "network-ip-watch:set:1800", "network-ip-watch:set:3600", "network-ip-watch:off", "cmd:captive_portal", "cmd:ipv6_connectivity", "cmd:tls_certificate", "cmd:service_probe", "cmd:latency_series", "cmd:packet_loss_history", "cmd:network_jitter", "cmd:network_throughput", "cmd:network_link_speed", "cmd:wifi_quality_history", "cmd:wifi_channel_summary", "cmd:wifi_connection_history", "cmd:proxy_status", "cmd:vpn_route_status", "cmd:endpoint_batch", "cmd:dnssec_check", "cmd:network_traffic"} or callback.startswith(("traffic:sample:", "traffic:alert-", "network-report:export:", "network-set:run:", "network-set:delete:", "network-link-speed:", "cmd:shell-late:view:", "cmd:shell-inbox:view:")):
+    if callback in {"cmd:shell_late_results", "cmd:shell_runbook_templates", "cmd:shell_metadata_export", "cmd:shell_runbook", "cmd:route_trace", "cmd:route_lookup", "cmd:shell_timing_report", "cmd:shell_runner_diagnostic", "cmd:shell_approval_inbox", "cmd:path_mtu", "cmd:path_diagnostic", "cmd:network_check_sets", "cmd:external_ip_watch", "network-set:create", "network-ip-watch:set:900", "network-ip-watch:set:1800", "network-ip-watch:set:3600", "network-ip-watch:off", "cmd:captive_portal", "cmd:ipv6_connectivity", "cmd:tls_certificate", "cmd:service_probe", "cmd:latency_series", "cmd:packet_loss_history", "cmd:network_jitter", "cmd:network_throughput", "cmd:network_link_speed", "cmd:wifi_quality_history", "cmd:wifi_channel_summary", "cmd:wifi_connection_history", "cmd:proxy_status", "cmd:vpn_route_status", "cmd:endpoint_batch", "cmd:dnssec_check", "cmd:network_traffic", "cmd:agent_files", "cmd:agent_file_get"} or callback.startswith(("traffic:sample:", "traffic:alert-", "network-report:export:", "network-set:run:", "network-set:delete:", "network-link-speed:", "cmd:shell-late:view:", "cmd:shell-inbox:view:")):
         return "OwnerFilter"
     if callback in {"camera:catalog", "camera:capture", "camera:preview:keep", "camera:preview:discard", "cmd:mic", "mic:level", "mic:balance", "mic:preview", "media:history", "audio:outputs", "audio:switch", "mic:test"} or callback.startswith(("camera:select:", "camera:series:", "media:cancel:", "mic:preview:", "mic:input:", "mic:level:", "mic:balance:", "micdur:", "audio:previewout:", "audio:testout:", "audio:setout:", "cmd:webcam")):
         return "OwnerFilter"
-    if callback in {"devices:filter-os", "devices:filter-os:cancel", "devices:filter-heartbeat", "devices:filter-heartbeat:cancel", "devices:filter-version", "devices:filter-version:cancel", "devices:filter-capability", "devices:filter-capability:cancel", "devices:filter-inventory-age", "devices:filter-inventory-age:cancel", "devices:sort", "catalog:pinned:list", "catalog:order:edit", "catalog:archive:list", "catalog:export", "catalog:import", "catalog:import:cancel"} or callback.startswith(("devices:sort:", "catalog:pinned:toggle:", "catalog:order:up:", "catalog:order:down:", "catalog:archive:", "catalog:export:", "catalog:link:")):
+    if callback in {"device:tools", "devices:filter-os", "devices:filter-os:cancel", "devices:filter-heartbeat", "devices:filter-heartbeat:cancel", "devices:filter-version", "devices:filter-version:cancel", "devices:filter-capability", "devices:filter-capability:cancel", "devices:filter-inventory-age", "devices:filter-inventory-age:cancel", "devices:sort", "catalog:pinned:list", "catalog:order:edit", "catalog:archive:list", "catalog:export", "catalog:import", "catalog:import:cancel"} or callback.startswith(("devices:sort:", "catalog:pinned:toggle:", "catalog:order:up:", "catalog:order:down:", "catalog:archive:", "catalog:export:", "catalog:link:")):
         return "OwnerFilter"
-    if callback in {"devices:search", "devices:search:cancel"}:
+    if callback in {"devices:search", "devices:search:cancel", "devices:tools"}:
         return "AdminFilter"
     if callback in {"shell:ok", "menu:admin", "menu:target", "url:favorites", "versions:server", "cpu:history", "memory:history", "volume:history", "volume:topology", "clock:drift", "sysinfo:history", "sysinfo:compare", "sysinfo:export", "sysinfo:interval", "sysinfo:threshold", "sysinfo:aggregate", "sysinfo:uncertainty", "camera:quality", "media:temp:cleanup", "display:catalog", "display:resolution", "pressure:history", "thermal:snapshot", "battery:health", "battery:cycles", "energy:usage", "sleep:history", "boot:duration", "reboot:status", "os:support", "hardware:history", "drivers:history", "apps:history", "startup:history", "services:history", "crash:summary", "smart:trend", "cmd:dns_resolution", "cmd:dns_settings", "cmd:dns_comparison", "cmd:gateway_probe", "cmd:agent_logs"} or callback.startswith(
         ("screenshot:mask", "screenshot:preview", "display:", "window:", "admin:", "devmg:", "install:", "server:", "server_confirm:", "url:fav:", "versions:bootstrap:", "versions:canary:", "versions:rollout:", "cmd:shell-approve:", "cmd:shell-cancel:", "cmd:shell-stop:", "cmd:shell-dryrun:", "permhelp:", "permsettings:", "permverify:", "location:", "dock:", "catalog:synonym:", "catalog:snapshot:", "catalog:collection:", "catalog:saved-filter:", "catalog:inactivity:", "catalog:fields:", "catalog:tags:", "catalog:order:", "catalog:note:", "catalog:place:", "catalog:review:", "catalog:purpose:", "files:inbox", "cpu:history:", "memory:history:", "pressure:history:", "sysinfo:export:", "sysinfo:interval:", "sysinfo:threshold:", "sysinfo:aggregate:")
@@ -10393,6 +11562,26 @@ _DEPENDENT_ACTION_CONTRACTS["on_cmd_agent_logs"] = dict(
     result_sensitivity="bounded redacted XIDER component logs",
     risk="owner-only local diagnostic read; output redacted before Telegram delivery",
 )
+_DEPENDENT_ACTION_CONTRACTS["on_cmd_agent_files"] = dict(
+    category="files", wire_action="agent_files", os_support=("Windows", "macOS"), timeout=12.0,
+    result_sensitivity="bounded installed-component and file metadata",
+    risk="owner-only inventory read; file contents remain hidden by default",
+)
+_DEPENDENT_ACTION_CONTRACTS["on_agent_file_content"] = dict(
+    category="files", wire_action="agent_file_get", os_support=("Windows", "macOS"), timeout=12.0,
+    result_sensitivity="one owner-requested allowlisted text file, capped at 8192 UTF-8 bytes",
+    risk="owner-only bounded file view; exact file ID and current device are revalidated",
+)
+_DEPENDENT_ACTION_CONTRACTS["on_agent_files_page"] = dict(
+    category="files", os_support=("Telegram",), timeout=0.0,
+    result_sensitivity="owner-scoped page of previously received component metadata",
+    risk="owner-only view with TTL and target binding",
+)
+_DEPENDENT_ACTION_CONTRACTS["on_agent_files_component"] = dict(
+    category="files", os_support=("Telegram",), timeout=0.0,
+    result_sensitivity="owner-scoped component details from a cached inventory",
+    risk="owner-only view with TTL and target binding",
+)
 
 
 def _descriptive_callback_metadata(callback, route):
@@ -10427,9 +11616,9 @@ def _descriptive_callback_metadata(callback, route):
             metadata["required_permission"] = "device grant: cmd:url (FSM-bound device)"
         elif grants == "owner; nonowner rejected by access_store":
             metadata["required_permission"] = f"owner authority: {callback} (access_store)"
-        elif callback in {"menu:main", "menu:devices", "menu:about", "back:device", "devices:search", "devices:search:cancel"}:
+        elif callback in {"menu:main", "menu:devices", "menu:about", "back:device", "devices:tools", "devices:search", "devices:search:cancel"}:
             metadata["required_permission"] = f"user navigation: {callback}"
-        elif callback.startswith("dev:"):
+        elif callback.startswith(("dev:", "devref:")):
             metadata["required_permission"] = f"device selection grant: {callback}"
     name = route.callback.__name__
     if name in _ACTION_CONTRACTS:
@@ -10455,7 +11644,7 @@ def _descriptive_callback_metadata(callback, route):
         if callback in {"shell:ok", "cmd:shell"}:
             metadata.update(result_sensitivity="private shell output after input", risk="arbitrary code execution",
                             os_support=("Windows", "macOS"), timeout=20.0, wire_action="shell")
-    elif name in _NAVIGATION_ROUTES:
+    elif name in _NAVIGATION_ROUTES or name in {"on_devices_tools", "on_device_tools"}:
         metadata["category"] = "navigation"
         if name in {"on_versions_list", "on_versions_detail", "on_versions_install_select"}:
             metadata.update(timeout=6.0, result_sensitivity="public release metadata", risk="catalog network read")
@@ -10570,8 +11759,8 @@ def test_inventory_routes_have_explicit_server_access_filters(monkeypatch):
                 assert metadata["required_permission"] == (
                     "device grant: cmd:url (FSM-bound device)" if callback.startswith("url:count:") else
                     f"owner authority: {callback} (access_store)" if callback.startswith(("all:", "ev:", "adm:", "quiet:", "digest:", "versions:")) or callback in {"cfm:stop_all", "stopall:ok"} else
-                    f"user navigation: {callback}" if callback in {"menu:main", "menu:devices", "menu:about", "back:device", "devices:search", "devices:search:cancel"} else
-                    f"device selection grant: {callback}" if callback.startswith("dev:") else f"device grant: {callback}"
+                    f"user navigation: {callback}" if callback in {"menu:main", "menu:devices", "menu:about", "back:device", "devices:tools", "devices:search", "devices:search:cancel"} else
+                    f"device selection grant: {callback}" if callback.startswith(("dev:", "devref:")) else f"device grant: {callback}"
                 )
             for field in ("os_support", "result_sensitivity", "risk"):
                 if isinstance(metadata[field], str) and metadata[field].startswith("unknown:"):
@@ -10759,7 +11948,7 @@ def test_prank_action_rows_are_backed_by_declarative_navigation(monkeypatch):
     monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
     expected = {
         "prank.visual": {
-            "prank:stop_all", "prank:screamer", "prank:rickroll50", "prank:matrix",
+            "prank:stop_all", "prank:screamer", "prank:rickroll50",
             "cmd:prank_bsod", "cmd:prank_fake_update", "cmd:prank_invert_screen",
             "prank:hidedesktop", "prank:dancewin", "prank:blackscreen", "cmd:prank_shake_window",
         },
@@ -11066,6 +12255,7 @@ def test_device_registry_menus_use_all_six_xlex_voices_without_changing_actions(
     )
     builders = (
         bot.devices_menu,
+        bot.device_tools_menu,
         lambda: bot.device_menu(target),
         bot.all_menu,
         bot.blocked_menu,
@@ -11287,12 +12477,14 @@ def test_user_device_menu_only_shows_granted_devices_and_no_global_controls(monk
 
     user_callbacks = _callback_data(bot.devices_menu(200))
     owner_callbacks = _callback_data(bot.devices_menu(100))
+    owner_tools_callbacks = _callback_data(bot.device_tools_menu(100))
     user_device_settings = _callback_data(bot.device_settings_menu(200))
 
     assert "dev:device-1" in user_callbacks
     assert "dev:device-2" not in user_callbacks
     assert not any(callback.startswith("devmg:") for callback in user_callbacks)
-    assert "devmg:clear_all" in owner_callbacks
+    assert "devices:tools" in owner_callbacks
+    assert "devmg:clear_all" in owner_tools_callbacks
     assert {"dev:device-1", "dev:device-2"}.issubset(owner_callbacks)
     assert not any(callback.startswith("devmg:") for callback in user_device_settings)
     assert "versions:device" not in user_device_settings
@@ -12218,6 +13410,22 @@ def test_user_fsm_handlers_revalidate_before_device_side_effects():
         ), name
 
 
+def test_file_agent_command_inputs_honor_hide_command_setting():
+    tree = ast.parse(Path(bot.__file__).read_text(encoding="utf-8"))
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    for name in ("on_path_input", "on_find_input"):
+        calls = {
+            call.func.id
+            for call in ast.walk(functions[name])
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+        }
+        assert "_delete_command_input_if_enabled" in calls, name
+
+
 def test_successful_file_put_ack_is_routed_to_text_collector(monkeypatch):
     received = []
 
@@ -12424,6 +13632,7 @@ class CardTelegram:
 
     def message(self, message_id=30, chat_id=10, user_id=20, media=False):
         from types import SimpleNamespace
+        card = self.cards.get(message_id, {})
         async def edit(text, **kwargs):
             await self.edit_message_text(text, chat_id=chat_id, message_id=message_id, **kwargs)
         async def answer(text, **kwargs):
@@ -12431,7 +13640,8 @@ class CardTelegram:
         async def document(value, **kwargs):
             return await self.send_document(chat_id, value, **kwargs)
         return SimpleNamespace(chat=SimpleNamespace(id=chat_id), from_user=SimpleNamespace(id=user_id),
-                               message_id=message_id, photo=[object()] if media else None,
+                               message_id=message_id, text=card.get("text"), caption=card.get("text"),
+                               reply_markup=card.get("markup"), photo=[object()] if media else None,
                                edit_text=edit, answer=answer, answer_document=document)
 
     def callback(self, data="menu:main", message_id=30, media=False):
@@ -12445,6 +13655,7 @@ class CardTelegram:
 def _card_telegram(monkeypatch, tmp_path):
     telegram = CardTelegram()
     monkeypatch.setattr(bot, "bot", telegram)
+    monkeypatch.setattr(bot, "_NAVIGATION_HISTORY", {})
     monkeypatch.setattr(bot.ui_cards, "FILE", tmp_path / "cards.json")
     bot.ui_cards.set_card(10, 20, 30)
     return telegram
@@ -12544,6 +13755,26 @@ def test_screenshot_preview_stages_original_until_one_use_owner_confirmation(mon
     # A replayed confirmation has no staged original to release again.
     asyncio.run(bot.on_screenshot_preview_send(telegram.callback(send_callback, message_id=preview_id, media=True)))
     assert len(media_edits) == 1
+
+
+def test_screenshot_preview_rejects_image_without_explicit_success(monkeypatch, tmp_path):
+    telegram = _successful_screenshot_fixture(monkeypatch, tmp_path)
+    _setup(monkeypatch, {"mac1": {"name": "Mac", "os": "macOS"}})
+
+    async def allowed(*args, **kwargs):
+        return True
+
+    async def missing_state(*args):
+        return {"image": _jpeg_test_image_b64()}
+
+    monkeypatch.setattr(bot, "_callback_result_access_or_report", allowed)
+    monkeypatch.setattr(bot, "screenshot_collector", type("Collector", (), {"wait_for": missing_state})())
+
+    asyncio.run(bot.on_screenshot_preview(telegram.callback("screenshot:preview")))
+
+    assert not telegram.sent
+    assert 20 not in bot._SCREENSHOT_DELIVERY_CACHE
+    assert "неизвестно" in telegram.cards[30]["text"].lower()
 
 
 def test_screenshot_preview_cancel_discards_staged_original(monkeypatch, tmp_path):
@@ -12823,10 +14054,11 @@ def test_bulk_screenshots_deliver_one_indexed_archive_with_device_names(monkeypa
     monkeypatch.setattr(bot, "ADMIN_ID", 20)
     monkeypatch.setattr(bot.transport, "publish_command", lambda *args: True)
     monkeypatch.setattr(bot.multi_screenshot, "reset", lambda: None)
+    image = base64.b64decode(_jpeg_test_image_b64())
     async def results(*args):
-        return [{"device_id": "a", "image": base64.b64encode(b"image-a").decode()},
-                {"device_id": "b", "image": base64.b64encode(b"image-b").decode()},
-                {"device_id": "c", "image": base64.b64encode(b"image-c").decode()}]
+        return [{"device_id": "a", "state": "success", "image": base64.b64encode(image).decode()},
+                {"device_id": "b", "state": "success", "image": base64.b64encode(image).decode()},
+                {"device_id": "c", "state": "success", "image": base64.b64encode(image).decode()}]
     monkeypatch.setattr(bot.multi_screenshot, "wait_window", results)
     labels = {"a": "Laptop", "b": "Desktop", "c": "Ноут/../" + "🖥" * 100}
     monkeypatch.setattr(bot, "target_label", lambda value: labels[value])
@@ -12836,13 +14068,13 @@ def test_bulk_screenshots_deliver_one_indexed_archive_with_device_names(monkeypa
     assert bot.ui_cards.get(10, 20) == 31
     document = telegram.cards[31]["document"]
     with zipfile.ZipFile(io.BytesIO(document.data)) as archive:
-        assert archive.read("01-a-Laptop.jpg") == b"image-a"
-        assert archive.read("02-b-Desktop.jpg") == b"image-b"
+        assert archive.read("01-a-Laptop.jpg") == image
+        assert archive.read("02-b-Desktop.jpg") == image
         manifest = json.loads(archive.read("manifest.json"))
         assert manifest[2]["device_id"] == "c"
         assert manifest[2]["device_name"] == labels["c"]
         assert "/" not in manifest[2]["file"] and "\\" not in manifest[2]["file"]
-        assert archive.read(manifest[2]["file"]) == b"image-c"
+        assert archive.read(manifest[2]["file"]) == image
 
 
 def test_concurrent_missing_card_callbacks_create_one_replacement(monkeypatch, tmp_path):
@@ -12887,6 +14119,30 @@ def test_navigation_category_operation_back_home_stays_one_card(monkeypatch, tmp
         assert list(telegram.cards) == [30]
         assert bot.ui_cards.get(10, 20) == 30
     asyncio.run(scenario())
+
+
+def test_back_restores_previous_screen_and_clears_pending_input(monkeypatch, tmp_path):
+    telegram = _card_telegram(monkeypatch, tmp_path)
+    monkeypatch.setattr(bot, "ADMIN_ID", 20)
+    _setup(monkeypatch, {"a": {"name": "Laptop", "os": "Windows", "online": True}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "a"})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
+
+    class PendingState:
+        cleared = False
+
+        async def clear(self):
+            self.cleared = True
+
+    state = PendingState()
+    bot._NAVIGATION_HISTORY[(10, 20)] = [("Previous input menu", bot.back_to_device_kb(user_id=20))]
+    asyncio.run(bot.on_back_to_device(telegram.callback("back:device"), state))
+
+    assert state.cleared is True
+    assert telegram.cards[30]["text"] == "Previous input menu"
+    assert "back:device" in _callback_data(telegram.cards[30]["markup"])
+    assert (10, 20) not in bot._NAVIGATION_HISTORY
 
 
 def test_versions_and_permission_check_round_trip_stays_one_card(monkeypatch, tmp_path):
@@ -12941,13 +14197,11 @@ def test_versions_and_permission_check_round_trip_stays_one_card(monkeypatch, tm
 
         await bot.on_cmd_capabilities(telegram.callback("cmd:capabilities"))
         callbacks = _callback_data(telegram.cards[30]["markup"])
-        assert "permhelp:camera" in callbacks
+        assert "permhelp:camera" not in callbacks
         assert "permsettings:camera" in callbacks
 
-        await bot.on_permission_help(telegram.callback("permhelp:camera"))
-        assert "Системные настройки" in telegram.cards[30]["text"]
         await bot.on_permission_settings(telegram.callback("permsettings:camera"))
-        assert settings_calls == [("permission_settings", {"timeout": 15.0, "permission": "camera"})]
+        assert settings_calls == [("permission_settings", {"timeout": 100.0, "permission": "camera"})]
 
         await bot.on_back_to_device(telegram.callback("back:device"))
         await bot.on_menu_main(telegram.callback("menu:main"))
@@ -12956,6 +14210,19 @@ def test_versions_and_permission_check_round_trip_stays_one_card(monkeypatch, tm
         assert bot.ui_cards.get(10, 20) == 30
 
     asyncio.run(scenario())
+
+
+def test_permission_recheck_keeps_exact_settings_action_available_until_granted(monkeypatch):
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+
+    denied = _callback_data(bot._permission_recheck_keyboard("camera", "denied", "Windows", 20))
+    granted = _callback_data(bot._permission_recheck_keyboard("camera", "granted", "Windows", 20))
+    unsupported = _callback_data(bot._permission_recheck_keyboard("screen_recording", "denied", "Windows", 20))
+
+    assert "permsettings:camera" in denied
+    assert "back:device" in denied
+    assert "permsettings:camera" in granted
+    assert "permsettings:screen_recording" not in unsupported
 
 
 @pytest.mark.parametrize("flow", ["callback", "input", "media", "document"])
@@ -16064,7 +17331,7 @@ def test_device_compare_entry_is_owner_only_and_uses_bounded_snapshot_index(monk
     monkeypatch.setattr(bot.access_store, "get_effective_grants", lambda _user: {"callbacks": [], "devices": []})
     monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args, **_kwargs: True)
 
-    markup = bot.device_menu("mac-1", user_id=100)
+    markup = bot.device_menu("mac-1", user_id=100, include_tools=True)
     callbacks = _callback_data(markup)
 
     compare = [item for item in callbacks if item.startswith("catalog:compare:start:")]
@@ -16213,7 +17480,7 @@ def test_device_completeness_entry_is_owner_only_and_edits_the_current_card(monk
         rendered.append((text, reply_markup))
 
     monkeypatch.setattr(bot, "_replace_callback_message", replace)
-    card = bot.device_menu("mac-1", user_id=100)
+    card = bot.device_menu("mac-1", user_id=100, include_tools=True)
     callbacks = _callback_data(card)
     action = next((value for value in callbacks if value.startswith("catalog:completeness:")), None)
     assert action is not None, callbacks
@@ -16275,7 +17542,7 @@ def test_device_registration_origin_is_owner_only_and_edits_the_current_card(mon
         rendered.append((text, reply_markup))
 
     monkeypatch.setattr(bot, "_replace_callback_message", replace)
-    card = bot.device_menu("mac-1", user_id=100)
+    card = bot.device_menu("mac-1", user_id=100, include_tools=True)
     action = next(value for value in _callback_data(card) if value.startswith("catalog:registration:"))
     assert len(action.encode("utf-8")) <= 64
     callback = Callback()
@@ -16331,7 +17598,7 @@ def test_device_inventory_wizard_is_owner_only_and_registered(monkeypatch, tmp_p
     monkeypatch.setattr(bot.access_store, "get_effective_grants", lambda _user: {"callbacks": [], "devices": []})
     monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args, **_kwargs: True)
 
-    owner_callbacks = _callback_data(bot.device_menu("mac-1", user_id=100))
+    owner_callbacks = _callback_data(bot.device_menu("mac-1", user_id=100, include_tools=True))
     user_callbacks = _callback_data(bot.device_menu("mac-1", user_id=101))
     assert any(value.startswith("catalog:wizard:start:") for value in owner_callbacks)
     assert not any(value.startswith("catalog:wizard:") for value in user_callbacks)
@@ -16389,7 +17656,7 @@ def test_device_inventory_wizard_guides_tags_and_typed_fields_without_remote_act
     monkeypatch.setattr(bot, "_replace_callback_message", replace)
     monkeypatch.setattr(bot, "_replace_user_card", replace_user)
     state, callback = State(), Callback()
-    entry = next(value for value in _callback_data(bot.device_menu("mac-1", user_id=100)) if value.startswith("catalog:wizard:start:"))
+    entry = next(value for value in _callback_data(bot.device_menu("mac-1", user_id=100, include_tools=True)) if value.startswith("catalog:wizard:start:"))
     callback.data = entry
 
     async def scenario():
@@ -16420,7 +17687,7 @@ def test_private_device_note_is_owner_only_and_audit_excludes_note_text(monkeypa
     monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(bot, "SESSION", {"target": "dev1"})
 
-    owner_callbacks = _callback_data(bot.device_menu("dev1", 100))
+    owner_callbacks = _callback_data(bot.device_menu("dev1", 100, include_tools=True))
     user_callbacks = _callback_data(bot.device_menu("dev1", 200))
     assert any(value.startswith("catalog:note:view:") for value in owner_callbacks)
     assert not any(value.startswith("catalog:note:") for value in user_callbacks)
@@ -16463,7 +17730,7 @@ def test_manual_device_place_label_is_owner_only_and_explicitly_not_gps(monkeypa
     monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(bot.devices, "get_device_place_label", lambda *_args: "Office", raising=False)
 
-    owner_callbacks = _callback_data(bot.device_menu("dev1", 100))
+    owner_callbacks = _callback_data(bot.device_menu("dev1", 100, include_tools=True))
     user_callbacks = _callback_data(bot.device_menu("dev1", 200))
     assert any(value.startswith("catalog:place:edit:") for value in owner_callbacks)
     assert not any(value.startswith("catalog:place:") for value in user_callbacks)
@@ -16505,7 +17772,7 @@ def test_device_purpose_entry_is_owner_only_and_distinct_from_tags(monkeypatch):
     monkeypatch.setattr(bot.devices, "get_device_purpose", lambda *_args: None, raising=False)
     monkeypatch.setattr(bot, "_device_compare_inventory", lambda _user: ([("dev1", {"name": "Desk PC"})], "aabbccdd"))
 
-    owner_callbacks = _callback_data(bot.device_menu("dev1", 100))
+    owner_callbacks = _callback_data(bot.device_menu("dev1", 100, include_tools=True))
     user_callbacks = _callback_data(bot.device_menu("dev1", 200))
 
     assert "catalog:purpose:view:aabbccdd:0" in owner_callbacks
@@ -16522,7 +17789,7 @@ def test_device_review_date_entry_is_owner_only_and_shows_saved_date(monkeypatch
     monkeypatch.setattr(bot, "_device_compare_inventory", lambda _user: ([('dev1', {"name": "Desk PC"})], "aabbccdd"))
     monkeypatch.setattr(bot.devices, "get_device_review_date", lambda *_args: "2027-01-31", raising=False)
 
-    owner_markup = bot.device_menu("dev1", 100)
+    owner_markup = bot.device_menu("dev1", 100, include_tools=True)
     owner_callbacks = _callback_data(owner_markup)
     user_callbacks = _callback_data(bot.device_menu("dev1", 200))
 
@@ -16547,7 +17814,7 @@ def test_device_maintenance_entry_is_owner_only_and_shows_expiry(monkeypatch):
         "until_date": "2027-01-31", "exclude_inactivity": True, "active": True,
     }, raising=False)
 
-    owner_markup = bot.device_menu("dev1", 100)
+    owner_markup = bot.device_menu("dev1", 100, include_tools=True)
     owner_callbacks = _callback_data(owner_markup)
     user_callbacks = _callback_data(bot.device_menu("dev1", 200))
 
@@ -16568,7 +17835,7 @@ def test_device_relations_entry_is_owner_only_and_shows_link_count(monkeypatch):
     monkeypatch.setattr(bot, "_device_compare_inventory", lambda _user: ([('dev1', {"name": "Desk PC"}), ('dev2', {"name": "Test Mac"})], "aabbccdd"))
     monkeypatch.setattr(bot.devices, "get_device_relations", lambda actor, owner, _device: ["dev2"] if actor == 100 else None, raising=False)
 
-    owner_markup = bot.device_menu("dev1", 100)
+    owner_markup = bot.device_menu("dev1", 100, include_tools=True)
     owner_callbacks = _callback_data(owner_markup)
     user_callbacks = _callback_data(bot.device_menu("dev1", 200))
     relation_button = next(button for row in owner_markup.inline_keyboard for button in row
@@ -16936,7 +18203,7 @@ def test_inventory_template_actions_are_only_shown_to_owner(monkeypatch):
     monkeypatch.setattr(bot.devices, "get_device_purpose", lambda *_args: None, raising=False)
     monkeypatch.setattr(bot.devices, "typed_fields", lambda *_args: {}, raising=False)
 
-    owner_callbacks = _callback_data(bot.device_menu("dev1", 100))
+    owner_callbacks = _callback_data(bot.device_menu("dev1", 100, include_tools=True))
     user_callbacks = _callback_data(bot.device_menu("dev1", 200))
 
     assert "catalog:template:save:aabbccdd:0" in owner_callbacks
@@ -17066,7 +18333,7 @@ def test_duplicate_candidate_is_owner_only_and_opens_read_only_comparison(monkey
     monkeypatch.setattr(bot, "_device_compare_inventory", lambda _user: (rows, "aabbccdd"))
     monkeypatch.setattr(bot.devices, "find_likely_duplicate_device_pairs", lambda actor, owner: [("device-a", "device-b")] if actor == owner == 100 else None, raising=False)
 
-    owner_callbacks = _callback_data(bot.device_menu("device-a", 100))
+    owner_callbacks = _callback_data(bot.device_menu("device-a", 100, include_tools=True))
     user_callbacks = _callback_data(bot.device_menu("device-a", 200))
 
     assert "catalog:duplicate:compare:aabbccdd:0:1" in owner_callbacks
@@ -17286,7 +18553,7 @@ def test_device_catalog_import_menu_entry_is_owner_only(monkeypatch, tmp_path, u
     monkeypatch.setattr(bot, "_visible_device_items", lambda _user: {})
     monkeypatch.setattr(bot.access_store, "get_effective_grants", lambda _user: {"callbacks": set()})
 
-    markup = bot.devices_menu(user_id)
+    markup = bot.device_tools_menu(user_id)
     callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
 
     assert ("catalog:import" in callbacks) is expected

@@ -1,11 +1,13 @@
 """One-shot location contract: OS doubles replace only native hardware/network."""
 import datetime
 import json
+import sys
 import urllib.request
 from types import SimpleNamespace
 from unittest.mock import Mock
 import pytest
 import xgent_mcs as agent
+import location_adapter
 
 @pytest.fixture(autouse=True)
 def isolated_native_diagnostic(monkeypatch):
@@ -56,6 +58,50 @@ def test_permission_gate_never_reads_or_requests_consent(permission, enabled, wa
     assert result["latitude"] is None
     assert result["source"] == "system"
     assert "settings" in result["label"].lower() or "настрой" in result["label"].lower()
+
+
+def test_passive_camera_permission_status_does_not_request_consent_or_capture(monkeypatch):
+    statuses = iter((3, 2))
+    media_types = []
+    device = SimpleNamespace(
+        authorizationStatusForMediaType_=lambda media_type: media_types.append(media_type) or next(statuses),
+    )
+    monkeypatch.setitem(sys.modules, "AVFoundation", SimpleNamespace(
+        AVMediaTypeVideo="video", AVMediaTypeAudio="audio", AVCaptureDevice=device,
+    ))
+
+    granted = location_adapter.permission_capability("camera")
+    denied = location_adapter.permission_capability("microphone")
+
+    assert granted[0] == "granted" and denied[0] == "denied"
+    assert media_types == ["video", "audio"]
+    assert "no capture or consent prompt" in granted[1]
+
+
+def test_passive_accessibility_permission_check_disables_system_prompt(monkeypatch):
+    observed = []
+    monkeypatch.setitem(sys.modules, "ApplicationServices", SimpleNamespace(
+        kAXTrustedCheckOptionPrompt="prompt",
+        AXIsProcessTrustedWithOptions=lambda options: observed.append(options) or False,
+    ))
+
+    state, _detail = location_adapter.permission_capability("accessibility")
+
+    assert state == "needs_live_test"
+    assert observed == [{"prompt": False}]
+
+
+def test_passive_screen_recording_check_uses_preflight_only(monkeypatch):
+    calls = []
+    monkeypatch.setitem(sys.modules, "Quartz", SimpleNamespace(
+        CGPreflightScreenCaptureAccess=lambda: calls.append("preflight") or False,
+        CGRequestScreenCaptureAccess=lambda: pytest.fail("passive check must not request consent"),
+    ))
+
+    state, _detail = location_adapter.permission_capability("screen_recording")
+
+    assert state == "needs_live_test"
+    assert calls == ["preflight"]
 
 @pytest.mark.parametrize("error,want", [(TimeoutError(), "needs_live_test"), (PermissionError(), "denied"),
                                       (OSError(), "unavailable")])

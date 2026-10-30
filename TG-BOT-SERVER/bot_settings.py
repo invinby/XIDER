@@ -20,6 +20,7 @@ _defaults = {
     "blocked_ids": [],
     "ui_style": "technical",
     "require_device_approval": True,
+    "hide_command_inputs": False,
 }
 
 

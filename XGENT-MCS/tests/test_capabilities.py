@@ -1,12 +1,237 @@
 """Capability reporting tests; no camera, microphone, or screen is accessed."""
 
 import xgent_mcs as mcs
+import location_adapter
 import shell_execution
 import datetime
 import json
 import plistlib
 import threading
+from pathlib import Path
 from types import SimpleNamespace
+import pytest
+
+
+def test_prank_matrix_ack_confirms_process_launch_but_not_visual_effect(monkeypatch):
+    client = object.__new__(mcs.XgentClient)
+    launched = []
+    published = []
+    monkeypatch.setattr(mcs.subprocess, "Popen", lambda *args, **kwargs: launched.append((args, kwargs)) or SimpleNamespace(pid=123))
+    monkeypatch.setattr(mcs, "DEVICE_ID", "mac-1")
+    client._publish_response = lambda topic, payload: published.append((topic, payload))
+
+    client._do_prank_matrix({"id": "matrix-1"})
+
+    assert len(launched) == 1
+    assert published[0][0] == "prank_matrix"
+    assert published[0][1]["state"] == "launch_accepted"
+    assert published[0][1]["effect_confirmed"] is False
+    assert published[0][1]["id"] == "matrix-1"
+
+
+def test_fake_kernel_screen_schedules_cleanup_for_its_owned_temp_page(monkeypatch, tmp_path):
+    client = object.__new__(mcs.XgentClient)
+    scheduled = []
+    published = []
+    monkeypatch.setattr(mcs, "_schedule_prank_temp_cleanup", lambda path: scheduled.append(Path(path)))
+    monkeypatch.setattr(mcs.subprocess, "Popen", lambda *args, **kwargs: SimpleNamespace(pid=123))
+    monkeypatch.setattr(mcs, "DEVICE_ID", "mac-1")
+    client._publish_response = lambda topic, payload: published.append((topic, payload)) or True
+
+    client._do_prank_bsod({})
+
+    assert len(scheduled) == 1
+    assert scheduled[0].name.startswith("xider-prank-")
+    assert scheduled[0].suffix == ".html"
+    assert published[0][1]["ok"] is True
+    scheduled[0].unlink(missing_ok=True)
+
+
+def test_prank_temp_cleanup_removes_only_owned_html_after_delay(monkeypatch, tmp_path):
+    owned = tmp_path / "xider-prank-one.html"
+    unrelated = tmp_path / "user-file.html"
+    owned.write_text("owned", encoding="utf-8")
+    unrelated.write_text("keep", encoding="utf-8")
+    timers = []
+
+    class FakeTimer:
+        def __init__(self, delay, callback, *, args):
+            self.delay = delay
+            self.callback = callback
+            self.args = args
+            self.daemon = False
+            timers.append(self)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(mcs.threading, "Timer", FakeTimer)
+    mcs._schedule_prank_temp_cleanup(str(owned))
+    mcs._schedule_prank_temp_cleanup(str(unrelated))
+
+    assert len(timers) == 1
+    assert timers[0].delay == 60
+    assert timers[0].daemon is True
+    timers[0].callback(*timers[0].args)
+    assert not owned.exists()
+    assert unrelated.read_text(encoding="utf-8") == "keep"
+
+
+def test_prank_response_marks_effect_unconfirmed_before_publish(monkeypatch):
+    import threading
+
+    sent = []
+
+    class PublishInfo:
+        rc = mcs.mqtt.MQTT_ERR_SUCCESS
+        def wait_for_publish(self, timeout=None): pass
+        def is_published(self): return True
+
+    class Client:
+        def publish(self, topic, payload, qos):
+            sent.append((topic, payload, qos))
+            return PublishInfo()
+
+    client = object.__new__(mcs.XgentClient)
+    client._client = Client()
+    client._command_context = threading.local()
+    monkeypatch.setattr(mcs, "ENCRYPT_PAYLOAD", False)
+    monkeypatch.setattr(mcs, "sign_message", lambda value: value)
+
+    assert client._publish_response("output", {
+        "type": "prank_fake_virus", "device_id": "mac-1", "ok": True,
+        "text": "Fake alert opened.",
+    }) is True
+
+    result = json.loads(sent[0][1])
+    assert result["state"] == "launch_accepted"
+    assert result["effect_confirmed"] is False
+    assert result["ok"] is True
+
+
+def test_worker_ack_means_handler_returned_not_action_succeeded(monkeypatch):
+    client = object.__new__(mcs.XgentClient)
+    client._command_context = threading.local()
+    observed = threading.Event()
+    acks = []
+    monkeypatch.setattr(client, "_publish_ack", lambda *args, **kwargs: (acks.append((args, kwargs)), observed.set()))
+
+    client._run_threaded("fixture", "fixture-1", lambda _payload: {"ok": False}, {})
+
+    assert observed.wait(2)
+    assert acks == [(("fixture", "completed"), {"cmd_id": "fixture-1"})]
+
+
+def test_wallpaper_prank_reports_failure_when_wallpaper_set_fails(monkeypatch, tmp_path):
+    client = object.__new__(mcs.XgentClient)
+    published = []
+    monkeypatch.setattr(mcs, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(mcs, "DEVICE_ID", "mac-1")
+    monkeypatch.setattr(
+        mcs.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="/tmp/original.jpg\n", stderr=""),
+    )
+    monkeypatch.setattr(client, "_do_wallpaper_set", lambda _payload: False)
+    client._publish_response = lambda topic, payload: published.append((topic, payload)) or True
+
+    client._do_prank_change_wallpaper({})
+
+    result = next(payload for topic, payload in published if payload.get("type") == "prank_change_wallpaper")
+    assert result["ok"] is False
+    assert "не изменены" in result["text"].lower()
+
+
+def test_hide_desktop_reports_failed_when_finder_commands_fail(monkeypatch):
+    client = object.__new__(mcs.XgentClient)
+    published = []
+    calls = []
+    monkeypatch.setattr(mcs, "DEVICE_ID", "mac-1")
+    monkeypatch.setattr(
+        mcs.subprocess,
+        "run",
+        lambda *args, **kwargs: calls.append(args[0]) or SimpleNamespace(returncode=1, stderr="denied"),
+    )
+    client._publish_response = lambda topic, payload: published.append(payload) or True
+
+    client._do_prank_hide_desktop({"hide": True})
+
+    assert len(calls) == 1
+    assert published[0]["ok"] is False
+    assert published[0]["state"] == "failed"
+
+
+def test_black_screen_reports_pmset_failure_and_never_claims_visual_confirmation(monkeypatch):
+    client = object.__new__(mcs.XgentClient)
+    published = []
+    monkeypatch.setattr(mcs, "DEVICE_ID", "mac-1")
+    monkeypatch.setattr(
+        mcs.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1, stderr="denied"),
+    )
+    client._publish_response = lambda topic, payload: published.append(payload) or True
+
+    client._do_prank_black_screen({})
+
+    assert published[0]["ok"] is False
+    assert published[0]["state"] == "failed"
+    assert published[0]["effect_confirmed"] is False
+
+
+def test_browser_meme_prank_reports_partial_launch_without_claiming_tabs_open(monkeypatch):
+    client = object.__new__(mcs.XgentClient)
+    published = []
+    launches = []
+    monkeypatch.setattr(mcs, "DEVICE_ID", "mac-1")
+    monkeypatch.setattr(mcs.time, "sleep", lambda _delay: None)
+
+    def fake_popen(args, **kwargs):
+        launches.append(args)
+        if len(launches) == 2:
+            raise OSError("browser launch denied")
+        return SimpleNamespace(pid=100 + len(launches))
+
+    monkeypatch.setattr(mcs.subprocess, "Popen", fake_popen)
+    client._publish_response = lambda topic, payload: published.append((topic, payload)) or True
+
+    client._do_prank_open_browser_memes({})
+
+    result = next(payload for _topic, payload in published if payload.get("type") == "prank_open_browser_memes")
+    assert len(launches) == 3
+    assert result["state"] == "partial"
+    assert result["accepted_count"] == 2
+    assert result["requested_count"] == 3
+    assert result["effect_confirmed"] is False
+    assert "открыты" not in result["text"].lower()
+
+
+def test_random_cursor_motion_is_explicitly_unsupported_on_macos(monkeypatch):
+    client = object.__new__(mcs.XgentClient)
+    published = []
+    monkeypatch.setattr(mcs, "DEVICE_ID", "mac-1")
+    client._publish_response = lambda topic, payload: published.append((topic, payload)) or True
+
+    client._do_prank_random_clicks({})
+
+    result = published[0][1]
+    assert result["ok"] is False
+    assert result["state"] == "unsupported"
+    assert "не реализовано" in result["text"].lower()
+
+
+def test_standby_rejection_emits_error_ack(monkeypatch):
+    client = object.__new__(mcs.XgentClient)
+    client._standby = True
+    acks = []
+    responses = []
+    monkeypatch.setattr(client, "_publish_ack", lambda *args, **kwargs: acks.append((args, kwargs)))
+    monkeypatch.setattr(client, "_publish_response", lambda *args: responses.append(args))
+
+    client._dispatch({"type": "volume_set", "id": "standby-1"})
+
+    assert responses and responses[0][1]["ok"] is False
+    assert acks == [(("volume_set", "error"), {"detail": "standby", "cmd_id": "standby-1"})]
 
 
 def test_feature_report_never_claims_live_permissions(monkeypatch):
@@ -69,6 +294,58 @@ def test_capabilities_response_includes_status_and_legacy_fields(monkeypatch):
     assert payload["shell_runner"]["executor_state"] in {"available", "unavailable"}
 
 
+def test_macos_lock_is_reported_unsupported_instead_of_sleeping_display(monkeypatch):
+    client = object.__new__(mcs.XgentClient)
+    sent = []
+    client._publish_response = lambda topic, payload: sent.append((topic, payload))
+    monkeypatch.setattr(
+        mcs.subprocess, "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("display sleep is not session lock")),
+    )
+
+    client._do_lock_screen({"id": "lock-ticket"})
+    assert sent == [("lock", {
+        "type": "lock", "device_id": mcs.DEVICE_ID, "action": "lock", "id": "lock-ticket",
+        "ok": False, "state": "unsupported",
+        "error": "macOS session lock is not implemented; display sleep is a separate action",
+    })]
+
+
+def test_macos_rickroll_counts_only_successful_open_requests(monkeypatch):
+    client = object.__new__(mcs.XgentClient)
+    sent = []
+    calls = []
+    codes = iter((0, 1, 0))
+    monkeypatch.setattr(mcs.subprocess, "run", lambda args, **kwargs: (
+        calls.append(args) or SimpleNamespace(returncode=next(codes), stderr="")
+    ))
+    monkeypatch.setattr(mcs.time, "sleep", lambda _seconds: None)
+    client._publish_response = lambda topic, payload: sent.append((topic, dict(payload)))
+
+    client._do_prank_rickroll({"id": "rr-mac", "tabs": 3})
+
+    result = sent[0][1]
+    assert len(calls) == 3
+    assert result["id"] == "rr-mac"
+    assert result["state"] == "launch_accepted" and result["ok"] is True
+    assert (result["tabs_requested"], result["tabs_accepted"], result["tabs_failed"]) == (3, 2, 1)
+    assert "не подтверждает показ" in result["text"]
+
+
+def test_macos_rickroll_reports_failed_when_open_command_fails(monkeypatch):
+    client = object.__new__(mcs.XgentClient)
+    sent = []
+    monkeypatch.setattr(mcs.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stderr="open failed"))
+    monkeypatch.setattr(mcs.time, "sleep", lambda _seconds: None)
+    client._publish_response = lambda topic, payload: sent.append((topic, dict(payload)))
+
+    client._do_prank_rickroll({"id": "rr-mac-fail", "tabs": 2})
+
+    result = sent[0][1]
+    assert result["ok"] is False and result["state"] == "failed"
+    assert result["tabs_accepted"] == 0 and result["tabs_failed"] == 2
+
+
 def test_shell_runner_probe_checks_filesystem_only_and_never_starts_a_process(monkeypatch, tmp_path):
     runner = tmp_path / "runner"
     runner.write_text("fixed shell executable placeholder", encoding="utf-8")
@@ -91,6 +368,10 @@ def test_shell_runner_probe_reports_missing_runner_without_claiming_permissions(
 def test_snapshot_inventory_is_complete_and_never_assumes_permission(monkeypatch):
     monkeypatch.setattr(mcs, "_module_available", lambda _name: True)
     monkeypatch.setattr(mcs, "_command_available", lambda *_args: True)
+    monkeypatch.setattr(location_adapter, "permission_capability", lambda key: (
+        "needs_live_test", "TCC status not available in this fixture"))
+    monkeypatch.setattr(location_adapter, "location_capability", lambda: (
+        "needs_live_test", "source=system; uncertainty=unknown; source=ip_estimate; uncertainty=unknown"))
     client = object.__new__(mcs.XgentClient)
     sent = []
     client._publish_response = lambda topic, payload: sent.append((topic, payload))
@@ -123,7 +404,35 @@ def test_snapshot_missing_dependencies_are_unavailable(monkeypatch):
     assert items["screen_recording"]["state"] == "unavailable"
 
 
-def test_permission_settings_opens_only_the_allowlisted_macos_pane(monkeypatch):
+def test_macos_permission_snapshot_uses_passive_states_without_claiming_live_actions(monkeypatch):
+    statuses = {"screen_recording": ("needs_live_test", "preflight false"),
+                "camera": ("granted", "AVFoundation status"),
+                "microphone": ("denied", "AVFoundation status"),
+                "location": ("granted", "CoreLocation status"),
+                "accessibility": ("granted", "AX trust status"),
+                "file_access": ("needs_live_test", "path-specific")}
+    calls = []
+    monkeypatch.setattr(location_adapter, "permission_capability", lambda key: calls.append(key) or statuses[key])
+    monkeypatch.setattr(location_adapter, "location_capability", lambda: statuses["location"])
+    monkeypatch.setattr(mcs, "_module_available", lambda _name: True)
+    monkeypatch.setattr(mcs, "_command_available", lambda *_args: True)
+    client = object.__new__(mcs.XgentClient)
+    sent = []
+    client._publish_response = lambda topic, payload: sent.append((topic, payload))
+
+    client._do_capabilities({})
+
+    items = {row["id"]: row for row in sent[0][1]["items"]}
+    assert items["camera"]["state"] == "granted"
+    assert items["microphone"]["state"] == "denied"
+    assert items["accessibility"]["state"] == "granted"
+    assert items["screen_recording"]["state"] == "needs_live_test"
+    assert items["file_access"]["state"] == "needs_live_test"
+    assert {"camera", "microphone", "screen_recording", "accessibility", "file_access"} == set(calls)
+    assert "location" not in calls  # handled through its dedicated passive adapter
+
+
+def test_camera_permission_button_requests_native_consent_without_opening_settings(monkeypatch):
     client = object.__new__(mcs.XgentClient)
     client._command_context = threading.local()
     client._command_context.cmd_id = "permission-request-1"
@@ -131,18 +440,119 @@ def test_permission_settings_opens_only_the_allowlisted_macos_pane(monkeypatch):
     calls = []
     client._publish_response = lambda topic, payload: responses.append((topic, dict(payload))) or True
     monkeypatch.setattr(mcs.subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs)) or SimpleNamespace(returncode=0))
+    monkeypatch.setattr(location_adapter, "request_permission", lambda permission, timeout: {
+        "state": "granted", "text": "macOS permission granted",
+    })
 
     result = client._do_permission_settings({"permission": "camera"})
 
-    assert calls == [(([
-        "open",
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera",
-    ],), {"check": False, "capture_output": True, "text": True, "timeout": 10})]
+    assert calls == []
     assert result["ok"] is True
     assert result["permission"] == "camera"
+    assert result["state"] == "granted"
     assert result["id"] == "permission-request-1"
     assert responses[0][0] == "permission_settings"
-    assert "XIDER" in responses[0][1]["text"]
+    assert responses[0][1]["text"] == "macOS permission granted"
+
+
+def test_native_camera_consent_uses_os_callback_without_opening_capture_device(monkeypatch):
+    callback = []
+    calls = []
+
+    class CaptureDevice:
+        @staticmethod
+        def authorizationStatusForMediaType_(_media_type):
+            return 0
+
+        @staticmethod
+        def requestAccessForMediaType_completionHandler_(media_type, handler):
+            calls.append(media_type)
+            callback.append(handler)
+
+    monkeypatch.setitem(__import__("sys").modules, "AVFoundation", SimpleNamespace(
+        AVMediaTypeVideo="video", AVMediaTypeAudio="audio", AVCaptureDevice=CaptureDevice,
+    ))
+    runtime = object.__new__(location_adapter.MacLocationRuntime)
+    job = {"permission": "camera", "cancelled": False, "done": threading.Event()}
+
+    runtime._start_permission_request(job)
+    callback[0](True)
+
+    assert calls == ["video"]
+    assert job["done"].is_set()
+    assert job["state"] == "granted"
+
+
+def test_native_permission_falls_back_to_settings_when_runtime_is_unavailable(monkeypatch):
+    client = object.__new__(mcs.XgentClient)
+    client._command_context = threading.local()
+    responses = []
+    opened = []
+    client._publish_response = lambda topic, payload: responses.append((topic, dict(payload))) or True
+    monkeypatch.setattr(location_adapter, "request_permission", lambda _permission, timeout: {
+        "state": "unavailable", "text": "Cocoa runtime unavailable",
+    })
+    monkeypatch.setattr(mcs.subprocess, "run", lambda args, **_kwargs: (
+        opened.append(args) or SimpleNamespace(returncode=0)
+    ))
+
+    result = client._do_permission_settings({"permission": "microphone"})
+
+    assert opened == [[
+        "open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+    ]]
+    assert result["ok"] is True and result["state"] == "settings_opened"
+    assert result["settings_opened"] is True
+    assert responses[0][1] == result
+
+
+def test_denied_native_permission_opens_exact_settings_pane_without_claiming_grant(monkeypatch):
+    client = object.__new__(mcs.XgentClient)
+    client._command_context = threading.local()
+    opened = []
+    client._publish_response = lambda *_args: True
+    monkeypatch.setattr(location_adapter, "request_permission", lambda _permission, timeout: {
+        "state": "denied", "text": "macOS denied camera access.",
+    })
+    monkeypatch.setattr(mcs.subprocess, "run", lambda args, **_kwargs: (
+        opened.append(args) or SimpleNamespace(returncode=0)
+    ))
+
+    result = client._do_permission_settings({"permission": "camera", "id": "perm-camera-1"})
+
+    assert opened == [[
+        "open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera",
+    ]]
+    assert result["state"] == "denied"
+    assert result["settings_opened"] is True
+    assert result["ok"] is True
+    assert "включить там вручную" in result["text"]
+
+
+@pytest.mark.parametrize("permission_state", ["granted", "denied"])
+def test_already_decided_permission_opens_settings_for_owner_to_change(monkeypatch, permission_state):
+    client = object.__new__(mcs.XgentClient)
+    client._command_context = threading.local()
+    opened = []
+    client._publish_response = lambda *_args: True
+    monkeypatch.setattr(location_adapter, "permission_capability", lambda _permission: (
+        permission_state, "permission already decided"
+    ))
+    monkeypatch.setattr(location_adapter, "request_permission", lambda *_args, **_kwargs: (
+        pytest.fail("must not request consent again when the permission is already decided")
+    ))
+    monkeypatch.setattr(mcs.subprocess, "run", lambda args, **_kwargs: (
+        opened.append(args) or SimpleNamespace(returncode=0)
+    ))
+
+    result = client._do_permission_settings({"permission": "camera", "id": "perm-camera-revoke"})
+
+    assert opened == [[
+        "open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera",
+    ]]
+    assert result["ok"] is True
+    assert result["state"] == "settings_opened"
+    assert result["permission_state"] == permission_state
 
 
 def test_permission_settings_rejects_arbitrary_or_unknown_targets(monkeypatch):
@@ -159,6 +569,142 @@ def test_permission_settings_rejects_arbitrary_or_unknown_targets(monkeypatch):
     assert result["ok"] is False
     assert result["permission"] == "unknown"
     assert responses[0][0] == "permission_settings"
+
+
+def test_macos_volume_set_reports_only_verified_readback(monkeypatch):
+    client = object.__new__(mcs.XgentClient)
+    client._command_context = threading.local()
+    client._command_context.cmd_id = "volume-set-1"
+    responses = []
+    calls = []
+
+    def publish(topic, payload):
+        payload = dict(payload)
+        payload.setdefault("id", client._command_context.cmd_id)
+        responses.append((topic, payload))
+        return True
+
+    client._publish_response = publish
+    monkeypatch.setattr(mcs, "DEVICE_ID", "mac-volume")
+    monkeypatch.setattr(mcs.subprocess, "run", lambda *args, **kwargs: (
+        calls.append((args, kwargs)) or SimpleNamespace(returncode=0, stdout="37\n", stderr="")
+    ))
+
+    client._do_volume_set({"level": 37})
+
+    topic, result = responses[0]
+    assert topic == "volume_set"
+    assert result["id"] == "volume-set-1"
+    assert result["ok"] is True and result["state"] == "confirmed"
+    assert result["level"] == result["current"] == 37
+    assert result["source"] == "osascript.volume_settings"
+    assert len(calls) == 2
+
+
+def test_macos_volume_set_never_substitutes_requested_level_for_failed_readback(monkeypatch):
+    client = object.__new__(mcs.XgentClient)
+    responses = []
+    calls = []
+    client._publish_response = lambda topic, payload: responses.append((topic, dict(payload)))
+    monkeypatch.setattr(mcs, "DEVICE_ID", "mac-volume")
+    monkeypatch.setattr(mcs.subprocess, "run", lambda *args, **kwargs: (
+        calls.append((args, kwargs)) or SimpleNamespace(returncode=1 if len(calls) == 2 else 0, stdout="", stderr="fixture failure")
+    ))
+
+    client._do_volume_set({"level": 37})
+
+    result = responses[0][1]
+    assert result["ok"] is False and result["state"] == "unknown"
+    assert result["current"] is None
+    assert "37%" not in result["text"]
+
+
+def test_macos_volume_toggle_reports_confirmed_readback(monkeypatch):
+    client = object.__new__(mcs.XgentClient)
+    client._command_context = threading.local()
+    client._command_context.cmd_id = "volume-toggle-1"
+    responses = []
+    outputs = iter(("false\n", "", "true\n"))
+
+    def publish(topic, payload):
+        payload = dict(payload)
+        payload.setdefault("id", client._command_context.cmd_id)
+        responses.append((topic, payload))
+        return True
+
+    client._publish_response = publish
+    monkeypatch.setattr(mcs, "DEVICE_ID", "mac-volume")
+    monkeypatch.setattr(mcs.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(
+        returncode=0, stdout=next(outputs), stderr="",
+    ))
+
+    client._do_volume_toggle({})
+
+    topic, result = responses[0]
+    assert topic == "volume_toggle"
+    assert result["id"] == "volume-toggle-1"
+    assert result["ok"] is True and result["state"] == "confirmed"
+    assert result["muted"] is True
+    assert result["source"] == "osascript.volume_settings"
+
+
+def test_macos_volume_toggle_does_not_change_state_when_initial_read_is_unknown(monkeypatch):
+    client = object.__new__(mcs.XgentClient)
+    responses = []
+    calls = []
+    client._publish_response = lambda topic, payload: responses.append((topic, dict(payload)))
+    monkeypatch.setattr(mcs, "DEVICE_ID", "mac-volume")
+    monkeypatch.setattr(mcs.subprocess, "run", lambda *args, **kwargs: (
+        calls.append((args, kwargs)) or SimpleNamespace(returncode=1, stdout="", stderr="fixture failure")
+    ))
+
+    client._do_volume_toggle({})
+
+    result = responses[0][1]
+    assert result["ok"] is False and result["state"] == "unknown"
+    assert len(calls) == 1
+
+
+def test_power_command_success_means_os_accepted_not_effect_confirmed(monkeypatch):
+    client = object.__new__(mcs.XgentClient)
+    monkeypatch.setattr(mcs, "DEVICE_ID", "mac-device")
+    monkeypatch.setattr(
+        mcs.subprocess, "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, dict(payload)))
+
+    client._do_power({"action": "shutdown", "id": "power-mac-1"})
+
+    assert [topic for topic, _ in published] == ["power", "output"]
+    result = published[0][1]
+    assert result["state"] == "launch_accepted"
+    assert result["ok"] is True
+    assert result["effect_confirmed"] is False
+    assert result["source"] == "osascript.SystemEvents"
+    assert result["id"] == result["request_id"] == "power-mac-1"
+    assert "не подтверждено" in result["text"].lower()
+
+
+def test_power_command_failure_is_reported_as_failed(monkeypatch):
+    client = object.__new__(mcs.XgentClient)
+    monkeypatch.setattr(mcs, "DEVICE_ID", "mac-device")
+    monkeypatch.setattr(
+        mcs.subprocess, "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stdout="", stderr="denied"),
+    )
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, dict(payload)))
+
+    client._do_power({"action": "shutdown", "id": "power-mac-2"})
+
+    result = published[0][1]
+    assert result["state"] == "failed"
+    assert result["ok"] is False
+    assert result["effect_confirmed"] is False
+    assert result["id"] == "power-mac-2"
+    assert "denied" in result["text"]
 
 
 def test_system_region_snapshot_has_separate_truthful_timezone_and_locale_sources():

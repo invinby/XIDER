@@ -61,12 +61,14 @@ def test_pages_launchers_authenticate_latest_installer_before_running_it():
     assert pages["win.txt"] == pages["win.ps1"]
     for platform, filename in (("macos", "mac"), ("windows", "win.ps1")):
         script = pages[filename]
-        assert f"releases/latest/download/{INSTALLERS[platform]}" in script
-        assert f"releases/latest/download/{INSTALLERS[platform]}.sig" in script
+        assert f"{INSTALLERS[platform]}\" -o" in script or f"{INSTALLERS[platform]}\" -OutFile" in script
+        assert f"{INSTALLERS[platform]}.sig\" -o" in script or f"{INSTALLERS[platform]}.sig\" -OutFile" in script
         assert "XIDER-INSTALLER-SHA256" in script
         assert INSTALLER_NAMESPACE in script
     assert pages["mac"].index("ssh-keygen -Y verify") < pages["mac"].index('bash "$p"')
     assert pages["win.ps1"].index("$v.ExitCode -ne 0") < pages["win.ps1"].index("$installer=Start-Process")
+    assert "releases/latest/download" in pages["win.ps1"]
+    assert "releases/latest/download" not in pages["mac"]
     assert "-Verb RunAs" in pages["win.ps1"]
     assert "-Wait -PassThru" in pages["win.ps1"]
     assert "XIDER Windows installer failed" in pages["win.ps1"]
@@ -83,14 +85,47 @@ def test_pages_launchers_authenticate_latest_installer_before_running_it():
     assert "Set-ExecutionPolicy" not in pages["win.ps1"]
 
 
+def test_pages_launchers_allow_a_validated_selected_release_tag():
+    pages = build_pages_launchers()
+
+    assert "$tag=$env:XIDER_INSTALL_TAG" in pages["win.ps1"]
+    assert "^v\\d{1,6}\\.\\d{1,6}\\.\\d{1,6}$" in pages["win.ps1"]
+    assert "https://github.com/invinby/XIDER/releases/download/$tag" in pages["win.ps1"]
+    assert 'tag="${XIDER_INSTALL_TAG:-}"' in pages["mac"]
+    assert "v[0-9]{1,6}\\.[0-9]{1,6}\\.[0-9]{1,6}" in pages["mac"]
+    assert 'base="https://github.com/invinby/XIDER/releases/download/${tag}"' in pages["mac"]
+
+
 def test_windows_pages_launcher_can_pin_a_windows_only_preview_release(monkeypatch):
     monkeypatch.setenv("XIDER_WINDOWS_INSTALLER_TAG", "v4.3.0")
 
     pages = build_pages_launchers()
 
-    assert "releases/download/v4.3.0/XIDER-install-windows.ps1" in pages["win.ps1"]
-    assert "releases/download/v4.3.0/XIDER-install-windows.ps1.sig" in pages["win.ps1"]
-    assert "releases/latest/download/XIDER-install-macos.sh" in pages["mac"]
+    assert "$installerBase='https://github.com/invinby/XIDER/releases/download/v4.3.0'" in pages["win.ps1"]
+    assert "base='https://github.com/invinby/XIDER/releases/download/v4.2.1'" in pages["mac"]
+
+
+def test_macos_pages_launcher_can_pin_a_cross_platform_release(monkeypatch):
+    monkeypatch.setenv("XIDER_MACOS_INSTALLER_TAG", "v4.2.1")
+
+    pages = build_pages_launchers()
+
+    assert "base='https://github.com/invinby/XIDER/releases/download/v4.2.1'" in pages["mac"]
+    assert "XIDER-install-macos.sh" in pages["mac"]
+
+
+def test_macos_pages_launcher_defaults_to_a_release_with_signed_macos_assets():
+    pages = build_pages_launchers()
+
+    assert "base='https://github.com/invinby/XIDER/releases/download/v4.2.1'" in pages["mac"]
+    assert "XIDER-install-macos.sh.sig" in pages["mac"]
+
+
+def test_macos_pages_launcher_rejects_an_invalid_release_tag(monkeypatch):
+    monkeypatch.setenv("XIDER_MACOS_INSTALLER_TAG", "main")
+
+    with pytest.raises(ValueError, match="XIDER_MACOS_INSTALLER_TAG"):
+        build_pages_launchers()
 
 
 def test_windows_pages_launcher_rejects_an_invalid_release_tag(monkeypatch):
@@ -175,13 +210,18 @@ def test_pages_only_cli_needs_no_commit_or_tag_and_preserves_existing_docs(tmp_p
 
 @pytest.mark.skipif(not (POWERSHELLS and SSH_KEYGEN), reason="Windows PowerShell/OpenSSH is unavailable")
 @pytest.mark.parametrize("powershell", POWERSHELLS)
-def test_short_windows_launcher_accepts_signed_installer_and_rejects_tampering(tmp_path, monkeypatch, powershell):
+@pytest.mark.parametrize("release_tag", [None, "v4.2.0"])
+def test_short_windows_launcher_accepts_signed_installer_and_rejects_tampering(tmp_path, monkeypatch, powershell, release_tag):
+    if release_tag is None:
+        monkeypatch.delenv("XIDER_INSTALL_TAG", raising=False)
+    else:
+        monkeypatch.setenv("XIDER_INSTALL_TAG", release_tag)
     root, private, trusted = make_signing_fixture(tmp_path, monkeypatch)
     sign_installers(root, private, trusted_keys=trusted, ssh_keygen=SSH_KEYGEN)
     script = build_pages_launchers()["win.ps1"]
     for suffix, variable in (("", "$p"), (".sig", "$s")):
         source = root / f"{INSTALLERS['windows']}{suffix}"
-        pattern = rf"iwr -UseBasicParsing -TimeoutSec 90 -Uri '[^']+/{re.escape(INSTALLERS['windows'] + suffix)}' -OutFile {re.escape(variable)}"
+        pattern = rf'iwr -UseBasicParsing -TimeoutSec 90 -Uri "\$installerBase/{re.escape(INSTALLERS["windows"] + suffix)}" -OutFile {re.escape(variable)}'
         script, count = re.subn(pattern, lambda _match: f"Copy-Item -LiteralPath '{source}' -Destination {variable}", script, count=1)
         assert count == 1
     # Keep this isolated signature-verification fixture noninteractive. The
@@ -207,7 +247,12 @@ def test_short_windows_launcher_accepts_signed_installer_and_rejects_tampering(t
 
 
 @pytest.mark.skipif(not SSH_KEYGEN, reason="OpenSSH is unavailable")
-def test_short_macos_launcher_accepts_signed_installer_and_rejects_tampering(tmp_path, monkeypatch):
+@pytest.mark.parametrize("release_tag", [None, "v4.2.0"])
+def test_short_macos_launcher_accepts_signed_installer_and_rejects_tampering(tmp_path, monkeypatch, release_tag):
+    if release_tag is None:
+        monkeypatch.delenv("XIDER_INSTALL_TAG", raising=False)
+    else:
+        monkeypatch.setenv("XIDER_INSTALL_TAG", release_tag)
     if os.name == "nt":
         wsl = shutil.which("wsl.exe")
         if not wsl:
@@ -230,7 +275,7 @@ def test_short_macos_launcher_accepts_signed_installer_and_rejects_tampering(tmp
     script = build_pages_launchers()["mac"]
     for suffix, variable in (("", "$p"), (".sig", "$s")):
         source = root / f"{INSTALLERS['macos']}{suffix}"
-        pattern = rf"curl -fsSL --max-time 90 '[^']+/{re.escape(INSTALLERS['macos'] + suffix)}' -o \"{re.escape(variable)}\""
+        pattern = rf'curl -fsSL --max-time 90 "\$base/{re.escape(INSTALLERS["macos"] + suffix)}" -o "{re.escape(variable)}"'
         script, count = re.subn(pattern, lambda _match: f"cp '{shell_path(source)}' \"{variable}\"", script, count=1)
         assert count == 1
     # Linux uses -d; macOS's launcher correctly uses -D.

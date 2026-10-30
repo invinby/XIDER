@@ -433,6 +433,50 @@ def test_mqtt_health_requires_both_successful_command_subacks(monkeypatch, tmp_p
     assert guardian_restarts == [True]
 
 
+def test_prune_agent_update_backups_keeps_two_latest_and_active_transaction(monkeypatch, tmp_path):
+    state_root = tmp_path / "state"
+    backup_root = state_root / package.UPDATE_BACKUP_DIR
+    names = ["20261001-000000-1", "20261002-000000-2", "20261003-000000-3", "20261004-000000-4"]
+    for name in names:
+        backup = backup_root / name
+        backup.mkdir(parents=True)
+        (backup / "xgent_mcs.py").write_text(name, encoding="utf-8")
+    state_path = state_root / package.UPDATE_STATE_NAME
+    state_path.write_text(json.dumps({
+        "schema": 1,
+        "status": "awaiting_health",
+        "backup_dir": str(backup_root / names[0]),
+    }), encoding="utf-8")
+
+    removed = package.prune_agent_update_backups(state_root, keep=2)
+
+    assert removed == 1
+    assert sorted(path.name for path in backup_root.iterdir()) == [names[0], *names[2:]]
+    assert (backup_root / names[0] / "xgent_mcs.py").read_text(encoding="utf-8") == names[0]
+
+
+def test_prune_agent_update_backups_fails_closed_on_invalid_journal_and_symlinks(tmp_path):
+    state_root = tmp_path / "state"
+    backup_root = state_root / package.UPDATE_BACKUP_DIR
+    old = backup_root / "20261001-000000-1"
+    old.mkdir(parents=True)
+    (old / "xgent_mcs.py").write_text("keep", encoding="utf-8")
+    state_path = state_root / package.UPDATE_STATE_NAME
+    state_path.write_text("not-json", encoding="utf-8")
+
+    assert package.prune_agent_update_backups(state_root, keep=1) == 0
+    assert old.is_dir()
+
+    state_path.unlink()
+    link = backup_root / "20261002-000000-2"
+    try:
+        link.symlink_to(old, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("directory symlinks are unavailable")
+    assert package.prune_agent_update_backups(state_root, keep=1) == 0
+    assert old.is_dir()
+
+
 @pytest.fixture
 def source_update(monkeypatch, tmp_path):
     """Real ZIP extraction, file swaps and journal; deferred process restart."""
@@ -632,12 +676,15 @@ def test_new_worker_health_activates_cache_before_committing(source_update, monk
     new._publish_status = lambda: None
     new._restart_existing_guardian_after_update = lambda: None
     activations = []
+    prunes = []
     monkeypatch.setattr(mcs, "validate_recovery_install", lambda *_args: "v4.2.0")
     monkeypatch.setattr(mcs, "activate_recovery_package", lambda root, slot: activations.append((root, slot)))
+    monkeypatch.setattr(mcs, "prune_recovery_slots", lambda root, *, keep: prunes.append((root, keep)))
 
     _ack_command_subscriptions(new)
 
     assert activations == [(state_root / "recovery", "v4.2.0-" + "a" * 64)]
+    assert prunes == [(state_root / "recovery", 2)]
     assert new._update_health.is_set()
     assert not (state_root / package.UPDATE_STATE_NAME).exists()
     receipt = package.read_agent_update_result(state_root / package.UPDATE_STATE_NAME)

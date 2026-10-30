@@ -76,6 +76,40 @@ def location_capability():
                    "Optional source=ip_estimate is city/region only; uncertainty=unknown. "
                    "Owner-local settings: " + SETTINGS)
 
+def permission_capability(permission):
+    """Passively read macOS permission state without prompting or using the resource."""
+    try:
+        if permission in {"camera", "microphone"}:
+            import AVFoundation
+            media_type = (AVFoundation.AVMediaTypeVideo if permission == "camera"
+                          else AVFoundation.AVMediaTypeAudio)
+            status = int(AVFoundation.AVCaptureDevice.authorizationStatusForMediaType_(media_type))
+            state = {0: "not_determined", 1: "unavailable", 2: "denied", 3: "granted"}.get(status, "unknown")
+            return state, "Read from AVFoundation authorization status; no capture or consent prompt was started."
+        if permission == "screen_recording":
+            import Quartz
+            if Quartz.CGPreflightScreenCaptureAccess():
+                return "granted", "CGPreflightScreenCaptureAccess reports Screen Recording permission; no capture was started."
+            return "needs_live_test", "macOS does not expose a passive denied/not-determined distinction here; run an owner-approved capture test."
+        if permission == "accessibility":
+            import ApplicationServices
+            trusted = bool(ApplicationServices.AXIsProcessTrustedWithOptions(
+                {ApplicationServices.kAXTrustedCheckOptionPrompt: False}
+            ))
+            state = "granted" if trusted else "needs_live_test"
+            return state, "Read from macOS TCC Accessibility trust status without prompting or controlling the interface."
+        if permission == "location":
+            return location_capability()
+        if permission == "file_access":
+            return "needs_live_test", (
+                "TCC Files and Folders access is path-specific; only an owner-approved check for the selected path can confirm it."
+            )
+        return "unknown", "Unknown permission; no system access was attempted."
+    except (ImportError, AttributeError, OSError):
+        return "unavailable", "The local macOS TCC permission status API is unavailable; no permission was inferred."
+    except Exception:
+        return "unknown", "macOS did not return a readable permission status; no permission was inferred."
+
 
 def location_text(value):
     if value.get("source") == "comparison":
@@ -122,6 +156,25 @@ class MacLocationRuntime:
         self.queue = queue.Queue()
         self.active = []
         class Delegate(NSObject):
+            def locationManagerDidChangeAuthorization_(delegate, manager):
+                job = getattr(delegate, "job", {})
+                if job.get("cancelled"):
+                    return
+                status = int(manager.authorizationStatus())
+                if job.get("kind") != "permission":
+                    return
+                if status in (3, 4):
+                    job["state"] = "granted"
+                    job["text"] = "macOS разрешила геолокацию."
+                    job["done"].set()
+                elif status in (1, 2):
+                    job["state"] = "denied"
+                    job["text"] = "В геолокации отказано на самом Mac."
+                    job["done"].set()
+
+            def locationManager_didChangeAuthorizationStatus_(delegate, manager, status):
+                delegate.locationManagerDidChangeAuthorization_(manager)
+
             def locationManager_didUpdateLocations_(delegate, manager, locations):
                 job = delegate.job
                 if not job["cancelled"]:
@@ -145,6 +198,75 @@ class MacLocationRuntime:
                 manager.stopUpdatingLocation()
         self.delegate_class = Delegate
 
+    def _start_permission_request(self, job):
+        """Start an OS-owned consent flow from the Cocoa thread, without using the resource."""
+        permission = job["permission"]
+
+        def finish(state, text):
+            if not job["cancelled"]:
+                job["state"] = state
+                job["text"] = text
+                job["done"].set()
+
+        if permission in {"camera", "microphone"}:
+            import AVFoundation
+            media_type = (AVFoundation.AVMediaTypeVideo if permission == "camera"
+                          else AVFoundation.AVMediaTypeAudio)
+            status = int(AVFoundation.AVCaptureDevice.authorizationStatusForMediaType_(media_type))
+            if status == 3:
+                finish("granted", "macOS уже разрешила доступ.")
+            elif status in {1, 2}:
+                finish("denied", "macOS уже отклонила доступ; измени его в Системных настройках.")
+            elif status == 0:
+                AVFoundation.AVCaptureDevice.requestAccessForMediaType_completionHandler_(
+                    media_type,
+                    lambda granted: finish(
+                        "granted" if granted else "denied",
+                        "macOS разрешила доступ." if granted else "В доступе отказано на самом Mac.",
+                    ),
+                )
+            else:
+                finish("unknown", "macOS вернула неизвестный статус разрешения.")
+            return
+
+        if permission == "screen_recording":
+            import Quartz
+            if Quartz.CGPreflightScreenCaptureAccess():
+                finish("granted", "macOS уже разрешила запись экрана.")
+            else:
+                requested = bool(Quartz.CGRequestScreenCaptureAccess())
+                finish("granted" if requested else "prompt_requested",
+                       "macOS разрешила запись экрана." if requested else
+                       "Системный запрос вызван. Если окно не появилось, выдай доступ в Системных настройках.")
+            return
+
+        if permission == "accessibility":
+            import ApplicationServices
+            trusted = bool(ApplicationServices.AXIsProcessTrustedWithOptions(
+                {ApplicationServices.kAXTrustedCheckOptionPrompt: True}
+            ))
+            finish("granted" if trusted else "prompt_requested",
+                   "macOS уже разрешила управление интерфейсом." if trusted else
+                   "macOS показала системную подсказку; переключатель нужно подтвердить в Системных настройках.")
+            return
+
+        if permission == "location":
+            manager = self.core.CLLocationManager.alloc().init()
+            delegate = self.delegate_class.alloc().init()
+            delegate.job = job
+            manager.setDelegate_(delegate)
+            self.active.append((manager, delegate, job))
+            status = int(manager.authorizationStatus())
+            if status in (3, 4):
+                finish("granted", "macOS уже разрешила геолокацию.")
+            elif status in (1, 2):
+                finish("denied", "macOS уже отклонила геолокацию; измени доступ в Системных настройках.")
+            else:
+                manager.requestWhenInUseAuthorization()
+            return
+
+        finish("unsupported", "Для этого разрешения нет отдельного системного запроса; открой Системные настройки.")
+
     def pump(self):
         import queue
         import time
@@ -154,6 +276,14 @@ class MacLocationRuntime:
             except queue.Empty:
                 break
             if job["cancelled"] or time.monotonic() >= job["deadline"]:
+                continue
+            if job.get("kind") == "permission":
+                try:
+                    self._start_permission_request(job)
+                except Exception:
+                    job["state"] = "unavailable"
+                    job["text"] = "Системный запрос недоступен; открой соответствующий раздел Системных настроек."
+                    job["done"].set()
                 continue
             if not self.core.CLLocationManager.locationServicesEnabled():
                 job["error"] = OSError()
@@ -184,7 +314,7 @@ class MacLocationRuntime:
     def read_once(self, timeout):
         import threading
         import time
-        job = {"done": threading.Event(), "deadline": time.monotonic() + timeout, "cancelled": False}
+        job = {"kind": "location", "done": threading.Event(), "deadline": time.monotonic() + timeout, "cancelled": False}
         self.queue.put(job)
         if not job["done"].wait(timeout):
             job["cancelled"] = True
@@ -192,6 +322,17 @@ class MacLocationRuntime:
         if "error" in job:
             raise job["error"]
         return job["value"]
+
+    def request_permission(self, permission, timeout):
+        import threading
+        import time
+        job = {"kind": "permission", "permission": permission, "done": threading.Event(),
+               "deadline": time.monotonic() + timeout, "cancelled": False}
+        self.queue.put(job)
+        if not job["done"].wait(timeout):
+            job["cancelled"] = True
+            return {"state": "prompt_requested", "text": "Запрос отправлен на Mac; проверь системное окно и ответь на нём."}
+        return {"state": job.get("state", "unknown"), "text": job.get("text", "Состояние разрешения неизвестно.")}
 
 def signed_bundle_available():
     import sys
@@ -249,8 +390,17 @@ class MacLocationBackend:
     def read_once(self, timeout):
         return _runtime.read_once(timeout)
 
+    def request_permission(self, permission, timeout):
+        if _runtime is None:
+            return {"state": "unavailable", "text": "Нет активного Cocoa-сеанса для системного запроса."}
+        return _runtime.request_permission(permission, timeout)
+
 def native_backend():
     return MacLocationBackend()
+
+def request_permission(permission, timeout=90):
+    """Request consent without capturing media or reading a location."""
+    return native_backend().request_permission(permission, timeout)
 
 def visible_local_setup():
     """Explicit local flag shows a foreground explanation before OS consent."""

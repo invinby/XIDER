@@ -55,6 +55,7 @@ _RECOVERY_SLOT = re.compile(r"^v\d{1,6}\.\d{1,6}\.\d{1,6}-[0-9a-f]{64}$")
 UPDATE_STATE_NAME = "agent-update-state.json"
 UPDATE_BACKUP_DIR = "agent-backups"
 UPDATE_RESULT_NAME = "agent-update-result.json"
+_UPDATE_BACKUP_NAME = re.compile(r"^\d{8}-\d{6}-\d+$")
 
 
 def _write_update_result(state_path: Path, state: dict, outcome: str) -> None:
@@ -91,6 +92,79 @@ def read_agent_update_result(state_path: Path) -> dict | None:
         return {key: result[key] for key in ("operation_id", "release_tag", "state", "update_state", "updated_at", "manifest_digest") if key in result}
     except (OSError, ValueError, KeyError):
         return None
+
+
+def prune_agent_update_backups(state_root: Path, *, keep: int = 2) -> int:
+    """Remove only old, unreferenced XIDER update backups after a healthy commit.
+
+    The active transaction journal pins its backup. Unknown entries, symlinks,
+    and unreadable journals fail closed; user data and legacy directory names
+    are never interpreted as disposable update backups.
+    """
+    if isinstance(keep, bool) or not isinstance(keep, int) or keep < 1:
+        raise ValueError("At least one rollback backup must be retained.")
+    state_root = Path(state_root)
+    backup_root = state_root / UPDATE_BACKUP_DIR
+    if state_root.is_symlink() or backup_root.is_symlink():
+        return 0
+    if not backup_root.exists():
+        return 0
+    if not backup_root.is_dir():
+        return 0
+    try:
+        canonical_root = backup_root.resolve(strict=True)
+        if canonical_root.parent != state_root.resolve(strict=True):
+            return 0
+        entries = list(backup_root.iterdir())
+    except OSError:
+        return 0
+
+    candidates = []
+    for entry in entries:
+        if not _UPDATE_BACKUP_NAME.fullmatch(entry.name):
+            continue
+        if entry.is_symlink():
+            return 0
+        try:
+            if not entry.is_dir() or entry.resolve(strict=True).parent != canonical_root:
+                return 0
+        except OSError:
+            return 0
+        candidates.append(entry)
+    candidates.sort(key=lambda path: path.name, reverse=True)
+
+    pinned: set[Path] = set()
+    journal = state_root / UPDATE_STATE_NAME
+    if journal.is_symlink():
+        return 0
+    if journal.exists():
+        try:
+            if not journal.is_file() or journal.stat().st_size > 65536:
+                return 0
+            active = json.loads(journal.read_text(encoding="utf-8"))
+            if not isinstance(active, dict) or active.get("status") not in {"installing", "awaiting_health"}:
+                return 0
+            raw_backup = active.get("backup_dir")
+            if isinstance(raw_backup, str) and raw_backup:
+                candidate = Path(raw_backup).resolve(strict=True)
+                if candidate.parent == canonical_root and candidate in {item.resolve() for item in candidates}:
+                    pinned.add(candidate)
+        except (OSError, ValueError, TypeError):
+            return 0
+
+    keep_set = set(candidates[:keep]) | pinned
+    removed = 0
+    for candidate in candidates:
+        if candidate in keep_set:
+            continue
+        try:
+            if candidate.is_symlink() or candidate.resolve(strict=True).parent != canonical_root:
+                return removed
+            shutil.rmtree(candidate)
+            removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 def update_operation_id(payload: dict, command_id=None) -> str:
@@ -355,6 +429,7 @@ def mark_agent_update_healthy(
     _write_update_result(state_path, state, "succeeded")
     state_path.unlink()
     _fsync_directory(state_path.parent)
+    prune_agent_update_backups(state_path.parent, keep=2)
     return True
 
 

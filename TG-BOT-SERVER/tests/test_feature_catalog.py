@@ -1,12 +1,49 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import pytest
 
 import feature_catalog
+import xlex
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_system_location_copy_is_distinct_from_the_explicit_ip_estimate():
+    system_copy = xlex.render("geo_system", "xperson")
+    ip_copy = xlex.render("geo_beta", "xperson")
+
+    assert "систем" in system_copy.casefold()
+    assert "ip" not in system_copy.casefold()
+    assert "ip" in ip_copy.casefold()
+
+
+def test_matrix_prank_copy_reports_terminal_launch_without_fullscreen_claim():
+    button_labels = [xlex.render("prank_matrix_button", style) for style in xlex.STYLES]
+    result_copy = [xlex.render("prank_matrix_unconfirmed", style) for style in xlex.STYLES]
+
+    assert all("full" not in label.casefold() for label in button_labels)
+    assert all("на весь экран" not in label.casefold() for label in button_labels)
+    assert all(
+        any(marker in text.casefold() for marker in ("не подтверж", "не подтверд", "не может подтвердить", "неизвест"))
+        for text in result_copy
+    )
+
+
+def test_matrix_prank_requires_physical_device_acceptance_in_registry():
+    registry = json.loads((ROOT / "docs" / "features" / "feature-registry.json").read_text(encoding="utf-8"))
+    row = next(item for item in registry["navigation"] if item.get("page_id") == "prank.visual.prank.matrix")
+
+    assert row["support_state"] == "needs_device_test"
+
+
+def test_random_cursor_motion_is_not_listed_as_supported_on_macos():
+    registry = json.loads((ROOT / "docs" / "features" / "feature-registry.json").read_text(encoding="utf-8"))
+    row = next(item for item in registry["navigation"] if item.get("callback") == "cmd:prank_random_clicks")
+
+    assert row["platforms"] == ["windows"]
 
 
 def _registry():

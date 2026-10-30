@@ -7,25 +7,82 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing XIDER semantic-version tag to build without publishing a release.
+        required: true
+        type: string
+        default: v4.3.4
 
 permissions:
   contents: read
 
 jobs:
+  source-state:
+    name: "Resolve and validate the exact source version"
+    if: github.event_name != 'workflow_dispatch' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    outputs:
+      source_ref: ${{ steps.source.outputs.source_ref }}
+      source_commit: ${{ steps.source.outputs.source_commit }}
+    steps:
+      - name: Check out the selected source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.sha }}
+          fetch-depth: 0
+
+      - name: Verify the selected release tag and record its commit
+        id: source
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_TAG: ${{ inputs.release_tag }}
+          EVENT_REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            tag="$DISPATCH_TAG"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="$EVENT_REF"
+          else
+            tag=""
+          fi
+          if [[ -n "$tag" ]]; then
+            [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Select an existing vMAJOR.MINOR.PATCH tag.' >&2; exit 1; }
+            [[ "$(git describe --tags --exact-match HEAD)" == "$tag" ]] || { echo 'Checked out commit does not match the selected release tag.' >&2; exit 1; }
+            for config in XGENT-WDS/config.py XGENT-MCS/config.py; do
+              version=$(sed -nE 's/^VERSION = "([0-9.]+)"$/\1/p' "$config" | head -n1)
+              [[ "v$version" == "$tag" ]] || { echo "$config version $version does not match $tag." >&2; exit 1; }
+            done
+            echo "source_ref=$tag" >> "$GITHUB_OUTPUT"
+          else
+            echo "source_ref=$GITHUB_REF" >> "$GITHUB_OUTPUT"
+          fi
+          commit=$(git rev-parse HEAD)
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || { echo 'Could not resolve a full source commit.' >&2; exit 1; }
+          echo "source_commit=$commit" >> "$GITHUB_OUTPUT"
+
   release-ci:
     name: "Release test gate"
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    needs: [source-state]
     uses: ./.github/workflows/ci.yml
+    with:
+      source_ref: ${{ needs.source-state.outputs.source_commit }}
     permissions:
       contents: read
 
   build-windows:
     name: "Build Windows Agent (EXE)"
+    needs: [source-state]
     runs-on: windows-latest
 
     steps:
       - name: "Checkout repository"
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.source-state.outputs.source_commit }}
 
       - name: "Set up Python 3.12"
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -68,10 +125,12 @@ jobs:
 
   build-macos:
     name: "Build compiled macOS Agent and recovery layers"
+    needs: [source-state]
     runs-on: macos-latest
     environment:
       name: xider-macos-signing
     env:
+      XIDER_RELEASE_MODE: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
       XIDER_MACOS_SIGNING_IDENTITY: ${{ secrets.XIDER_MACOS_SIGNING_IDENTITY }}
       APPLE_CERTIFICATE_B64: ${{ secrets.APPLE_CERTIFICATE_B64 }}
       APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -82,6 +141,8 @@ jobs:
     steps:
       - name: "Checkout repository"
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.source-state.outputs.source_commit }}
 
       - name: "Set up Python 3.12"
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -90,11 +151,11 @@ jobs:
           cache: "pip"
 
       - name: "Block release when signing or notarization credentials are missing"
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         run: python tools/verify_macos_bundle.py --release-credentials
 
       - name: "Import Apple certificate into temporary keychain"
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         run: |
           python -c 'import os,base64,pathlib; pathlib.Path(os.environ["RUNNER_TEMP"],"xider-signing.p12").write_bytes(base64.b64decode(os.environ["APPLE_CERTIFICATE_B64"],validate=True))'
           security create-keychain -p "$APPLE_KEYCHAIN_PASSWORD" "$RUNNER_TEMP/xider-signing.keychain-db"
@@ -111,7 +172,7 @@ jobs:
 
       - name: "Compile macOS bundles with Nuitka"
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+          if [[ "$XIDER_RELEASE_MODE" == "true" ]]; then
             python tools/build_nuitka_macos.py
             codesign -dv --verbose=4 XGENT-MCS/dist/nuitka/XIDER.app
             codesign --verify --deep --strict XGENT-MCS/dist/nuitka/XIDER-Guard-Keeper.app
@@ -122,7 +183,7 @@ jobs:
           fi
 
       - name: "Notarize and staple without changing signed app contents"
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         run: |
           mkdir -p "$RUNNER_TEMP/xider-notary-payload"
           ditto XGENT-MCS/dist/nuitka/XIDER.app "$RUNNER_TEMP/xider-notary-payload/XIDER.app"
@@ -155,7 +216,7 @@ jobs:
             exit 1
           fi
           python ../../tools/verify_command_approval_bundle.py --public-only-zip XGENT-MCS-macos-bundle.zip
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+          if [[ "$XIDER_RELEASE_MODE" == "true" ]]; then
             mkdir "$RUNNER_TEMP/xider-final-extracted"
             ditto -x -k XGENT-MCS-macos-bundle.zip "$RUNNER_TEMP/xider-final-extracted"
             python ../../tools/verify_macos_bundle.py "$RUNNER_TEMP/xider-final-extracted/XIDER.app" --distribution
@@ -187,10 +248,12 @@ jobs:
   pack-components:
     name: "Package Guard Keeper and server components"
     runs-on: ubuntu-latest
-    needs: [build-windows, build-macos]
+    needs: [source-state, build-windows, build-macos]
     steps:
       - name: "Checkout repository"
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.source-state.outputs.source_commit }}
 
       - name: "Download the Windows agent and Guard Keeper build"
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -254,10 +317,56 @@ jobs:
           name: XIDER-Components
           path: artifacts/*.zip
 
+  protected-build-inventory:
+    name: "Sign owner-requested build inventory (no release publication)"
+    if: github.event_name == 'workflow_dispatch' && github.actor == github.repository_owner
+    needs: [release-ci, source-state, pack-components]
+    runs-on: ubuntu-latest
+    environment:
+      name: xider-release-signing
+    permissions:
+      actions: read
+      contents: read
+    env:
+      XIDER_RELEASE_PRIVATE_KEY_B64: ${{ secrets.XIDER_RELEASE_PRIVATE_KEY_B64 }}
+    steps:
+      - name: Check out the exact dispatched tag commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.source-state.outputs.source_commit }}
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install manifest verifier dependency
+        run: python -m pip install cryptography
+
+      - name: Download compiled/source bundles from this exact run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: XIDER-Components
+          path: artifacts
+
+      - name: Hash every package member and sign the inventory
+        run: >-
+          python tools/build_protected_build_manifest.py artifacts
+          --source-ref "${{ needs.source-state.outputs.source_ref }}"
+          --source-commit "${{ needs.source-state.outputs.source_commit }}"
+          --require-signature
+
+      - name: Upload the signed, inspectable build inventory
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: XIDER-Protected-Build-Inventory
+          path: artifacts/protected-build-manifest.json
+          if-no-files-found: error
+
   create-release:
     name: "Publish GitHub Release"
-    needs: [release-ci, build-windows, build-macos, pack-components]
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [release-ci, source-state, build-windows, build-macos, pack-components]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment:
       name: xider-release-signing

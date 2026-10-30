@@ -906,6 +906,43 @@ def test_signed_package_recovers_missing_worker_without_overwriting_present_file
     assert json.loads((recovery_root / "current.json").read_text())["slot"] == slot
 
 
+def test_prune_recovery_slots_keeps_current_previous_and_latest_signed_slot(signed_recovery, monkeypatch):
+    recovery, _manifest, _archive, recovery_root, _payloads = signed_recovery
+    slots_root = recovery_root / "slots"
+    names = [f"v4.{index}.0-" + str(index) * 64 for index in range(4)]
+    for index, name in enumerate(names):
+        slot = slots_root / name
+        slot.mkdir(parents=True)
+        (slot / "release-manifest.json").write_text("signed fixture", encoding="utf-8")
+        (slot / "XIDER-source.zip").write_bytes(b"fixture")
+        import os
+        os.utime(slot, ns=(index + 1, index + 1))
+    (recovery_root / "current.json").write_text(
+        json.dumps({"schema": 1, "slot": names[0]}), encoding="utf-8",
+    )
+    (recovery_root.parent / "agent-update-state.json").write_text(json.dumps({
+        "status": "awaiting_health", "recovery_slot": names[3], "recovery_previous_slot": names[1],
+    }), encoding="utf-8")
+    monkeypatch.setattr(recovery, "_verified_inputs", lambda manifest, archive: (
+        Path(manifest).parent.name.split("-", 1)[0],
+        Path(manifest).parent.name.split("-", 1)[1], b"manifest", b"archive",
+    ))
+
+    removed = recovery.prune_recovery_slots(recovery_root, keep=1)
+
+    assert removed == 1
+    assert sorted(path.name for path in slots_root.iterdir()) == [names[0], names[1], names[3]]
+
+
+def test_prune_recovery_slots_fails_closed_on_invalid_transaction_journal(signed_recovery, monkeypatch):
+    recovery, manifest, archive, recovery_root, _payloads = signed_recovery
+    slot = recovery.stage_recovery_package(manifest, archive, recovery_root)
+    (recovery_root.parent / "agent-update-state.json").write_text("not-json", encoding="utf-8")
+
+    assert recovery.prune_recovery_slots(recovery_root, keep=1) == 0
+    assert (recovery_root / "slots" / slot).is_dir()
+
+
 def test_signed_recovery_restores_location_adapter_absent_in_old_install(signed_recovery, tmp_path):
     recovery, manifest, archive, recovery_root, payloads = signed_recovery
     assert "location_adapter.py" in payloads

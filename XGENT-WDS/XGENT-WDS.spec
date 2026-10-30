@@ -7,9 +7,10 @@ MAC_AGENT_DIR = REPO_ROOT / 'XGENT-MCS'
 
 datas = []
 binaries = []
-hiddenimports = ['pystray._win32', 'comtypes.stream',
+hiddenimports = ['pystray._win32', 'comtypes.stream', 'agent_file_inventory',
                  'cv2_enumerate_cameras', 'camera_series', 'microphone_devices', 'microphone_level', 'audio_output_control', 'media_history', 'media_request_control', 'dns_diagnostics', 'dns_settings', 'dns_comparison', 'dnssec_check', 'gateway_probe', 'route_trace', 'path_mtu', 'captive_portal', 'ipv6_connectivity', 'tls_certificate', 'service_probe', 'latency_series', 'packet_loss_history', 'jitter_measurement', 'network_throughput', 'network_link_speed', 'route_lookup', 'endpoint_batch', 'wifi_quality', 'wifi_channel', 'wifi_connection_history', 'proxy_status', 'vpn_route', 'network_traffic', 'network_traffic_schedule', 'interface_status_history',
                  'command_module_loader', 'command_signing', 'command_replay', 'shell_execution',
+                 'permission_prompt', 'tkinter', 'tkinter.ttk',
                  'cryptography.hazmat.primitives.asymmetric.ed25519',
                  'winrt.windows.devices.geolocation',
                  'winrt.windows.security.authorization.appcapabilityaccess']

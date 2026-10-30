@@ -374,6 +374,25 @@
       "presentation": "nav"
     },
     {
+      "page_id": "device.tools",
+      "parent": "device",
+      "label_id": "device_tools_button",
+      "callback": "device:tools",
+      "roles": [
+        "owner",
+        "user"
+      ],
+      "grants": [],
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "permissions": [],
+      "support_state": "implemented",
+      "style": "primary",
+      "presentation": "device_tools"
+    },
+    {
       "page_id": "device.tags",
       "parent": "device",
       "label_id": "device_tags",
@@ -2224,7 +2243,7 @@
     {
       "page_id": "all.location",
       "parent": "all.devices",
-      "label_id": "geo_beta",
+      "label_id": "geo_system",
       "callback": "cmd:geo_location",
       "roles": [
         "owner"
@@ -3365,8 +3384,7 @@
       ],
       "grants": [],
       "platforms": [
-        "windows",
-        "macos"
+        "windows"
       ],
       "permissions": [],
       "support_state": "implemented",
@@ -3657,6 +3675,57 @@
       "support_state": "implemented",
       "style": "success",
       "presentation": "screen_action"
+    },
+    {
+      "page_id": "system.filevault",
+      "parent": "system",
+      "label_id": "feature.m01.f01.title",
+      "callback": "filevault:status",
+      "roles": [
+        "owner"
+      ],
+      "grants": [],
+      "platforms": [
+        "macos"
+      ],
+      "permissions": [],
+      "support_state": "implemented",
+      "style": "primary",
+      "presentation": "filevault_status"
+    },
+    {
+      "page_id": "system.sip",
+      "parent": "system",
+      "label_id": "feature.m01.f02.title",
+      "callback": "sip:status",
+      "roles": [
+        "owner"
+      ],
+      "grants": [],
+      "platforms": [
+        "macos"
+      ],
+      "permissions": [],
+      "support_state": "implemented",
+      "style": "primary",
+      "presentation": "sip_status"
+    },
+    {
+      "page_id": "system.gatekeeper",
+      "parent": "system",
+      "label_id": "feature.m01.f03.title",
+      "callback": "gatekeeper:status",
+      "roles": [
+        "owner"
+      ],
+      "grants": [],
+      "platforms": [
+        "macos"
+      ],
+      "permissions": [],
+      "support_state": "implemented",
+      "style": "primary",
+      "presentation": "gatekeeper_status"
     },
     {
       "page_id": "network.external_ip",
@@ -5172,57 +5241,6 @@
       "presentation": "os_support"
     },
     {
-      "page_id": "system.filevault_status",
-      "parent": "system",
-      "label_id": "feature.m01.f01.title",
-      "callback": "filevault:status",
-      "roles": [
-        "owner"
-      ],
-      "grants": [],
-      "platforms": [
-        "macos"
-      ],
-      "permissions": [],
-      "support_state": "implemented",
-      "style": "success",
-      "presentation": "filevault_status"
-    },
-    {
-      "page_id": "system.sip_status",
-      "parent": "system",
-      "label_id": "feature.m01.f02.title",
-      "callback": "sip:status",
-      "roles": [
-        "owner"
-      ],
-      "grants": [],
-      "platforms": [
-        "macos"
-      ],
-      "permissions": [],
-      "support_state": "implemented",
-      "style": "success",
-      "presentation": "sip_status"
-    },
-    {
-      "page_id": "system.gatekeeper_status",
-      "parent": "system",
-      "label_id": "feature.m01.f03.title",
-      "callback": "gatekeeper:status",
-      "roles": [
-        "owner"
-      ],
-      "grants": [],
-      "platforms": [
-        "macos"
-      ],
-      "permissions": [],
-      "support_state": "implemented",
-      "style": "success",
-      "presentation": "gatekeeper_status"
-    },
-    {
       "page_id": "system.hardware_inventory",
       "parent": "system",
       "label_id": "feature.d01.f14.title",
@@ -5921,6 +5939,23 @@
       "parent": "events",
       "label_id": "events_server_autostart_button",
       "callback": "ev:server_autostart:toggle",
+      "roles": [
+        "owner"
+      ],
+      "grants": [],
+      "platforms": [
+        "telegram"
+      ],
+      "permissions": [],
+      "support_state": "implemented",
+      "style": "primary",
+      "presentation": "nav"
+    },
+    {
+      "page_id": "events.hide_command_inputs",
+      "parent": "events",
+      "label_id": "events_hide_command_inputs_button",
+      "callback": "ev:toggle:hide_command_inputs",
       "roles": [
         "owner"
       ],
@@ -10041,7 +10076,7 @@
         "macos"
       ],
       "permissions": [],
-      "support_state": "implemented",
+      "support_state": "needs_device_test",
       "style": "success",
       "presentation": "nav"
     },
@@ -10493,8 +10528,7 @@
       ],
       "grants": [],
       "platforms": [
-        "windows",
-        "macos"
+        "windows"
       ],
       "permissions": [],
       "support_state": "implemented",
@@ -11234,13 +11268,8 @@
           "novelty_status": "needs_novelty_audit"
         }
       ],
-      "handler_id": "d05.f30.terminal.shell_late_results",
-      "test_refs": [
-        "TG-BOT-SERVER/tests/test_shell_late_result_inbox.py::test_refresh_keeps_only_bounded_metadata_for_fresh_late_timeouts",
-        "TG-BOT-SERVER/tests/test_shell_late_result_inbox.py::test_consume_is_owner_bound_expiry_bound_and_single_use",
-        "TG-BOT-SERVER/tests/test_bot_ui.py::test_shell_late_result_inbox_is_exact_owner_only_redacted_and_single_use",
-        "TG-BOT-SERVER/tests/test_bot_ui.py::test_response_collector_late_result_cache_is_exact_ttl_bound_and_consumable"
-      ],
+      "handler_id": null,
+      "test_refs": [],
       "acceptance_level": [
         "unit",
         "integration",
@@ -23184,7 +23213,8 @@
       "acceptance_level": [
         "unit",
         "integration",
-        "device"
+        "device",
+        "live"
       ]
     },
     {
@@ -27420,7 +27450,7 @@
       "permissions": [
         "one_time_owner_shell_approval"
       ],
-      "support_state": "needs_device_test",
+      "support_state": "planned",
       "baseline_evidence": [
         {
           "path": "docs/superpowers/specs/2026-10-14-tarped-capability-expansion-design.md",
@@ -27428,13 +27458,8 @@
           "novelty_status": "needs_novelty_audit"
         }
       ],
-      "handler_id": "d05.f30.terminal.shell_late_results",
-      "test_refs": [
-        "TG-BOT-SERVER/tests/test_shell_late_result_inbox.py::test_refresh_keeps_only_bounded_metadata_for_fresh_late_timeouts",
-        "TG-BOT-SERVER/tests/test_shell_late_result_inbox.py::test_consume_is_owner_bound_expiry_bound_and_single_use",
-        "TG-BOT-SERVER/tests/test_bot_ui.py::test_shell_late_result_inbox_is_exact_owner_only_redacted_and_single_use",
-        "TG-BOT-SERVER/tests/test_bot_ui.py::test_response_collector_late_result_cache_is_exact_ttl_bound_and_consumable"
-      ],
+      "handler_id": null,
+      "test_refs": [],
       "acceptance_level": [
         "unit",
         "integration",
@@ -27490,7 +27515,7 @@
       "permissions": [
         "owner_guardian_or_power_confirmation"
       ],
-      "support_state": "needs_device_test",
+      "support_state": "planned",
       "baseline_evidence": [
         {
           "path": "docs/superpowers/specs/2026-10-14-tarped-capability-expansion-design.md",
@@ -27498,13 +27523,8 @@
           "novelty_status": "needs_novelty_audit"
         }
       ],
-      "handler_id": "d06.f01.power.action_preview",
-      "test_refs": [
-        "TG-BOT-SERVER/tests/test_power_preview.py::test_power_preview_explains_shutdown_impact_without_claiming_unsaved_work_detection",
-        "TG-BOT-SERVER/tests/test_power_preview.py::test_power_preview_distinguishes_sleep_from_shutdown",
-        "TG-BOT-SERVER/tests/test_power_preview.py::test_power_preview_rejects_unknown_actions_and_platforms",
-        "TG-BOT-SERVER/tests/test_bot_ui.py::test_power_action_shows_effect_and_unsaved_work_limit_before_confirmation"
-      ],
+      "handler_id": null,
+      "test_refs": [],
       "acceptance_level": [
         "unit",
         "integration",
@@ -33189,8 +33209,9 @@
       ],
       "component_min_versions": {
         "bot": {
-          "state": "required",
-          "minimum": "4.3.0"
+          "state": "planned",
+          "minimum": null,
+          "reason": "not implemented at the selected baseline; set a tested minimum before shipping"
         },
         "windows_agent": {
           "state": "not_applicable",
@@ -33198,8 +33219,9 @@
           "reason": "M01 does not implement behavior in windows_agent"
         },
         "macos_agent": {
-          "state": "required",
-          "minimum": "4.3.0"
+          "state": "planned",
+          "minimum": null,
+          "reason": "not implemented at the selected baseline; set a tested minimum before shipping"
         },
         "server": {
           "state": "not_applicable",
@@ -33220,7 +33242,7 @@
         "key": null
       },
       "permissions": [],
-      "support_state": "needs_device_test",
+      "support_state": "planned",
       "baseline_evidence": [
         {
           "path": "docs/superpowers/specs/2026-10-14-tarped-capability-expansion-design.md",
@@ -33228,14 +33250,8 @@
           "novelty_status": "needs_novelty_audit"
         }
       ],
-      "handler_id": "m01.f01.filevault.status",
-      "test_refs": [
-        "XGENT-MCS/tests/test_filevault_status.py::test_filevault_status_parses_only_on_off_and_omits_raw_output",
-        "XGENT-MCS/tests/test_filevault_status.py::test_filevault_status_unknown_does_not_forward_command_output",
-        "XGENT-MCS/tests/test_filevault_status.py::test_filevault_agent_reply_is_correlated_and_contains_no_key",
-        "TG-BOT-SERVER/tests/test_bot_ui.py::test_filevault_status_is_mac_only_owner_only_and_registry_backed",
-        "TG-BOT-SERVER/tests/test_bot_ui.py::test_filevault_status_dispatches_only_to_supported_macos_agent"
-      ],
+      "handler_id": null,
+      "test_refs": [],
       "acceptance_level": [
         "unit",
         "integration",
@@ -33255,8 +33271,9 @@
       ],
       "component_min_versions": {
         "bot": {
-          "state": "required",
-          "minimum": "4.3.0"
+          "state": "planned",
+          "minimum": null,
+          "reason": "not implemented at the selected baseline; set a tested minimum before shipping"
         },
         "windows_agent": {
           "state": "not_applicable",
@@ -33264,8 +33281,9 @@
           "reason": "M01 does not implement behavior in windows_agent"
         },
         "macos_agent": {
-          "state": "required",
-          "minimum": "4.3.0"
+          "state": "planned",
+          "minimum": null,
+          "reason": "not implemented at the selected baseline; set a tested minimum before shipping"
         },
         "server": {
           "state": "not_applicable",
@@ -33286,7 +33304,7 @@
         "key": null
       },
       "permissions": [],
-      "support_state": "needs_device_test",
+      "support_state": "planned",
       "baseline_evidence": [
         {
           "path": "docs/superpowers/specs/2026-10-14-tarped-capability-expansion-design.md",
@@ -33294,14 +33312,8 @@
           "novelty_status": "needs_novelty_audit"
         }
       ],
-      "handler_id": "m01.f02.sip.status",
-      "test_refs": [
-        "XGENT-MCS/tests/test_sip_status.py::test_sip_status_parses_enabled_and_disabled_without_shell",
-        "XGENT-MCS/tests/test_sip_status.py::test_sip_status_unknown_redacts_unrecognized_output",
-        "XGENT-MCS/tests/test_sip_status.py::test_sip_agent_reply_is_correlated_and_sanitized",
-        "TG-BOT-SERVER/tests/test_bot_ui.py::test_sip_status_is_mac_only_owner_only_and_registry_backed",
-        "TG-BOT-SERVER/tests/test_bot_ui.py::test_sip_status_dispatches_only_to_supported_macos_agent"
-      ],
+      "handler_id": null,
+      "test_refs": [],
       "acceptance_level": [
         "unit",
         "integration",
@@ -33321,8 +33333,9 @@
       ],
       "component_min_versions": {
         "bot": {
-          "state": "required",
-          "minimum": "4.3.0"
+          "state": "planned",
+          "minimum": null,
+          "reason": "not implemented at the selected baseline; set a tested minimum before shipping"
         },
         "windows_agent": {
           "state": "not_applicable",
@@ -33330,8 +33343,9 @@
           "reason": "M01 does not implement behavior in windows_agent"
         },
         "macos_agent": {
-          "state": "required",
-          "minimum": "4.3.0"
+          "state": "planned",
+          "minimum": null,
+          "reason": "not implemented at the selected baseline; set a tested minimum before shipping"
         },
         "server": {
           "state": "not_applicable",
@@ -33352,7 +33366,7 @@
         "key": null
       },
       "permissions": [],
-      "support_state": "needs_device_test",
+      "support_state": "planned",
       "baseline_evidence": [
         {
           "path": "docs/superpowers/specs/2026-10-14-tarped-capability-expansion-design.md",
@@ -33360,14 +33374,8 @@
           "novelty_status": "needs_novelty_audit"
         }
       ],
-      "handler_id": "m01.f03.gatekeeper.status",
-      "test_refs": [
-        "XGENT-MCS/tests/test_gatekeeper_status.py::test_gatekeeper_status_parses_enabled_and_disabled_without_shell",
-        "XGENT-MCS/tests/test_gatekeeper_status.py::test_gatekeeper_status_unknown_redacts_unrecognized_output",
-        "XGENT-MCS/tests/test_gatekeeper_status.py::test_gatekeeper_agent_reply_is_correlated_and_sanitized",
-        "TG-BOT-SERVER/tests/test_bot_ui.py::test_gatekeeper_status_is_mac_only_owner_only_and_registry_backed",
-        "TG-BOT-SERVER/tests/test_bot_ui.py::test_gatekeeper_status_dispatches_only_to_supported_macos_agent"
-      ],
+      "handler_id": null,
+      "test_refs": [],
       "acceptance_level": [
         "unit",
         "integration",

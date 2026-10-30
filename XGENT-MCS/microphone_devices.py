@@ -98,8 +98,9 @@ def run_microphone_roundtrip(sounddevice, soundfile, *, input_device_id: object,
     temp_file = _create_roundtrip_temp_file()
     path = Path(temp_file.name)
     try:
-        temp_file.close()
+        temp_file.close(retain_reservation=True)
         soundfile.write(str(path), samples, rate, format="WAV", subtype="PCM_16")
+        temp_file.release()
         playback_samples, playback_rate = soundfile.read(
             str(path), dtype="float32", always_2d=True,
         )
@@ -119,6 +120,7 @@ def run_microphone_roundtrip(sounddevice, soundfile, *, input_device_id: object,
             path.unlink(missing_ok=True)
         except OSError:
             pass
+        temp_file.release()
 
 
 def _create_preview_temp_file():
@@ -164,10 +166,11 @@ def preview_microphone_recording(sounddevice, soundfile, *, input_device_id: obj
             raise ValueError("microphone_preview_audio_invalid")
         temp_file = _create_preview_temp_file()
         path = Path(temp_file.name)
-        temp_file.close()
+        temp_file.close(retain_reservation=True)
         sounddevice.play(samples, samplerate=rate, device=output_index)
         sounddevice.wait()
         soundfile.write(str(path), samples, rate, format="OGG")
+        temp_file.release()
         payload = path.read_bytes()
         if not payload or len(payload) > MAX_PREVIEW_BYTES:
             raise ValueError("microphone_preview_audio_invalid")
@@ -184,6 +187,8 @@ def preview_microphone_recording(sounddevice, soundfile, *, input_device_id: obj
                 path.unlink(missing_ok=True)
             except OSError:
                 pass
+        if path is not None:
+            temp_file.release()
         try:
             if samples is not None:
                 samples.fill(0)

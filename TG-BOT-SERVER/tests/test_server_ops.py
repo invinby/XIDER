@@ -324,6 +324,27 @@ def test_explicit_confirmation_callback_is_replay_resistant(bot_callbacks):
     assert calls == ["restart"]
 
 
+def test_device_approval_policy_toggle_requires_confirmation_and_persists(bot_callbacks, monkeypatch, tmp_path):
+    bot, callback, _, cards = bot_callbacks
+    monkeypatch.setattr(bot.bot_settings, "FILE", tmp_path / "bot_settings.json")
+
+    assert bot.bot_settings.get("require_device_approval", True) is True
+    asyncio.run(bot.on_server_approval(callback("server:approval")))
+    prompt, markup = cards[-1]
+    assert "политики допуска устройств" in prompt
+    confirm = next(
+        button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+        if button.callback_data.startswith("server_confirm:")
+    )
+    asyncio.run(bot.on_server_confirm(callback(confirm)))
+
+    assert bot.bot_settings.get("require_device_approval") is False
+    assert '"require_device_approval": false' in (tmp_path / "bot_settings.json").read_text(encoding="utf-8")
+    assert bot._lex("server_approval_line", state="выключено") in cards[-1][0]
+
+
 def test_confirmation_callback_checks_role_revocation_and_expiry(bot_callbacks, monkeypatch):
     bot, callback, calls, cards = bot_callbacks
     clock = [100]

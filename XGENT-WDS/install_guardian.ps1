@@ -10,16 +10,16 @@ $AgentDir = (Resolve-Path $AgentDir).Path
 $envPath = Join-Path $AgentDir '.env'
 $guardianExe = Join-Path $AgentDir 'XIDER-Guard-Keeper.exe'
 $guardian = Join-Path $AgentDir 'xider_guardian_wds.py'
-$python = Join-Path $AgentDir 'venv\Scripts\python.exe'
+$pythonw = Join-Path $AgentDir 'venv\Scripts\pythonw.exe'
 
 if (-not (Test-Path -LiteralPath $envPath)) { throw "Missing $envPath" }
 $packagedGuardian = Test-Path -LiteralPath $guardianExe -PathType Leaf
 if (-not $packagedGuardian) {
     if (-not (Test-Path -LiteralPath $guardian -PathType Leaf)) { throw "Missing $guardian and $guardianExe" }
-    if (-not (Test-Path -LiteralPath $python)) {
-        $systemPython = Get-Command python.exe -ErrorAction SilentlyContinue
-        if (-not $systemPython) { throw 'Guardian Python runtime is missing.' }
-        $python = $systemPython.Source
+    if (-not (Test-Path -LiteralPath $pythonw -PathType Leaf)) {
+        $systemPythonw = Get-Command pythonw.exe -ErrorAction SilentlyContinue
+        if (-not $systemPythonw) { throw 'A windowless Guardian Python runtime (pythonw.exe) is missing.' }
+        $pythonw = $systemPythonw.Source
     }
 }
 foreach ($commandName in @(
@@ -34,10 +34,13 @@ foreach ($commandName in @(
 $guardianAction = if ($packagedGuardian) {
     New-ScheduledTaskAction -Execute $guardianExe -WorkingDirectory $AgentDir
 } else {
-    New-ScheduledTaskAction -Execute $python -Argument ('"{0}"' -f $guardian) -WorkingDirectory $AgentDir
+    # python.exe opens a console window at every Guardian restart. Use the
+    # paired windowless runtime so recovery remains silent without hiding the
+    # visible task, logs, stop controls, or uninstall path.
+    New-ScheduledTaskAction -Execute $pythonw -Argument ('"{0}"' -f $guardian) -WorkingDirectory $AgentDir
 }
 if ($PreflightOnly) {
-    Write-Host '[OK] Packaged Guardian or Python fallback and Task Scheduler commands are present. Nothing changed.'
+    Write-Host '[OK] Packaged Guardian or windowless Python fallback and Task Scheduler commands are present. Nothing changed.'
     return
 }
 

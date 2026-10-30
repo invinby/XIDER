@@ -62,13 +62,19 @@ def test_invalid_signed_catalogue_fails_closed(signed_release, mutation):
     assert not ledger.verify_release_metadata(release, manifest)
 
 
-def test_prereleases_never_displace_stable_order():
+def test_signed_preview_releases_are_selectable_but_stable_remains_default_update_target():
     releases = ledger.parse_releases([
-        {"tag_name": "v5.0.0", "prerelease": True},
+        {"tag_name": "v5.0.0", "prerelease": True,
+         "assets": [{"name": "XGENT-WDS.exe"}]},
         {"tag_name": "v4.2.0-rc.1"},
-        {"tag_name": "v4.1.9"}, {"tag_name": "v4.1.10"},
+        {"tag_name": "v4.1.9", "assets": [{"name": "XGENT-WDS.exe"}]},
+        {"tag_name": "v4.1.10", "assets": [{"name": "XGENT-WDS.exe"}]},
+        {"tag_name": "v6.0.0", "draft": True},
     ])
-    assert [release.tag for release in releases] == ["v4.1.10", "v4.1.9"]
+    assert [release.tag for release in releases] == ["v5.0.0", "v4.1.10", "v4.1.9"]
+    assert releases[0].prerelease is True
+    assert ledger.newest_with_package(releases, "windows_agent").tag == "v4.1.10"
+    assert ledger.newest_with_package(releases, "windows_agent", include_prereleases=True).tag == "v5.0.0"
 
 
 def test_unsigned_catalogue_cannot_offer_install():

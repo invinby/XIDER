@@ -15,7 +15,9 @@ def test_preview_recording_plays_locally_before_returning_audio_and_cleans_temp(
 
     class TempFile:
         name = str(temp_path)
-        def close(self):
+        def close(self, *, retain_reservation=False):
+            pass
+        def release(self):
             pass
 
     monkeypatch.setattr(microphone_devices, "_create_preview_temp_file", lambda: TempFile())
@@ -431,7 +433,9 @@ def test_microphone_roundtrip_deletes_temp_audio_when_playback_fails(tmp_path, m
     temp_path = tmp_path / "xider-media-failed.wav"
     class TempFile:
         name = str(temp_path)
-        def close(self):
+        def close(self, *, retain_reservation=False):
+            pass
+        def release(self):
             pass
     monkeypatch.setattr(microphone_devices, "_create_roundtrip_temp_file", lambda: TempFile())
     class SoundFile:

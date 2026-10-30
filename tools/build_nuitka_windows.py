@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,7 +16,12 @@ WDS = ROOT / "XGENT-WDS"
 MCS = ROOT / "XGENT-MCS"
 TOOLS = ROOT / "tools"
 OUTPUT = WDS / "dist" / "nuitka"
-BUILD_ROOT = WDS / "build" / "nuitka-windows"
+BUILD_PARENT = WDS / "build"
+LEGACY_NUITKA_INTERMEDIATES = (
+    "xgent_wds.build", "xgent_wds.dist", "xgent_wds.onefile-build",
+    "xider_guardian_wds.build", "xider_guardian_wds.dist",
+    "xider_guardian_wds.onefile-build",
+)
 
 
 def _hidden_imports() -> tuple[str, ...]:
@@ -54,7 +60,10 @@ def _build(entry: Path, output_dir: Path, output_name: str, modules: tuple[str, 
         f"--output-filename={output_name}",
     ]
     if entry.name == "xgent_wds.py":
-        command.extend(("--include-package=pyttsx3", "--include-module=soundfile"))
+        command.extend((
+            "--include-package=pyttsx3", "--include-module=soundfile",
+            "--enable-plugin=tk-inter",
+        ))
     command.extend(f"--include-module={name}" for name in modules)
     command.append(str(entry))
     subprocess.run(command, cwd=ROOT, env=environment, check=True)
@@ -64,27 +73,70 @@ def _build(entry: Path, output_dir: Path, output_name: str, modules: tuple[str, 
     return artifact
 
 
+def _cleanup_legacy_nuitka_intermediates() -> None:
+    """Remove only known Nuitka-generated legacy dirs after a successful build."""
+    output_root = OUTPUT.resolve()
+    for name in LEGACY_NUITKA_INTERMEDIATES:
+        candidate = OUTPUT / name
+        try:
+            if candidate.is_symlink() or not candidate.is_dir():
+                continue
+            resolved = candidate.resolve(strict=True)
+            if resolved.parent != output_root:
+                continue
+            # Preserve any diagnostic/configuration payload if one was placed
+            # in a legacy intermediate directory by a failed local build.
+            if any(
+                path.is_file() and (
+                    path.suffix.casefold() in {".log", ".xml", ".dmp", ".crash"}
+                    or path.name.casefold() == ".env"
+                )
+                for path in candidate.rglob("*")
+            ):
+                continue
+            shutil.rmtree(candidate)
+        except (OSError, RuntimeError):
+            # A cleanup failure must not invalidate the just-built executables.
+            continue
+
+
 def main() -> int:
     if os.name != "nt":
         raise SystemExit("Windows agent bundles must be built on Windows.")
+    build_packages()
+    return 0
+
+
+def build_packages() -> tuple[Path, Path]:
+    """Build in a fresh owned staging directory; keep failed stages for diagnosis."""
     OUTPUT.mkdir(parents=True, exist_ok=True)
+    BUILD_PARENT.mkdir(parents=True, exist_ok=True)
+    build_root = Path(tempfile.mkdtemp(prefix="nuitka-windows-", dir=BUILD_PARENT))
     agent = _build(
-        WDS / "xgent_wds.py", BUILD_ROOT / "agent", "XGENT-WDS.exe", _hidden_imports(),
+        WDS / "xgent_wds.py", build_root / "agent", "XGENT-WDS.exe", _hidden_imports(),
     )
-    guardian_dir = BUILD_ROOT / "guardian"
     guardian = _build(
-        WDS / "xider_guardian_wds.py", guardian_dir, "XIDER-Guard-Keeper.exe",
+        WDS / "xider_guardian_wds.py", build_root / "guardian", "XIDER-Guard-Keeper.exe",
         ("update_package", "release_signature"),
     )
     # Copy only compiled executables into the release root. Nuitka's generated
     # C and distribution trees remain outside the upload directory.
+    published_paths = []
     for artifact in (agent, guardian):
         destination = OUTPUT / artifact.name
         if artifact != destination:
             shutil.copy2(artifact, destination)
-    print(f"Built {OUTPUT / 'XGENT-WDS.exe'}")
-    print(f"Built {OUTPUT / 'XIDER-Guard-Keeper.exe'}")
-    return 0
+        published_paths.append(destination)
+    # Both executables are safely copied. Remove only this invocation's fresh
+    # Nuitka intermediates; failed staging remains available for diagnosis.
+    try:
+        shutil.rmtree(build_root)
+    except OSError:
+        print(f"Warning: successful build staging remains for cleanup: {build_root}")
+    _cleanup_legacy_nuitka_intermediates()
+    print(f"Built {published_paths[0]}")
+    print(f"Built {published_paths[1]}")
+    return published_paths[0], published_paths[1]
 
 
 if __name__ == "__main__":

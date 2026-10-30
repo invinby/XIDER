@@ -835,6 +835,10 @@ class Guardian:
                     "update_state": "succeeded", "updated_at": time.time(),
                     "agent_update_protocol": MAC_BUNDLE_UPDATE_PROTOCOL,
                 })
+                try:
+                    prune_bundle_backups(SCRIPT_DIR, current_backup=backup_root, keep=2)
+                except Exception:
+                    log.exception("Could not prune old signed macOS bundle backups")
                 # The running Guardian image is still the old signed app. Let
                 # launchd restart it from the atomically replaced bundle.
                 threading.Timer(

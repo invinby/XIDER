@@ -41,6 +41,18 @@ function Assert-XiderBootstrapElevation {
     }
 }
 
+function Get-XiderExpectedGuardianExecutable {
+    param(
+        [Parameter(Mandatory)][string]$AgentDirectory,
+        [string]$ReleaseTag
+    )
+
+    if ($ReleaseTag) {
+        return Join-Path $AgentDirectory 'XIDER-Guard-Keeper.exe'
+    }
+    return Join-Path $AgentDirectory 'venv\Scripts\pythonw.exe'
+}
+
 function Invoke-XiderNativeProbe {
     param(
         [Parameter(Mandatory)][string]$Executable,
@@ -79,10 +91,10 @@ function Get-XiderPythonExecutable {
     $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
     if ($pythonCommand) {
         foreach ($command in @($pythonCommand)) {
-            $probe = Invoke-XiderNativeProbe -Executable $command.Source -Arguments @('-c', 'import sys; print(sys.executable); print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+            $probe = Invoke-XiderNativeProbe -Executable $command.Source -Arguments @('-c', 'import sys; print(sys.executable); print(sys.version_info[0]*100 + sys.version_info[1])')
             $candidate = @($probe.Output)
             if ($probe.ExitCode -eq 0 -and $candidate.Count -ge 2 -and
-                $candidate[-1] -match '^3\.(?:11|12|14)$' -and
+                $candidate[-1] -match '^3(?:11|12|14)$' -and
                 (Test-Path -LiteralPath $candidate[0] -PathType Leaf)) {
                 return [string]$candidate[0]
             }
@@ -105,8 +117,8 @@ function Get-XiderPythonExecutable {
     $runtimeRoot = Join-Path $InstallRoot "bootstrap-runtime\python-$version"
     $pythonExe = Join-Path $runtimeRoot 'python.exe'
     if (Test-Path -LiteralPath $pythonExe -PathType Leaf) {
-        $versionCheck = @(& $pythonExe -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>$null)
-        if ($LASTEXITCODE -eq 0 -and $versionCheck -contains '3.14') { return $pythonExe }
+        $versionCheck = @(& $pythonExe -c 'import sys; print(sys.version_info[0]*100 + sys.version_info[1])' 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $versionCheck -contains '314') { return $pythonExe }
         throw "Python runtime повреждён или имеет неверную версию: $pythonExe"
     }
 
@@ -134,8 +146,8 @@ function Get-XiderPythonExecutable {
         if ($process.ExitCode -notin @(0, 3010) -or -not (Test-Path -LiteralPath $pythonExe -PathType Leaf)) {
             throw "Установка Python завершилась с кодом $($process.ExitCode)."
         }
-        $versionCheck = @(& $pythonExe -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>$null)
-        if ($LASTEXITCODE -ne 0 -or $versionCheck -notcontains '3.14') {
+        $versionCheck = @(& $pythonExe -c 'import sys; print(sys.version_info[0]*100 + sys.version_info[1])' 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $versionCheck -notcontains '314') {
             throw 'Установленный Python не прошёл проверку версии.'
         }
         return $pythonExe
@@ -184,6 +196,47 @@ function Remove-XiderStageEnvironment {
         Write-Warning "Не удалось удалить временную копию .env; она осталась в staging-каталоге: $StagePath"
     }
     return $removed
+}
+
+function Remove-XiderOldPreviousCheckouts {
+    param(
+        [Parameter(Mandatory)][string]$InstallRoot,
+        [Parameter(Mandatory)][string]$CurrentBackup,
+        [int]$Keep = 2
+    )
+
+    if ($Keep -lt 1) { return }
+    try {
+        $root = [IO.Path]::GetFullPath($InstallRoot)
+        $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop
+        if (-not $rootItem.PSIsContainer -or
+            ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return }
+        $current = [IO.Path]::GetFullPath($CurrentBackup)
+        $managed = @(Get-ChildItem -LiteralPath $root -Directory -Force -ErrorAction Stop |
+            Where-Object { $_.Name -match '^git-ver\.previous\.\d{14}\.[0-9a-fA-F]{32}$' } |
+            Sort-Object -Property Name -Descending)
+        $keepPaths = @{}
+        foreach ($item in @($managed | Select-Object -First $Keep)) {
+            $keepPaths[[IO.Path]::GetFullPath($item.FullName)] = $true
+        }
+        $keepPaths[$current] = $true
+        foreach ($item in $managed) {
+            $path = [IO.Path]::GetFullPath($item.FullName)
+            if ($keepPaths.ContainsKey($path) -or
+                ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }
+            if (-not [string]::Equals([IO.Path]::GetDirectoryName($path), $root, [StringComparison]::OrdinalIgnoreCase)) { continue }
+            try {
+                $nestedLinks = @(Get-ChildItem -LiteralPath $path -Force -Recurse -ErrorAction Stop |
+                    Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint })
+                if ($nestedLinks.Count) { continue }
+                Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
+            }
+            catch { Write-Warning "Не удалось удалить устаревшую резервную копию XIDER: $path" }
+        }
+    } catch {
+        # Retention is best-effort; a cleanup failure must not turn a healthy install into a rollback.
+        Write-Warning "Не удалось ограничить старые резервные копии XIDER: $($_.Exception.Message)"
+    }
 }
 
 function Assert-XiderWindowsBundleArchive {
@@ -887,11 +940,10 @@ try {
         if ($agentTask -and $guardianTask -and $agentTask.State -eq 'Running' -and $guardianTask.State -eq 'Running') {
             if ($ReleaseTag) {
                 $expectedAgent = Join-Path $agent 'XGENT-WDS.exe'
-                $expectedGuardian = Join-Path $agent 'XIDER-Guard-Keeper.exe'
             } else {
                 $expectedAgent = Join-Path $agent 'venv\Scripts\pythonw.exe'
-                $expectedGuardian = Join-Path $agent 'venv\Scripts\python.exe'
             }
+            $expectedGuardian = Get-XiderExpectedGuardianExecutable -AgentDirectory $agent -ReleaseTag $ReleaseTag
             $agentExecutable = [string]($agentTask.Actions | Select-Object -First 1 -ExpandProperty Execute)
             $guardianExecutable = [string]($guardianTask.Actions | Select-Object -First 1 -ExpandProperty Execute)
             $agentPathMatches = [string]::Equals($agentExecutable, $expectedAgent, [StringComparison]::OrdinalIgnoreCase)
@@ -945,6 +997,7 @@ try {
     }
     if (-not $healthy) { throw 'Agent и Guardian не подтвердили свежее MQTT-соединение; выполняю откат.' }
     Write-Host '[OK] XIDER Windows Agent + Guardian установлены и запущены.'
+    Remove-XiderOldPreviousCheckouts -InstallRoot $resolvedRoot -CurrentBackup $backup -Keep 2
     if (Test-Path -LiteralPath $backup) { Write-Host "[BACKUP] Предыдущая версия сохранена: $backup" }
 }
 catch {

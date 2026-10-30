@@ -55,7 +55,7 @@ OWNER_ONLY_CALLBACK_PREFIXES = (
     "cpu:history:", "memory:history:",
 )
 USER_NAVIGATION_CALLBACKS = frozenset({
-    "menu:main", "menu:about", "menu:devices", "back:device", "devices:search",
+    "menu:main", "menu:about", "menu:devices", "back:device", "devices:tools", "devices:search",
     "devices:search:cancel", "access:request",
 })
 

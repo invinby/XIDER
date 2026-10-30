@@ -282,6 +282,7 @@ def test_version_screens_follow_six_voices_and_keep_release_callbacks(monkeypatc
         published_at="2026-09-30T12:00:00Z",
         notes="<&' \n" * 1000,
         asset_names=frozenset({"XGENT-MCS-macos-bundle.zip"}),
+        prerelease=True,
     )
     monkeypatch.setattr(bot.release_catalog.catalog, "list", lambda: [release])
     shown = {}
@@ -328,6 +329,7 @@ def test_version_screens_follow_six_voices_and_keep_release_callbacks(monkeypatc
 
         asyncio.run(bot.on_versions_list(Callback("versions:list:agent:0")))
         assert "&lt;release &amp; notes&gt;" in shown["text"]
+        assert "🧪" in shown["text"]
         assert xlex.render("versions_list_title", style, title="X-EDGE-M") in shown["text"]
         rendered_lists.add(shown["text"])
         list_callbacks = {
@@ -348,6 +350,7 @@ def test_version_screens_follow_six_voices_and_keep_release_callbacks(monkeypatc
         assert xlex.render(
             "versions_detail_title", style, title="X-EDGE-M", tag="v4.0.2"
         ) in shown["text"]
+        assert "preview release" in shown["text"].lower() or "предварительный выпуск" in shown["text"].lower()
         rendered_details.add(shown["text"])
         detail_callbacks = {
             button.callback_data
@@ -783,10 +786,20 @@ def test_common_navigation_controls_follow_voice_without_changing_callbacks(monk
             button.callback_data: button.text
             for row in bot.devices_menu().inline_keyboard for button in row
         }
+        tools_buttons = {
+            button.callback_data: button.text
+            for row in bot.device_tools_menu().inline_keyboard for button in row
+        }
         assert back_buttons["back:device"] == xlex.nav("back_device", style)
         assert back_buttons["menu:main"] == xlex.nav("home", style)
         assert confirm_buttons["back:device"] == xlex.nav("cancel", style)
-        assert devices_buttons["menu:devices"] == xlex.nav("refresh", style)
+        assert devices_buttons["devices:tools"] == bot._ui_phrase(
+            "🎛 Filters and tools", "🎛 Фильтры и инструменты", "🎛 Фильтры и инструменты",
+        )
+        assert "menu:devices" not in devices_buttons
+        assert tools_buttons["menu:devices"] == bot._ui_phrase(
+            "← Devices", "← Устройства", "← Устройства",
+        )
         assert devices_buttons["menu:main"] == xlex.nav("home", style)
         assert all(
             len(label) <= 64

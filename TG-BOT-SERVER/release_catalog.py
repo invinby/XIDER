@@ -43,6 +43,7 @@ class Release:
     notes: str
     asset_names: frozenset[str]
     manifest: dict | None = None
+    prerelease: bool = False
 
     def signed_package(self, component: str) -> bool:
         return verify_release_metadata(self, self.manifest) and any(
@@ -141,7 +142,7 @@ def parse_releases(payload: object) -> list[Release]:
         raise ValueError("GitHub returned an invalid release list")
     result = []
     for item in payload:
-        if not isinstance(item, dict) or item.get("draft") or item.get("prerelease"):
+        if not isinstance(item, dict) or item.get("draft"):
             continue
         tag = str(item.get("tag_name") or "")
         match = _TAG.fullmatch(tag)
@@ -158,8 +159,9 @@ def parse_releases(payload: object) -> list[Release]:
             published_at=str(item.get("published_at") or "")[:32],
             notes=str(item.get("body") or ""),
             asset_names=names,
+            prerelease=item.get("prerelease") is True,
         ))
-    return sorted(result, key=lambda release: release.version, reverse=True)
+    return sorted(result, key=lambda release: (release.version, not release.prerelease), reverse=True)
 
 
 def _download() -> object:
@@ -223,8 +225,12 @@ class Catalog:
             return list(self._releases)
 
 
-def newest_with_package(releases: list[Release], component: str) -> Release | None:
-    return next((item for item in releases if item.has_package(component)), None)
+def newest_with_package(
+    releases: list[Release], component: str, *, include_prereleases: bool = False,
+) -> Release | None:
+    """Return the stable update target by default; previews require explicit opt-in."""
+    return next((item for item in releases
+                 if (include_prereleases or not item.prerelease) and item.has_package(component)), None)
 
 
 def is_older(current: str, latest: Release | None) -> bool:

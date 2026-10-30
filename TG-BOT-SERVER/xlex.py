@@ -1121,6 +1121,14 @@ COPY = {
         "xcore": "IP-локация · приблизительно, не GPS",
         "xadam": "IP-локация · оценка, не GPS",
     },
+    "geo_system": {
+        "xtech": "Геолокация ОС · разовый запрос",
+        "xperson": "Системная геолокация · разовый запрос ОС",
+        "xpikmi": "📍 Системная локация · один запрос ОС ♡",
+        "xtarped": "Локация через ОС · разовый запрос",
+        "xcore": "Однократная системная геолокация",
+        "xadam": "Разовый запрос геолокации ОС",
+    },
     "danger_confirm": {
         "xtech": "Подтвердите действие «{action}». Оно изменит состояние устройства.",
         "xperson": "Подтверди «{action}». Это реально изменит состояние устройства, не просто красивая кнопка.",
@@ -1130,6 +1138,316 @@ COPY = {
         "xadam": "Подтверди «{action}». Команда будет выполнена.",
     },
 }
+
+COPY.update({
+    "agent_files_page_title": {
+        "xtech": "📦 <b>Agent files · {device}</b>",
+        "xperson": "📦 <b>Файлы агента · {device}</b>",
+        "xpikmi": "📦 <b>Файлики компонентов · {device} ♡</b>",
+        "xtarped": "📦 <b>Файлы XIDER · {device}</b>",
+        "xcore": "📦 <b>Инвентарь файлов · {device}</b>",
+        "xadam": "📦 <b>Файлы агента · {device}</b>",
+    },
+    "agent_files_page_status": {
+        "xtech": "Status: <code>{status}</code> · files: <code>{count}</code>",
+        "xperson": "Состояние: <code>{status}</code> · файлов: <code>{count}</code>",
+        "xpikmi": "Статус: <code>{status}</code> · файликов: <code>{count}</code>",
+        "xtarped": "Состояние: <code>{status}</code> · файлов: <code>{count}</code>",
+        "xcore": "Статус: <code>{status}</code> · файлов: <code>{count}</code>",
+        "xadam": "Состояние: <code>{status}</code> · файлов: <code>{count}</code>",
+    },
+    "agent_files_snapshot": {
+        "xtech": "Agent snapshot: <code>{timestamp}</code>",
+        "xperson": "Снимок агента: <code>{timestamp}</code>",
+        "xpikmi": "Снимок агентчика: <code>{timestamp}</code>",
+        "xtarped": "Снимок агента: <code>{timestamp}</code>",
+        "xcore": "Снимок: <code>{timestamp}</code>",
+        "xadam": "Снимок агента: <code>{timestamp}</code>",
+    },
+    "agent_files_protection": {
+        "xtech": "List integrity: <code>{integrity}</code> · obfuscation: <code>{obfuscation}</code>",
+        "xperson": "Подпись списка: <code>{integrity}</code> · обфускация: <code>{obfuscation}</code>",
+        "xpikmi": "Целостность списка: <code>{integrity}</code> · обфускация: <code>{obfuscation}</code>",
+        "xtarped": "Целостность списка: <code>{integrity}</code> · обфускация: <code>{obfuscation}</code>",
+        "xcore": "Целостность: <code>{integrity}</code> · обфускация: <code>{obfuscation}</code>",
+        "xadam": "Проверка целостности: <code>{integrity}</code> · обфускация: <code>{obfuscation}</code>",
+    },
+    "agent_files_hash_disclaimer": {
+        "xtech": "Hashes are a file snapshot only; without a signed manifest they do not prove integrity.",
+        "xperson": "Хеши — только снимок файлов; без подписанного манифеста они не доказывают целостность.",
+        "xpikmi": "Хеши — это снимок файлов; без подписанного манифеста целостность не подтверждена ♡",
+        "xtarped": "Хеши показывают снимок файлов; без подписанного манифеста целостность не подтверждена.",
+        "xcore": "Хеши не подтверждают целостность без подписанного манифеста.",
+        "xadam": "Хеши показывают снимок; целостность без подписанного манифеста не подтверждена.",
+    },
+    "agent_files_report_available": {
+        "xtech": "complete inventory received", "xperson": "полный список получен",
+        "xpikmi": "полный списочек получен", "xtarped": "полный список получен",
+        "xcore": "список получен полностью", "xadam": "полный список получен",
+    },
+    "agent_files_report_partial": {
+        "xtech": "partial inventory", "xperson": "частичный список",
+        "xpikmi": "список частичный", "xtarped": "список частичный",
+        "xcore": "получен частично", "xadam": "частичный список",
+    },
+    "agent_files_report_missing": {
+        "xtech": "components not found", "xperson": "компоненты не найдены",
+        "xpikmi": "компонентиков не нашлось", "xtarped": "компоненты не найдены",
+        "xcore": "компоненты отсутствуют", "xadam": "компоненты не найдены",
+    },
+    "agent_files_report_error": {
+        "xtech": "inventory error", "xperson": "ошибка инвентаризации",
+        "xpikmi": "ошибка при сборе списка", "xtarped": "ошибка инвентаризации",
+        "xcore": "ошибка сбора", "xadam": "ошибка инвентаризации",
+    },
+    "agent_files_component_available": {
+        "xtech": "available", "xperson": "доступен",
+        "xpikmi": "доступен ♡", "xtarped": "доступен", "xcore": "доступен", "xadam": "доступен",
+    },
+    "agent_files_component_partial": {
+        "xtech": "partial", "xperson": "частично доступен",
+        "xpikmi": "доступен частично", "xtarped": "доступен частично", "xcore": "частично", "xadam": "частично доступен",
+    },
+    "agent_files_component_missing": {
+        "xtech": "missing", "xperson": "не найден",
+        "xpikmi": "не найден", "xtarped": "не найден", "xcore": "отсутствует", "xadam": "не найден",
+    },
+    "agent_files_component_error": {
+        "xtech": "error", "xperson": "ошибка",
+        "xpikmi": "ошибка", "xtarped": "ошибка", "xcore": "сбой", "xadam": "ошибка",
+    },
+    "agent_files_integrity_verified": {
+        "xtech": "verified", "xperson": "подтверждена",
+        "xpikmi": "подтверждена ♡", "xtarped": "подтверждена", "xcore": "подтверждена", "xadam": "подтверждена",
+    },
+    "agent_files_integrity_unverified": {
+        "xtech": "unverified", "xperson": "не проверена",
+        "xpikmi": "ещё не проверена", "xtarped": "не проверена", "xcore": "не проверена", "xadam": "не проверена",
+    },
+    "agent_files_integrity_failed": {
+        "xtech": "failed", "xperson": "ошибка проверки",
+        "xpikmi": "проверка не прошла", "xtarped": "проверка провалена", "xcore": "ошибка", "xadam": "проверка провалена",
+    },
+    "agent_files_obfuscation_obfuscated": {
+        "xtech": "obfuscated", "xperson": "обфусцирована",
+        "xpikmi": "обфусцирована ♡", "xtarped": "обфусцирована", "xcore": "обфусцирована", "xadam": "обфусцирована",
+    },
+    "agent_files_obfuscation_plain": {
+        "xtech": "not obfuscated", "xperson": "не обфусцирована",
+        "xpikmi": "без обфускации", "xtarped": "не обфусцирована", "xcore": "не обфусцирована", "xadam": "не обфусцирована",
+    },
+    "agent_files_obfuscation_partial": {
+        "xtech": "partially obfuscated", "xperson": "частично обфусцирована",
+        "xpikmi": "обфусцирована частично", "xtarped": "частично обфусцирована", "xcore": "частично обфусцирована", "xadam": "частично обфусцирована",
+    },
+    "agent_files_signature_verified": {
+        "xtech": "verified", "xperson": "подписана и проверена",
+        "xpikmi": "подпись проверена ♡", "xtarped": "подписана и проверена", "xcore": "проверена", "xadam": "подпись проверена",
+    },
+    "agent_files_signature_unsigned": {
+        "xtech": "unsigned", "xperson": "не подписана",
+        "xpikmi": "без подписи", "xtarped": "не подписана", "xcore": "не подписана", "xadam": "не подписана",
+    },
+    "agent_files_signature_invalid": {
+        "xtech": "invalid signature", "xperson": "подпись недействительна",
+        "xpikmi": "подпись не прошла проверку", "xtarped": "подпись недействительна", "xcore": "подпись неверна", "xadam": "подпись недействительна",
+    },
+    "agent_files_signature_unsupported": {
+        "xtech": "unsupported", "xperson": "не поддерживается",
+        "xpikmi": "не поддерживается", "xtarped": "не поддерживается", "xcore": "не поддерживается", "xadam": "не поддерживается",
+    },
+    "agent_files_signature_not_applicable": {
+        "xtech": "not applicable", "xperson": "не применяется",
+        "xpikmi": "не применимо", "xtarped": "не применяется", "xcore": "не применяется", "xadam": "не применяется",
+    },
+    "agent_files_status_unknown": {
+        "xtech": "unknown", "xperson": "неизвестно",
+        "xpikmi": "неизвестно", "xtarped": "неизвестно", "xcore": "неизвестно", "xadam": "неизвестно",
+    },
+    "agent_files_name_agent": {
+        "xtech": "Agent", "xperson": "Агент", "xpikmi": "Агент ♡",
+        "xtarped": "Агент", "xcore": "Агент", "xadam": "Агент",
+    },
+    "agent_files_name_guardian": {
+        "xtech": "Guard Keeper", "xperson": "Guard Keeper",
+        "xpikmi": "Guard Keeper ♡", "xtarped": "Guard Keeper", "xcore": "Guard Keeper", "xadam": "Guard Keeper",
+    },
+    "agent_files_name_safari": {
+        "xtech": "Safari", "xperson": "Safari", "xpikmi": "Safari ♡",
+        "xtarped": "Safari", "xcore": "Safari", "xadam": "Safari",
+    },
+    "agent_files_name_siri": {
+        "xtech": "Siri", "xperson": "Siri", "xpikmi": "Siri ♡",
+        "xtarped": "Siri", "xcore": "Siri", "xadam": "Siri",
+    },
+    "agent_files_name_other": {
+        "xtech": "{component}", "xperson": "{component}", "xpikmi": "{component}",
+        "xtarped": "{component}", "xcore": "{component}", "xadam": "{component}",
+    },
+    "agent_files_component_summary": {
+        "xtech": "<b>{component}</b>: <code>{status}</code>{version} · files {count}",
+        "xperson": "<b>{component}</b>: <code>{status}</code>{version} · файлов {count}",
+        "xpikmi": "<b>{component}</b>: <code>{status}</code>{version} · файликов {count}",
+        "xtarped": "<b>{component}</b>: <code>{status}</code>{version} · файлов {count}",
+        "xcore": "<b>{component}</b>: <code>{status}</code>{version} · файлов {count}",
+        "xadam": "<b>{component}</b>: <code>{status}</code>{version} · файлов {count}",
+    },
+    "agent_files_open_component_button": {
+        "xtech": "🔎 {component}", "xperson": "🔎 {component}", "xpikmi": "🔎 {component}",
+        "xtarped": "🔎 {component}", "xcore": "🔎 {component}", "xadam": "🔎 {component}",
+    },
+    "agent_files_page_number": {
+        "xtech": "<b>Files · page {page}/{pages}</b>", "xperson": "<b>Файлы · страница {page}/{pages}</b>",
+        "xpikmi": "<b>Файлики · страница {page}/{pages}</b>", "xtarped": "<b>Файлы · страница {page}/{pages}</b>",
+        "xcore": "<b>Файлы · страница {page}/{pages}</b>", "xadam": "<b>Файлы · страница {page}/{pages}</b>",
+    },
+    "agent_files_size_bytes": {
+        "xtech": "{size} B", "xperson": "{size} Б", "xpikmi": "{size} Б",
+        "xtarped": "{size} Б", "xcore": "{size} Б", "xadam": "{size} Б",
+    },
+    "agent_files_unknown_size": {
+        "xtech": "unknown", "xperson": "неизвестен", "xpikmi": "неизвестен",
+        "xtarped": "неизвестен", "xcore": "неизвестен", "xadam": "неизвестен",
+    },
+    "agent_files_missing_hash": {
+        "xtech": "not provided", "xperson": "нет", "xpikmi": "не указан",
+        "xtarped": "не указан", "xcore": "нет", "xadam": "нет",
+    },
+    "agent_files_path_line": {
+        "xtech": "\n<code>{component}</code> · <code>{path}</code>",
+        "xperson": "\n<code>{component}</code> · <code>{path}</code>",
+        "xpikmi": "\n<code>{component}</code> · <code>{path}</code>",
+        "xtarped": "\n<code>{component}</code> · <code>{path}</code>",
+        "xcore": "\n<code>{component}</code> · <code>{path}</code>",
+        "xadam": "\n<code>{component}</code> · <code>{path}</code>",
+    },
+    "agent_files_file_metadata": {
+        "xtech": "Size: <code>{size}</code> · signature: <code>{signature}</code> · integrity: <code>{integrity}</code>",
+        "xperson": "Размер: <code>{size}</code> · подпись: <code>{signature}</code> · целостность: <code>{integrity}</code>",
+        "xpikmi": "Размер: <code>{size}</code> · подпись: <code>{signature}</code> · целостность: <code>{integrity}</code>",
+        "xtarped": "Размер: <code>{size}</code> · подпись: <code>{signature}</code> · целостность: <code>{integrity}</code>",
+        "xcore": "Размер: <code>{size}</code> · подпись: <code>{signature}</code> · целостность: <code>{integrity}</code>",
+        "xadam": "Размер: <code>{size}</code> · подпись: <code>{signature}</code> · целостность: <code>{integrity}</code>",
+    },
+    "agent_files_hash_line": {
+        "xtech": "SHA-256: <code>{digest}</code>", "xperson": "SHA-256: <code>{digest}</code>",
+        "xpikmi": "SHA-256: <code>{digest}</code>", "xtarped": "SHA-256: <code>{digest}</code>",
+        "xcore": "SHA-256: <code>{digest}</code>", "xadam": "SHA-256: <code>{digest}</code>",
+    },
+    "agent_files_unknown_version": {
+        "xtech": "unknown", "xperson": "не определена", "xpikmi": "не определена",
+        "xtarped": "не определена", "xcore": "неизвестна", "xadam": "не определена",
+    },
+    "agent_files_unknown_path": {
+        "xtech": "path unavailable", "xperson": "путь недоступен", "xpikmi": "путь недоступен",
+        "xtarped": "путь недоступен", "xcore": "недоступен", "xadam": "путь недоступен",
+    },
+    "agent_files_component_title": {
+        "xtech": "📂 <b>{component} · {device}</b>", "xperson": "📂 <b>{component} · {device}</b>",
+        "xpikmi": "📂 <b>{component} · {device}</b>", "xtarped": "📂 <b>{component} · {device}</b>",
+        "xcore": "📂 <b>{component} · {device}</b>", "xadam": "📂 <b>{component} · {device}</b>",
+    },
+    "agent_files_component_status": {
+        "xtech": "Version: <code>{version}</code> · status: <code>{status}</code>",
+        "xperson": "Версия: <code>{version}</code> · состояние: <code>{status}</code>",
+        "xpikmi": "Версия: <code>{version}</code> · статус: <code>{status}</code>",
+        "xtarped": "Версия: <code>{version}</code> · состояние: <code>{status}</code>",
+        "xcore": "Версия: <code>{version}</code> · статус: <code>{status}</code>",
+        "xadam": "Версия: <code>{version}</code> · состояние: <code>{status}</code>",
+    },
+    "agent_files_install_path": {
+        "xtech": "Install path: <code>{path}</code> · files: <code>{count}</code>",
+        "xperson": "Путь установки: <code>{path}</code> · файлов: <code>{count}</code>",
+        "xpikmi": "Где установлен: <code>{path}</code> · файликов: <code>{count}</code>",
+        "xtarped": "Путь установки: <code>{path}</code> · файлов: <code>{count}</code>",
+        "xcore": "Путь: <code>{path}</code> · файлов: <code>{count}</code>",
+        "xadam": "Расположение: <code>{path}</code> · файлов: <code>{count}</code>",
+    },
+    "agent_files_metadata_only_disclaimer": {
+        "xtech": "Files are shown as metadata; contents were not requested. Integrity is unverified without a signed manifest.",
+        "xperson": "Показаны только метаданные; содержимое не запрашивалось. Целостность без подписанного манифеста не подтверждена.",
+        "xpikmi": "Тут только метаданные, содержимое не запрашивалось ♡ Без подписанного манифеста целостность не подтверждена.",
+        "xtarped": "Показаны метаданные; содержимое не запрашивалось. Без подписанного манифеста целостность не подтверждена.",
+        "xcore": "Только метаданные. Содержимое не запрашивалось; целостность не подтверждена.",
+        "xadam": "Показаны метаданные. Содержимое не читалось; целостность без манифеста не подтверждена.",
+    },
+    "agent_files_view_file_button": {
+        "xtech": "📄 View", "xperson": "📄 Просмотреть", "xpikmi": "📄 Посмотреть ♡",
+        "xtarped": "📄 Просмотреть", "xcore": "📄 Открыть", "xadam": "📄 Посмотреть",
+    },
+    "agent_files_to_list_button": {
+        "xtech": "← To list", "xperson": "← К списку", "xpikmi": "← К списочку ♡",
+        "xtarped": "← К списку", "xcore": "← К списку", "xadam": "← К списку",
+    },
+    "agent_files_to_component_files_button": {
+        "xtech": "← Component files", "xperson": "← К файлам компонента",
+        "xpikmi": "← К файликам компонента ♡", "xtarped": "← К файлам компонента",
+        "xcore": "← Файлы компонента", "xadam": "← К файлам компонента",
+    },
+    "agent_files_back_to_device_button": {
+        "xtech": "← Back to device", "xperson": "← К устройству", "xpikmi": "← К устройству ♡",
+        "xtarped": "← К устройству", "xcore": "← К устройству", "xadam": "← К устройству",
+    },
+    "agent_files_file_title": {
+        "xtech": "📄 <b>{component} · XIDER file</b>", "xperson": "📄 <b>{component} · файл XIDER</b>",
+        "xpikmi": "📄 <b>{component} · файлик XIDER ♡</b>", "xtarped": "📄 <b>{component} · файл XIDER</b>",
+        "xcore": "📄 <b>{component} · файл XIDER</b>", "xadam": "📄 <b>{component} · файл XIDER</b>",
+    },
+    "agent_files_file_path": {
+        "xtech": "Path: <code>{path}</code>", "xperson": "Путь: <code>{path}</code>",
+        "xpikmi": "Путь: <code>{path}</code>", "xtarped": "Путь: <code>{path}</code>",
+        "xcore": "Путь: <code>{path}</code>", "xadam": "Путь: <code>{path}</code>",
+    },
+    "agent_files_file_result": {
+        "xtech": "Result: <code>{result}</code>", "xperson": "Результат: <code>{result}</code>",
+        "xpikmi": "Результат: <code>{result}</code>", "xtarped": "Результат: <code>{result}</code>",
+        "xcore": "Результат: <code>{result}</code>", "xadam": "Итог: <code>{result}</code>",
+    },
+    "agent_files_content_available": {
+        "xtech": "content received", "xperson": "содержимое получено", "xpikmi": "содержимое получено ♡",
+        "xtarped": "содержимое получено", "xcore": "получено", "xadam": "содержимое получено",
+    },
+    "agent_files_content_unavailable": {
+        "xtech": "file unavailable", "xperson": "файл недоступен", "xpikmi": "файлик недоступен",
+        "xtarped": "файл недоступен", "xcore": "недоступен", "xadam": "файл недоступен",
+    },
+    "agent_files_content_not_allowed": {
+        "xtech": "file is not on the read allowlist", "xperson": "этот файл не входит в разрешённый список чтения",
+        "xpikmi": "этого файла нет в разрешённом списке чтения", "xtarped": "файл не входит в разрешённый список чтения",
+        "xcore": "чтение файла не разрешено", "xadam": "файл отсутствует в allowlist чтения",
+    },
+    "agent_files_content_unsupported": {
+        "xtech": "this agent version does not support file viewing", "xperson": "эта версия агента не поддерживает просмотр файлов",
+        "xpikmi": "эта версия агента не умеет показывать файлы", "xtarped": "эта версия агента не поддерживает просмотр файлов",
+        "xcore": "просмотр не поддерживается", "xadam": "версия агента не поддерживает просмотр файлов",
+    },
+    "agent_files_content_error": {
+        "xtech": "agent reported a read error", "xperson": "агент сообщил об ошибке чтения",
+        "xpikmi": "агент сообщил об ошибке при чтении", "xtarped": "агент сообщил об ошибке чтения",
+        "xcore": "ошибка чтения на агенте", "xadam": "ошибка чтения файла на агенте",
+    },
+    "agent_files_content_timeout": {
+        "xtech": "agent timed out; this version may not support file viewing", "xperson": "агент не ответил вовремя; эта версия может не поддерживать чтение",
+        "xpikmi": "агент не успел ответить; возможно, версия не умеет читать файлы", "xtarped": "агент не ответил вовремя; версия может не поддерживать чтение",
+        "xcore": "тайм-аут; чтение может не поддерживаться", "xadam": "истекло время ожидания; проверь поддержку версии",
+    },
+    "agent_files_content_invalid": {
+        "xtech": "unverified agent response", "xperson": "неподтверждённый ответ агента",
+        "xpikmi": "ответ агента не удалось подтвердить", "xtarped": "ответ агента не подтверждён",
+        "xcore": "ответ не подтверждён", "xadam": "неподтверждённый ответ",
+    },
+    "agent_files_content_publish_failed": {
+        "xtech": "command was not sent", "xperson": "команда не отправлена",
+        "xpikmi": "команду не удалось отправить", "xtarped": "команда не отправлена",
+        "xcore": "не отправлено", "xadam": "команда не отправлена",
+    },
+    "agent_files_content_truncated": {
+        "xtech": "Only part of the file content is shown.", "xperson": "Показана только часть содержимого.",
+        "xpikmi": "Показана только часть содержимого ♡", "xtarped": "Показана только часть содержимого.",
+        "xcore": "Содержимое показано частично.", "xadam": "Показана только часть файла.",
+    },
+})
+
 
 COPY.update({
     "target_required": {
@@ -1180,6 +1498,38 @@ COPY.update({
         "xcore": "Получено подтверждение выполнения.",
         "xadam": "Агент подтвердил выполнение.",
     },
+    "action_result_failed": {
+        "xtech": "⚠️ Агент сообщил, что действие не выполнено.",
+        "xperson": "⚠️ Агент вернул ошибку: действие не подтверждено.",
+        "xpikmi": "⚠️ Агент сообщил об ошибочке: действие не выполнено.",
+        "xtarped": "⚠️ Агент вернул отказ или частичный результат.",
+        "xcore": "⚠️ Действие завершилось ошибкой или частично.",
+        "xadam": "⚠️ Агент не подтвердил выполнение действия.",
+    },
+    "action_result_unsupported": {
+        "xtech": "ℹ️ Эта функция не поддерживается на устройстве.",
+        "xperson": "ℹ️ На этой системе такой функции нет.",
+        "xpikmi": "ℹ️ На этом устройствечке функция не поддерживается.",
+        "xtarped": "ℹ️ Функция не поддерживается этой ОС.",
+        "xcore": "ℹ️ Функция недоступна на этой платформе.",
+        "xadam": "ℹ️ Устройство не поддерживает эту функцию.",
+    },
+    "action_result_unknown": {
+        "xtech": "❔ Итог действия неизвестен.",
+        "xperson": "❔ У агента нет достоверного итога действия.",
+        "xpikmi": "❔ Агент пока не знает, чем всё закончилось.",
+        "xtarped": "❔ Результат не удалось подтвердить.",
+        "xcore": "❔ Подтверждённого результата нет.",
+        "xadam": "❔ Итог не подтверждён.",
+    },
+    "action_result_unconfirmed": {
+        "xtech": "⏳ Запрос принят, но выполнение не подтверждено.",
+        "xperson": "⏳ Агент принял запрос, но не подтвердил, что действие завершилось.",
+        "xpikmi": "⏳ Запросик принят ♡ Но агент ещё не подтвердил результат.",
+        "xtarped": "⏳ Запрос принят; подтверждения выполнения нет.",
+        "xcore": "⏳ Запрос принят. Результат неизвестен.",
+        "xadam": "⏳ Запрос принят, итог не подтверждён.",
+    },
     "device_timeout": {
         "xtech": "⏳ Ответ не получен за {seconds} сек. Устройство могло быть занято или недоступно.",
         "xperson": "⏳ За {seconds} сек ответ не пришёл — запрос мог просто задержаться.",
@@ -1203,6 +1553,14 @@ COPY.update({
         "xtarped": "⚠️ MQTT-брокер не на связи, отправки не было.",
         "xcore": "⚠️ MQTT-транспорт недоступен.",
         "xadam": "⚠️ Канал MQTT недоступен. Команда не отправлена.",
+    },
+    "mqtt_publish_unknown": {
+        "xtech": "⚠️ Брокер не подтвердил публикацию. Жду ответ устройства; без него итог останется неизвестным.",
+        "xperson": "⚠️ Статус отправки неясен, поэтому я жду ответ устройства. Если он не придёт — непонятно, дошёл ли запрос.",
+        "xpikmi": "🎀 Отправка пока не подтверждена. Жду ответик устройства; без него нельзя сказать, дошёл ли запрос.",
+        "xtarped": "⚠️ Публикация не подтверждена. Ожидаю коррелированный ответ; до его получения исход неизвестен.",
+        "xcore": "⚠️ Статус публикации неизвестен. Ожидается ответ устройства; результат не подтверждён.",
+        "xadam": "⚠️ Отправка не подтверждена. Жду ответ устройства; пока неизвестно, дошёл ли запрос.",
     },
     "mqtt_publish_failed": {
         "xtech": "⚠️ MQTT-брокер отклонил отправку команды.",
@@ -1932,6 +2290,14 @@ COPY.update({
         "xcore": "🕘 История команд",
         "xadam": "🕘 Просмотр истории консоли",
     },
+    "device_tools_button": {
+        "xtech": "🧰 Инструменты устройства",
+        "xperson": "🧰 Настройки и инструменты устройства",
+        "xpikmi": "🧰 Устройствечко: настройки и штуки ♡",
+        "xtarped": "🧰 Служебные инструменты устройства",
+        "xcore": "🧰 Инструменты · устройство",
+        "xadam": "🧰 Управление устройством",
+    },
     "settings_rename_button": {
         "xtech": "✏️ Переименовать",
         "xperson": "✏️ Дать устройству имя",
@@ -2035,6 +2401,14 @@ COPY.update({
         "xtarped": "{mark} Низкий заряд · меньше 20%",
         "xcore": "{mark} Событие · батарея ниже 20%",
         "xadam": "{mark} Уведомлять о заряде ниже 20%",
+    },
+    "events_hide_command_inputs_button": {
+        "xtech": "{mark} Удалять мои команды после отправки",
+        "xperson": "{mark} Убирать мои команды из чата после отправки",
+        "xpikmi": "{mark} Спрятать мои командочки после отправки ♡",
+        "xtarped": "{mark} Удалять мои команды после отправки",
+        "xcore": "{mark} Удалять ввод владельца после отправки",
+        "xadam": "{mark} Убирать мои команды из чата после отправки",
     },
     "events_quiet_hours_button": {
         "xtech": "🌙 Тихие часы",
@@ -2341,12 +2715,28 @@ COPY.update({
         "xadam": "🎵 Рикролл · 50 повторов",
     },
     "prank_matrix_button": {
-        "xtech": "🌈 Матрица (full)",
-        "xperson": "🌈 Полноэкранная Матрица",
-        "xpikmi": "🌈 Матрица на весь экранчик ♡",
-        "xtarped": "🌈 Матрица · полный экран",
-        "xcore": "🌈 Эффект «Матрица» · экран",
-        "xadam": "🌈 Полноэкранный эффект «Матрица»",
+        "xtech": "🌈 Запуск терминала · Матрица",
+        "xperson": "🌈 Терминальная Матрица",
+        "xpikmi": "🌈 Матрица в терминальчике ♡",
+        "xtarped": "🌈 Терминал с эффектом «Матрица»",
+        "xcore": "🌈 Терминальная анимация «Матрица»",
+        "xadam": "🌈 Запустить терминальную Матрицу",
+    },
+    "prank_matrix_unconfirmed": {
+        "xtech": "Запуск терминала принят; отображение эффекта не подтверждено.",
+        "xperson": "Запрос на запуск терминала принят. Агент не может подтвердить, что окно открылось и эффект появился.",
+        "xpikmi": "Запуск терминальчика запрошен ♡ Но агент не подтвердил, что окошко открылось и эффект появился.",
+        "xtarped": "Запуск терминала принят; что окно реально показало эффект — не подтверждено.",
+        "xcore": "Запрос запуска принят. Визуальный результат неизвестен.",
+        "xadam": "Запуск принят. Видимый эффект не подтверждён.",
+    },
+    "prank_effect_unconfirmed": {
+        "xtech": "Агент ответил на команду, но не подтвердил фактический эффект.",
+        "xperson": "Команда дошла до агента, но он не прислал проверяемое подтверждение результата.",
+        "xpikmi": "Агент получил команду ♡ Но показать, что эффект правда появился, он не подтвердил.",
+        "xtarped": "Агент принял команду. Сам эффект пока не подтверждён — не выдаём запуск за результат.",
+        "xcore": "Команда получена. Подтверждения эффекта нет.",
+        "xadam": "Команда принята. Эффект не подтверждён.",
     },
     "prank_bsod_button": {
         "xtech": "💀 Экран BSOD",
@@ -2533,12 +2923,12 @@ COPY.update({
         "xadam": "🌀 Включить помехи курсора",
     },
     "prank_random_clicks_button": {
-        "xtech": "🤹 Случайные клики",
-        "xperson": "🤹 Указатель делает несколько случайных кликов",
-        "xpikmi": "🤹 Курсорчик кликает сам ♡",
-        "xtarped": "🤹 Случайные щелчки мышью",
-        "xcore": "🤹 Автоматические клики · тест",
-        "xadam": "🤹 Выполнить случайные клики",
+        "xtech": "🤹 Подёргать курсор",
+        "xperson": "🤹 Немного подвигать указатель",
+        "xpikmi": "🤹 Курсорчик танцует туда-сюда ♡",
+        "xtarped": "🤹 Случайные движения курсора",
+        "xcore": "🤹 Подёргивание курсора · 5 с",
+        "xadam": "🤹 Двигать указатель случайно",
     },
     "prank_keyboard_disco_button": {
         "xtech": "💃 Диско клавиатуры",
@@ -4262,6 +4652,14 @@ COPY.update({
         "xcore": "✅ Устройство <b>{device}</b> подтверждено.",
         "xadam": "✅ Цель <b>{device}</b> подтверждена.",
     },
+    "device_waiting_for_approval": {
+        "xtech": "⏳ Команды устройству заблокированы до подтверждения владельцем.",
+        "xperson": "⏳ Новое устройство пока на проверке. Команды пойдут после подтверждения владельцем.",
+        "xpikmi": "🎀 Устройствечко ждёт подтверждения владельца; команды пока не отправляю 🩷",
+        "xtarped": "⏳ Устройство ждёт подтверждения. До этого бот не отправляет ему команды.",
+        "xcore": "⏳ Устройство не допущено: ожидается подтверждение владельца.",
+        "xadam": "⏳ Цель ожидает допуска владельца; команды заблокированы.",
+    },
     "device_block_confirm": {
         "xtech": "⛔ Заблокировать <b>{device}</b>? Устройство перестанет появляться в списке и отправлять статусы.",
         "xperson": "⛔ Заблокировать <b>{device}</b>? Оно исчезнет из списка и перестанет присылать статусы до разблокировки.",
@@ -4461,6 +4859,77 @@ COPY.update({
         "xtarped": "Устройство прислало пустой результат.",
         "xcore": "Отсутствует текстовый результат.",
         "xadam": "Ответ без отчёта.",
+    },
+})
+
+
+COPY.update({
+    "agent_files_collecting_toast": {
+        "xtech": "Collecting XIDER file metadata…", "xperson": "Собираю метаданные файлов XIDER…",
+        "xpikmi": "Собираю метаданные файликов XIDER… ♡", "xtarped": "Собираю метаданные файлов XIDER…",
+        "xcore": "Сбор метаданных файлов XIDER…", "xadam": "Запрашиваю метаданные файлов XIDER…",
+    },
+    "agent_files_requesting_card": {
+        "xtech": "📦 Requesting the component and file inventory…",
+        "xperson": "📦 Запрашиваю список компонентов и их файлов…",
+        "xpikmi": "📦 Запрашиваю список компонентов и файликов… ♡",
+        "xtarped": "📦 Запрашиваю список компонентов и файлов…",
+        "xcore": "📦 Запрос списка компонентов и файлов…",
+        "xadam": "📦 Запрашиваю инвентарь компонентов и файлов…",
+    },
+    "agent_files_unconfirmed_response": {
+        "xtech": "📦 No verified response from this agent version. Check its connection and whether it supports agent_files.",
+        "xperson": "📦 Нет подтверждённого ответа этой версии агента. Проверь подключение и наличие команды agent_files.",
+        "xpikmi": "📦 Эта версия агента не прислала подтверждённый ответ. Проверь подключение и поддержку agent_files ♡",
+        "xtarped": "📦 Нет подтверждённого ответа. Проверь связь и поддержку agent_files этой версией агента.",
+        "xcore": "📦 Ответ агента не подтверждён. Проверь связь и поддержку agent_files.",
+        "xadam": "📦 Нет ответа этой версии агента. Проверь подключение и поддержку agent_files.",
+    },
+    "agent_files_invalid_page": {
+        "xtech": "Invalid page.", "xperson": "Некорректная страница.", "xpikmi": "Такой страницы нет ♡",
+        "xtarped": "Некорректная страница.", "xcore": "Неверный номер страницы.", "xadam": "Некорректная страница.",
+    },
+    "agent_files_view_expired": {
+        "xtech": "The list expired, the device changed, or access was revoked.",
+        "xperson": "Список истёк, устройство сменилось или доступ закрыт.",
+        "xpikmi": "Список устарел или устройство сменилось. Проверь доступ ♡",
+        "xtarped": "Список истёк или устройство сменилось. Обнови его.",
+        "xcore": "Список недоступен: срок истёк или цель изменилась.",
+        "xadam": "Список устарел, устройство изменилось или доступ отозван.",
+    },
+    "agent_files_page_unavailable": {
+        "xtech": "The page expired or is unavailable.", "xperson": "Список истёк или недоступен.",
+        "xpikmi": "Страница списка недоступна ♡", "xtarped": "Страница списка истекла или недоступна.",
+        "xcore": "Страница недоступна.", "xadam": "Страница списка больше недоступна.",
+    },
+    "agent_files_invalid_component": {
+        "xtech": "Invalid component.", "xperson": "Некорректный компонент.", "xpikmi": "Компонент не распознан ♡",
+        "xtarped": "Некорректный компонент.", "xcore": "Неверный компонент.", "xadam": "Некорректный компонент.",
+    },
+    "agent_files_component_unavailable": {
+        "xtech": "The component or page is unavailable.", "xperson": "Компонент или страница недоступны.",
+        "xpikmi": "Компонент или страничка недоступны ♡", "xtarped": "Компонент или страница недоступны.",
+        "xcore": "Компонент недоступен.", "xadam": "Компонент или страница недоступны.",
+    },
+    "agent_files_invalid_file": {
+        "xtech": "Invalid file.", "xperson": "Некорректный файл.", "xpikmi": "Файл не распознан ♡",
+        "xtarped": "Некорректный файл.", "xcore": "Неверный файл.", "xadam": "Некорректный файл.",
+    },
+    "agent_files_file_not_in_snapshot": {
+        "xtech": "This file is no longer part of the inventory snapshot.",
+        "xperson": "Файл больше не относится к этому снимку.",
+        "xpikmi": "Файлик уже не относится к этому снимку ♡", "xtarped": "Файл больше не входит в этот снимок.",
+        "xcore": "Файл отсутствует в текущем снимке.", "xadam": "Файл больше не относится к этому снимку.",
+    },
+    "agent_files_reading_file_toast": {
+        "xtech": "Reading the selected allowlisted file…", "xperson": "Читаю выбранный allowlist-файл…",
+        "xpikmi": "Читаю выбранный разрешённый файлик… ♡", "xtarped": "Читаю выбранный разрешённый файл…",
+        "xcore": "Чтение разрешённого файла…", "xadam": "Читаю выбранный файл из allowlist…",
+    },
+    "agent_files_file_unavailable": {
+        "xtech": "The list expired or the file is unavailable.", "xperson": "Список истёк или файл недоступен.",
+        "xpikmi": "Список устарел или файлик недоступен ♡", "xtarped": "Список истёк или файл недоступен.",
+        "xcore": "Снимок или файл недоступен.", "xadam": "Список или выбранный файл недоступен.",
     },
 })
 

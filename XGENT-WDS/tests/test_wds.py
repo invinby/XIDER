@@ -14,11 +14,157 @@ from pathlib import Path
 
 import psutil
 import pytest
+from types import SimpleNamespace
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 import xgent_wds as wds
 from release_signature import release_key_id, sign_manifest
+
+
+def test_prank_matrix_ack_confirms_process_launch_but_not_visual_effect(client, monkeypatch):
+    launched = []
+    published = []
+    monkeypatch.setattr(wds.subprocess, "Popen", lambda *args, **kwargs: launched.append((args, kwargs)) or SimpleNamespace(pid=123))
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    client._publish_response = lambda topic, payload: published.append((topic, payload))
+
+    client._do_prank_matrix({"id": "matrix-1"})
+
+    assert len(launched) == 1
+    assert published[0][0] == "prank_matrix"
+    assert published[0][1]["state"] == "launch_accepted"
+    assert published[0][1]["effect_confirmed"] is False
+    assert published[0][1]["id"] == "matrix-1"
+
+
+def test_confetti_prank_schedules_cleanup_for_its_owned_temp_page(client, monkeypatch, tmp_path):
+    scheduled = []
+    published = []
+    monkeypatch.setattr(wds, "_schedule_prank_temp_cleanup", lambda path: scheduled.append(Path(path)))
+    monkeypatch.setattr(wds.subprocess, "Popen", lambda *args, **kwargs: SimpleNamespace(pid=123))
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    client._publish_response = lambda topic, payload: published.append((topic, payload)) or True
+
+    client._do_prank_confetti_winner({})
+
+    assert len(scheduled) == 1
+    assert scheduled[0].name.startswith("xider-prank-")
+    assert scheduled[0].suffix == ".html"
+    assert published[0][1]["ok"] is True
+    scheduled[0].unlink(missing_ok=True)
+
+
+def test_prank_temp_cleanup_removes_only_owned_html_after_delay(monkeypatch, tmp_path):
+    owned = tmp_path / "xider-prank-one.html"
+    unrelated = tmp_path / "user-file.html"
+    owned.write_text("owned", encoding="utf-8")
+    unrelated.write_text("keep", encoding="utf-8")
+    timers = []
+
+    class FakeTimer:
+        def __init__(self, delay, callback, *, args):
+            self.delay = delay
+            self.callback = callback
+            self.args = args
+            self.daemon = False
+            timers.append(self)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(wds.threading, "Timer", FakeTimer)
+    wds._schedule_prank_temp_cleanup(str(owned))
+    wds._schedule_prank_temp_cleanup(str(unrelated))
+
+    assert len(timers) == 1
+    assert timers[0].delay == 60
+    assert timers[0].daemon is True
+    timers[0].callback(*timers[0].args)
+    assert not owned.exists()
+    assert unrelated.read_text(encoding="utf-8") == "keep"
+
+
+def test_random_clicks_reports_cursor_motion_request_without_claiming_clicks(client, monkeypatch):
+    published = []
+    class FakeThread:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+        def start(self):
+            pass
+    monkeypatch.setattr(wds.threading, "Thread", FakeThread)
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    client._publish_response = lambda topic, payload: published.append((topic, payload)) or True
+
+    client._do_prank_random_clicks({})
+
+    result = published[0][1]
+    assert result["type"] == "prank_random_clicks"
+    assert result["state"] == "launch_accepted"
+    assert result["effect_confirmed"] is False
+    assert "клики не выполняются" in result["text"]
+
+
+@pytest.mark.parametrize(("api_result", "expected_state"), [(1, "launch_accepted"), (0, "failed")])
+def test_black_screen_checks_windows_broadcast_acceptance(client, monkeypatch, api_result, expected_state):
+    published = []
+    calls = []
+
+    class User32:
+        def SendMessageTimeoutW(self, *args):
+            calls.append(args)
+            return api_result
+
+    monkeypatch.setattr(wds.ctypes, "windll", SimpleNamespace(user32=User32()))
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    client._publish_response = lambda topic, payload: published.append((topic, payload)) or True
+
+    client._do_prank_black_screen({})
+
+    result = published[0][1]
+    assert len(calls) == 1
+    assert result["state"] == expected_state
+    assert result["effect_confirmed"] is False
+    assert result["ok"] is (api_result == 1)
+
+
+def test_random_site_reports_browser_launch_failure(client, monkeypatch):
+    published = []
+    monkeypatch.setattr(wds.random, "choice", lambda sites: sites[0])
+    monkeypatch.setattr(wds.webbrowser, "open_new_tab", lambda _url: False)
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    client._publish_response = lambda topic, payload: published.append((topic, payload)) or True
+
+    client._do_prank_random_site({})
+
+    result = published[0][1]
+    assert result["ok"] is False
+    assert result["state"] == "failed"
+    assert result["effect_confirmed"] is False
+
+
+@pytest.mark.parametrize(
+    ("method", "action", "payload"),
+    [
+        ("_do_file_del", "file_del", {"path": "  "}),
+        ("_do_file_del", "file_del", {"path": []}),
+        ("_do_path_open", "path_open", {"path": "  "}),
+        ("_do_path_open", "path_open", {"path": None}),
+        ("_do_shell", "shell", {"command": "  "}),
+        ("_do_shell", "shell", {"command": []}),
+    ],
+)
+def test_empty_or_malformed_action_input_returns_explicit_failure(client, monkeypatch, method, action, payload):
+    published = []
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    monkeypatch.setattr(client, "_publish_response", lambda topic, body: published.append((topic, body)) or True)
+    monkeypatch.setattr(wds, "_reserve_shell_approval", lambda *_args: pytest.fail("empty shell command must be rejected before approval"))
+
+    getattr(client, method)(payload)
+
+    assert published and published[0][0] == action
+    assert published[0][1]["ok"] is False
+    assert published[0][1]["state"] == "failed"
 
 
 # ---------------------------------------------------------------------------
@@ -423,6 +569,279 @@ def test_windows_volume_topology_hashes_volume_ids_and_keeps_mount_aliases(clien
     assert result["request_id"] == "topology-ticket"
 
 
+def test_volume_set_reports_confirmed_only_when_readback_matches(client, monkeypatch):
+    class Volume:
+        def __init__(self, value):
+            self.value = value
+            self.requested = None
+
+        def SetMasterVolumeLevelScalar(self, value, _context):
+            self.requested = value
+
+        def GetMasterVolumeLevelScalar(self):
+            return self.value
+
+    volume = Volume(0.42)
+    monkeypatch.setattr(client, "_get_master_volume", lambda: volume)
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, dict(payload)))
+
+    client._do_volume_set({"level": 0})
+
+    assert volume.requested == 0.0
+    assert [topic for topic, _ in published] == ["volume_set", "output"]
+    assert published[0][1]["state"] == "failed"
+    assert published[0][1]["ok"] is False
+    assert published[0][1]["level"] == 0
+    assert published[0][1]["current"] == 42
+    assert published[1][1] == published[0][1]
+
+
+def test_volume_set_confirms_matching_readback(client, monkeypatch):
+    class Volume:
+        def __init__(self):
+            self.value = 0.32
+
+        def SetMasterVolumeLevelScalar(self, value, _context):
+            self.value = value
+
+        def GetMasterVolumeLevelScalar(self):
+            return self.value
+
+    volume = Volume()
+    monkeypatch.setattr(client, "_get_master_volume", lambda: volume)
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, dict(payload)))
+
+    client._do_volume_set({"level": 32})
+
+    result = published[0][1]
+    assert result["state"] == "confirmed"
+    assert result["ok"] is True
+    assert result["current"] == 32
+    assert result["source"] == "pycaw.IAudioEndpointVolume"
+
+
+def test_volume_set_reports_unknown_when_readback_is_unavailable(client, monkeypatch):
+    class Volume:
+        def SetMasterVolumeLevelScalar(self, _value, _context):
+            pass
+
+        def GetMasterVolumeLevelScalar(self):
+            raise OSError("readback unavailable")
+
+    monkeypatch.setattr(client, "_get_master_volume", lambda: Volume())
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, dict(payload)))
+
+    client._do_volume_set({"level": 25})
+
+    assert published[0][1]["state"] == "unknown"
+    assert published[0][1]["ok"] is False
+    assert published[0][1]["current"] is None
+
+
+def test_volume_toggle_requires_observed_mute_transition(client, monkeypatch):
+    class Volume:
+        def __init__(self, *, applies):
+            self.muted = False
+            self.applies = applies
+            self.requested = None
+
+        def GetMute(self):
+            return self.muted
+
+        def SetMute(self, muted, _context):
+            self.requested = muted
+            if self.applies:
+                self.muted = muted
+
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    for applies, expected_state, expected_muted in (
+        (True, "confirmed", True),
+        (False, "failed", False),
+    ):
+        volume = Volume(applies=applies)
+        monkeypatch.setattr(client, "_get_master_volume", lambda volume=volume: volume)
+        published = []
+        client._publish_response = lambda topic, payload: published.append((topic, dict(payload)))
+
+        client._do_volume_toggle({})
+
+        result = published[0][1]
+        assert result["state"] == expected_state
+        assert result["ok"] is (expected_state == "confirmed")
+        assert result["muted"] is expected_muted
+        assert result["source"] == "pycaw.IAudioEndpointVolume"
+
+
+def test_power_shutdown_reports_launch_only_after_successful_spawn(client, monkeypatch):
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, dict(payload)))
+    spawned = []
+    monkeypatch.setattr(wds.subprocess, "Popen", lambda *args, **kwargs: spawned.append((args, kwargs)))
+
+    client._do_power({"action": "shutdown", "id": "power-1"})
+
+    assert len(spawned) == 1
+    assert [topic for topic, _ in published] == ["power", "output"]
+    result = published[0][1]
+    assert result["id"] == result["request_id"] == "power-1"
+    assert result["state"] == "launch_accepted"
+    assert result["ok"] is True
+    assert result["effect_confirmed"] is False
+    assert "не подтверждено" in result["text"].lower()
+
+
+def test_power_shutdown_reports_spawn_failure_without_prior_success(client, monkeypatch):
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, dict(payload)))
+
+    def fail_spawn(*_args, **_kwargs):
+        raise OSError("fixture spawn failure")
+
+    monkeypatch.setattr(wds.subprocess, "Popen", fail_spawn)
+    client._do_power({"action": "shutdown", "id": "power-2"})
+
+    assert [topic for topic, _ in published] == ["power", "output"]
+    assert published[0][1]["state"] == "failed"
+    assert published[0][1]["ok"] is False
+    assert published[0][1]["id"] == "power-2"
+
+
+def test_power_sleep_reports_suspend_api_result_after_worker_finishes(client, monkeypatch):
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    monkeypatch.setattr(wds.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        wds.ctypes, "windll",
+        SimpleNamespace(powrprof=SimpleNamespace(SetSuspendState=lambda *_args: 1)),
+        raising=False,
+    )
+
+    class InlineThread:
+        def __init__(self, *, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(wds.threading, "Thread", InlineThread)
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, dict(payload)))
+
+    client._do_power({"action": "sleep", "id": "power-sleep-1"})
+
+    result = published[0][1]
+    assert result["state"] == "confirmed"
+    assert result["ok"] is True
+    assert result["effect_confirmed"] is True
+    assert result["id"] == "power-sleep-1"
+
+
+def test_power_sleep_reports_false_fallback_as_failure(client, monkeypatch):
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    monkeypatch.setattr(wds.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        wds.ctypes, "windll",
+        SimpleNamespace(powrprof=SimpleNamespace(SetSuspendState=lambda *_args: 0)),
+        raising=False,
+    )
+
+    class InlineThread:
+        def __init__(self, *, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(wds.threading, "Thread", InlineThread)
+    monkeypatch.setattr(
+        wds.subprocess, "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="False"),
+    )
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, dict(payload)))
+
+    client._do_power({"action": "sleep", "id": "power-sleep-2"})
+
+    result = published[0][1]
+    assert result["state"] == "failed"
+    assert result["ok"] is False
+    assert result["effect_confirmed"] is False
+    assert result["id"] == "power-sleep-2"
+
+
+def test_display_brightness_checks_wmi_status_and_readback(client, monkeypatch):
+    results = iter((
+        SimpleNamespace(returncode=0, stdout="0", stderr=""),
+        SimpleNamespace(returncode=0, stdout="55", stderr=""),
+    ))
+    calls = []
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    monkeypatch.setattr(wds.subprocess, "run", lambda args, **kwargs: calls.append((args, kwargs)) or next(results))
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, dict(payload)))
+
+    client._do_display_brightness({"level": 55})
+
+    assert len(calls) == 2
+    assert [topic for topic, _ in published] == ["display_brightness", "output"]
+    result = published[0][1]
+    assert result["state"] == "confirmed"
+    assert result["ok"] is True
+    assert result["current"] == 55
+    assert result["source"] == "WMI.WmiMonitorBrightness"
+
+
+def test_display_brightness_does_not_confirm_nonzero_wmi_result(client, monkeypatch):
+    results = iter((SimpleNamespace(returncode=0, stdout="5", stderr=""),))
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    monkeypatch.setattr(wds.subprocess, "run", lambda *_args, **_kwargs: next(results))
+    fallback = SimpleNamespace(
+        set_brightness=lambda _level: None,
+        get_brightness=lambda: [42],
+    )
+    monkeypatch.setitem(sys.modules, "screen_brightness_control", fallback)
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, dict(payload)))
+
+    client._do_display_brightness({"level": 55})
+
+    result = published[0][1]
+    assert result["state"] == "failed"
+    assert result["ok"] is False
+    assert result["current"] == 42
+    assert result["source"] == "screen_brightness_control"
+
+
+def test_display_brightness_reports_unknown_without_readback(client, monkeypatch):
+    results = iter((
+        SimpleNamespace(returncode=0, stdout="0", stderr=""),
+        SimpleNamespace(returncode=0, stdout="", stderr=""),
+    ))
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    monkeypatch.setattr(wds.subprocess, "run", lambda *_args, **_kwargs: next(results))
+    monkeypatch.setitem(
+        sys.modules, "screen_brightness_control",
+        SimpleNamespace(set_brightness=lambda _level: None,
+                        get_brightness=lambda: (_ for _ in ()).throw(OSError("no readback"))),
+    )
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, dict(payload)))
+
+    client._do_display_brightness({"level": 55})
+
+    result = published[0][1]
+    assert result["state"] == "unknown"
+    assert result["ok"] is False
+    assert result["current"] is None
+
+
 def test_windows_clock_drift_compares_wall_and_monotonic_elapsed_without_setting_time(monkeypatch):
     wall = iter([10_000_000_000, 12_123_000_000])
     monotonic = iter([50_000, 2_000_050_000])
@@ -496,6 +915,8 @@ def test_format_battery_present():
     out = wds._format_battery(b)
     assert out["available"] is True
     assert out["percent"] == 87.4
+    assert out["source"] == "psutil.sensors_battery"
+    assert out["sampled_at"] > 0
     assert out["power_plugged"] is False
     assert out["secsleft"] == 12345
     assert out["time_left"] == "3ч 25мин"
@@ -509,6 +930,57 @@ def test_format_battery_unlimited():
     assert out["secsleft"] is None
     assert out["time_left"] is None
     assert out["state"] == "charging"
+
+
+def test_lock_screen_publishes_platform_result(monkeypatch):
+    from types import SimpleNamespace
+
+    client = object.__new__(wds.XgentClient)
+    sent = []
+    client._publish_response = lambda topic, payload: sent.append((topic, payload))
+    monkeypatch.setattr(
+        wds.ctypes, "windll",
+        SimpleNamespace(user32=SimpleNamespace(LockWorkStation=lambda: 1)),
+        raising=False,
+    )
+
+    client._do_lock_screen({"id": "lock-ticket"})
+    assert sent == [("lock", {
+        "type": "lock", "device_id": wds.DEVICE_ID, "action": "lock", "id": "lock-ticket",
+        "ok": True, "error": None,
+    })]
+
+
+def test_rickroll_reports_browser_launch_results_instead_of_claiming_all_tabs(monkeypatch):
+    client = object.__new__(wds.XgentClient)
+    sent = []
+    opened = iter((True, False, True))
+    monkeypatch.setattr(wds.webbrowser, "open_new_tab", lambda _url: next(opened))
+    monkeypatch.setattr(wds.time, "sleep", lambda _seconds: None)
+    client._publish_response = lambda topic, payload: sent.append((topic, dict(payload)))
+
+    client._do_prank_rickroll({"id": "rr-1", "tabs": 3})
+
+    result = sent[0][1]
+    assert sent[0][0] == "prank_rickroll"
+    assert result["id"] == "rr-1"
+    assert result["state"] == "launch_accepted" and result["ok"] is True
+    assert (result["tabs_requested"], result["tabs_accepted"], result["tabs_failed"]) == (3, 2, 1)
+    assert "не подтверждает показ" in result["text"]
+
+
+def test_rickroll_is_failed_when_browser_rejects_every_tab(monkeypatch):
+    client = object.__new__(wds.XgentClient)
+    sent = []
+    monkeypatch.setattr(wds.webbrowser, "open_new_tab", lambda _url: False)
+    monkeypatch.setattr(wds.time, "sleep", lambda _seconds: None)
+    client._publish_response = lambda topic, payload: sent.append((topic, dict(payload)))
+
+    client._do_prank_rickroll({"id": "rr-2", "tabs": 2})
+
+    result = sent[0][1]
+    assert result["ok"] is False and result["state"] == "failed"
+    assert result["tabs_accepted"] == 0 and result["tabs_failed"] == 2
 
 
 class _Addr:
@@ -617,6 +1089,46 @@ def client(monkeypatch):
     return c
 
 
+def test_sys_clean_temp_only_reports_xider_owned_expired_files(client, monkeypatch):
+    report = {"state": "success", "scanned": 4, "deleted": 2, "skipped": 2, "failed": 0}
+    calls = []
+    monkeypatch.setattr(wds.media_temp, "cleanup_stale_media_temp", lambda: calls.append(True) or report)
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, payload)) or True
+
+    client._do_sys_clean_temp({"id": "temp-clean-1"})
+
+    assert calls == [True]
+    assert len(published) == 1
+    topic, payload = published[0]
+    assert topic == "output"
+    assert payload["type"] == "sys_clean_temp"
+    assert payload["state"] == "success"
+    assert payload["ok"] is True
+    assert payload["deleted"] == 2
+    assert payload["skipped"] == 2
+    assert payload["failed"] == 0
+    assert "XIDER" in payload["text"]
+    assert "TEMP/TMP" not in payload["text"]
+
+
+def test_sys_clean_temp_does_not_claim_success_for_partial_cleanup(client, monkeypatch):
+    monkeypatch.setattr(wds.media_temp, "cleanup_stale_media_temp", lambda: {
+        "state": "partial", "scanned": 3, "deleted": 1, "skipped": 0, "failed": 2,
+    })
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, payload)) or True
+
+    client._do_sys_clean_temp({"id": "temp-clean-2"})
+
+    payload = published[0][1]
+    assert payload["state"] == "partial"
+    assert payload["ok"] is False
+    assert payload["deleted"] == 1
+    assert payload["failed"] == 2
+    assert "частично" in payload["text"]
+
+
 def test_publish_response_journals_only_media_metadata_locally(client, monkeypatch, tmp_path):
     import media_history
 
@@ -635,6 +1147,64 @@ def test_publish_response_journals_only_media_metadata_locally(client, monkeypat
     saved = path.read_text(encoding="utf-8")
     assert "private-audio-content" not in saved
     assert "device-secret-id" not in saved and "request-secret-id" not in saved
+
+
+def test_prank_response_marks_effect_unconfirmed_before_publish(client, monkeypatch):
+    import json
+
+    monkeypatch.setattr(wds, "ENCRYPT_PAYLOAD", False)
+    monkeypatch.setattr(wds, "sign_message", lambda value: value)
+    client._client.publish.return_value.rc = wds.mqtt.MQTT_ERR_SUCCESS
+    client._client.publish.return_value.is_published.return_value = True
+
+    assert client._publish_response("output", {
+        "type": "prank_fake_update", "device_id": "device-1", "ok": True,
+        "text": "Demo window started.",
+    }) is True
+
+    sent = json.loads(client._client.publish.call_args.args[1])
+    assert sent["state"] == "launch_accepted"
+    assert sent["effect_confirmed"] is False
+    assert sent["ok"] is True
+
+
+def test_kill_by_name_reports_not_found_instead_of_success(monkeypatch):
+    class Process:
+        info = {"pid": 200, "name": "notepad.exe"}
+
+        def kill(self):
+            raise AssertionError("unmatched process must not be killed")
+
+    monkeypatch.setattr(wds.psutil, "process_iter", lambda _fields: [Process()])
+
+    result = wds._kill_by_name("chrome")
+
+    assert result["ok"] is False
+    assert result["state"] == "not_found"
+    assert result["count"] == 0
+    assert "Совпадений" in result["text"]
+
+
+def test_kill_by_name_confirms_exit_before_reporting_success(monkeypatch):
+    calls = []
+
+    class Process:
+        info = {"pid": 200, "name": "notepad.exe"}
+
+        def kill(self):
+            calls.append("kill")
+
+        def wait(self, timeout):
+            calls.append(("wait", timeout))
+
+    monkeypatch.setattr(wds.psutil, "process_iter", lambda _fields: [Process()])
+
+    result = wds._kill_by_name("notepad")
+
+    assert calls == ["kill", ("wait", 3)]
+    assert result["ok"] is True
+    assert result["state"] == "completed"
+    assert result["count"] == 1
 
 
 def test_windows_remote_update_does_not_claim_success_without_signed_release(client, monkeypatch, tmp_path):
@@ -717,7 +1287,7 @@ def test_dispatch_unknown_command(client):
     assert ack["id"] == "abc"
 
 
-def test_dispatch_known_command_acks_received_and_ok(client, monkeypatch):
+def test_dispatch_known_command_acks_received_and_completed(client, monkeypatch):
     # open_url не требует оборудования, кроме webbrowser.open_new_tab — замокаем.
     monkeypatch.setattr(wds.webbrowser, "open_new_tab", lambda u: True)
     monkeypatch.setattr(wds, "ctypes_windll_user32_message_box", lambda t: None)
@@ -738,10 +1308,10 @@ def test_dispatch_known_command_acks_received_and_ok(client, monkeypatch):
     assert acks and acks[0]["status"] == "received"
     # Итоговый ok придёт из потока — дождёмся.
     for _ in range(50):
-        if any(p["status"] == "ok" for p in _acks()):
+        if any(p["status"] == "completed" for p in _acks()):
             break
         time.sleep(0.05)
-    assert any(p["status"] == "ok" for p in _acks())
+    assert any(p["status"] == "completed" for p in _acks())
 
 
 def test_open_url_opens_the_requested_number_of_web_tabs(client, monkeypatch):
@@ -752,6 +1322,32 @@ def test_open_url_opens_the_requested_number_of_web_tabs(client, monkeypatch):
     client._do_open_url({"url": "https://example.com/path", "count": 3})
 
     assert opened == ["https://example.com/path"] * 3
+
+
+def test_worker_ack_means_handler_returned_not_action_succeeded(client, monkeypatch):
+    import threading
+
+    observed = threading.Event()
+    acks = []
+    monkeypatch.setattr(client, "_publish_ack", lambda *args, **kwargs: (acks.append((args, kwargs)), observed.set()))
+
+    client._run_threaded("fixture", "fixture-1", lambda _payload: {"ok": False}, {})
+
+    assert observed.wait(2)
+    assert acks == [(("fixture", "completed"), {"cmd_id": "fixture-1"})]
+
+
+def test_standby_rejection_emits_error_ack(client, monkeypatch):
+    acks = []
+    responses = []
+    client._standby = True
+    monkeypatch.setattr(client, "_publish_ack", lambda *args, **kwargs: acks.append((args, kwargs)))
+    monkeypatch.setattr(client, "_publish_response", lambda *args: responses.append(args))
+
+    client._dispatch({"type": "volume_set", "id": "standby-1"})
+
+    assert responses and responses[0][1]["ok"] is False
+    assert acks == [(("volume_set", "error"), {"detail": "standby", "cmd_id": "standby-1"})]
 
 
 @pytest.mark.parametrize("payload", [
@@ -830,6 +1426,61 @@ def test_night_light_helpers():
 
     back = wds._night_light_toggle_bytes(off)
     assert wds._night_light_enabled(back) is True
+
+
+def test_night_light_write_is_not_reported_success_without_matching_readback(client, monkeypatch):
+    import types
+
+    state = bytearray(43)
+    state[18] = 0x13
+    key = object()
+    fake_winreg = types.SimpleNamespace(
+        HKEY_CURRENT_USER=1, KEY_READ=1, KEY_SET_VALUE=2, REG_BINARY=3,
+        OpenKey=lambda *_args: key,
+        QueryValueEx=lambda *_args: (bytes(state), 3),
+        SetValueEx=lambda *_args: None,
+        CloseKey=lambda *_args: None,
+    )
+    published = []
+    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    client._publish_response = lambda topic, payload: published.append(payload) or True
+
+    client._do_display_night_light({"enabled": True})
+
+    assert published[0]["ok"] is False
+    assert published[0]["state"] == "unknown"
+    assert published[0]["enabled"] is True
+
+
+def test_night_light_reports_cloudstore_readback_without_claiming_visual_effect(client, monkeypatch):
+    import types
+
+    state = bytearray(43)
+    state[18] = 0x13
+    key = object()
+
+    def set_value(_key, _name, _reserved, _kind, data):
+        state[:] = data
+
+    fake_winreg = types.SimpleNamespace(
+        HKEY_CURRENT_USER=1, KEY_READ=1, KEY_SET_VALUE=2, REG_BINARY=3,
+        OpenKey=lambda *_args: key,
+        QueryValueEx=lambda *_args: (bytes(state), 3),
+        SetValueEx=set_value,
+        CloseKey=lambda *_args: None,
+    )
+    published = []
+    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    client._publish_response = lambda topic, payload: published.append(payload) or True
+
+    client._do_display_night_light({"enabled": True})
+
+    assert published[0]["ok"] is True
+    assert published[0]["state"] == "success"
+    assert published[0]["source"] == "HKCU CloudStore Data readback"
+    assert published[0]["visual_effect_confirmed"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -1177,6 +1828,22 @@ def test_open_app_uses_startfile_no_shell(client, monkeypatch):
     monkeypatch.setattr(wds.os, "startfile", fake_startfile, raising=False)
     client._dispatch({"type": "open_app", "app": "calc"})
     assert calls["startfile"] == "calc"
+
+
+def test_permission_settings_opens_only_allowlisted_windows_privacy_page(client, monkeypatch):
+    calls = []
+    published = []
+    monkeypatch.setattr(wds.os, "startfile", lambda target: calls.append(target), raising=False)
+    client._publish_response = lambda topic, payload: published.append((topic, dict(payload)))
+
+    result = client._do_permission_settings({"permission": "camera", "id": "camera-permission-1"})
+
+    assert calls == ["ms-settings:privacy-webcam"]
+    assert result["state"] == "settings_opened"
+    assert result["ok"] is True
+    assert result["id"] == "camera-permission-1"
+    assert "классических приложений" in result["text"]
+    assert published == [("permission_settings", result)]
 
 
 def test_capabilities_does_not_leak_secret(client):

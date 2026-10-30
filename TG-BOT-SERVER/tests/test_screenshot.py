@@ -346,11 +346,13 @@ def test_single_full_decode_and_dimension_gate(monkeypatch, case):
     monkeypatch.setattr(bot, "_replace_callback_message", render)
     monkeypatch.setattr(bot, "_replace_callback_with_media", media)
     asyncio.run(bot.on_cmd_screenshot(SimpleNamespace(answer=answer, from_user=SimpleNamespace(id=bot.ADMIN_ID), data="cmd:screenshot")))
-    if case in {"valid", "legacy"}:
+    if case == "valid":
         assert photos == [data]
     else:
         assert not photos
-        assert "прочитать" in shown[0] or "размер" in shown[0]
+        assert shown
+        if case in {"invalid", "truncated", "bomb", "dimensions"}:
+            assert "прочитать" in shown[0] or "размер" in shown[0]
     if case == "dimensions":
         assert (10000, 5000) not in decoded_sizes, "huge dimensions reached pixel decode"
 
@@ -377,3 +379,28 @@ def test_bulk_bad_image_keeps_valid_peer(monkeypatch, bad):
         assert archive.read(manifest[0]["file"]) == good
     assert "bad" in deliveries[0]["caption"]
     assert "прочитать" in deliveries[0]["caption"] or "размер" in deliveries[0]["caption"]
+
+
+def test_bulk_screenshot_omits_image_without_explicit_success(monkeypatch):
+    deliveries = []
+    good = screenshot_bytes("valid")
+    async def answer(*args, **kwargs): pass
+    async def media(cq, sender, **kwargs): deliveries.append(kwargs)
+    async def results(*args):
+        return [
+            {"device_id": "unknown", "image": base64.b64encode(good).decode()},
+            {"device_id": "confirmed", "state": "success", "image": base64.b64encode(good).decode()},
+        ]
+    monkeypatch.setattr(bot.transport, "publish_command", lambda *args: True)
+    monkeypatch.setattr(bot.multi_screenshot, "reset", lambda: None)
+    monkeypatch.setattr(bot.multi_screenshot, "wait_window", results)
+    monkeypatch.setattr(bot, "_replace_callback_with_media", media)
+    monkeypatch.setattr(bot, "target_label", lambda value: value)
+
+    asyncio.run(bot.on_all_screenshot(SimpleNamespace(answer=answer, message=SimpleNamespace(chat=SimpleNamespace(id=1)))))
+
+    assert len(deliveries) == 1
+    with zipfile.ZipFile(io.BytesIO(deliveries[0]["document"].data)) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        assert [item["device_id"] for item in manifest] == ["confirmed"]
+    assert "unknown" in deliveries[0]["caption"]

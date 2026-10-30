@@ -26,6 +26,7 @@ INSTALLERS = {
     "macos": "XIDER-install-macos.sh",
 }
 INSTALLER_NAMESPACE = "xider-installer@xider.link"
+DEFAULT_MACOS_INSTALLER_TAG = "v4.2.1"
 
 
 def build_installers(
@@ -61,26 +62,36 @@ def build_installers(
 
 
 def build_pages_launchers() -> dict[str, str]:
-    """Static, pinned-key entry points; fail closed if latest assets are absent."""
+    """Build static, pinned-key entry points; release tags can pin OS-specific assets."""
     allowed_b64 = base64.b64encode(_openssh_allowed_signers().encode("ascii")).decode("ascii")
     base = f"https://github.com/{REPOSITORY}/releases/latest/download"
     windows_tag = os.environ.get("XIDER_WINDOWS_INSTALLER_TAG", "").strip()
     if windows_tag and not re.fullmatch(r"v\d+\.\d+\.\d+", windows_tag):
         raise ValueError("XIDER_WINDOWS_INSTALLER_TAG must be a semantic release tag.")
+    macos_tag = os.environ.get("XIDER_MACOS_INSTALLER_TAG", DEFAULT_MACOS_INSTALLER_TAG).strip()
+    if macos_tag and not re.fullmatch(r"v\d+\.\d+\.\d+", macos_tag):
+        raise ValueError("XIDER_MACOS_INSTALLER_TAG must be a semantic release tag.")
     windows_base = (
         f"https://github.com/{REPOSITORY}/releases/download/{windows_tag}"
         if windows_tag else base
     )
+    macos_base = f"https://github.com/{REPOSITORY}/releases/download/{macos_tag}"
     mac = (
         "#!/bin/bash\nset -eu\n"
         "for tool in curl base64 shasum ssh-keygen; do\n"
         "  command -v \"$tool\" >/dev/null 2>&1 || { printf 'XIDER: required tool missing: %s\\n' \"$tool\" >&2; exit 1; }\n"
         "done\n"
-        "printf '%s\\n' 'XIDER: downloading the latest signed macOS installer...'\n"
+        "printf '%s\\n' 'XIDER: selecting the signed macOS installer...'\n"
+        f"base='{macos_base}'\n"
+        "tag=\"${XIDER_INSTALL_TAG:-}\"\n"
+        "if [ -n \"$tag\" ]; then\n"
+        "  [[ \"$tag\" =~ ^v[0-9]{1,6}\\.[0-9]{1,6}\\.[0-9]{1,6}$ ]] || { printf '%s\\n' 'XIDER: invalid release tag.' >&2; exit 1; }\n"
+        f"  base=\"https://github.com/{REPOSITORY}/releases/download/${{tag}}\"\n"
+        "fi\n"
         "d=\"$(mktemp -d)\"\ntrap 'rm -rf \"$d\"' EXIT\n"
         "p=\"$d/install.sh\"; s=\"$d/install.sig\"; a=\"$d/allowed_signers\"\n"
-        f"curl -fsSL --max-time 90 '{base}/{INSTALLERS['macos']}' -o \"$p\"\n"
-        f"curl -fsSL --max-time 90 '{base}/{INSTALLERS['macos']}.sig' -o \"$s\"\n"
+        f"curl -fsSL --max-time 90 \"$base/{INSTALLERS['macos']}\" -o \"$p\"\n"
+        f"curl -fsSL --max-time 90 \"$base/{INSTALLERS['macos']}.sig\" -o \"$s\"\n"
         f"printf '%s' '{allowed_b64}' | base64 -D > \"$a\"\n"
         "h=\"$(shasum -a 256 \"$p\" | awk '{print $1}')\"\n"
         "printf 'XIDER-INSTALLER-SHA256\\nmacos\\n%s\\n' \"$h\" | "
@@ -113,9 +124,13 @@ def build_pages_launchers() -> dict[str, str]:
         "    if(-not $sshCommand){throw 'OpenSSH Client is still unavailable. Restart PowerShell and retry the XIDER command.'}\n"
         "  }\n"
         "  $ssh=$sshCommand.Source\n"
-        "  Write-Host 'XIDER: downloading the latest signed Windows installer...'\n"
-        f"  iwr -UseBasicParsing -TimeoutSec 90 -Uri '{windows_base}/{INSTALLERS['windows']}' -OutFile $p\n"
-        f"  iwr -UseBasicParsing -TimeoutSec 90 -Uri '{windows_base}/{INSTALLERS['windows']}.sig' -OutFile $s\n"
+        "  $tag=$env:XIDER_INSTALL_TAG\n"
+        "  if($tag -and $tag -notmatch '^v\\d{1,6}\\.\\d{1,6}\\.\\d{1,6}$'){throw 'XIDER release tag is invalid.'}\n"
+        f"  $installerBase='{windows_base}'\n"
+        f"  if($tag){{$installerBase=\"https://github.com/{REPOSITORY}/releases/download/$tag\"}}\n"
+        "  Write-Host 'XIDER: downloading the selected signed installer...'\n"
+        f"  iwr -UseBasicParsing -TimeoutSec 90 -Uri \"$installerBase/{INSTALLERS['windows']}\" -OutFile $p\n"
+        f"  iwr -UseBasicParsing -TimeoutSec 90 -Uri \"$installerBase/{INSTALLERS['windows']}.sig\" -OutFile $s\n"
         f"  [IO.File]::WriteAllBytes($a,[Convert]::FromBase64String('{allowed_b64}'))\n"
         "  $f=[IO.File]::OpenRead($p); $sha=[Security.Cryptography.SHA256]::Create()\n"
         "  try{$hash=[BitConverter]::ToString($sha.ComputeHash($f)).Replace('-','').ToLowerInvariant()} finally{$f.Dispose();$sha.Dispose()}\n"

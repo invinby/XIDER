@@ -111,6 +111,19 @@ try {
     if (([IO.File]::ReadAllLines((Join-Path $fixture '.env')) -join "`n") -ne ($secureEnv -join "`n")) {
         throw 'Legacy startup cleanup changed the active .env contents.'
     }
+    $guardianExe = Join-Path $fixture 'XIDER-Guard-Keeper.exe'
+    $guardianExeBackup = "$guardianExe.fixture"
+    $hadGuardianExe = Test-Path -LiteralPath $guardianExe -PathType Leaf
+    if ($hadGuardianExe) { Move-Item -LiteralPath $guardianExe -Destination $guardianExeBackup }
+    try {
+        & $guardianInstaller -AgentDir $fixture -TaskName 'XIDER Guardian Python Fixture'
+        $windowlessPython = Join-Path $venv 'pythonw.exe'
+        if ($global:XiderTestActions['XIDER Guardian Python Fixture'].Execute -ne $windowlessPython) {
+            throw 'Guardian Python fallback must use pythonw.exe to avoid a console flash.'
+        }
+    } finally {
+        if ($hadGuardianExe) { Move-Item -LiteralPath $guardianExeBackup -Destination $guardianExe }
+    }
     foreach ($taskName in @('XIDER Fixture', 'XIDER Guardian')) {
         $settings = $global:XiderTestActions[$taskName].Settings
         if (-not $settings.AllowStartIfOnBatteries -or
@@ -124,7 +137,7 @@ try {
     if ($global:XiderTestActions['XIDER Fixture'].Execute -ne (Join-Path $fixture 'XGENT-WDS.exe')) {
         throw 'Direct install no longer preserves executable-first behavior.'
     }
-    if ($global:XiderRegisterCount -ne 4 -or $global:XiderStartCount -ne 4) {
+    if ($global:XiderRegisterCount -ne 5 -or $global:XiderStartCount -ne 5) {
         throw 'Repeat installation did not register and start both tasks.'
     }
 
@@ -174,7 +187,7 @@ try {
     $missingPythonRejected = $false
     try { & $installer -AgentDir $fixture -TaskName 'XIDER Fixture' -PreferPython }
     catch { $missingPythonRejected = $true }
-    if (-not $missingPythonRejected -or $global:XiderRegisterCount -ne 4 -or $global:XiderStartCount -ne 4) {
+    if (-not $missingPythonRejected -or $global:XiderRegisterCount -ne 5 -or $global:XiderStartCount -ne 5) {
         throw 'PreferPython did not reject a missing Python runtime before task registration.'
     }
     Write-Host 'Windows agent preflight and executable selection fixtures passed.'

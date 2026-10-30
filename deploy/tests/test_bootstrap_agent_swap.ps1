@@ -34,7 +34,8 @@ function global:ssh.exe {
 function Get-ScheduledTask {
     param($TaskName, $ErrorAction)
     if ($global:XiderMockTasksRunning) {
-        $binary = if ($TaskName -eq 'XIDER Agent') { 'pythonw.exe' } else { 'python.exe' }
+        # Both development tasks are registered with the console-free runtime.
+        $binary = 'pythonw.exe'
         $execute = Join-Path $global:XiderMockAgentDir ("venv\Scripts\$binary")
         $arguments = if ($TaskName -eq 'XIDER Agent') { 'xgent_wds.py' } else { 'xider_guardian_wds.py' }
         return [pscustomobject]@{
@@ -256,6 +257,18 @@ try {
     }
     $successRoot = Join-Path $fixture 'success-install'
     New-OldInstall $successRoot
+    foreach ($stamp in @(
+        '20261001000000.11111111111111111111111111111111',
+        '20261002000000.22222222222222222222222222222222',
+        '20261003000000.33333333333333333333333333333333'
+    )) {
+        $oldBackup = Join-Path $successRoot ("git-ver.previous.$stamp")
+        New-Item -ItemType Directory -Path (Join-Path $oldBackup 'XGENT-WDS') -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $oldBackup 'XGENT-WDS\old-marker.txt'), $stamp, $utf8)
+    }
+    $unrecognizedBackup = Join-Path $successRoot 'git-ver.previous.owner-data'
+    New-Item -ItemType Directory -Path $unrecognizedBackup -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $unrecognizedBackup 'keep.txt'), 'not an XIDER-generated backup', $utf8)
     # ASCII source keeps this fixture safe under PS5.1's own script decoding.
     # The .env itself is intentionally BOM-less UTF-8 with Unicode credentials.
     $unicodePassword = -join @([char]0x043F, [char]0x0430, [char]0x0440, [char]0x043E, [char]0x043B, [char]0x044C, [char]0x4E2D)
@@ -288,8 +301,11 @@ try {
         throw 'The new checkout was not activated.'
     }
     $backups = @(Get-ChildItem -LiteralPath $successRoot -Directory -Filter 'git-ver.previous.*')
-    if ($backups.Count -ne 1 -or -not (Test-Path -LiteralPath (Join-Path $backups[0].FullName 'XGENT-WDS\old-marker.txt'))) {
-        throw 'The previous checkout was not kept as a recoverable backup.'
+    $managedBackups = @($backups | Where-Object { $_.Name -match '^git-ver\.previous\.\d{14}\.[0-9a-fA-F]{32}$' })
+    if ($managedBackups.Count -ne 2 -or
+        -not ($managedBackups | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'XGENT-WDS\old-marker.txt') }) -or
+        -not (Test-Path -LiteralPath (Join-Path $unrecognizedBackup 'keep.txt'))) {
+        throw 'Successful install did not retain two managed rollback backups and preserve unrelated data.'
     }
     Write-Host 'Windows staged install and rollback fixture passed.'
 }

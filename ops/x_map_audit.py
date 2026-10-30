@@ -24,6 +24,7 @@ PLATFORM_ONLY_ACTIONS = {
     "macos": frozenset({"filevault_status", "sip_status", "gatekeeper_status"}),
 }
 DYNAMIC_ACTION_WRAPPERS = {
+    ("publish_command", "_publish_device_command"): "admission_guarded_dispatch",
     ("publish_command", "publish"): "shared_publish_dispatch",
     ("publish_command", "on_repeat"): "history_replay",
     ("publish_tracked", "_run_text_prank_input"): "prompted_text_prank_dispatch",
@@ -121,9 +122,9 @@ PERMISSION_PROFILES = {
         "macos": "Действуют привилегии macOS и политика устройства; привилегии не повышаются автоматически.",
     },
     "permission_settings_ui": {
-        "label": "Переход к настройкам разрешений",
-        "windows": "Команда открывает только фиксированную страницу Параметров Windows; владелец сам проверяет и меняет доступ.",
-        "macos": "Команда открывает только фиксированную страницу Системных настроек; решение TCC принимает пользователь локально.",
+        "label": "Системный запрос разрешения",
+        "windows": "Геолокация может вызвать owner-confirmed native consent Windows из локального foreground helper; камера/микрофон переходят на privacy page, так как у unpackaged EXE нет per-app переключателей.",
+        "macos": "Команда вызывает доступный системный запрос macOS для камеры, микрофона, геолокации, записи экрана и Accessibility; при необходимости открывает фиксированную панель. Решение остаётся за пользователем.",
     },
     "agent_lifecycle": {
         "label": "Жизненный цикл агента",
@@ -200,13 +201,17 @@ KNOWN_UNRETESTED_REPORTS = {
 }
 
 KNOWN_SOURCE_BEHAVIOR = {
+    ("lock", "macos"): {
+        "state": "explicitly_unsupported",
+        "evidence": "Handler reports that macOS session lock is unsupported; display sleep remains a separate action.",
+    },
     ("permission_settings", "windows"): {
         "state": "handler_present",
-        "evidence": "Handler opens only a fixed, allowlisted settings target; it never grants access or changes an OS permission.",
+        "evidence": "Location uses a local visible confirmation and Geolocator.RequestAccessAsync before any coordinate read, or opens fixed, allowlisted settings after a prior decision; camera/microphone open fixed privacy pages because this unpackaged EXE has no per-app switches.",
     },
     ("permission_settings", "macos"): {
         "state": "handler_present",
-        "evidence": "Handler opens only a fixed, allowlisted settings target; it never grants access or changes an OS permission.",
+        "evidence": "Handler requests OS consent via allowlisted macOS APIs for supported permission types, otherwise opens a fixed, allowlisted System Settings target; it never grants access itself.",
     },
     ("display_brightness", "macos"): {
         "state": "dependency_gated",
@@ -238,13 +243,75 @@ KNOWN_SOURCE_BEHAVIOR = {
     },
     ("prank_random_clicks", "macos"): {
         "state": "explicitly_unimplemented",
-        "evidence": "Handler always returns that random clicks are not implemented safely.",
+        "evidence": "Handler explicitly reports cursor movement as unsupported on macOS.",
     },
     ("prank_swap_mouse", "macos"): {
         "state": "explicitly_disabled",
         "evidence": "Handler always returns that remote mouse-button swapping is disabled.",
     },
 }
+
+_MEDIA_RESULT_COMMANDS = {
+    "screenshot", "display_contact_sheet", "display_screenshot",
+    "display_region_screenshot", "window_screenshot", "webcam", "mic",
+}
+_REQUEST_ONLY_COMMANDS = {"screen_off", "screensaver_on"}
+_LAUNCH_ONLY_COMMANDS = {"open_app", "open_url", "notify"}
+
+
+def _expected_result(command: str, source_support: str, source_behavior: dict[str, str]) -> dict[str, str]:
+    """State the evidence the bot must receive; never infer device success from an ACK."""
+    if source_support == "unsupported_by_design":
+        return {
+            "state": "explicit_unsupported_result",
+            "evidence": "The bot must show unsupported for this platform; no handler response may be inferred.",
+        }
+    if source_support != "declared_and_handler":
+        return {
+            "state": "source_gap_no_result",
+            "evidence": "No valid platform command result can be expected until declaration and handler are both present.",
+        }
+    if source_behavior.get("state") in {
+        "explicitly_disabled", "explicitly_unavailable", "explicitly_unimplemented", "explicitly_unsupported",
+    }:
+        return {
+            "state": "explicit_unsupported_result",
+            "evidence": source_behavior["evidence"],
+        }
+    if command in _REQUEST_ONLY_COMMANDS:
+        return {
+            "state": "correlated_request_acceptance_only",
+            "evidence": "A correlated acceptance may be shown, but it does not prove the display effect occurred.",
+        }
+    if command in _LAUNCH_ONLY_COMMANDS:
+        return {
+            "state": "correlated_launch_acceptance_only",
+            "evidence": "A correlated launch acceptance is not proof that a window or notification became visible.",
+        }
+    if command.startswith("prank_"):
+        return {
+            "state": "correlated_effect_or_launch_only",
+            "evidence": "Show a confirmed effect only with explicit effect evidence; otherwise report launch acceptance without claiming the effect.",
+        }
+    if command in _MEDIA_RESULT_COMMANDS:
+        return {
+            "state": "correlated_media_payload_with_success_state",
+            "evidence": "Deliver media only with a matching request identity and explicit successful capture state.",
+        }
+    if command == "permission_settings":
+        return {
+            "state": "correlated_os_request_outcome_not_grant",
+            "evidence": "Report the OS prompt/settings request separately; it does not prove that permission was granted.",
+        }
+    if command == "shell":
+        return {
+            "state": "correlated_command_result",
+            "evidence": "Show only the result for the same one-use owner-approved command; worker ACK alone is not output.",
+        }
+    return {
+        "state": "correlated_typed_agent_result",
+        "evidence": "Require a matching correlated response and render its typed success, failure, unsupported, or unknown state; worker ACK alone is not success.",
+    }
 
 
 def _string_constants(node: ast.AST) -> set[str]:
@@ -425,6 +492,13 @@ def _permission_profile_ids(command: str, *, guardian: bool = False) -> list[str
 
 
 def _command_source_behavior(command: str, platform: str, source_support: str) -> dict[str, str]:
+    platform_key = "windows" if platform == "macos" else "macos"
+    if command in PLATFORM_ONLY_ACTIONS.get(platform_key, frozenset()):
+        current_platform = "Windows" if platform == "windows" else "macOS"
+        return {
+            "state": "explicitly_unsupported",
+            "evidence": f"This command is intentionally {platform_key}-only; no {current_platform} handler is expected.",
+        }
     if source_support != "declared_and_handler":
         return {
             "state": "source_gap",
@@ -443,6 +517,11 @@ def _command_stability(
     source_behavior: dict[str, str],
 ) -> dict[str, str]:
     """Never promote an AST match into a physical-device reliability claim."""
+    if source_support == "unsupported_by_design":
+        return {
+            "state": "known_source_limited",
+            "evidence": source_behavior["evidence"],
+        }
     if source_support != "declared_and_handler":
         return {
             "state": "source_gap",
@@ -491,9 +570,14 @@ def _command_matrix(
                     "handler_without_declaration" if handler else "not_declared"
                 )
             )
+            platform_key = "windows" if platform == "macos" else "macos"
+            platform_only = command in PLATFORM_ONLY_ACTIONS.get(platform_key, frozenset())
+            if platform_only:
+                source_support = "unsupported_by_design"
             source_behavior = _command_source_behavior(command, platform, source_support)
             platform_rows[platform] = {
                 "source_support": source_support,
+                "expected_result": _expected_result(command, source_support, source_behavior),
                 "source_behavior": source_behavior,
                 "permission_profile_ids": _permission_profile_ids(command),
                 "stability": _command_stability(command, platform, source_support, source_behavior),
@@ -509,6 +593,13 @@ def _command_matrix(
             source_support = "source_branch_present" if supported else "source_branch_missing"
             platform_rows[platform] = {
                 "source_support": source_support,
+                "expected_result": {
+                    "state": "correlated_guardian_state_or_action_result" if supported else "source_gap_no_result",
+                    "evidence": (
+                        "Require a correlated Guardian outcome/state; command receipt alone does not prove recovery or action success."
+                        if supported else "No platform Guardian branch exists to produce a result."
+                    ),
+                },
                 "source_behavior": {
                     "state": "handler_present" if supported else "source_gap",
                     "evidence": (

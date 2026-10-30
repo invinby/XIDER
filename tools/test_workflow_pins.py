@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "build-agents.yml"
 SERVER_BUNDLE_WORKFLOW = ROOT / ".github" / "workflows" / "server-deploy-bundle.yml"
+WINDOWS_PREVIEW_WORKFLOW = ROOT / ".github" / "workflows" / "release-windows-preview.yml"
 WORKFLOWS = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
 EXPECTED_ACTIONS = {
     "actions/checkout": ("11bd71901bbe5b1630ceea73d27597364c9af683", "v4.2.2"),
@@ -52,7 +53,7 @@ def test_tagged_release_builds_and_publishes_signed_source_package():
     assert "--output=artifacts/XIDER-source.zip HEAD" in packaging
     assert "path: artifacts/*.zip" in packaging
     assert "cp artifacts/windows/XGENT-WDS-Windows.zip artifacts/XGENT-WDS-Windows.zip" in release
-    assert "if: startsWith(github.ref, 'refs/tags/v')" in release
+    assert "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in release
     assert 'python tools/build_release_manifest.py "${GITHUB_REF_NAME}" artifacts --require-signature' in release
 
     published_assets = release.split("          files: |", 1)[1].split("          draft:", 1)[0]
@@ -94,11 +95,42 @@ def test_tagged_release_waits_for_the_full_ci_workflow():
     release_workflow = WORKFLOW.read_text(encoding="utf-8")
     release = release_workflow.split("  create-release:", 1)[1]
 
-    assert "on:\n  workflow_call: {}" in ci
+    assert "workflow_call:" in ci and "source_ref:" in ci
     assert "  release-ci:\n    name: \"Release test gate\"" in release_workflow
     assert "    uses: ./.github/workflows/ci.yml" in release_workflow
-    assert "    if: startsWith(github.ref, 'refs/tags/v')" in release_workflow
-    assert "needs: [release-ci, build-windows, build-macos, pack-components]" in release
+    assert "    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')" in release_workflow
+    assert "source_ref: ${{ needs.source-state.outputs.source_commit }}" in release_workflow
+    assert "needs: [release-ci, source-state, build-windows, build-macos, pack-components]" in release
+
+
+def test_manual_tag_build_creates_signed_inventory_without_publishing_release():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    inventory = text.split("  protected-build-inventory:", 1)[1].split("  create-release:", 1)[0]
+    release = text.split("  create-release:", 1)[1]
+
+    assert "if: github.event_name == 'workflow_dispatch'" in inventory
+    source = text.split("  source-state:", 1)[1].split("  release-ci:", 1)[0]
+    assert "release_tag:" in text.split("  workflow_dispatch:", 1)[1].split("permissions:", 1)[0]
+    assert "ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.sha }}" in source
+    assert "git describe --tags --exact-match HEAD" in source
+    assert "needs.source-state.outputs.source_commit" in inventory
+    assert "XIDER_RELEASE_PRIVATE_KEY_B64: ${{ secrets.XIDER_RELEASE_PRIVATE_KEY_B64 }}" in inventory
+    assert "tools/build_protected_build_manifest.py" in inventory
+    assert "--require-signature" in inventory
+    assert "name: XIDER-Protected-Build-Inventory" in inventory
+    assert "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in release
+
+
+def test_manual_signed_build_inventory_is_owner_only_and_never_publishes_release():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    source_state = text.split("  source-state:", 1)[1].split("  release-ci:", 1)[0]
+    inventory = text.split("  protected-build-inventory:", 1)[1].split("  create-release:", 1)[0]
+    release = text.split("  create-release:", 1)[1]
+
+    assert "github.actor == github.repository_owner" in source_state
+    assert "github.actor == github.repository_owner" in inventory
+    assert "needs: [release-ci, source-state, pack-components]" in inventory
+    assert "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in release
 
 
 def test_tagged_release_publishes_commit_pinned_quickstart_for_both_platforms():
@@ -165,12 +197,15 @@ def test_macos_notarization_uses_the_nuitka_bundle_paths():
 def test_release_signing_secret_is_scoped_to_protected_release_environment():
     text = WORKFLOW.read_text(encoding="utf-8")
     release = text.split("  create-release:", 1)[1]
+    inventory = text.split("  protected-build-inventory:", 1)[1].split("  create-release:", 1)[0]
 
     assert "permissions:\n  contents: read" in text
     assert "environment:\n      name: xider-release-signing" in release
     assert "permissions:\n      contents: write" in release
     assert "XIDER_RELEASE_PRIVATE_KEY_B64: ${{ secrets.XIDER_RELEASE_PRIVATE_KEY_B64 }}" in release
-    assert "XIDER_RELEASE_PRIVATE_KEY_B64" not in text.split("  create-release:", 1)[0]
+    assert "environment:\n      name: xider-release-signing" in inventory
+    assert "XIDER_RELEASE_PRIVATE_KEY_B64: ${{ secrets.XIDER_RELEASE_PRIVATE_KEY_B64 }}" in inventory
+    assert "XIDER_RELEASE_PRIVATE_KEY_B64" not in text.split("  protected-build-inventory:", 1)[0]
 
 
 def test_server_bundle_workflow_signs_source_without_publishing_a_general_release():
@@ -187,3 +222,24 @@ def test_server_bundle_workflow_signs_source_without_publishing_a_general_releas
     assert "deploy/verify_server_bundle.py" in text
     assert "name: XIDER-server-deploy-bundle" in text
     assert "softprops/action-gh-release" not in text
+
+
+def test_windows_preview_build_and_signed_assets_share_the_selected_tag_commit():
+    text = WINDOWS_PREVIEW_WORKFLOW.read_text(encoding="utf-8")
+    source_version = re.search(
+        r'^VERSION = "([0-9.]+)"$',
+        (ROOT / "XGENT-WDS" / "config.py").read_text(encoding="utf-8"), re.M,
+    )
+    default_tag = re.search(r"(?m)^\s+default:\s+(v[0-9.]+)\s*$", text)
+    assert source_version and default_tag
+    assert default_tag.group(1) == f"v{source_version.group(1)}"
+
+    build = text.split("  build-windows:", 1)[1].split("  publish-windows:", 1)[0]
+    publish = text.split("  publish-windows:", 1)[1]
+    assert "ref: ${{ needs.release-state.outputs.tag }}" in build
+    assert "source_commit: ${{ steps.source.outputs.commit }}" in build
+    assert "git rev-parse HEAD" in build
+    assert "ref: ${{ needs.build-windows.outputs.source_commit }}" in publish
+    assert 'BUILD_SHA: ${{ needs.build-windows.outputs.source_commit }}' in publish
+    assert 'COMMIT=$(git rev-parse "${BUILD_SHA}^{commit}")' in publish
+    assert "${{ github.sha }}" not in build + publish

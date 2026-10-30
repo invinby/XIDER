@@ -48,6 +48,8 @@ def test_pages_generates_signed_installers_before_checking_and_uploading_site() 
     assert generate in workflow
     assert workflow.index(generate) < workflow.index(check)
     assert workflow.index(generate) < workflow.index(upload)
+    assert re.search(r"^\s+XIDER_WINDOWS_INSTALLER_TAG:\s*v\d+\.\d+\.\d+\s*$", workflow, re.MULTILINE)
+    assert re.search(r"^\s+XIDER_MACOS_INSTALLER_TAG:\s*v\d+\.\d+\.\d+\s*$", workflow, re.MULTILINE)
 
     for source in (
         '"tools/build_pages_entrypoints.py"',

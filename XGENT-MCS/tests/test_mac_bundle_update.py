@@ -157,3 +157,28 @@ def test_mac_bundle_can_restore_previous_signed_app_set(tmp_path, monkeypatch):
     for app, executable in bundle_update.APP_EXECUTABLES.items():
         assert (install / app / executable).read_text(encoding="utf-8") == f"old-{app}-binary"
         assert (failed / app / executable).read_text(encoding="utf-8") == f"new-{app}-binary"
+
+
+def test_prune_bundle_backups_keeps_latest_two_and_current_and_ignores_unknown(tmp_path):
+    install = tmp_path / "install"
+    install.mkdir()
+    operation_ids = ["1" * 32, "2" * 32, "3" * 32, "4" * 32]
+    roots = []
+    for index, operation_id in enumerate(operation_ids):
+        root = install / f".xider-update-{operation_id}.backup"
+        root.mkdir()
+        for app in bundle_update.APP_EXECUTABLES:
+            (root / app).mkdir()
+        os.utime(root, ns=(index + 1, index + 1))
+        roots.append(root)
+    unknown = install / ".xider-update-not-an-operation.backup"
+    unknown.mkdir()
+    (unknown / "keep.txt").write_text("owner data", encoding="utf-8")
+
+    removed = bundle_update.prune_bundle_backups(install, current_backup=roots[0], keep=2)
+
+    assert removed == 1
+    assert roots[0].is_dir()
+    assert not roots[1].exists()
+    assert roots[2].is_dir() and roots[3].is_dir()
+    assert (unknown / "keep.txt").read_text(encoding="utf-8") == "owner data"

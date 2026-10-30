@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import stat
 import subprocess
@@ -18,6 +19,7 @@ APP_EXECUTABLES = {
 }
 MAX_MEMBERS = 100_000
 MAX_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
+_BACKUP_NAME = re.compile(r"^\.xider-update-[0-9a-f]{32}\.backup$")
 
 
 def _validated_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
@@ -81,6 +83,65 @@ def _verify_signed_app(app_path: Path) -> None:
         ["xcrun", "stapler", "validate", str(app_path)],
         capture_output=True, text=True, check=True, timeout=60,
     )
+
+
+def prune_bundle_backups(
+    install_root: Path, *, current_backup: Path, keep: int = 2,
+) -> int:
+    """Keep the two newest complete signed-app backups plus the active result.
+
+    Only direct-child backups with XIDER's exact operation-ID name are eligible.
+    Unknown entries, symlinks, and incomplete app sets are preserved.
+    """
+    if isinstance(keep, bool) or not isinstance(keep, int) or keep < 1:
+        raise ValueError("At least one signed-app rollback backup must be retained.")
+    raw_root = Path(install_root)
+    if raw_root.is_symlink():
+        return 0
+    try:
+        root = raw_root.resolve(strict=True)
+        if not root.is_dir():
+            return 0
+        current = Path(current_backup)
+        if current.is_symlink():
+            return 0
+        current = current.resolve(strict=False)
+        entries = list(root.iterdir())
+    except OSError:
+        return 0
+
+    candidates: list[tuple[int, str, Path]] = []
+    for entry in entries:
+        if not _BACKUP_NAME.fullmatch(entry.name):
+            continue
+        if entry.is_symlink():
+            return 0
+        try:
+            if not entry.is_dir() or entry.resolve(strict=True).parent != root:
+                return 0
+            if any((entry / app).is_symlink() or not (entry / app).is_dir() for app in APP_EXECUTABLES):
+                continue
+            candidates.append((entry.stat().st_mtime_ns, entry.name, entry))
+        except OSError:
+            return 0
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    keep_paths = {item[2].resolve() for item in candidates[:keep]}
+    if current.parent == root and current in {item[2].resolve() for item in candidates}:
+        keep_paths.add(current)
+
+    removed = 0
+    for _mtime, _name, entry in candidates:
+        try:
+            resolved = entry.resolve(strict=True)
+            if resolved in keep_paths:
+                continue
+            if entry.is_symlink() or resolved.parent != root:
+                return removed
+            shutil.rmtree(entry)
+            removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 def _extract_apps(archive_path: Path, stage_root: Path) -> None:
