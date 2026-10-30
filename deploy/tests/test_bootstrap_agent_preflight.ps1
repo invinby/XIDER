@@ -116,22 +116,16 @@ try {
         throw 'Python version checks must use the PowerShell 5.1-safe, quote-free probe.'
     }
     $pythonCandidates = @(
-        (Join-Path $PSScriptRoot '..\..\.venv312\Scripts\python.exe'),
-        (Get-Command python.exe -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })
-    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -Unique
+        @(
+            (Join-Path $PSScriptRoot '..\..\.venv312\Scripts\python.exe'),
+            (Get-Command python.exe -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })
+        ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -Unique
+    )
     if ($pythonCandidates.Count -gt 0) {
         $versionProbe = Invoke-XiderNativeProbe -Executable $pythonCandidates[0] -Arguments @('-c', $safeVersionProbe)
         if ($versionProbe.ExitCode -ne 0 -or $versionProbe.Output.Count -ne 1 -or
             [string]$versionProbe.Output[0] -notmatch '^3(?:11|12|14)$') {
-            $diagnosticExecutable = [string]$pythonCandidates[0]
-            $directOutput = @()
-            $directError = ''
-            $directExit = -1
-            try {
-                $directOutput = @(& $diagnosticExecutable -c $safeVersionProbe 2>&1)
-                $directExit = $LASTEXITCODE
-            } catch { $directError = $_.Exception.Message }
-            throw ('Unsupported Python probe. Executable=[' + $diagnosticExecutable + ']; helperExit=' + $versionProbe.ExitCode + '; helperOutput=' + (@($versionProbe.Output) -join '|') + '; directExit=' + $directExit + '; directOutput=' + ($directOutput -join '|') + '; directError=' + $directError)
+            throw 'The PowerShell 5.1 Python version probe did not return a supported runtime version.'
         }
     }
     $elevationFunction = $bootstrapAst.Find({ param($node)
