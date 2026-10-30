@@ -124,9 +124,14 @@ try {
         if ($versionProbe.ExitCode -ne 0 -or $versionProbe.Output.Count -ne 1 -or
             [string]$versionProbe.Output[0] -notmatch '^3(?:11|12|14)$') {
             $diagnosticExecutable = [string]$pythonCandidates[0]
-            $directOutput = @(& $diagnosticExecutable -c $safeVersionProbe 2>&1)
-            $directExit = $LASTEXITCODE
-            throw ('Unsupported Python probe. Executable=' + $pythonCandidates[0] + '; helperExit=' + $versionProbe.ExitCode + '; helperOutput=' + (@($versionProbe.Output) -join '|') + '; directExit=' + $directExit + '; directOutput=' + ($directOutput -join '|'))
+            $directOutput = @()
+            $directError = ''
+            $directExit = -1
+            try {
+                $directOutput = @(& $diagnosticExecutable -c $safeVersionProbe 2>&1)
+                $directExit = $LASTEXITCODE
+            } catch { $directError = $_.Exception.Message }
+            throw ('Unsupported Python probe. Executable=[' + $diagnosticExecutable + ']; helperExit=' + $versionProbe.ExitCode + '; helperOutput=' + (@($versionProbe.Output) -join '|') + '; directExit=' + $directExit + '; directOutput=' + ($directOutput -join '|') + '; directError=' + $directError)
         }
     }
     $elevationFunction = $bootstrapAst.Find({ param($node)
