@@ -405,8 +405,24 @@ def main() -> int:
             print(f"XIDER {role} {action}: {exc}", file=sys.stderr)
             return 1
         if action == "status":
-            state = "OK" if running else "STOPPED"
-            print(f"[{state}] XIDER {role} LaunchAgent")
+            health = _read_json(CONFIG_DIR / f"{role}-health.json")
+            stamp = health.get("updated_at")
+            age = time.time() - stamp if type(stamp) in (int, float) else float("inf")
+            fresh = (
+                health.get("schema") == 1 and health.get("component") == role
+                and health.get("state") == "running" and 0 <= age < HEALTH_STALE_SECONDS
+                and type(health.get("pid")) is int and health["pid"] > 0
+                and isinstance(health.get("version"), str)
+                and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", health["version"])
+            )
+            if running and fresh:
+                print(f"[OK] XIDER {role.title()} v{health['version']}; PID={health['pid']}; process=LaunchAgent-running; MQTT=n/a (local layer); Telegram=not-confirmed")
+                print(f"[HEALTH] fresh; age={age:.1f}s")
+            elif running:
+                print(f"[WARN] XIDER {role.title()} process=LaunchAgent-running; version=unknown; PID=unknown; MQTT=n/a (local layer); Telegram=not-confirmed")
+                print(f"[HEALTH] missing, stale, or invalid {role}-health.json")
+            else:
+                print(f"[STOPPED] XIDER {role.title()} process=LaunchAgent-stopped; MQTT=n/a (local layer); Telegram=not-confirmed")
             print(f"[LOG] {CONFIG_DIR / f'{role}.log'}")
             return 0 if running else 1
         print(f"[OK] XIDER {role}: {action}")
