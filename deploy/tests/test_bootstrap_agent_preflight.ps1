@@ -123,7 +123,9 @@ try {
         $versionProbe = Invoke-XiderNativeProbe -Executable $pythonCandidates[0] -Arguments @('-c', $safeVersionProbe)
         if ($versionProbe.ExitCode -ne 0 -or $versionProbe.Output.Count -ne 1 -or
             [string]$versionProbe.Output[0] -notmatch '^3(?:11|12|14)$') {
-            throw 'The PowerShell 5.1 Python version probe did not return a supported runtime version.'
+            $directOutput = @(& $pythonCandidates[0] -c $safeVersionProbe 2>&1)
+            $directExit = $LASTEXITCODE
+            throw ('Unsupported Python probe. Executable=' + $pythonCandidates[0] + '; helperExit=' + $versionProbe.ExitCode + '; helperOutput=' + (@($versionProbe.Output) -join '|') + '; directExit=' + $directExit + '; directOutput=' + ($directOutput -join '|'))
         }
     }
     $elevationFunction = $bootstrapAst.Find({ param($node)
