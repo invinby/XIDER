@@ -6323,6 +6323,7 @@ def main() -> None:
                 and health.get("state") == "running" and 0 <= age < 180
                 and type(health.get("pid")) is int and health["pid"] > 0
                 and isinstance(health.get("version"), str)
+                and re.fullmatch(r"[0-9]+\\.[0-9]+\\.[0-9]+", health["version"])
                 and type(health.get("connected")) is bool
             )
             if running and fresh:
