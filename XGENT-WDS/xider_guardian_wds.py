@@ -377,12 +377,12 @@ class Guardian:
         payload = encrypt_payload(body) if ENCRYPT_PAYLOAD else body
         return json.dumps(sign_message(payload), ensure_ascii=False)
 
-    def _publish(self, body: dict) -> None:
+    def _publish(self, body: dict, *, qos: int = 1) -> None:
         payload = dict(body)
         payload.setdefault("type", "guardian")
         payload.setdefault("device_id", DEVICE_ID)
         info = self.client.publish(
-            f"{MQTT_PREFIX}/{DEVICE_ID}/guardian", self._envelope(payload), qos=1
+            f"{MQTT_PREFIX}/{DEVICE_ID}/guardian", self._envelope(payload), qos=qos
         )
         try:
             info.wait_for_publish(timeout=3)
@@ -659,7 +659,7 @@ class Guardian:
         self._mqtt_connected = True
         client.subscribe(f"{MQTT_PREFIX}/{DEVICE_ID}/cmd", qos=1)
         client.subscribe(f"{MQTT_PREFIX}/all/cmd", qos=1)
-        self._publish(self.status_payload())
+        self._publish(self.status_payload(), qos=0)
         latest_receipt = _read_update_receipt(CONFIG_DIR / UPDATE_RECEIPT_NAME)
         if latest_receipt is not None:
             self._publish(latest_receipt)
@@ -970,7 +970,7 @@ class Guardian:
                 self._refresh_worker_intent()
                 now = time.monotonic()
                 if getattr(self, "_mqtt_connected", False) and now - getattr(self, "_last_status_publish", 0.0) >= 30:
-                    self._publish(self.status_payload())
+                    self._publish(self.status_payload(), qos=0)
                     self._last_status_publish = now
                 if not (self.state.get("auto_restart") and self.state.get("desired_running")):
                     continue
