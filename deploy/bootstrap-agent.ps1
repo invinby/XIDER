@@ -394,15 +394,20 @@ function Test-XiderManagedProcess {
     )
 
     $agentRoot = [IO.Path]::GetFullPath($AgentDirectory).TrimEnd([char[]]@([char]92, [char]47))
-    $managedExecutable = Join-Path $agentRoot 'XGENT-WDS.exe'
+    $managedExecutables = @(
+        (Join-Path $agentRoot 'XGENT-WDS.exe'),
+        (Join-Path $agentRoot 'XIDER-Guard-Keeper.exe')
+    )
     if ($Process.ExecutablePath) {
         try {
             $processExecutable = [IO.Path]::GetFullPath([string]$Process.ExecutablePath)
-            if ([string]::Equals(
-                $processExecutable,
-                $managedExecutable,
-                [StringComparison]::OrdinalIgnoreCase
-            )) { return $true }
+            foreach ($managedExecutable in $managedExecutables) {
+                if ([string]::Equals(
+                    $processExecutable,
+                    $managedExecutable,
+                    [StringComparison]::OrdinalIgnoreCase
+                )) { return $true }
+            }
         } catch { }
     }
 
@@ -586,7 +591,29 @@ try {
     if ($SourceArchive) {
         Copy-Item -LiteralPath $SourceArchive -Destination $zip -ErrorAction Stop
     } else {
-        Invoke-WebRequest -Uri $repoUrl -OutFile $zip -UseBasicParsing -TimeoutSec 90
+        # GitHub archive GETs are safe to retry. A dropped transport must not
+        # leave a partial ZIP that makes the next install attempt ambiguous.
+        $downloadAttempts = 3
+        $downloadComplete = $false
+        for ($downloadAttempt = 1; $downloadAttempt -le $downloadAttempts; $downloadAttempt++) {
+            try {
+                Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+                Invoke-WebRequest -Uri $repoUrl -OutFile $zip -UseBasicParsing -TimeoutSec 90
+                $downloadedArchive = Get-Item -LiteralPath $zip -ErrorAction Stop
+                if ($downloadedArchive.Length -lt 4) { throw 'GitHub archive response was empty or truncated.' }
+                $downloadComplete = $true
+                break
+            } catch {
+                $downloadFailure = $_
+                Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+                if ($downloadAttempt -ge $downloadAttempts) {
+                    throw "Не удалось скачать архив XIDER после $downloadAttempts попыток: $($downloadFailure.Exception.Message)"
+                }
+                Write-Host "Загрузка оборвалась (попытка $downloadAttempt/$downloadAttempts); повторяю через $($downloadAttempt * 2) сек..."
+                Start-Sleep -Seconds ($downloadAttempt * 2)
+            }
+        }
+        if (-not $downloadComplete) { throw 'Не удалось скачать архив XIDER; рабочая версия не изменена.' }
     }
     Expand-XiderArchiveSafely -ArchivePath $zip -DestinationPath $unpack
     $downloaded = Get-ChildItem -LiteralPath $unpack -Directory | Select-Object -First 1
@@ -996,7 +1023,8 @@ try {
         Start-Sleep -Seconds 1
     }
     if (-not $healthy) { throw 'Agent и Guardian не подтвердили свежее MQTT-соединение; выполняю откат.' }
-    Write-Host '[OK] XIDER Windows Agent + Guardian установлены и запущены.'
+    Write-Host ("[OK] Agent v{0}; PID={1}; MQTT=connected" -f $healthStates.agent.version, $healthStates.agent.pid)
+    Write-Host ("[OK] Guardian v{0}; PID={1}; MQTT=connected" -f $healthStates.guardian.version, $healthStates.guardian.pid)
     Remove-XiderOldPreviousCheckouts -InstallRoot $resolvedRoot -CurrentBackup $backup -Keep 2
     if (Test-Path -LiteralPath $backup) { Write-Host "[BACKUP] Предыдущая версия сохранена: $backup" }
 }
