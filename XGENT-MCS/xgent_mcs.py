@@ -6312,7 +6312,28 @@ def main() -> None:
             print(f"XIDER Agent {args.service}: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
         if args.service == "status":
-            print(f"[{'OK' if running else 'STOPPED'}] XIDER Agent LaunchAgent")
+            health_path = CONFIG_DIR / "agent-health.json"
+            try:
+                health = json.loads(health_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                health = {}
+            age = time.time() - health.get("updated_at", 0) if type(health.get("updated_at")) in (int, float) else float("inf")
+            fresh = (
+                health.get("schema") == 1 and health.get("component") == "agent"
+                and health.get("state") == "running" and 0 <= age < 180
+                and type(health.get("pid")) is int and health["pid"] > 0
+                and isinstance(health.get("version"), str)
+                and type(health.get("connected")) is bool
+            )
+            if running and fresh:
+                mqtt_state = "connected" if health["connected"] else "disconnected"
+                print(f"[OK] Agent v{health['version']}; PID={health['pid']}; process=LaunchAgent-running; MQTT={mqtt_state}; Telegram=not-confirmed")
+                print(f"[HEALTH] fresh; age={age:.1f}s")
+            elif running:
+                print("[WARN] Agent process=LaunchAgent-running; version=unknown; PID=unknown; MQTT=unknown; Telegram=not-confirmed")
+                print("[HEALTH] missing, stale, or invalid agent-health.json")
+            else:
+                print("[STOPPED] Agent process=LaunchAgent-stopped; MQTT=unknown; Telegram=not-confirmed")
             print(f"[LOG] {CONFIG_DIR / 'xgent.log'}")
             raise SystemExit(0 if running else 1)
         print(f"[OK] XIDER Agent: {args.service}")
