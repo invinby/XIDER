@@ -567,6 +567,22 @@ runtime_services_status() {
   [[ -f "$directory/start_agent.sh" && -f "$directory/start_guardian.sh" ]] || return 1
   (cd "$directory" && bash ./start_agent.sh --status && bash ./start_guardian.sh --status)
 }
+runtime_layers_status() {
+  local directory="$1"
+  local layer_binary="$directory/XIDER-Layers.app/Contents/MacOS/XIDER-Layers"
+  local role
+  for role in safari siri; do
+    if ! layer_enabled "$role"; then
+      echo "[SKIP] XIDER $role выключен в настройках владельца."
+      continue
+    fi
+    if [[ -x "$layer_binary" ]]; then
+      "$layer_binary" --service "$role" status || return 1
+    else
+      (cd "$directory" && bash "./start_${role}.sh" --status) || return 1
+    fi
+  done
+}
 stop_loaded_job() {
   local label="$1" service="gui/$(id -u)/$1"
   if launchctl print "$service" >/dev/null 2>&1; then
@@ -599,7 +615,8 @@ fi
 
 if ! (start_runtime_services "$TARGET/XGENT-MCS" &&
       start_enabled_layers "$TARGET/XGENT-MCS" &&
-      runtime_services_status "$TARGET/XGENT-MCS"); then
+      runtime_services_status "$TARGET/XGENT-MCS" &&
+      runtime_layers_status "$TARGET/XGENT-MCS"); then
   echo "Запуск не прошёл; возвращаю предыдущую версию." >&2
   if ! stop_loaded_job com.xider.siri || ! stop_loaded_job com.xider.safari ||
      ! stop_loaded_job com.xider.guardian || ! stop_loaded_job com.xgent.agent; then
@@ -638,5 +655,5 @@ fi
 echo "Установка завершена: $TARGET"
 prune_previous_checkouts "$INSTALL_ROOT" "$backup"
 [[ ! -e "$backup" ]] || echo "Предыдущая установка сохранена: $backup"
-echo "Проверка: \"$TARGET/XGENT-MCS/XIDER.app/Contents/MacOS/XGENT-MCS\" --service status; \"$TARGET/XGENT-MCS/XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper\" --service status"
-echo "Запуск процессов подтверждён. Связь MQTT и системные разрешения проверь в карточке устройства в боте."
+echo "Проверка: Agent и Guard Keeper — выше; Safari/Siri — отдельные [OK]/[SKIP] строки выше."
+echo "Запуск компонентов подтверждён. MQTT и системные разрешения проверь в карточке устройства в боте."
