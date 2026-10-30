@@ -12,7 +12,7 @@ on:
         description: Existing XIDER semantic-version tag to build without publishing a release.
         required: true
         type: string
-        default: v4.3.4
+        default: v4.3.5
 
 permissions:
   contents: read

@@ -21,12 +21,12 @@ VSVersionInfo(
           [
             StringStruct(u'CompanyName', u'XIDER Systems'),
             StringStruct(u'FileDescription', u'XIDER Remote Endpoint Agent'),
-            StringStruct(u'FileVersion', u'4.3.4.0'),
+            StringStruct(u'FileVersion', u'4.3.5.0'),
             StringStruct(u'InternalName', u'XGENT-WDS'),
             StringStruct(u'LegalCopyright', u'Copyright (C) 2026 XIDER Project. All rights reserved.'),
             StringStruct(u'OriginalFilename', u'XGENT-WDS.exe'),
             StringStruct(u'ProductName', u'XIDER Endpoint Management'),
-            StringStruct(u'ProductVersion', u'4.3.4.0'),
+            StringStruct(u'ProductVersion', u'4.3.5.0'),
           ]
         )
       ]
