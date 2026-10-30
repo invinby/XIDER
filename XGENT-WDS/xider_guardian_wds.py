@@ -290,6 +290,7 @@ def _task_exists(task_name: str) -> bool | None:
         result = subprocess.run(
             ["schtasks.exe", "/Query", "/TN", task_name],
             capture_output=True, text=True, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except OSError:
         return None
@@ -602,6 +603,7 @@ class Guardian:
                 result = subprocess.run(
                     ["schtasks.exe", "/End", "/TN", AGENT_TASK],
                     capture_output=True, text=True, check=False, timeout=15,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
                 if result.returncode not in (0, 1):
                     raise RuntimeError("Task Scheduler не остановил задачу агента.")
@@ -737,9 +739,10 @@ class Guardian:
         exe = SCRIPT_DIR / "XGENT-WDS.exe"
         if exe.exists():
             return [str(exe)]
-        python = SCRIPT_DIR / "venv" / "Scripts" / "python.exe"
+        python = SCRIPT_DIR / "venv" / "Scripts" / "pythonw.exe"
         if not python.exists():
-            python = Path(sys.executable)
+            candidate = Path(sys.executable).with_name("pythonw.exe")
+            python = candidate if candidate.exists() else Path(sys.executable)
         return [str(python), str(SCRIPT_DIR / "xgent_wds.py")]
 
     def status_payload(self) -> dict:
@@ -806,7 +809,8 @@ class Guardian:
         child = subprocess.Popen(
             self._agent_command(), cwd=str(SCRIPT_DIR), env=env,
             stdout=handle, stderr=subprocess.STDOUT,
-            creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+            creationflags=(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                           | getattr(subprocess, "CREATE_NO_WINDOW", 0)),
         )
         self.state["desired_running"] = True
         _save_state(self.state, "desired_running")
@@ -822,6 +826,7 @@ class Guardian:
             subprocess.run(
                 ["schtasks.exe", "/End", "/TN", AGENT_TASK],
                 capture_output=True, text=True, check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         if not proc:
             return
