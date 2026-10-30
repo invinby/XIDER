@@ -19,7 +19,7 @@ _defaults = {
     "admins": [],
     "blocked_ids": [],
     "ui_style": "technical",
-    "require_device_approval": False,
+    "require_device_approval": True,
     "hide_command_inputs": False,
 }
 
