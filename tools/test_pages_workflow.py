@@ -19,7 +19,7 @@ def test_pages_workflow_validates_pull_requests_and_gates_deploy_to_main_push() 
     assert deploy, "Pages deploy must be an explicit, separate job"
     body = deploy.group("body")
     assert re.search(
-        r"^    if:\s*github\.event_name == 'push' && github\.ref == 'refs/heads/main'\s*$",
+        r"^    if:\s*\(github\.event_name == 'push' && github\.ref == 'refs/heads/main'\) \|\| \(github\.event_name == 'release' && github\.event\.action == 'published'\)\s*$",
         body,
         re.MULTILINE,
     )
@@ -48,8 +48,9 @@ def test_pages_generates_signed_installers_before_checking_and_uploading_site() 
     assert generate in workflow
     assert workflow.index(generate) < workflow.index(check)
     assert workflow.index(generate) < workflow.index(upload)
-    assert re.search(r"^\s+XIDER_WINDOWS_INSTALLER_TAG:\s*v\d+\.\d+\.\d+\s*$", workflow, re.MULTILINE)
-    assert re.search(r"^\s+XIDER_MACOS_INSTALLER_TAG:\s*v\d+\.\d+\.\d+\s*$", workflow, re.MULTILINE)
+    assert "XIDER_WINDOWS_INSTALLER_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || 'v4.3.11' }}" in workflow
+    assert "XIDER_MACOS_INSTALLER_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || 'v4.3.11' }}" in workflow
+    assert re.search(r"^\s*release:\s*\n\s+types:\s*\[published\]\s*$", workflow, re.MULTILINE)
     assert re.search(r"^\s+XIDER_MACOS_SOURCE_PREVIEW:\s*'1'\s*$", workflow, re.MULTILINE)
 
     for source in (

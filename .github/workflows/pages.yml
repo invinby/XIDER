@@ -27,6 +27,8 @@ on:
       - "XGENT-MCS/release_signature.py"
       - ".github/workflows/pages.yml"
       - ".github/workflows/ci.yml"
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -52,8 +54,10 @@ jobs:
 
       - name: "Generate signed installer entry points"
         env:
-          XIDER_WINDOWS_INSTALLER_TAG: v4.3.11
-          XIDER_MACOS_INSTALLER_TAG: v4.3.11
+          # Keep the last published release during the merge-to-release gap.
+          # A published release event then rebuilds Pages against its exact tag.
+          XIDER_WINDOWS_INSTALLER_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || 'v4.3.11' }}
+          XIDER_MACOS_INSTALLER_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || 'v4.3.11' }}
           XIDER_MACOS_SOURCE_PREVIEW: '1'
         run: python tools/build_pages_entrypoints.py site
 
@@ -67,7 +71,7 @@ jobs:
 
   deploy:
     name: "Publish validated site"
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'release' && github.event.action == 'published')
     needs: build
     runs-on: ubuntu-latest
     permissions:
