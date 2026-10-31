@@ -128,7 +128,10 @@ def test_new_device_approval_uses_owner_card_and_keeps_action_keyboard(monkeypat
     monkeypatch.setattr(bot, "bot", Telegram())
     async def scenario():
         monkeypatch.setattr(bot, "LOOP", asyncio.get_running_loop())
-        bot.on_mqtt_message(f"{bot.MQTT_PREFIX}/mac/status", {"type": "status", "status": "online", "name": "Mac"})
+        bot.on_mqtt_message(f"{bot.MQTT_PREFIX}/mac/status", {
+            "type": "status", "status": "online", "name": "Mac",
+            "mqtt_session_id": "b" * 32,
+        })
         await asyncio.sleep(0.03)
         assert len(edits) == 1
         text, options = edits[0]
