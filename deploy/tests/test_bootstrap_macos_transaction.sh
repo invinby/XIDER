@@ -145,6 +145,18 @@ while (($#)); do
   shift
 done
 printf '%s\n' "$url" >> "${XIDER_TEST_CURL_LOG:-/dev/null}"
+if [[ "${XIDER_TEST_CURL_TRUNCATE_FIRST:-0}" == 1 ]]; then
+  attempts=0
+  if [[ -f "${XIDER_TEST_CURL_ATTEMPT_FILE:?}" ]]; then
+    attempts="$(<"${XIDER_TEST_CURL_ATTEMPT_FILE:?}")"
+  fi
+  attempts=$((attempts + 1))
+  printf '%s\n' "$attempts" > "${XIDER_TEST_CURL_ATTEMPT_FILE:?}"
+  if ((attempts == 1)); then
+    printf 'truncated archive\n' > "$destination"
+    exit 0
+  fi
+fi
 cp "${XIDER_TEST_ARCHIVE_PATH:?}" "$destination"
 CURL
 chmod +x "$FAKE_BIN/curl"
@@ -408,6 +420,25 @@ grep -Fx "https://github.com/invinby/XIDER/archive/${PINNED_REF}.zip" "$FIXTURE/
 }
 [[ -f "$PINNED_ROOT/git-ver/XGENT-MCS/new-version.marker" ]] || {
   echo 'The pinned macOS archive was not activated.' >&2; exit 1;
+}
+
+RETRY_ROOT="$FIXTURE/retry-source-download"
+RETRY_REF="$(printf 'd%.0s' {1..40})"
+RETRY_ATTEMPTS="$FIXTURE/retry-curl-attempts"
+make_old_install "$RETRY_ROOT"
+: > "$FIXTURE/curl-urls.log"
+XIDER_TEST_CURL_TRUNCATE_FIRST=1 \
+XIDER_TEST_CURL_ATTEMPT_FILE="$RETRY_ATTEMPTS" \
+  run_network_bootstrap "$RETRY_ROOT" "$RETRY_REF" > "$FIXTURE/retry-download.log" 2>&1
+[[ "$(<"$RETRY_ATTEMPTS")" == 2 ]] || {
+  echo 'The macOS bootstrap did not retry a truncated but successful HTTP response.' >&2
+  cat "$FIXTURE/retry-download.log" >&2
+  exit 1
+}
+[[ -f "$RETRY_ROOT/git-ver/XGENT-MCS/new-version.marker" ]] || {
+  echo 'The verified retry did not activate the new macOS checkout.' >&2
+  cat "$FIXTURE/retry-download.log" >&2
+  exit 1
 }
 
 INVALID_REF_ROOT="$FIXTURE/invalid-ref-install"
