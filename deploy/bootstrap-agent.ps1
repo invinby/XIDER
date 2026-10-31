@@ -72,6 +72,29 @@ function Invoke-XiderNativeProbe {
     return [pscustomobject]@{ Output = @($output); ExitCode = [int]$exitCode }
 }
 
+function Invoke-XiderPythonScriptProbe {
+    param(
+        [Parameter(Mandatory)][string]$Executable,
+        [Parameter(Mandatory)][string]$Code,
+        [string[]]$Arguments = @()
+    )
+
+    # Avoid PowerShell 5 native-argument quoting differences for Python -c.
+    # A short ASCII file gives Python the exact same script on every host.
+    $scriptPath = Join-Path $env:TEMP ('.xider-python-probe-' + [guid]::NewGuid().ToString('N') + '.py')
+    try {
+        [IO.File]::WriteAllText(
+            $scriptPath,
+            $Code + [Environment]::NewLine,
+            [Text.Encoding]::ASCII
+        )
+        $probeArguments = @($Arguments) + $scriptPath
+        return Invoke-XiderNativeProbe -Executable $Executable -Arguments $probeArguments
+    } finally {
+        Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-XiderPythonExecutable {
     # Prefer a known interpreter before downloading anything. The Windows
     # launcher may point `py -3` at an untested newest runtime, so probe the
@@ -79,7 +102,7 @@ function Get-XiderPythonExecutable {
     $launcher = (Get-Command py.exe -ErrorAction SilentlyContinue).Source
     if ($launcher) {
         foreach ($version in @('3.14', '3.12', '3.11')) {
-            $probe = Invoke-XiderNativeProbe -Executable $launcher -Arguments @("-$version", '-c', 'import sys; print(sys.executable)')
+            $probe = Invoke-XiderPythonScriptProbe -Executable $launcher -Arguments @("-$version") -Code 'import sys; print(sys.executable)'
             $candidate = @($probe.Output)
             if ($probe.ExitCode -eq 0 -and $candidate.Count -eq 1 -and
                 (Test-Path -LiteralPath $candidate[0] -PathType Leaf)) {
@@ -91,7 +114,7 @@ function Get-XiderPythonExecutable {
     $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
     if ($pythonCommand) {
         foreach ($command in @($pythonCommand)) {
-            $probe = Invoke-XiderNativeProbe -Executable $command.Source -Arguments @('-c', 'import sys; print(sys.executable); print(sys.version_info[0]*100 + sys.version_info[1])')
+            $probe = Invoke-XiderPythonScriptProbe -Executable $command.Source -Code 'import sys; print(sys.executable); print(sys.version_info[0]*100 + sys.version_info[1])'
             $candidate = @($probe.Output)
             if ($probe.ExitCode -eq 0 -and $candidate.Count -ge 2 -and
                 $candidate[-1] -match '^3(?:11|12|14)$' -and
@@ -117,8 +140,8 @@ function Get-XiderPythonExecutable {
     $runtimeRoot = Join-Path $InstallRoot "bootstrap-runtime\python-$version"
     $pythonExe = Join-Path $runtimeRoot 'python.exe'
     if (Test-Path -LiteralPath $pythonExe -PathType Leaf) {
-        $versionCheck = @(& $pythonExe -c 'import sys; print(sys.version_info[0]*100 + sys.version_info[1])' 2>$null)
-        if ($LASTEXITCODE -eq 0 -and $versionCheck -contains '314') { return $pythonExe }
+        $versionProbe = Invoke-XiderPythonScriptProbe -Executable $pythonExe -Code 'import sys; print(sys.version_info[0]*100 + sys.version_info[1])'
+        if ($versionProbe.ExitCode -eq 0 -and @($versionProbe.Output) -contains '314') { return $pythonExe }
         throw "Python runtime повреждён или имеет неверную версию: $pythonExe"
     }
 
@@ -146,8 +169,8 @@ function Get-XiderPythonExecutable {
         if ($process.ExitCode -notin @(0, 3010) -or -not (Test-Path -LiteralPath $pythonExe -PathType Leaf)) {
             throw "Установка Python завершилась с кодом $($process.ExitCode)."
         }
-        $versionCheck = @(& $pythonExe -c 'import sys; print(sys.version_info[0]*100 + sys.version_info[1])' 2>$null)
-        if ($LASTEXITCODE -ne 0 -or $versionCheck -notcontains '314') {
+        $versionProbe = Invoke-XiderPythonScriptProbe -Executable $pythonExe -Code 'import sys; print(sys.version_info[0]*100 + sys.version_info[1])'
+        if ($versionProbe.ExitCode -ne 0 -or @($versionProbe.Output) -notcontains '314') {
             throw 'Установленный Python не прошёл проверку версии.'
         }
         return $pythonExe
