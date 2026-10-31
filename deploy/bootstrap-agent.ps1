@@ -722,7 +722,7 @@ public static class XiderRestartManagerInterop {
     [StructLayout(LayoutKind.Sequential)]
     public struct UniqueProcess {
         public int ProcessId;
-        public FILETIME ProcessStartTime;
+        public System.Runtime.InteropServices.ComTypes.FILETIME ProcessStartTime;
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -758,7 +758,10 @@ public static class XiderRestartManagerInterop {
 }
 '@
         }
-    } catch { return @() }
+    } catch {
+        Write-Warning ("Restart Manager interop could not be initialized: {0}" -f $_.Exception.Message)
+        return @()
+    }
 
     # Restart Manager registers file paths, not directories. Register concrete
     # managed files so a bad directory entry cannot make the whole query fail.
