@@ -1,5 +1,21 @@
 # XIDER release history
 
+## X4.3.14-LOCK-TRACE+20261031 — Windows install lock diagnostics
+
+### English
+
+- Fixed the Windows PowerShell 5.1 Restart Manager interop declaration so lock-owner discovery compiles and reports the blocking process and parent instead of silently returning no owners.
+- Added a Windows CI fixture that holds a staged file in another process and checks the reported process identity.
+- Interrupted source ZIP downloads still retry and are validated before the active installation is touched.
+- macOS remains a signed source-preview installer; its runtime is not Apple-signed or notarized.
+
+### Русский
+
+- Исправлена interop-структура Restart Manager для Windows PowerShell 5.1: поиск владельца блокировки теперь компилируется и показывает процесс с родителем вместо тихого пустого результата.
+- В Windows CI добавлена проверка с файлом, который удерживает отдельный процесс.
+- Оборванная загрузка ZIP повторяется и проверяется до изменения активной установки.
+- macOS остаётся подписанным издателем source-preview установщиком; runtime не подписан Apple и не нотарифицирован.
+
 ## X4.3.13-LOCK-TRACE+20261031 — Windows install lock diagnostics
 
 ### English
