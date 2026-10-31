@@ -27,7 +27,7 @@ from pathlib import Path
 
 from config import CONFIG_DIR, observed_component_health
 from mac_service_control import (
-    app_install_root, start_launch_agent, stop_launch_agent,
+    app_install_root, launch_agent_pid, start_launch_agent, stop_launch_agent,
     write_launch_agent as write_service_launch_agent,
 )
 
@@ -408,19 +408,21 @@ def main() -> int:
             health = _read_json(CONFIG_DIR / f"{role}-health.json")
             stamp = health.get("updated_at")
             age = time.time() - stamp if type(stamp) in (int, float) else float("inf")
+            service_pid = launch_agent_pid(LAYERS[role]["label"])
             fresh = (
                 health.get("schema") == 1 and health.get("component") == role
                 and health.get("state") == "running" and 0 <= age < HEALTH_STALE_SECONDS
                 and type(health.get("pid")) is int and health["pid"] > 0
+                and health["pid"] == service_pid
                 and isinstance(health.get("version"), str)
                 and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", health["version"])
             )
             if running and fresh:
-                print(f"[OK] XIDER {role.title()} v{health['version']}; PID={health['pid']}; process=LaunchAgent-running; MQTT=n/a (local layer); Telegram=not-confirmed")
+                print(f"[OK] XIDER {role.title()} v{health['version']}; PID={service_pid}; process=LaunchAgent-running; MQTT=n/a (local layer); Telegram=not-confirmed")
                 print(f"[HEALTH] fresh; age={age:.1f}s")
             elif running:
-                print(f"[WARN] XIDER {role.title()} process=LaunchAgent-running; version=unknown; PID=unknown; MQTT=n/a (local layer); Telegram=not-confirmed")
-                print(f"[HEALTH] missing, stale, or invalid {role}-health.json")
+                print(f"[WARN] XIDER {role.title()} process=LaunchAgent-running; PID={service_pid or 'unknown'}; version=unknown; MQTT=n/a (local layer); Telegram=not-confirmed")
+                print(f"[HEALTH] missing, stale, invalid, or PID-mismatched {role}-health.json")
             else:
                 print(f"[STOPPED] XIDER {role.title()} process=LaunchAgent-stopped; MQTT=n/a (local layer); Telegram=not-confirmed")
             print(f"[LOG] {CONFIG_DIR / f'{role}.log'}")
