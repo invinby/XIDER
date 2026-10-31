@@ -112,7 +112,9 @@ def test_manual_tag_build_creates_signed_inventory_without_publishing_release():
     source = text.split("  source-state:", 1)[1].split("  release-ci:", 1)[0]
     assert "release_tag:" in text.split("  workflow_dispatch:", 1)[1].split("permissions:", 1)[0]
     assert "ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.sha }}" in source
-    assert "git describe --tags --exact-match HEAD" in source
+    assert 'git fetch --force --no-tags origin "refs/tags/$tag:refs/tags/$tag"' in source
+    assert 'git rev-parse --verify "refs/tags/$tag^{commit}"' in source
+    assert '[[ "$tag_commit" == "$commit" ]]' in source
     assert "needs.source-state.outputs.source_commit" in inventory
     assert "XIDER_RELEASE_PRIVATE_KEY_B64: ${{ secrets.XIDER_RELEASE_PRIVATE_KEY_B64 }}" in inventory
     assert "tools/build_protected_build_manifest.py" in inventory
