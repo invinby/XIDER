@@ -2638,7 +2638,9 @@ class XgentClient:
         result = self._client.publish(
             f"{MQTT_PREFIX}/{DEVICE_ID}/status",
             json.dumps(envelope, ensure_ascii=False),
-            qos=1,
+            # Status is replaceable telemetry. QoS 1 may replay an old signed
+            # envelope after reconnect; the fresh status sent on connect is authoritative.
+            qos=0,
         )
         if result.rc != mqtt.MQTT_ERR_SUCCESS:
             log.warning("Status not accepted by MQTT transport (rc=%s); it will retry on the next heartbeat", result.rc)

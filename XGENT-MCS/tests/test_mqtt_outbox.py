@@ -129,7 +129,7 @@ def test_agent_status_uses_ephemeral_qos_zero(monkeypatch):
     monkeypatch.setattr(mcs, "MQTT_PREFIX", "xgent/v1")
     monkeypatch.setattr(mcs, "DEVICE_NAME", "Mac test")
     monkeypatch.setattr(mcs, "PLATFORM", "macOS")
-    monkeypatch.setattr(mcs, "VERSION", "4.3.8")
+    monkeypatch.setattr(mcs, "VERSION", "4.3.9")
     monkeypatch.setattr(mcs, "_BUNDLED_RUNTIME", False)
     monkeypatch.setattr(mcs, "trusted_release_keys_ready", lambda: True)
     monkeypatch.setattr(mcs, "_command_approval_protocol_enabled", lambda _client: False)

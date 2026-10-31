@@ -1,5 +1,19 @@
 # XIDER release history
 
+## X4.3.9-TARPED+20261031 — Windows fresh status delivery
+
+### English
+
+- Windows Agent status heartbeats now use QoS 0, matching macOS. QoS 1 could replay an old signed heartbeat after reconnect; the server rejects stale signatures and the next fresh heartbeat is authoritative.
+- Command replies keep QoS 1 delivery and the bounded macOS response outbox. This change affects replaceable status telemetry only.
+- macOS remains a source-preview installer, not an Apple-signed or notarized application release.
+
+### Русский
+
+- Статусы Windows Agent теперь отправляются с QoS 0, как на macOS. QoS 1 мог повторно доставить старый подписанный heartbeat после переподключения; сервер отклоняет его, а следующий свежий статус становится актуальным.
+- Ответы на команды сохраняют QoS 1 и ограниченную очередь macOS. Изменение касается только заменяемых статусных сообщений.
+- macOS остаётся source-preview установщиком, а не подписанным Apple и нотариализованным приложением.
+
 ## X4.3.8-TARPED+20261031 — MQTT delivery retry and fresh heartbeat
 
 ### English
