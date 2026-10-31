@@ -69,6 +69,18 @@ def test_quickstart_bootstrap_source_is_pinned_to_the_exact_git_commit():
         assert worktree != blob
 
 
+def test_macos_source_preview_uses_pinned_source_without_requesting_compiled_bundle():
+    commands = build_platform_commands(
+        CURRENT_COMMIT, RELEASE_TAG, macos_source_preview=True
+    )
+
+    assert f"XIDER_REF='{CURRENT_COMMIT}' bash \"$p\"" in commands["macos"]
+    assert "XIDER_RELEASE_TAG=" not in commands["macos"]
+    assert f"releases/download/{RELEASE_TAG}/XIDER-bootstrap-macos.sh.sig" in commands["macos"]
+    text = build_commands(CURRENT_COMMIT, RELEASE_TAG, macos_source_preview=True)
+    assert "runtime is not Apple-signed or notarized" in text
+
+
 def test_configured_dock_url_is_embedded_in_both_signed_platform_commands():
     dock_url = "https://enroll.example.net"
     commands = build_platform_commands(CURRENT_COMMIT, RELEASE_TAG, dock_url)

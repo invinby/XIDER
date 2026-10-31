@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import math
+import re
 import threading
 import time
 import uuid
@@ -97,11 +98,23 @@ def verify_message_detailed(
     if not hmac.compare_digest(expected, signature):
         return None, "bad_hmac"
     ts = payload.get("ts")
-    if not isinstance(ts, (int, float)):
+    if type(ts) not in (int, float):
         return None, "invalid_timestamp"
-    # LWT (Last Will and Testament) оффлайн-статус отправляется брокером при обрыве связи,
-    # поэтому его ts может быть старше MAX_AGE. Подпись HMAC при этом проверяется всегда.
-    is_lwt = (payload.get("type") == "status" and str(payload.get("status")).lower() == "offline")
+    try:
+        finite_timestamp = math.isfinite(float(ts))
+    except (OverflowError, ValueError):
+        finite_timestamp = False
+    if not finite_timestamp:
+        return None, "invalid_timestamp"
+    # Старый timestamp допустим только у подписанного LWT с токеном сессии;
+    # bot.py сверяет его с последним принятым online-сеансом устройства.
+    is_lwt = (
+        payload.get("type") == "status"
+        and str(payload.get("status")).lower() == "offline"
+        and isinstance(payload.get("mqtt_session_id"), str)
+        and re.fullmatch(r"[0-9a-f]{32}", payload["mqtt_session_id"]) is not None
+        and ts <= time.time() + MAX_AGE
+    )
     if not is_lwt:
         if abs(time.time() - ts) > MAX_AGE:
             return None, "stale_timestamp"

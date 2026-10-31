@@ -66,6 +66,36 @@ def test_verify_detailed_reports_safe_failure_categories():
     assert m.verify_message_detailed(replay) == (None, "replay")
 
 
+def test_stale_offline_requires_signed_session_id():
+    import hashlib
+    import hmac
+
+    def signed(payload):
+        payload = {**payload, "ts": int(time.time()) - m.MAX_AGE - 10, "nonce": "a" * 32}
+        signature = hmac.new(m.SHARED_KEY.encode("utf-8"), m._canonical(payload), hashlib.sha256).hexdigest()
+        return {"sig": signature, "payload": payload}
+
+    assert m.verify_message_detailed(signed({"type": "status", "status": "offline"})) == (
+        None, "stale_timestamp"
+    )
+    payload, reason = m.verify_message_detailed(signed({
+        "type": "status", "status": "offline", "mqtt_session_id": "a" * 32,
+    }))
+    assert reason == "ok"
+    assert payload["status"] == "offline"
+
+    future = m.sign_message({
+        "type": "status", "status": "offline", "mqtt_session_id": "b" * 32,
+    })
+    future_payload = dict(future["payload"], ts=int(time.time()) + m.MAX_AGE + 1)
+    future_sig = hmac.new(
+        m.SHARED_KEY.encode("utf-8"), m._canonical(future_payload), hashlib.sha256
+    ).hexdigest()
+    assert m.verify_message_detailed({"sig": future_sig, "payload": future_payload}) == (
+        None, "stale_timestamp"
+    )
+
+
 def test_replay_denied():
     env = m.sign_message({"type": "shell", "command": "whoami"})
     assert m.verify_message(env) is not None

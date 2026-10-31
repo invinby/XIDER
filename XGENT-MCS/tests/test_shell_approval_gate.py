@@ -66,6 +66,8 @@ def _client(monkeypatch, tmp_path):
     monkeypatch.setattr(mcs, "DEVICE_ID", DEVICE_ID)
     monkeypatch.setattr(mcs.time, "time", lambda: NOW)
     client = object.__new__(mcs.XgentClient)
+    client._mqtt_session_id = "a" * 32
+    client._mqtt_connected = True
     client._command_replay_ledger = command_replay.CommandReplayLedger(
         tmp_path / "command-replay.json"
     )

@@ -12600,7 +12600,10 @@ def test_device_status_notices_confirm_transitions_without_heartbeat_starvation(
         monkeypatch.setattr(bot, "_STATUS_NOTICE_PENDING", {})
         monkeypatch.setattr(bot, "_STATUS_NOTICE_DELAY_SEC", 0.02)
         monkeypatch.setattr(bot, "ENCRYPT_PAYLOAD", False)
-        monkeypatch.setattr(bot, "verify_message_detailed", lambda payload, **_kwargs: (payload, "ok"))
+        monkeypatch.setattr(
+            bot, "verify_message_detailed",
+            lambda envelope, **_kwargs: (envelope["payload"], "ok"),
+        )
         monkeypatch.setattr(bot, "audit", lambda *args, **kwargs: None)
         monkeypatch.setattr(bot, "_schedule_admin_notice", lambda text, **kwargs: notices.append(text))
         monkeypatch.setattr(bot.bot_settings, "is_blocked", lambda _device_id: False)
@@ -12611,19 +12614,35 @@ def test_device_status_notices_confirm_transitions_without_heartbeat_starvation(
             lambda key, default=None: True if key in {"notify_online", "notify_offline"} else default,
         )
 
+        session_counter = 0
+        active_session = "a" * 32
+        last_status = None
+
         def status(value, update_mode="source", release_update_ready=False):
+            nonlocal session_counter, active_session, last_status
+            if value == "online" and last_status == "offline":
+                session_counter += 1
+                active_session = f"{session_counter:032x}"
+            timestamp = int(time.time()) - 1
             bot.on_mqtt_message(
                 f"{bot.MQTT_PREFIX}/mac-1/status",
                 {
-                    "type": "status", "status": value, "name": "Mac", "os": "macOS",
-                    "version": "test", "update_mode": update_mode,
-                    "release_update_ready": release_update_ready,
+                    "payload": {
+                        "ts": timestamp, "type": "status", "status": value,
+                        "name": "Mac", "os": "macOS", "version": "test",
+                        "mqtt_session_id": active_session,
+                        "update_mode": update_mode,
+                        "release_update_ready": release_update_ready,
+                    },
                 },
             )
+            last_status = value
+            return timestamp
 
-        status("online", release_update_ready=True)
+        online_timestamp = status("online", release_update_ready=True)
         assert store.get("mac-1")["update_mode"] == "source"
         assert store.get("mac-1")["release_update_ready"] is True
+        assert store.get("mac-1")["last_seen"] == online_timestamp
         status("online", update_mode=[])
         assert store.get("mac-1")["update_mode"] == "unknown"
         assert store.get("mac-1")["release_update_ready"] is False
@@ -12643,6 +12662,7 @@ def test_device_status_notices_confirm_transitions_without_heartbeat_starvation(
         assert len(notices) == 1
 
         status("offline")
+        assert store.get("mac-1")["mqtt_session_id"] is None
         await asyncio.sleep(0.05)
         assert len(notices) == 2 and "ушёл в оффлайн" in notices[1]
 
@@ -12652,6 +12672,7 @@ def test_device_status_notices_confirm_transitions_without_heartbeat_starvation(
         assert len(notices) == 2
 
         status("online")
+        assert store.get("mac-1")["mqtt_session_id"] == active_session
         await asyncio.sleep(0.05)
         assert len(notices) == 3 and "вернулся онлайн" in notices[2]
 

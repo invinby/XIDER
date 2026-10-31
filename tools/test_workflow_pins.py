@@ -244,4 +244,11 @@ def test_windows_preview_build_and_signed_assets_share_the_selected_tag_commit()
     assert "ref: ${{ needs.build-windows.outputs.source_commit }}" in publish
     assert 'BUILD_SHA: ${{ needs.build-windows.outputs.source_commit }}' in publish
     assert 'COMMIT=$(git rev-parse "${BUILD_SHA}^{commit}")' in publish
+    assert "git show \"${COMMIT}:deploy/bootstrap.sh\" > artifacts/XIDER-bootstrap-macos.sh" in publish
+    assert "build_install_launchers.py \"$COMMIT\" \"$TAG\" artifacts --macos-source-preview" in publish
+    assert "sign_bootstrap.py \"$TAG\" \"$COMMIT\" artifacts" in publish
+    assert "sign_installers.py artifacts" in publish
+    assert "--platform windows --platform macos --exclude-asset XGENT-MCS-macos-bundle.zip --require-signature" in publish
+    assert "artifacts/XIDER-install-macos.sh.sig" in publish
+    assert "runtime is not Apple-signed or notarized" in publish
     assert "${{ github.sha }}" not in build + publish

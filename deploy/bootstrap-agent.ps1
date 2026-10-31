@@ -516,8 +516,10 @@ function Stop-XiderManagedProcesses {
         if (-not $remaining.Count) { return }
         Start-Sleep -Seconds 1
     }
-    $remainingIds = @($remaining | ForEach-Object { $_.ProcessId }) -join ', '
-    throw "Процессы XIDER всё ещё используют каталог агента: $remainingIds"
+    $remainingSummary = @($remaining | ForEach-Object {
+        '{0} ({1}; {2}; started {3})' -f $_.ProcessId, $_.Name, $_.ExecutablePath, $_.CreationDate
+    }) -join '; '
+    throw "Процессы XIDER всё ещё используют каталог агента: $remainingSummary"
 }
 
 function Expand-XiderArchiveSafely {

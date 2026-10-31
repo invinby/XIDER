@@ -27,13 +27,8 @@ layer_cli() {
 set_enabled() { layer_cli --set-enabled "$ROLE" "$1"; }
 
 if [[ "${1:-}" == "--status" ]]; then
-  if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then
-    echo "[OK] XIDER Safari layer loaded"
-    echo "[LOG] $HOME/.xgent/safari.log"
-    exit 0
-  fi
-  echo "[STOPPED] XIDER Safari layer is not loaded"
-  exit 1
+  layer_cli --service "$ROLE" status
+  exit $?
 fi
 if [[ "${1:-}" == "--stop" ]]; then
   layer_cli --owner-stop "$ROLE"

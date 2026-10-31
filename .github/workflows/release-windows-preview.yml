@@ -1,4 +1,4 @@
-name: XIDER Windows passwordless installer
+name: XIDER signed Windows and macOS source-preview installers
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
       release_tag:
         description: Existing XIDER source tag to package (must match agent VERSION).
         required: true
-        default: v4.3.6
+        default: v4.3.7
 
 permissions:
   contents: read
@@ -141,23 +141,27 @@ jobs:
           mkdir -p artifacts
           git archive --format=zip --prefix=XIDER-source/ "$COMMIT" > artifacts/XIDER-source.zip
           git show "${COMMIT}:deploy/bootstrap-agent.ps1" > artifacts/XIDER-bootstrap-windows.ps1
+          git show "${COMMIT}:deploy/bootstrap.sh" > artifacts/XIDER-bootstrap-macos.sh
           (cd artifacts && zip -q Guard-Keeper-Windows.zip XIDER-Guard-Keeper.exe)
-          python tools/build_install_launchers.py "$COMMIT" "$TAG" artifacts
-          python tools/sign_bootstrap.py "$TAG" "$COMMIT" artifacts --platform windows
-          python tools/sign_installers.py artifacts --platform windows
+          python tools/build_install_launchers.py "$COMMIT" "$TAG" artifacts --macos-source-preview
+          python tools/sign_bootstrap.py "$TAG" "$COMMIT" artifacts
+          python tools/sign_installers.py artifacts
           python - "$COMMIT" "$TAG" artifacts/XIDER-QUICKSTART.txt <<'PY'
           import sys
           from pathlib import Path
           sys.path.insert(0, str(Path("tools").resolve()))
           from build_bootstrap_commands import build_platform_commands
           commit, tag, output = sys.argv[1:]
-          command = build_platform_commands(commit, tag)["windows"]
+          commands = build_platform_commands(commit, tag, macos_source_preview=True)
+          command = commands["windows"]
+          mac_command = commands["macos"]
           Path(output).write_text(
-              f"XIDER {tag} — Windows\nCommit: {commit}\n\nWindows PowerShell:\n{command}\n",
+              f"XIDER {tag} — Windows + macOS source preview\nCommit: {commit}\n\n"
+              f"Windows PowerShell:\n{command}\n\nmacOS Terminal (source preview; runtime is not Apple-signed or notarized):\n{mac_command}\n",
               encoding="utf-8",
           )
           PY
-          python tools/build_release_manifest.py "$TAG" artifacts --platform windows --require-signature
+          python tools/build_release_manifest.py "$TAG" artifacts --platform windows --platform macos --exclude-asset XGENT-MCS-macos-bundle.zip --require-signature
           python - <<'PY'
           import json
           import sys
@@ -167,17 +171,17 @@ jobs:
           verify_manifest_signature(json.loads(Path("artifacts/release-manifest.json").read_text(encoding="utf-8")))
           PY
 
-      - name: Publish signed Windows preview release
+      - name: Publish signed Windows and macOS source-preview installers
         uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
         with:
           tag_name: ${{ needs.release-state.outputs.tag }}
-          name: XIDER ${{ needs.release-state.outputs.tag }} — Windows preview
+          name: XIDER ${{ needs.release-state.outputs.tag }} — Windows preview + macOS source preview
           prerelease: true
           draft: false
           body: |
-            Signed Windows Agent and Guard Keeper package. The short Windows installer enrolls through X-Dock and does not request a VPS SSH password.
+            Signed Windows Agent and Guard Keeper package plus a signed macOS source-preview installer. When a local `.env` is absent, each installer uses X-Dock enrollment; neither asks for a VPS SSH password.
 
-            This preview is Windows-only; macOS remains on its separately signed release path.
+            macOS source preview uses the pinned XIDER source and Python runtime. Its bootstrap and installer are publisher-signed, but the runtime is not Apple-signed or notarized. This is not the full compiled macOS app release; Safari and Siri installation are reported as separate verified steps.
             The signed manifest pins the exact source commit used to build these assets.
           files: |
             artifacts/XIDER-source.zip
@@ -186,8 +190,12 @@ jobs:
             artifacts/Guard-Keeper-Windows.zip
             artifacts/XGENT-WDS-Windows.zip
             artifacts/XIDER-bootstrap-windows.ps1
+            artifacts/XIDER-bootstrap-macos.sh
             artifacts/XIDER-bootstrap-windows.ps1.sig
+            artifacts/XIDER-bootstrap-macos.sh.sig
             artifacts/XIDER-install-windows.ps1
+            artifacts/XIDER-install-macos.sh
             artifacts/XIDER-install-windows.ps1.sig
+            artifacts/XIDER-install-macos.sh.sig
             artifacts/XIDER-QUICKSTART.txt
             artifacts/release-manifest.json

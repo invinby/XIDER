@@ -26,13 +26,20 @@ INSTALLERS = {
     "macos": "XIDER-install-macos.sh",
 }
 INSTALLER_NAMESPACE = "xider-installer@xider.link"
-DEFAULT_MACOS_INSTALLER_TAG = "v4.2.1"
+DEFAULT_MACOS_INSTALLER_TAG = "v4.3.7"
 
 
 def build_installers(
-    commit_id: str, release_tag: str, platforms: set[str] | None = None
+    commit_id: str,
+    release_tag: str,
+    platforms: set[str] | None = None,
+    *,
+    macos_source_preview: bool = False,
 ) -> dict[str, str]:
-    commands = build_platform_commands(commit_id, release_tag)
+    commands = build_platform_commands(
+        commit_id, release_tag,
+        macos_source_preview=macos_source_preview,
+    )
     installers = {
         INSTALLERS["windows"]: (
             "param([string]$LogPath)\n"
@@ -49,7 +56,9 @@ def build_installers(
         ),
         INSTALLERS["macos"]: (
             "#!/bin/bash\n"
-            f"# XIDER {release_tag}: agent-only installer; commit {commit_id.lower()}\n"
+            f"# XIDER {release_tag}: "
+            f"{'macOS source preview; runtime is not Apple-signed or notarized' if macos_source_preview else 'agent-only installer'}; "
+            f"commit {commit_id.lower()}\n"
             "printf '%s\\n' 'XIDER: verifying the signed macOS bootstrap...'\n"
             + commands["macos"] + "\n"
         ),
@@ -76,13 +85,19 @@ def build_pages_launchers() -> dict[str, str]:
         if windows_tag else base
     )
     macos_base = f"https://github.com/{REPOSITORY}/releases/download/{macos_tag}"
+    macos_source_preview = os.environ.get("XIDER_MACOS_SOURCE_PREVIEW", "").strip().lower() in {"1", "true", "yes"}
+    macos_preview_notice = (
+        "printf '%s\\n' 'XIDER: selecting the signed macOS source-preview installer (runtime is not Apple-signed or notarized)...'\n"
+        if macos_source_preview
+        else "printf '%s\\n' 'XIDER: selecting the signed macOS installer...'\n"
+    )
     mac = (
         "#!/bin/bash\nset -eu\n"
         "for tool in curl base64 shasum ssh-keygen; do\n"
         "  command -v \"$tool\" >/dev/null 2>&1 || { printf 'XIDER: required tool missing: %s\\n' \"$tool\" >&2; exit 1; }\n"
         "done\n"
-        "printf '%s\\n' 'XIDER: selecting the signed macOS installer...'\n"
-        f"base='{macos_base}'\n"
+        + macos_preview_notice
+        + f"base='{macos_base}'\n"
         "tag=\"${XIDER_INSTALL_TAG:-}\"\n"
         "if [ -n \"$tag\" ]; then\n"
         "  [[ \"$tag\" =~ ^v[0-9]{1,6}\\.[0-9]{1,6}\\.[0-9]{1,6}$ ]] || { printf '%s\\n' 'XIDER: invalid release tag.' >&2; exit 1; }\n"
@@ -171,9 +186,13 @@ def main() -> None:
     parser.add_argument("release_tag")
     parser.add_argument("output", type=Path)
     parser.add_argument("--pages-dir", type=Path)
+    parser.add_argument("--macos-source-preview", action="store_true")
     args = parser.parse_args()
     try:
-        installers = build_installers(args.commit_id, args.release_tag)
+        installers = build_installers(
+            args.commit_id, args.release_tag,
+            macos_source_preview=args.macos_source_preview,
+        )
         pages = build_pages_launchers() if args.pages_dir else None
     except ValueError as exc:
         parser.error(str(exc))
