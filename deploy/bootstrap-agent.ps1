@@ -312,6 +312,107 @@ $oldTasks = @{}
 $tasksStopped = $false
 $activationStarted = $false
 $taskInstallAttempted = $false
+$installReportId = 'install-' + [guid]::NewGuid().ToString('N')
+$localAppData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { [Environment]::GetFolderPath('LocalApplicationData') }
+$installReportPath = Join-Path $localAppData 'XIDER\logs\install-report.json'
+
+function Write-XiderInstallReport {
+    param(
+        [Parameter(Mandatory)][ValidateSet('succeeded', 'failed', 'partial')][string]$Outcome,
+        [string]$ErrorMessage,
+        [string]$RequestedVersion,
+        [switch]$Required,
+        [AllowNull()][hashtable]$HealthStates = @{}
+    )
+
+    if (-not $HealthStates) { $HealthStates = @{} }
+    $notVerified = @{
+        status = 'not_verified'
+        detail = 'MQTT connection is local evidence; this installer did not observe a bot acknowledgement.'
+    }
+    $components = @{}
+    foreach ($component in @('agent', 'guardian')) {
+        $health = if ($HealthStates.ContainsKey($component)) { $HealthStates[$component] } else { $null }
+        $pidValue = 0
+        if ($health) { [void][int]::TryParse([string]$health.pid, [ref]$pidValue) }
+        $process = if ($pidValue -gt 0) { Get-Process -Id $pidValue -ErrorAction SilentlyContinue } else { $null }
+        $connected = [bool]($health -and $health.connected -eq $true)
+        $version = if ($health -and $health.version) { [string]$health.version } else { $null }
+        $installed = $Outcome -eq 'succeeded' -and $connected -and $process -and
+            $version -eq $RequestedVersion
+        $status = if ($installed) { 'installed' } elseif ($Outcome -eq 'failed') { 'failed' } else { 'unknown' }
+        $componentError = if ($status -eq 'failed') { $ErrorMessage } else { $null }
+        $components[$component] = @{
+            status = $status
+            version = $version
+            process = @{
+                running = [bool]$process
+                pid = if ($process) { $pidValue } else { $null }
+                name = if ($process) { [string]$process.ProcessName } else { $null }
+            }
+            bot_response = $notVerified
+            error = $componentError
+        }
+    }
+    foreach ($component in @('safari', 'siri')) {
+        $components[$component] = @{
+            status = 'not_applicable'
+            version = $null
+            process = @{ running = $false; pid = $null; name = $null }
+            bot_response = @{ status = 'not_applicable'; detail = 'Windows installer does not install this macOS component.' }
+            error = $null
+        }
+    }
+    $report = @{
+        schema = 1
+        install_id = $installReportId
+        installed_at = [DateTimeOffset]::UtcNow.ToString('o')
+        platform = 'windows'
+        requested_version = $RequestedVersion
+        outcome = $Outcome
+        components = $components
+    }
+    $temporaryReportPath = Join-Path (Split-Path -Parent $installReportPath) ('.' + $installReportId + '.tmp')
+    $backupReportPath = Join-Path (Split-Path -Parent $installReportPath) ('.' + $installReportId + '.bak')
+    try {
+        $reportDirectory = Split-Path -Parent $installReportPath
+        New-Item -ItemType Directory -Path $reportDirectory -Force | Out-Null
+        foreach ($candidate in @($reportDirectory, (Split-Path -Parent $reportDirectory))) {
+            if (Test-Path -LiteralPath $candidate) {
+                $item = Get-Item -LiteralPath $candidate -Force
+                if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                    throw 'Install report directory must not be a reparse point.'
+                }
+            }
+        }
+        if (Test-Path -LiteralPath $installReportPath) {
+            $existing = Get-Item -LiteralPath $installReportPath -Force
+            if (($existing.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw 'Install report file must not be a reparse point.'
+            }
+        }
+        $json = $report | ConvertTo-Json -Depth 8 -Compress
+        if ([Text.Encoding]::UTF8.GetByteCount($json) -gt 131072) {
+            throw 'Install report exceeds the size limit.'
+        }
+        [IO.File]::WriteAllText($temporaryReportPath, $json, [Text.UTF8Encoding]::new($false))
+        if (Test-Path -LiteralPath $installReportPath) {
+            if (Test-Path -LiteralPath $backupReportPath) {
+                throw 'Install report backup path already exists.'
+            }
+            [IO.File]::Replace($temporaryReportPath, $installReportPath, $backupReportPath)
+            Remove-Item -LiteralPath $backupReportPath -Force -ErrorAction SilentlyContinue
+        } else {
+            [IO.File]::Move($temporaryReportPath, $installReportPath)
+        }
+        Write-Host "[REPORT] Installation report: $installReportPath"
+    } catch {
+        if ($Required) { throw }
+        Write-Warning "Installation report could not be written: $($_.Exception.Message)"
+    } finally {
+        Remove-Item -LiteralPath $temporaryReportPath -Force -ErrorAction SilentlyContinue
+    }
+}
 
 function Merge-XiderCommandPublicKeyset {
     param([string[]]$ConfigLines, [string[]]$PublicLines)
@@ -615,6 +716,9 @@ try {
     New-Item -ItemType Directory -Path $extract -Force | Out-Null
     if ($SourceArchive) {
         Copy-Item -LiteralPath $SourceArchive -Destination $zip -ErrorAction Stop
+        Expand-XiderArchiveSafely -ArchivePath $zip -DestinationPath $unpack
+        $downloaded = Get-ChildItem -LiteralPath $unpack -Directory | Select-Object -First 1
+        if (-not $downloaded) { throw 'GitHub archive is empty after extraction.' }
     } else {
         # GitHub archive GETs are safe to retry. A dropped transport must not
         # leave a partial ZIP that makes the next install attempt ambiguous.
@@ -623,14 +727,23 @@ try {
         for ($downloadAttempt = 1; $downloadAttempt -le $downloadAttempts; $downloadAttempt++) {
             try {
                 Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath $unpack -Recurse -Force -ErrorAction SilentlyContinue
+                New-Item -ItemType Directory -Path $unpack -Force | Out-Null
                 Invoke-WebRequest -Uri $repoUrl -OutFile $zip -UseBasicParsing -TimeoutSec 90
                 $downloadedArchive = Get-Item -LiteralPath $zip -ErrorAction Stop
                 if ($downloadedArchive.Length -lt 4) { throw 'GitHub archive response was empty or truncated.' }
+                # A transport can return a partial ZIP without Invoke-WebRequest
+                # surfacing the disconnect. Expand it inside the retry boundary
+                # so EOF/CRC/central-directory failures discard the whole attempt.
+                Expand-XiderArchiveSafely -ArchivePath $zip -DestinationPath $unpack
+                $downloaded = Get-ChildItem -LiteralPath $unpack -Directory | Select-Object -First 1
+                if (-not $downloaded) { throw 'GitHub archive is empty after extraction.' }
                 $downloadComplete = $true
                 break
             } catch {
                 $downloadFailure = $_
                 Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath $unpack -Recurse -Force -ErrorAction SilentlyContinue
                 if ($downloadAttempt -ge $downloadAttempts) {
                     throw "Не удалось скачать архив XIDER после $downloadAttempts попыток: $($downloadFailure.Exception.Message)"
                 }
@@ -640,9 +753,6 @@ try {
         }
         if (-not $downloadComplete) { throw 'Не удалось скачать архив XIDER; рабочая версия не изменена.' }
     }
-    Expand-XiderArchiveSafely -ArchivePath $zip -DestinationPath $unpack
-    $downloaded = Get-ChildItem -LiteralPath $unpack -Directory | Select-Object -First 1
-    if (-not $downloaded) { throw 'GitHub archive is empty.' }
     foreach ($requiredFile in @(
         'XGENT-WDS\xgent_wds.py',
         'XGENT-WDS\xider_guardian_wds.py',
@@ -816,7 +926,9 @@ try {
         $envSource = $normalizedEnv
     } else {
         $prefixValue = [regex]::Match([string]$prefixLines[0], $prefixPattern).Groups[1].Value.Trim().Trim('"', "'").Trim()
-        if ($prefixValue -notmatch '^[A-Za-z0-9._/-]+$') {
+        $prefixInvalid = [string]::IsNullOrWhiteSpace($prefixValue) -or
+            $prefixValue -notmatch '^[A-Za-z0-9._/-]+$'
+        if ($prefixInvalid) {
             throw 'В конфигурации MQTT_PREFIX пустой или имеет неподдерживаемый формат. Рабочая установка не изменена.'
         }
     }
@@ -1050,6 +1162,7 @@ try {
     if (-not $healthy) { throw 'Agent и Guardian не подтвердили свежее MQTT-соединение; выполняю откат.' }
     Write-Host ("[OK] Agent v{0}; PID={1}; MQTT=connected" -f $healthStates.agent.version, $healthStates.agent.pid)
     Write-Host ("[OK] Guardian v{0}; PID={1}; MQTT=connected" -f $healthStates.guardian.version, $healthStates.guardian.pid)
+    Write-XiderInstallReport -Outcome succeeded -RequestedVersion $expectedAgentVersion -HealthStates $healthStates -Required
     Remove-XiderOldPreviousCheckouts -InstallRoot $resolvedRoot -CurrentBackup $backup -Keep 2
     if (Test-Path -LiteralPath $backup) { Write-Host "[BACKUP] Предыдущая версия сохранена: $backup" }
 }
@@ -1102,6 +1215,10 @@ catch {
                 catch { $rollbackProblems += "Не удалось перезапустить ${taskName}: $($_.Exception.Message)" }
             }
         }
+    }
+    if (-not $PreflightOnly) {
+        Write-XiderInstallReport -Outcome failed -ErrorMessage $originalError.Exception.Message `
+            -RequestedVersion $expectedAgentVersion -HealthStates $healthStates
     }
     $problemText = if ($rollbackProblems.Count) { ' Откат неполный: ' + ($rollbackProblems -join '; ') } else { '' }
     throw "Установка Windows-агента не завершена: $($originalError.Exception.Message).$problemText"

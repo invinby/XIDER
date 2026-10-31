@@ -95,7 +95,167 @@ mkdir -p "$INSTALL_ROOT"
 INSTALL_ROOT="$(cd "$INSTALL_ROOT" && pwd -P)"
 TARGET="${INSTALL_ROOT}/git-ver"
 stage="$(mktemp -d "${INSTALL_ROOT}/.xider-install.XXXXXX")"
-trap 'rm -rf "$stage"' EXIT
+
+write_install_report() {
+  local outcome="$1" error_message="$2" writer="${downloaded:-}/deploy/install_report.py"
+  local report_path="$HOME/.xgent/logs/install-report.json"
+  if [[ ! -f "$writer" ]]; then
+    echo "[REPORT] Install report unavailable: source report writer was not downloaded." >&2
+    return 1
+  fi
+  if ! "$PYTHON_BIN" - "$writer" "$report_path" "$TARGET" "$outcome" "$error_message" "$RELEASE_TAG" <<'PY'
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+writer, destination, install_root, outcome, error_message, release_tag = sys.argv[1:]
+sys.path.insert(0, str(Path(writer).parent))
+from install_report import write_install_report
+
+home = Path.home()
+health_root = home / ".xgent"
+labels = {
+    "agent": "com.xgent.agent",
+    "guardian": "com.xider.guardian",
+    "safari": "com.xider.safari",
+    "siri": "com.xider.siri",
+}
+install_root = Path(install_root)
+source_config = Path(writer).parents[1] / "XGENT-MCS" / "config.py"
+version_match = re.search(r'^VERSION\s*=\s*["\']([^"\']+)', source_config.read_text(encoding="utf-8"), re.M)
+expected_version = release_tag.removeprefix("v") if release_tag else (version_match.group(1) if version_match else None)
+if not version_match or (release_tag and version_match.group(1) != expected_version):
+    raise SystemExit("Requested release version does not match the pinned Agent source.")
+layer_source = Path(writer).parents[1] / "XGENT-MCS" / "xider_layers.py"
+layer_version_match = re.search(r'^VERSION\s*=\s*["\']([^"\']+)', layer_source.read_text(encoding="utf-8"), re.M)
+if not layer_version_match:
+    raise SystemExit("XIDER-Layers source version is unavailable.")
+expected_versions = {
+    "agent": expected_version,
+    "guardian": expected_version,
+    "safari": layer_version_match.group(1),
+    "siri": layer_version_match.group(1),
+}
+layer_state = {"safari": True, "siri": True}
+try:
+    state_path = health_root / "layer-state.json"
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    if isinstance(saved, dict):
+        layer_state.update({key: value for key, value in saved.items() if key in layer_state and type(value) is bool})
+except (OSError, ValueError):
+    pass
+
+def health(component):
+    path = health_root / f"{component}-health.json"
+    try:
+        if path.is_symlink() or path.stat().st_size > 4096:
+            return {}
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) and value.get("component") == component else {}
+    except (OSError, ValueError):
+        return {}
+
+def launchd_pid(label):
+    uid = os.getuid() if hasattr(os, "getuid") else int(os.environ.get("XIDER_TEST_UID", "501"))
+    try:
+        result = subprocess.run(["launchctl", "print", f"gui/{uid}/{label}"], capture_output=True, text=True, timeout=8, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = re.search(r"(?m)^\s*pid = ([1-9][0-9]*)\s*$", result.stdout)
+    return int(match.group(1)) if result.returncode == 0 and match else None
+
+def process_name(pid):
+    if pid is None:
+        return None
+    try:
+        result = subprocess.run(["ps", "-p", str(pid), "-o", "comm="], capture_output=True, text=True, timeout=3, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    value = result.stdout.strip()
+    return value if result.returncode == 0 and value else None
+
+now = datetime.now(timezone.utc).timestamp()
+components = {}
+for name, label in labels.items():
+    record = health(name)
+    pid = launchd_pid(label)
+    process = process_name(pid)
+    running = pid is not None and process is not None
+    version = record.get("version") if isinstance(record.get("version"), str) else None
+    fresh = type(record.get("updated_at")) in (int, float) and 0 <= now - record["updated_at"] <= 35
+    if name in {"agent", "guardian"}:
+        ready = running and fresh and record.get("connected") is True and version == expected_versions[name]
+        enabled = True
+    else:
+        enabled = layer_state[name]
+        ready = enabled and running and fresh and record.get("state") == "running" and version == expected_versions[name]
+    state = "disabled" if not enabled else ("installed" if ready else ("failed" if outcome == "failed" else "unknown"))
+    component_error = None
+    if state == "failed":
+        component_error = error_message or f"Fresh process/health confirmation failed; inspect {health_root / (name + '.log')}"
+    if state == "disabled":
+        component_error = None
+    if name in {"agent", "guardian"}:
+        bot_status = "not_verified"
+        bot_detail = "Local MQTT connection was checked; no bot acknowledgement was observed by the installer."
+    else:
+        bot_status = "not_verified"
+        bot_detail = "This local recovery layer has no direct bot acknowledgement; its process and health record were checked."
+    components[name] = {
+        "status": state,
+        "version": version,
+        "process": {"running": running, "pid": pid if running else None, "name": process},
+        "bot_response": {"status": bot_status, "detail": bot_detail},
+        "error": component_error,
+    }
+
+report = {
+    "schema": 1,
+    "install_id": f"install-{os.getpid()}-{int(now)}",
+    "installed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    "platform": "macos",
+    "requested_version": expected_version,
+    "outcome": outcome,
+    "components": components,
+}
+verification_failed = outcome == "succeeded" and any(
+    component["status"] not in {"installed", "disabled"}
+    for component in components.values()
+)
+if verification_failed:
+    for component in components.values():
+        if component["status"] == "unknown":
+            component["status"] = "failed"
+            component["error"] = error_message or "Fresh process and component health were not confirmed."
+    report["outcome"] = "failed"
+written = write_install_report(destination, report)
+print(f"[REPORT] Installation report: {written}")
+if verification_failed:
+    print("[REPORT] One or more enabled components failed fresh process/health verification.", file=sys.stderr)
+    raise SystemExit(1)
+PY
+  then
+    echo "[REPORT] Install report could not be written." >&2
+    return 1
+  fi
+}
+
+xider_finish() {
+  local status=$?
+  trap - EXIT
+  if ((status == 0)); then
+    write_install_report succeeded "" || true
+  else
+    write_install_report failed "Installer exited with code $status." || true
+  fi
+  rm -rf "$stage"
+  exit "$status"
+}
+trap xider_finish EXIT
 
 if [[ -n "$REF" ]]; then
   echo "Получаю XIDER из зафиксированного commit=$REF"
@@ -616,7 +776,8 @@ fi
 if ! (start_runtime_services "$TARGET/XGENT-MCS" &&
       start_enabled_layers "$TARGET/XGENT-MCS" &&
       runtime_services_status "$TARGET/XGENT-MCS" &&
-      runtime_layers_status "$TARGET/XGENT-MCS"); then
+      runtime_layers_status "$TARGET/XGENT-MCS" &&
+      write_install_report succeeded ""); then
   echo "Запуск не прошёл; возвращаю предыдущую версию." >&2
   if ! stop_loaded_job com.xider.siri || ! stop_loaded_job com.xider.safari ||
      ! stop_loaded_job com.xider.guardian || ! stop_loaded_job com.xgent.agent; then
