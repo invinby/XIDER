@@ -9,17 +9,20 @@ PAGES_WORKFLOW = ROOT / ".github" / "workflows" / "pages.yml"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
 
-def test_pages_workflow_validates_pull_requests_and_gates_deploy_to_main_push() -> None:
+def test_pages_workflow_validates_pull_requests_and_gates_production_deploy_events() -> None:
     workflow = PAGES_WORKFLOW.read_text(encoding="utf-8")
 
     assert re.search(r"^\s*pull_request:\s*$", workflow, re.MULTILINE)
+    assert re.search(r"^\s*workflow_call:\s*\n\s+inputs:\s*\n\s+installer_tag:\s*$", workflow, re.MULTILINE)
+    assert re.search(r"^\s*required:\s*true\s*$", workflow, re.MULTILINE)
+    assert re.search(r"^\s*type:\s*string\s*$", workflow, re.MULTILINE)
     assert re.search(r"^permissions:\s*\n\s+contents:\s*read\s*$", workflow, re.MULTILINE)
 
     deploy = re.search(r"(?ms)^  deploy:\n(?P<body>.*?)(?=^  [a-zA-Z_-]+:|\Z)", workflow)
     assert deploy, "Pages deploy must be an explicit, separate job"
     body = deploy.group("body")
     assert re.search(
-        r"^    if:\s*github\.event_name == 'push' && github\.ref == 'refs/heads/main'\s*$",
+        r"^    if:\s*\(github\.event_name == 'push' && github\.ref == 'refs/heads/main'\) \|\| \(github\.event_name == 'release' && github\.event\.action == 'published'\) \|\| inputs\.installer_tag != ''\s*$",
         body,
         re.MULTILINE,
     )
@@ -48,8 +51,12 @@ def test_pages_generates_signed_installers_before_checking_and_uploading_site() 
     assert generate in workflow
     assert workflow.index(generate) < workflow.index(check)
     assert workflow.index(generate) < workflow.index(upload)
-    assert re.search(r"^\s+XIDER_WINDOWS_INSTALLER_TAG:\s*v\d+\.\d+\.\d+\s*$", workflow, re.MULTILINE)
-    assert re.search(r"^\s+XIDER_MACOS_INSTALLER_TAG:\s*v\d+\.\d+\.\d+\s*$", workflow, re.MULTILINE)
+    assert "gh api \"repos/${GITHUB_REPOSITORY}/releases?per_page=100\"" in workflow
+    assert "REQUESTED_TAG: ${{ inputs.installer_tag }}" in workflow
+    assert "RELEASE_EVENT_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}" in workflow
+    assert "XIDER_WINDOWS_INSTALLER_TAG: ${{ steps.release-tag.outputs.tag }}" in workflow
+    assert "XIDER_MACOS_INSTALLER_TAG: ${{ steps.release-tag.outputs.tag }}" in workflow
+    assert re.search(r"^\s*release:\s*\n\s+types:\s*\[published\]\s*$", workflow, re.MULTILINE)
     assert re.search(r"^\s+XIDER_MACOS_SOURCE_PREVIEW:\s*'1'\s*$", workflow, re.MULTILINE)
 
     for source in (

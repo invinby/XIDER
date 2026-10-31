@@ -27,6 +27,14 @@ on:
       - "XGENT-MCS/release_signature.py"
       - ".github/workflows/pages.yml"
       - ".github/workflows/ci.yml"
+  release:
+    types: [published]
+  workflow_call:
+    inputs:
+      installer_tag:
+        description: Published XIDER release tag whose installers Pages should promote.
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -50,10 +58,25 @@ jobs:
       - name: "Test site and workflow contracts"
         run: python -m pytest tools/test_site.py tools/test_pages_workflow.py -q
 
+      - name: "Resolve published installer release"
+        id: release-tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.installer_tag }}
+          RELEASE_EVENT_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
+        run: |
+          set -euo pipefail
+          tag="${REQUESTED_TAG:-${RELEASE_EVENT_TAG:-}}"
+          if [[ -z "$tag" ]]; then
+            tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq '[.[] | select(.draft == false and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")))] | sort_by(.published_at) | last | .tag_name')"
+          fi
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "No valid published XIDER installer release found." >&2; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
       - name: "Generate signed installer entry points"
         env:
-          XIDER_WINDOWS_INSTALLER_TAG: v4.3.11
-          XIDER_MACOS_INSTALLER_TAG: v4.3.11
+          XIDER_WINDOWS_INSTALLER_TAG: ${{ steps.release-tag.outputs.tag }}
+          XIDER_MACOS_INSTALLER_TAG: ${{ steps.release-tag.outputs.tag }}
           XIDER_MACOS_SOURCE_PREVIEW: '1'
         run: python tools/build_pages_entrypoints.py site
 
@@ -67,7 +90,7 @@ jobs:
 
   deploy:
     name: "Publish validated site"
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'release' && github.event.action == 'published') || inputs.installer_tag != ''
     needs: build
     runs-on: ubuntu-latest
     permissions:

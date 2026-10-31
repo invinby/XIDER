@@ -30,6 +30,10 @@ def test_every_github_action_uses_an_explicit_immutable_commit_pin():
                 assert workflow.name == "build-agents.yml"
                 assert (ROOT / ".github" / "workflows" / "ci.yml").is_file()
                 continue
+            if value == "./.github/workflows/pages.yml":
+                assert workflow.name == "release-windows-preview.yml"
+                assert (ROOT / ".github" / "workflows" / "pages.yml").is_file()
+                continue
             match = re.fullmatch(r"([^@\s]+)@([0-9a-f]{40})\s+#\s+(v\S+)", value)
             assert match, f"{workflow.name} action is not pinned to an immutable SHA: {value}"
             action, sha, release = match.groups()

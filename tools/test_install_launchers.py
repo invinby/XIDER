@@ -111,7 +111,7 @@ def test_windows_pages_launcher_can_pin_a_windows_only_preview_release(monkeypat
     pages = build_pages_launchers()
 
     assert "$installerBase='https://github.com/invinby/XIDER/releases/download/v4.3.0'" in pages["win.ps1"]
-    assert "base='https://github.com/invinby/XIDER/releases/download/v4.3.11'" in pages["mac"]
+    assert "base='https://github.com/invinby/XIDER/releases/download/v4.3.12'" in pages["mac"]
 
 
 def test_macos_pages_launcher_can_pin_a_cross_platform_release(monkeypatch):
@@ -126,7 +126,7 @@ def test_macos_pages_launcher_can_pin_a_cross_platform_release(monkeypatch):
 def test_macos_pages_launcher_defaults_to_a_release_with_signed_macos_assets():
     pages = build_pages_launchers()
 
-    assert "base='https://github.com/invinby/XIDER/releases/download/v4.3.11'" in pages["mac"]
+    assert "base='https://github.com/invinby/XIDER/releases/download/v4.3.12'" in pages["mac"]
     assert "XIDER-install-macos.sh.sig" in pages["mac"]
 
 
