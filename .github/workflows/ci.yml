@@ -153,6 +153,10 @@ jobs:
         shell: powershell
         run: .\deploy\tests\test_bootstrap_agent_swap.ps1
 
+      - name: "Exercise Windows Restart Manager lock owner detection"
+        shell: powershell
+        run: .\deploy\tests\test_restart_manager_lock_owners.ps1
+
       - name: "Exercise Windows install report and rollback health"
         shell: powershell
         run: .\deploy\tests\test_install_report_windows.ps1
