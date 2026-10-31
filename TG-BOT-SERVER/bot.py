@@ -9777,6 +9777,9 @@ _START_NOTIFY_LAST: dict[int, float] = {}
 _LIFECYCLE_NOTICE_LAST: dict[tuple[str, str, str], float] = {}
 _LIFECYCLE_NOTICE_LOCK = threading.Lock()
 _OFFLINE_TIMEOUT_SEC = 150  # два пропущенных heartbeat-а считаем офлайном
+# v4.2.1 is the currently observed signed macOS client without a per-connection
+# MQTT session ID. Keep this compatibility exception narrow and temporary.
+_LEGACY_SESSIONLESS_MAC_VERSIONS = {"4.2.1"}
 
 LOOP: asyncio.AbstractEventLoop | None = None
 SESSION: SessionRegistry = SessionRegistry()
@@ -10096,11 +10099,24 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             isinstance(session_id, str)
             and re.fullmatch(r"[0-9a-f]{32}", session_id) is not None
         )
-        if online and not valid_session_id:
+        legacy_version = str(payload.get("version") or "").removeprefix("v")
+        known_legacy_sessionless_mac = (
+            online
+            and not valid_session_id
+            and legacy_version in _LEGACY_SESSIONLESS_MAC_VERSIONS
+            and "mac" in str(payload.get("os") or old.get("os") or "").lower()
+            and str(old.get("version") or "").removeprefix("v") == legacy_version
+            and old.get("mqtt_session_id") is None
+            and old.get("last_status_session_id") is None
+            and old.get("legacy_sessionless_status") in (None, True)
+        )
+        if online and not valid_session_id and not known_legacy_sessionless_mac:
             # An online heartbeat without a connection identity cannot be
             # ordered against a previous MQTT connection. Accepting it lets a
-            # legacy/replayed status refresh receipt-time liveness and erase
-            # the active session used to validate the broker's Last Will.
+            # replayed status refresh receipt-time liveness and erase the active
+            # session used to validate the broker's Last Will. The one legacy
+            # exception below is pinned to the already-registered v4.2.1 Mac,
+            # and is still ordered by its signed timestamp.
             log.info("Online MQTT status without a valid session ID from %s ignored", device_id)
             audit(
                 "stale_device_online_rejected",
@@ -10118,12 +10134,16 @@ def on_mqtt_message(topic: str, data: dict) -> None:
                 sender_timestamp = math.nan
             if not math.isfinite(sender_timestamp):
                 sender_timestamp = None
+            if known_legacy_sessionless_mac and sender_timestamp is None:
+                log.info("Legacy MQTT status without a usable signed timestamp from %s ignored", device_id)
+                audit("stale_device_online_rejected", device_id=device_id, reason="legacy_timestamp_missing")
+                return
         if online and sender_timestamp is not None and type(previous_sender_timestamp) in (int, float):
             previous_timestamp = float(previous_sender_timestamp)
             session_changed = valid_session_id and session_id != old.get("mqtt_session_id")
             if (
                 sender_timestamp < previous_timestamp
-                or (sender_timestamp == previous_timestamp and session_changed)
+                or (sender_timestamp == previous_timestamp and (session_changed or known_legacy_sessionless_mac))
             ):
                 # QoS/reconnect delivery can put a signed heartbeat from an
                 # older MQTT session behind a newer one. Receipt time alone
@@ -10132,6 +10152,31 @@ def on_mqtt_message(topic: str, data: dict) -> None:
                 log.info("Out-of-order MQTT online status from %s ignored", device_id)
                 audit("stale_device_online_rejected", device_id=device_id)
                 return
+        retired_sessions = old.get("retired_mqtt_session_ids")
+        retired_sessions = list(retired_sessions) if isinstance(retired_sessions, list) else []
+        retired_sessions = [
+            value for value in retired_sessions
+            if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{32}", value)
+        ][-8:]
+        if online and valid_session_id and session_id in retired_sessions:
+            log.info("Retired MQTT session tried to restore online status for %s", device_id)
+            audit("stale_device_online_rejected", device_id=device_id, reason="retired_session")
+            return
+        active_session_id = old.get("mqtt_session_id")
+        if (
+            online and valid_session_id
+            and isinstance(active_session_id, str)
+            and session_id != active_session_id
+        ):
+            try:
+                active_status_age = received_at - float(old.get("last_seen") or 0)
+            except (TypeError, ValueError, OverflowError):
+                active_status_age = float("inf")
+            if old.get("online", False) and active_status_age < _OFFLINE_TIMEOUT_SEC:
+                log.info("New MQTT session from %s rejected while prior session is still fresh", device_id)
+                audit("stale_device_online_rejected", device_id=device_id, reason="active_session_conflict")
+                return
+            retired_sessions = (retired_sessions + [active_session_id])[-8:]
         if (
             online and not old.get("online", False) and valid_session_id
             and session_id == previous_session_id
@@ -10168,6 +10213,8 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             log.info("Rejected stale MQTT offline status for %s (session mismatch)", device_id)
             audit("stale_device_lwt_rejected", device_id=device_id)
             return
+        if not online and valid_mqtt_session:
+            retired_sessions = (retired_sessions + [mqtt_session_id])[-8:]
         info = {
             "name": str(payload.get("name") or device_id),
             "os": str(payload.get("os") or "unknown"),
@@ -10176,6 +10223,8 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             "mqtt_session_id": mqtt_session_id if valid_mqtt_session else None,
             "standby": is_standby,
             "command_approval_protocol": payload.get("command_approval_protocol") if type(payload.get("command_approval_protocol")) is int else 0,
+            "legacy_sessionless_status": known_legacy_sessionless_mac,
+            "retired_mqtt_session_ids": retired_sessions,
         }
         if online:
             info["mqtt_session_id"] = (
@@ -10206,7 +10255,13 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             # A minimal Will must not overwrite the known device label,
             # platform, version, or last fresh heartbeat. Clearing the active
             # session also makes this old Will single-use at the device state layer.
-            info = {**old, "online": False, "standby": False, "mqtt_session_id": None}
+            info = {
+                **old,
+                "online": False,
+                "standby": False,
+                "mqtt_session_id": None,
+                "retired_mqtt_session_ids": retired_sessions,
+            }
         if online:
             info["last_seen"] = received_at
             info["last_status_at"] = received_at
