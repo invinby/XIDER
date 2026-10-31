@@ -536,3 +536,37 @@ Telegram-бота.
 install report по четырём компонентам и выполнить одну безопасную команду с
 наблюдаемым ответом в Telegram. До этих двух наблюдений Mac update и сквозной
 Mac request/response считаются неподтверждёнными.
+
+## Проверка артефактов и свежих heartbeat · 2026-10-31 22:24 UTC
+
+Проверка самого старого Mac-коммита `d7d77a698b763f169327ec99e350ff73f5e34f16`
+подтвердила точную причину старого результата: в `deploy/bootstrap.sh` на этом
+коммите нет шагов запуска Safari/Siri или записи install report; в дереве
+`XGENT-MCS` также нет `xider_layers.py`, `start_safari.sh`, `start_siri.sh` и
+`deploy/install_report.py`. Значит, старый текст «установка завершена» относился
+только к Agent и Guardian и не мог подтверждать recovery layers.
+
+Свежий read-only снимок `known_devices.json` показывает новые возрастающие
+sender timestamps и принятые heartbeat: Windows `4.3.15` — с активной MQTT
+session, Mac `4.2.1` — через узкое legacy sessionless правило. `last_seen` обоих
+устройств находится в 22:23 UTC; после server deploy в отобранной части журнала
+нет отклонений их online-status. Это подтверждает обработку свежего статуса, но
+не ответ на Telegram-команду.
+
+GitHub job logs для `41237742569` подтвердили один источник падения release gate:
+тест `test_macos_app_builder_uses_the_current_agent_release_version` ждал
+буквальное `4.3.14`, когда закреплённый source уже содержал `4.3.15`; на каждой
+из Python 3.11/3.12/3.14 было по одному такому failure. В текущей ветке удалено
+лишнее жёсткое ожидание; тест по-прежнему сравнивает версии bundle с
+`config.VERSION`, а workflow отдельно сверяет версию исходника с тегом. Commit
+`7439ed349d3af72433605c2ca06aa96119024da5` отправлен в
+`fix/mac-remote-update-audit-20261101`; целевой тест прошёл локально (`1 passed`).
+Изменение не меняет уже опубликованный тег `v4.3.15`. Главный CI на
+`5ad7b64519e479042cb8d8f0298feb4460de0c8a` (`41245759260`) завершился успешно.
+
+Публичный `/mac` сейчас отвечает HTTP 200 и выбирает `v4.3.15` source-preview.
+Пакет содержит подписанные XIDER installer/bootstrap, source archive и manifest,
+но не `XGENT-MCS-macos-bundle.zip`, Apple-подписанные `.app` или доказательство
+нотариации. Это не полноценный macOS native release. На физическом Mac ещё нет
+свежего install report по четырём компонентам и подтверждённого ответа Telegram;
+для этого требуется запуск текущего `/mac` и реальный тест владельца.
