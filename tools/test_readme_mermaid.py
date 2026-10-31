@@ -8,6 +8,7 @@ import sys
 import unittest
 from pathlib import Path
 
+import validate_mermaid
 
 ROOT = Path(__file__).resolve().parents[1]
 README_FILES = (ROOT / "README.md", ROOT / "README.ru.md")
@@ -15,6 +16,10 @@ MERMAID_BLOCK = re.compile(r"```mermaid\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
 
 class ReadmeMermaidTests(unittest.TestCase):
+    @unittest.skipUnless(
+        validate_mermaid._cli_path().is_file(),
+        "real Mermaid rendering runs in the Unix CI job",
+    )
     def test_readme_diagrams_parse_with_pinned_mermaid_cli(self) -> None:
         validator = ROOT / "tools" / "validate_mermaid.py"
         result = subprocess.run(

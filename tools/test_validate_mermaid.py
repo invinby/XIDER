@@ -3,15 +3,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import validate_mermaid
 
 ROOT = Path(__file__).resolve().parents[1]
+MERMAID_CLI_AVAILABLE = validate_mermaid._cli_path().is_file()
 
 
 def run_validator(path):
     return subprocess.run([sys.executable, str(ROOT / "tools/validate_mermaid.py"), str(path)], capture_output=True, text=True)
 
 
+@pytest.mark.skipif(not MERMAID_CLI_AVAILABLE, reason="real Mermaid rendering runs in the Unix CI job")
 def test_valid_diagram(tmp_path):
     path = tmp_path / "valid.md"
     path.write_text("```mermaid\nflowchart TD\n A --> B\n```\n", encoding="utf-8")
@@ -19,6 +22,7 @@ def test_valid_diagram(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+@pytest.mark.skipif(not MERMAID_CLI_AVAILABLE, reason="real Mermaid parsing runs in the Unix CI job")
 def test_malformed_second_diagram_reports_file_block_line(tmp_path):
     path = tmp_path / "invalid.md"
     path.write_text("```mermaid\nflowchart TD\n A --> B\n```\n\n```mermaid\nflowchart TD\n A[unterminated\n```\n", encoding="utf-8")

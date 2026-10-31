@@ -25,14 +25,18 @@ def _puppeteer_args() -> list[str]:
     return []
 
 
+def _cli_path() -> Path:
+    """Return the platform-specific executable from the pinned local install."""
+    name = "mmdc.cmd" if sys.platform == "win32" else "mmdc"
+    return ROOT / "tools" / "node_modules" / ".bin" / name
+
+
 def main(argv: list[str]) -> int:
     if not argv:
         print("usage: python tools/validate_mermaid.py FILE [FILE ...]")
         return 2
-    cli = ROOT / "tools" / "node_modules" / ".bin" / ("mmdc.cmd" if sys.platform == "win32" else "mmdc")
-    if not cli.is_file():
-        print("Mermaid CLI is not installed; run npm ci --prefix tools")
-        return 2
+    cli = _cli_path()
+    documents: list[tuple[Path, list[re.Match[str]]]] = []
     failed = False
     for raw_path in argv:
         path = Path(raw_path).resolve()
@@ -48,6 +52,14 @@ def main(argv: list[str]) -> int:
             print(f"{path.name}: no Mermaid blocks")
             failed = True
             continue
+        documents.append((path, blocks))
+    if failed:
+        return 1
+    if not cli.is_file():
+        print("Mermaid CLI is not installed; run npm ci --prefix tools")
+        return 2
+    for path, blocks in documents:
+        source = path.read_text(encoding="utf-8")
         for index, block in enumerate(blocks, 1):
             line = source.count("\n", 0, block.start()) + 1
             with tempfile.TemporaryDirectory(prefix="xider-mermaid-") as directory:
