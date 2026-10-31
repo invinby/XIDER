@@ -141,7 +141,7 @@ function Get-XiderPythonExecutable {
     $pythonExe = Join-Path $runtimeRoot 'python.exe'
     if (Test-Path -LiteralPath $pythonExe -PathType Leaf) {
         $versionProbe = Invoke-XiderPythonScriptProbe -Executable $pythonExe -Code 'import sys; print(sys.version_info[0]*100 + sys.version_info[1])'
-        if ($versionProbe.ExitCode -eq 0 -and @($versionProbe.Output) -contains '314') { return $pythonExe }
+        if ($versionProbe.ExitCode -eq 0 -and (@($versionProbe.Output) -contains '314')) { return $pythonExe }
         throw "Python runtime повреждён или имеет неверную версию: $pythonExe"
     }
 
@@ -170,7 +170,7 @@ function Get-XiderPythonExecutable {
             throw "Установка Python завершилась с кодом $($process.ExitCode)."
         }
         $versionProbe = Invoke-XiderPythonScriptProbe -Executable $pythonExe -Code 'import sys; print(sys.version_info[0]*100 + sys.version_info[1])'
-        if ($versionProbe.ExitCode -ne 0 -or @($versionProbe.Output) -notcontains '314') {
+        if ($versionProbe.ExitCode -ne 0 -or (@($versionProbe.Output) -notcontains '314')) {
             throw 'Установленный Python не прошёл проверку версии.'
         }
         return $pythonExe
