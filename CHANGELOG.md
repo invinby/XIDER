@@ -1,5 +1,19 @@
 # XIDER release history
 
+## X4.3.16-RELEASE-GATE+20261101 — verified source-preview publication
+
+### English
+
+- The signed Windows and macOS source-preview release now waits for the full CI suite on the exact selected tag commit before building or publishing assets.
+- Version metadata is aligned at `4.3.16` across the bot, Windows Agent, and macOS Agent.
+- macOS remains a publisher-signed source preview until an Apple Developer signing identity and notarization credentials are configured; no native Apple-signed app is claimed by this release.
+
+### Русский
+
+- Подписанный релиз Windows и macOS source-preview теперь собирается и публикуется только после полного CI на точном коммите выбранного тега.
+- Метаданные версий бота, Windows Agent и macOS Agent синхронизированы на `4.3.16`.
+- macOS остаётся source-preview с подписью XIDER, пока не настроены Apple Developer certificate и данные нотариализации; этот релиз не объявляется нативным приложением с подписью Apple.
+
 ## X4.3.15-GUARD-QUIET+20261101 — quiet Guardian status checks
 
 ### English

@@ -8,7 +8,7 @@ on:
       release_tag:
         description: Existing XIDER source tag to package (must match agent VERSION).
         required: true
-        default: v4.3.15
+        default: v4.3.16
 
 permissions:
   contents: read
@@ -19,17 +19,33 @@ jobs:
     outputs:
       exists: ${{ steps.check.outputs.exists }}
       tag: ${{ steps.check.outputs.tag }}
+      source_commit: ${{ steps.check.outputs.source_commit }}
     steps:
+      - name: Check out the selected source tag
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+          fetch-depth: 0
       - id: check
         env:
           TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          ACTOR: ${{ github.actor }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && "$ACTOR" != "$REPOSITORY_OWNER" ]]; then
+            echo 'Only the repository owner may dispatch a signed release build.' >&2
+            exit 1
+          fi
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Invalid XIDER release tag: $TAG" >&2
             exit 1
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          commit=$(git rev-parse --verify 'HEAD^{commit}')
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || { echo 'Could not resolve the selected tag commit.' >&2; exit 1; }
+          echo "source_commit=$commit" >> "$GITHUB_OUTPUT"
           status=$(curl -sS -o /dev/null -w '%{http_code}' \
             -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/$TAG")
@@ -42,8 +58,18 @@ jobs:
             exit 1
           fi
 
+  release-ci:
+    name: Release test gate
+    if: needs.release-state.outputs.exists == 'false'
+    needs: [release-state]
+    uses: ./.github/workflows/ci.yml
+    with:
+      source_ref: ${{ needs.release-state.outputs.source_commit }}
+    permissions:
+      contents: read
+
   build-windows:
-    needs: release-state
+    needs: [release-state, release-ci]
     if: needs.release-state.outputs.exists == 'false'
     runs-on: windows-latest
     outputs:
@@ -52,7 +78,7 @@ jobs:
       - name: Check out reviewed source snapshot
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ needs.release-state.outputs.tag }}
+          ref: ${{ needs.release-state.outputs.source_commit }}
 
       - name: Pin exact selected-tag commit for this release transaction
         id: source
@@ -101,7 +127,7 @@ jobs:
           path: artifacts/*
 
   publish-windows:
-    needs: [release-state, build-windows]
+    needs: [release-state, release-ci, build-windows]
     if: needs.release-state.outputs.exists == 'false'
     runs-on: ubuntu-latest
     environment:
@@ -202,7 +228,7 @@ jobs:
 
   dispatch-pages:
     name: "Dispatch Pages deployment from the allowed main branch"
-    needs: [release-state, publish-windows]
+    needs: [release-state, release-ci, publish-windows]
     if: needs.release-state.outputs.exists == 'false'
     runs-on: ubuntu-latest
     permissions:
