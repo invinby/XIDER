@@ -1,5 +1,21 @@
 # XIDER release history
 
+## X4.3.8-TARPED+20261031 — MQTT delivery retry and fresh heartbeat
+
+### English
+
+- Agent and Guard Keeper now keep command replies in a bounded, expiring in-memory outbox while MQTT is disconnected. Replies are signed when resent, so the timestamp and nonce are fresh; missing broker acknowledgments leave the reply queued and are recorded in logs.
+- Replaceable Agent and Guard Keeper status heartbeats use QoS 0 and are refreshed after reconnect. This avoids replaying an old QoS 1 signed status after a network interruption; the server continues to reject any stale signed packet.
+- Guard Keeper now sends a status heartbeat every 60 seconds. `mqtt_outbox.py` is included in agent update and Guardian recovery packages.
+- macOS remains a source-preview installer. No Apple code-signing/notarization credentials are available, so this release does not claim a notarized XIDER.app or compiled Safari/Siri apps.
+
+### Русский
+
+- Agent и Guard Keeper сохраняют ответы команд в ограниченной очереди с TTL, пока MQTT отключён. При повторной отправке ответ подписывается заново с актуальными timestamp и nonce; при отсутствии подтверждения брокера ответ остаётся в очереди, а состояние отражается в логе.
+- Заменяемые heartbeat-статусы Agent и Guard Keeper отправляются с QoS 0 и обновляются после переподключения. Так старый подписанный статус QoS 1 не воспроизводится после сетевого обрыва; сервер по-прежнему отклоняет любой устаревший пакет.
+- Guard Keeper отправляет статус раз в 60 секунд. `mqtt_outbox.py` входит в пакеты обновления агента и восстановления Guardian.
+- macOS остаётся source-preview установщиком. Сертификата Apple и данных нотариации нет, поэтому релиз не заявляет нотариализованный XIDER.app или скомпилированные приложения Safari/Siri.
+
 ## X4.3.7-TARPED+20261031 — Windows update diagnostics and macOS source preview
 
 ### English

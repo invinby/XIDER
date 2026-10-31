@@ -23,6 +23,7 @@ $global:XiderMockOldTasks = $true
 $global:XiderMockOldRunning = @{ 'XIDER Agent' = $true; 'XIDER Guardian' = $true }
 $global:XiderMockRestored = @()
 $global:XiderMockRestarted = @()
+$global:XiderMockUnregistered = @()
 
 function global:ssh.exe {
     $global:LASTEXITCODE = 0
@@ -62,6 +63,13 @@ function Stop-ScheduledTask {
 function Register-ScheduledTask {
     param($TaskName, $Xml, [switch]$Force)
     $global:XiderMockRestored += $TaskName
+}
+function Unregister-ScheduledTask {
+    param($TaskName, [switch]$Confirm)
+    if ($TaskName -notin @('XIDER Agent', 'XIDER Guardian')) {
+        throw "Fixture attempted to unregister an unexpected task: $TaskName"
+    }
+    $global:XiderMockUnregistered += $TaskName
 }
 function Start-ScheduledTask {
     param($TaskName)
@@ -316,5 +324,5 @@ finally {
         (Split-Path $fixture -Leaf) -like 'xider-bootstrap-swap-*') {
         Remove-Item -LiteralPath $fixture -Recurse -Force
     }
-    Remove-Variable XiderMockInstallerResult,XiderMockInstallerCalls,XiderMockTasksRunning,XiderMockAgentDir,XiderMockProcesses,XiderMockStoppedPids,XiderMockFilterResults,XiderMockHealthStatus,XiderMockOldTasks,XiderMockOldRunning,XiderMockRestored,XiderMockRestarted -Scope Global -ErrorAction SilentlyContinue
+    Remove-Variable XiderMockInstallerResult,XiderMockInstallerCalls,XiderMockTasksRunning,XiderMockAgentDir,XiderMockProcesses,XiderMockStoppedPids,XiderMockFilterResults,XiderMockHealthStatus,XiderMockOldTasks,XiderMockOldRunning,XiderMockRestored,XiderMockRestarted,XiderMockUnregistered -Scope Global -ErrorAction SilentlyContinue
 }

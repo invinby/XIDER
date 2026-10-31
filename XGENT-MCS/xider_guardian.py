@@ -46,6 +46,7 @@ from config import (
     write_runtime_health,
 )
 from crypto import sign_message, verify_message
+from mqtt_outbox import MqttResponseOutbox
 from guardian_recovery import RECOVERY_FILES, restore_missing_agent_files
 from mac_bundle_update import install_signed_bundle, restore_backup_set
 from update_package import (
@@ -314,6 +315,10 @@ class Guardian:
         self._observed_agent_pid: int | None = None
         self._observed_agent_since = 0.0
         self._mqtt_connected = False
+        self._pending_responses = MqttResponseOutbox()
+        self._pending_response_flush_lock = threading.Lock()
+        self._pending_response_flush_wake = threading.Event()
+        self._last_status_publish = 0.0
         self._intent_file_required = True
         self.client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
@@ -336,19 +341,120 @@ class Guardian:
         payload = encrypt_payload(body) if ENCRYPT_PAYLOAD else body
         return json.dumps(sign_message(payload), ensure_ascii=False)
 
-    def _publish(self, body: dict) -> None:
+    def _publish(self, body: dict, *, queue_if_disconnected: bool = False) -> bool:
         body = dict(body)
         body.setdefault("type", "guardian")
         body.setdefault("device_id", DEVICE_ID)
-        info = self.client.publish(
-            f"{MQTT_PREFIX}/{DEVICE_ID}/guardian",
-            self._envelope(body),
-            qos=1,
-        )
+        if not self._mqtt_connected:
+            return self._queue_response(body) if queue_if_disconnected else False
+        if self._send_publish(body):
+            return True
+        return self._queue_response(body) if queue_if_disconnected else False
+
+    def _send_publish(self, body: dict) -> bool:
+        try:
+            info = self.client.publish(
+                f"{MQTT_PREFIX}/{DEVICE_ID}/guardian",
+                self._envelope(body),
+                qos=1,
+            )
+        except Exception:
+            log.exception("Guardian MQTT client could not accept response")
+            return False
+        if info.rc != mqtt.MQTT_ERR_SUCCESS:
+            log.warning("Guardian MQTT client rejected response (rc=%s)", info.rc)
+            return False
+        wait_succeeded = True
         try:
             info.wait_for_publish(timeout=3)
         except Exception:
-            pass
+            wait_succeeded = False
+            log.warning("Guardian response accepted by MQTT client; broker confirmation pending")
+        try:
+            published = info.is_published() if callable(getattr(info, "is_published", None)) else True
+        except Exception:
+            published = False
+            log.warning("Could not inspect Guardian response QoS state", exc_info=True)
+        if not published:
+            log.warning("Guardian response remains in MQTT client's QoS queue")
+        return published and wait_succeeded
+
+    def _queue_response(self, body: dict) -> bool:
+        accepted, reason, expired = self._pending_responses.enqueue("guardian", body)
+        if expired:
+            log.warning("Guardian MQTT outbox expired %s response(s)", expired)
+        if not accepted:
+            log.error("Guardian response was not queued (%s)", reason)
+            return False
+        log.warning("Guardian command response queued until MQTT reconnect")
+        if self._mqtt_connected:
+            self._start_pending_response_flush()
+        return True
+
+    def _start_pending_response_flush(self) -> None:
+        if not self._mqtt_connected:
+            return
+        entry, expired = self._pending_responses.peek()
+        if expired:
+            log.warning("Guardian MQTT outbox expired %s response(s)", expired)
+        if entry is None:
+            return
+        threading.Thread(
+            target=self._flush_pending_responses,
+            name="xider-guardian-mqtt-response-flush",
+            daemon=True,
+        ).start()
+
+    def _publish_status_if_due(self, *, now: float | None = None) -> bool:
+        if not self._mqtt_connected:
+            return False
+        current = time.monotonic() if now is None else now
+        if current - self._last_status_publish < 60:
+            return False
+        if not self._publish_status():
+            return False
+        self._last_status_publish = current
+        return True
+
+    def _publish_status(self) -> bool:
+        if not self._mqtt_connected:
+            return False
+        try:
+            info = self.client.publish(
+                f"{MQTT_PREFIX}/{DEVICE_ID}/guardian",
+                self._envelope(self.status_payload()),
+                qos=0,
+            )
+        except Exception:
+            log.exception("Guardian status publish failed; it will retry on the next heartbeat")
+            return False
+        if info.rc != mqtt.MQTT_ERR_SUCCESS:
+            log.warning("Guardian status was rejected by MQTT client (rc=%s)", info.rc)
+            return False
+        return True
+
+    def _flush_pending_responses(self) -> None:
+        if not self._pending_response_flush_lock.acquire(blocking=False):
+            return
+        try:
+            delay = 1.0
+            while not self.stop_event.is_set():
+                if not self._mqtt_connected:
+                    return
+                entry, expired = self._pending_responses.peek()
+                if expired:
+                    log.warning("Guardian MQTT outbox expired %s response(s)", expired)
+                if entry is None:
+                    return
+                if self._send_publish(entry.payload):
+                    self._pending_responses.remove(entry.token)
+                    delay = 1.0
+                    continue
+                self._pending_response_flush_wake.wait(delay)
+                self._pending_response_flush_wake.clear()
+                delay = min(delay * 2.0, 30.0)
+        finally:
+            self._pending_response_flush_lock.release()
 
     def _write_health(self, *, state: str = "running") -> None:
         try:
@@ -366,11 +472,14 @@ class Guardian:
         self._write_health()
         client.subscribe(f"{MQTT_PREFIX}/{DEVICE_ID}/cmd", qos=1)
         client.subscribe(f"{MQTT_PREFIX}/all/cmd", qos=1)
-        self._publish(self.status_payload())
+        if self._publish_status():
+            self._last_status_publish = time.monotonic()
+        self._start_pending_response_flush()
         log.info("Guardian connected to %s:%s", MQTT_BROKER, MQTT_PORT)
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
         self._mqtt_connected = False
+        self._pending_response_flush_wake.set()
         self._write_health(state="waiting")
         log.warning("Guardian MQTT disconnected: %s", reason_code)
 
@@ -670,7 +779,7 @@ class Guardian:
         self._next_restart_at = time.monotonic() + delay
         self._restart_backoff_seconds = min(delay * 2, 300.0)
         if message != self._last_recovery_error:
-            self._publish({"ok": False, "text": f"⚠️ Guardian не смог запустить агент: {message}"})
+            self._publish({"ok": False, "text": f"⚠️ Guardian не смог запустить агент: {message}"}, queue_if_disconnected=True)
             self._last_recovery_error = message
         log.warning("Guardian restart failed; retry in %.0f seconds: %s", delay, message)
 
@@ -835,7 +944,7 @@ class Guardian:
                     "release_tag": release_tag, "manifest_digest": manifest_digest,
                     "update_state": "succeeded", "updated_at": time.time(),
                     "agent_update_protocol": MAC_BUNDLE_UPDATE_PROTOCOL,
-                })
+                }, queue_if_disconnected=True)
                 try:
                     prune_bundle_backups(SCRIPT_DIR, current_backup=backup_root, keep=2)
                 except Exception:
@@ -887,7 +996,7 @@ class Guardian:
                 "release_tag": release_tag, "manifest_digest": manifest_digest,
                 "update_state": outcome, "updated_at": time.time(),
                 "agent_update_protocol": MAC_BUNDLE_UPDATE_PROTOCOL,
-            })
+            }, queue_if_disconnected=True)
         finally:
             if operation_id and getattr(self, "_active_bundle_update_id", None) == operation_id:
                 self._active_bundle_update_id = None
@@ -978,11 +1087,12 @@ class Guardian:
             result = {"ok": False, "text": f"⚠️ Guardian не выполнил команду: {exc}"}
         if payload.get("id"):
             result["id"] = payload["id"]
-        self._publish(result)
+        self._publish(result, queue_if_disconnected=True)
 
     def monitor(self) -> None:
         while not self.stop_event.wait(5):
             self._write_health()
+            self._publish_status_if_due()
             with self.lock:
                 self._refresh_worker_intent()
                 update_lock = getattr(self, "_bundle_update_lock", None)
@@ -1013,7 +1123,7 @@ class Guardian:
                         self._publish({
                             "ok": True,
                             "text": f"🛡 Guardian запустил агент (PID {pid}); проверяю, что он остаётся активен.",
-                        })
+                        }, queue_if_disconnected=True)
                     except Exception as exc:
                         self._record_recovery_failure(exc)
 

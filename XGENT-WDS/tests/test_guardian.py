@@ -371,16 +371,21 @@ def test_guardian_periodically_publishes_fresh_update_capability(guardian_module
     guardian.state = {"auto_restart": False, "desired_running": True}
     guardian._mqtt_connected = True
     guardian._last_status_publish = 0.0
+    guardian._last_health_write = 0.0
     guardian._refresh_worker_intent = Mock()
     guardian.status_payload = Mock(return_value={"agent_update_protocol": 1})
     published = []
+    health_writes = []
     guardian._publish = lambda payload, **_kwargs: published.append(payload)
+    monkeypatch.setattr(module, "write_runtime_health", lambda *args: health_writes.append(args))
     monkeypatch.setattr(module.time, "monotonic", lambda: 100.0)
 
     guardian.monitor()
 
     assert published == [{"agent_update_protocol": 1}]
     assert guardian._last_status_publish == 100.0
+    assert health_writes == [("guardian", True)]
+    assert guardian._last_health_write == 100.0
 
 
 def test_task_query_access_error_is_not_reported_as_missing(guardian_module, monkeypatch):

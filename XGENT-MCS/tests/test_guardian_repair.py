@@ -534,7 +534,7 @@ def test_guardian_reports_missing_agent_on_remote_start(guardian_module, monkeyp
     replies = []
     monkeypatch.setattr(module, "_save_state", lambda _state, *_fields: None)
     monkeypatch.setattr(guardian, "agent_pid", lambda: None)
-    monkeypatch.setattr(guardian, "_publish", replies.append)
+    monkeypatch.setattr(guardian, "_publish", lambda payload, **_kwargs: replies.append(payload))
 
     guardian.handle({"command": "start", "id": "repair-check"})
 
@@ -550,7 +550,7 @@ def test_guardian_backoff_limits_duplicate_recovery_notifications(guardian_modul
     guardian._reset_recovery_backoff()
     published = []
     monkeypatch.setattr(module.time, "monotonic", lambda: 100.0)
-    monkeypatch.setattr(guardian, "_publish", published.append)
+    monkeypatch.setattr(guardian, "_publish", lambda payload, **_kwargs: published.append(payload))
 
     guardian._record_recovery_failure(RuntimeError("worker files are missing"))
     assert guardian._next_restart_at == 105.0
@@ -582,7 +582,7 @@ def test_short_lived_agent_exit_increases_guardian_backoff(guardian_module, monk
     guardian._observed_agent_since = 100.0
     published = []
     monkeypatch.setattr(guardian_module.time, "monotonic", lambda: 104.0)
-    monkeypatch.setattr(guardian, "_publish", published.append)
+    monkeypatch.setattr(guardian, "_publish", lambda payload, **_kwargs: published.append(payload))
 
     guardian._observe_agent_process(None, 104.0)
 
@@ -629,7 +629,7 @@ def test_guardian_monitor_waits_before_retrying_a_crashed_worker(guardian_module
     monkeypatch.setattr(guardian_module.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(guardian, "agent_pid", lambda: None)
     monkeypatch.setattr(guardian, "start_agent", starts)
-    monkeypatch.setattr(guardian, "_publish", published.append)
+    monkeypatch.setattr(guardian, "_publish", lambda payload, **_kwargs: published.append(payload))
 
     guardian.monitor()
 
@@ -1267,7 +1267,7 @@ def test_recovery_toggle_does_not_override_explicit_worker_stop(
     guardian = object.__new__(module.Guardian)
     guardian.state = {"state_version": 2, "auto_restart": True, "desired_running": False}
     monkeypatch.setattr(guardian, "status_payload", lambda: {"ok": True})
-    monkeypatch.setattr(guardian, "_publish", lambda _payload: None)
+    monkeypatch.setattr(guardian, "_publish", lambda _payload, **_kwargs: None)
 
     guardian.handle({"command": "auto_restart", "enabled": False})
 
@@ -1287,6 +1287,7 @@ def test_guardian_monitor_does_not_restart_agent_during_mac_bundle_update(guardi
             return self.calls > 1
 
     guardian = object.__new__(module.Guardian)
+    guardian._mqtt_connected = False
     guardian.stop_event = StopAfterOneWait()
     guardian.lock = threading.RLock()
     guardian._bundle_update_lock = threading.Lock()

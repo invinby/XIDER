@@ -131,9 +131,13 @@ try {
     if ($pythonCandidates.Count -gt 0) {
         $versionProbe = Invoke-XiderPythonScriptProbe -Executable $pythonCandidates[0] -Code $safeVersionProbe
         if ($versionProbe.ExitCode -ne 0 -or $versionProbe.Output.Count -ne 1 -or
-            [string]$versionProbe.Output[0] -notmatch '^3(?:11|12|14)$') {
-            throw 'The PowerShell 5.1 Python version probe did not return a supported runtime version.'
+            [string]$versionProbe.Output[0] -notmatch '^3\d{2}$') {
+            throw 'The PowerShell 5.1 Python version probe did not return a numeric major/minor version.'
         }
+    }
+    if ($bootstrapSource -notmatch "candidate\[-1\] -match '\^3\(\?:11\|12\|14\)\$'" -or
+        $bootstrapSource -notmatch "\$version = '3\.14\.10'") {
+        throw 'Unsupported local Python must be skipped in favor of the pinned Python 3.14.10 runtime.'
     }
     $elevationFunction = $bootstrapAst.Find({ param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and

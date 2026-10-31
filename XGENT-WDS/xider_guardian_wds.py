@@ -356,6 +356,7 @@ class Guardian:
         self._observed_agent_pid: int | None = None
         self._observed_agent_since = 0.0
         self._last_status_publish = 0.0
+        self._last_health_write = 0.0
         self.client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
             client_id=f"xider-guardian-windows-{DEVICE_ID}",
@@ -966,9 +967,16 @@ class Guardian:
 
     def monitor(self) -> None:
         while not self.stop_event.wait(5):
+            now = time.monotonic()
+            if getattr(self, "_mqtt_connected", False) and now - getattr(self, "_last_health_write", 0.0) >= 30:
+                try:
+                    write_runtime_health("guardian", True)
+                except Exception:
+                    log.exception("Could not refresh local Guardian MQTT health")
+                else:
+                    self._last_health_write = now
             with self.lock:
                 self._refresh_worker_intent()
-                now = time.monotonic()
                 if getattr(self, "_mqtt_connected", False) and now - getattr(self, "_last_status_publish", 0.0) >= 30:
                     self._publish(self.status_payload(), qos=0)
                     self._last_status_publish = now

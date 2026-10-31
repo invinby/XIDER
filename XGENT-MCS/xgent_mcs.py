@@ -40,6 +40,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "--command-approval-bundle-smoke":
     import command_approval_bundle_smoke  # noqa: F401 - exits after writing its report
 
 from sleep_wake_history import parse_pmset_sleep_wake_log
+from mqtt_outbox import MqttResponseOutbox
 from sysinfo_schedule import load_schedule, save_schedule
 import camera_quality
 import camera_devices
@@ -1304,6 +1305,9 @@ class XgentClient:
         self._update_cancelled = threading.Event()
         self._mqtt_connected = False
         self._mqtt_session_id = uuid.uuid4().hex
+        self._pending_responses = MqttResponseOutbox()
+        self._pending_response_flush_lock = threading.Lock()
+        self._pending_response_flush_wake = threading.Event()
         self._pending_command_subacks: set[int] = set()
         self._command_subscriptions_failed = False
         self._client = mqtt.Client(
@@ -1642,6 +1646,7 @@ class XgentClient:
                         log.exception("Не удалось запросить командную MQTT-подписку %s", topic)
             log.info("Подключено к %s:%s", MQTT_BROKER, MQTT_PORT)
             self._publish_status()
+            self._start_pending_response_flush()
         else:
             log.warning("Не удалось подключиться к брокеру: %s", reason_code)
 
@@ -1721,6 +1726,9 @@ class XgentClient:
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
         self._mqtt_connected = False
+        wake = getattr(self, "_pending_response_flush_wake", None)
+        if wake is not None:
+            wake.set()
         self._write_local_health(state="waiting" if self._running.is_set() else "stopped")
         with self._lifecycle_lock:
             self._pending_command_subacks.clear()
@@ -1921,11 +1929,18 @@ class XgentClient:
         envelope = sign_message(body)
         if not self._mqtt_connected:
             return
-        result = self._client.publish(
-            f"{MQTT_PREFIX}/{DEVICE_ID}/status",
-            json.dumps(envelope, ensure_ascii=False),
-            qos=1,
-        )
+        # Status is replaceable telemetry. QoS 1 may replay the old signed
+        # envelope after reconnect, where its anti-replay timestamp is stale.
+        # The fresh status published by _on_connect is authoritative.
+        try:
+            result = self._client.publish(
+                f"{MQTT_PREFIX}/{DEVICE_ID}/status",
+                json.dumps(envelope, ensure_ascii=False),
+                qos=0,
+            )
+        except Exception:
+            log.exception("Не удалось опубликовать статус; он повторится на следующем heartbeat")
+            return
         if result.rc != mqtt.MQTT_ERR_SUCCESS:
             log.warning("Статус не принят MQTT-транспортом (rc=%s); повторится на следующем heartbeat", result.rc)
 
@@ -1951,24 +1966,96 @@ class XgentClient:
                 media_history.record_response(CONFIG_DIR / "media-history.json", topic_suffix, payload)
         except Exception:
             log.exception("Не удалось записать метаданные media-операции в локальную историю")
+        if not getattr(self, "_mqtt_connected", True):
+            return self._queue_pending_response(topic_suffix, payload)
+        if self._send_response_payload(topic_suffix, payload):
+            return True
+        return self._queue_pending_response(topic_suffix, payload)
+
+    def _queue_pending_response(self, topic_suffix: str, payload: dict) -> bool:
+        outbox = getattr(self, "_pending_responses", None)
+        if outbox is None:
+            log.error("Ответ %s не доставлен: MQTT отключён, очередь не инициализирована", topic_suffix)
+            return False
+        accepted, reason, expired = outbox.enqueue(topic_suffix, payload)
+        if expired:
+            log.warning("Из очереди MQTT удалено просроченных ответов: %s", expired)
+        if not accepted:
+            log.error("Ответ %s не доставлен и не поставлен в очередь (%s)", topic_suffix, reason)
+            return False
+        log.warning("Ответ %s поставлен в ограниченную MQTT-очередь до переподключения", topic_suffix)
+        if self._mqtt_connected:
+            self._start_pending_response_flush()
+        return True
+
+    def _send_response_payload(self, topic_suffix: str, payload: dict) -> bool:
         body = encrypt_payload(payload) if ENCRYPT_PAYLOAD else payload
         envelope = sign_message(body)
-        # Ответ обновления должен пережить немедленный перезапуск агента.
-        info = self._client.publish(
-            f"{MQTT_PREFIX}/{DEVICE_ID}/{topic_suffix}",
-            json.dumps(envelope, ensure_ascii=False),
-            qos=1,
-        )
-        if info.rc != mqtt.MQTT_ERR_SUCCESS:
-            log.warning("Не удалось опубликовать ответ %s (rc=%s)", topic_suffix, info.rc)
+        try:
+            info = self._client.publish(
+                f"{MQTT_PREFIX}/{DEVICE_ID}/{topic_suffix}",
+                json.dumps(envelope, ensure_ascii=False),
+                qos=1,
+            )
+        except Exception:
+            log.exception("MQTT-клиент не смог принять ответ %s", topic_suffix)
             return False
-        else:
-            try:
-                info.wait_for_publish(timeout=3.0)
-            except Exception:
-                log.exception("Не дождались доставки ответа %s", topic_suffix)
-                return False
-        return info.is_published() if callable(getattr(info, "is_published", None)) else True
+        if info.rc != mqtt.MQTT_ERR_SUCCESS:
+            log.warning("MQTT-клиент не принял ответ %s (rc=%s)", topic_suffix, info.rc)
+            return False
+        wait_succeeded = True
+        try:
+            info.wait_for_publish(timeout=3.0)
+        except Exception:
+            wait_succeeded = False
+            log.warning("Ответ %s принят MQTT-клиентом, подтверждение брокера пока не пришло", topic_suffix)
+        try:
+            published = info.is_published() if callable(getattr(info, "is_published", None)) else True
+        except Exception:
+            published = False
+            log.warning("Не удалось прочитать состояние QoS для ответа %s", topic_suffix, exc_info=True)
+        if not published:
+            log.warning("Ответ %s остаётся у MQTT-клиента до QoS-подтверждения", topic_suffix)
+        return published and wait_succeeded
+
+    def _start_pending_response_flush(self) -> None:
+        outbox = getattr(self, "_pending_responses", None)
+        if outbox is None or not self._mqtt_connected:
+            return
+        entry, expired = outbox.peek()
+        if expired:
+            log.warning("Из очереди MQTT удалено просроченных ответов: %s", expired)
+        if entry is None:
+            return
+        threading.Thread(
+            target=self._flush_pending_responses,
+            name="xgent-mqtt-response-flush",
+            daemon=True,
+        ).start()
+
+    def _flush_pending_responses(self) -> None:
+        lock = getattr(self, "_pending_response_flush_lock", None)
+        if lock is None or not lock.acquire(blocking=False):
+            return
+        try:
+            delay = 1.0
+            while self._running.is_set():
+                if not self._mqtt_connected:
+                    return
+                entry, expired = self._pending_responses.peek()
+                if expired:
+                    log.warning("Из очереди MQTT удалено просроченных ответов: %s", expired)
+                if entry is None:
+                    return
+                if self._send_response_payload(entry.topic_suffix, entry.payload):
+                    self._pending_responses.remove(entry.token)
+                    delay = 1.0
+                    continue
+                self._pending_response_flush_wake.wait(delay)
+                self._pending_response_flush_wake.clear()
+                delay = min(delay * 2.0, 30.0)
+        finally:
+            lock.release()
 
     def _publish_ack(self, action, status, detail=None, cmd_id=None) -> None:
         payload = {"type": "ack", "device_id": DEVICE_ID, "action": action, "status": status}

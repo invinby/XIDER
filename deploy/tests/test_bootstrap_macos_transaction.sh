@@ -36,8 +36,61 @@ for version in 3.14 3.12 3.11; do
   ln -s python3 "$FAKE_BIN/python${version}"
 done
 
-printf '#!/usr/bin/env bash\nexit 0\n' > "$FAKE_BIN/launchctl"
+cat > "$FAKE_BIN/launchctl" <<'LAUNCHCTL'
+#!/usr/bin/env bash
+if [[ "${1:-}" == print ]]; then
+  case "${2:-}" in
+    *com.xgent.agent) printf 'pid = 12345\n' ;;
+    *com.xider.guardian) printf 'pid = 12346\n' ;;
+    *com.xider.safari) printf 'pid = 12347\n' ;;
+    *com.xider.siri) printf 'pid = 12348\n' ;;
+  esac
+fi
+exit 0
+LAUNCHCTL
 chmod +x "$FAKE_BIN/launchctl"
+cat > "$FAKE_BIN/ps" <<'PS'
+#!/usr/bin/env bash
+printf 'xider-fixture-process\n'
+PS
+chmod +x "$FAKE_BIN/ps"
+cat > "$FAKE_BIN/write-health" <<'HEALTH'
+#!/usr/bin/env bash
+set -euo pipefail
+component="$1" pid="$2" version="$3" state="${4:-running}"
+mkdir -p "$HOME/.xgent"
+connected=false
+if [[ "$component" == agent || "$component" == guardian ]]; then connected=true; fi
+printf '{"schema":1,"component":"%s","version":"%s","pid":%s,"updated_at":%s,"state":"%s","connected":%s}\n' \
+  "$component" "$version" "$pid" "$(date +%s)" "$state" "$connected" \
+  > "$HOME/.xgent/$component-health.json"
+HEALTH
+chmod +x "$FAKE_BIN/write-health"
+cat > "$FAKE_BIN/sitecustomize.py" <<'PYTHON'
+from pathlib import Path
+import subprocess
+
+_run = subprocess.run
+
+def _fixture_run(args, *positional, **kwargs):
+    values = list(args) if isinstance(args, (list, tuple)) else [str(args)]
+    command = Path(str(values[0])).name if values else ""
+    if command == "launchctl" and len(values) >= 3 and values[1] == "print":
+        labels = {
+            "com.xgent.agent": 12345,
+            "com.xider.guardian": 12346,
+            "com.xider.safari": 12347,
+            "com.xider.siri": 12348,
+        }
+        pid = next((pid for label, pid in labels.items() if str(values[2]).endswith(label)), None)
+        output = f"pid = {pid}\n" if pid else ""
+        return subprocess.CompletedProcess(args, 0, stdout=output, stderr="")
+    if command == "ps":
+        return subprocess.CompletedProcess(args, 0, stdout="xider-fixture-process\n", stderr="")
+    return _run(args, *positional, **kwargs)
+
+subprocess.run = _fixture_run
+PYTHON
 cat > "$FAKE_BIN/ssh" <<'SSH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -101,17 +154,31 @@ cat > "$SOURCE_ROOT/XGENT-MCS/start_agent.sh" <<'AGENT'
 set -euo pipefail
 if [[ "${1:-}" == --status ]]; then exit 0; fi
 if [[ -f new-version.marker && "${XIDER_FAIL_NEW_AGENT:-0}" == 1 ]]; then exit 17; fi
+write-health agent 12345 4.3.8
 exit 0
 AGENT
 cat > "$SOURCE_ROOT/XGENT-MCS/start_guardian.sh" <<'KEEPER'
 #!/usr/bin/env bash
+write-health guardian 12346 4.3.8
 exit 0
 KEEPER
-printf '#!/usr/bin/env bash\nexit 0\n' > "$SOURCE_ROOT/XGENT-MCS/start_safari.sh"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$SOURCE_ROOT/XGENT-MCS/start_siri.sh"
+cat > "$SOURCE_ROOT/XGENT-MCS/start_safari.sh" <<'SAFARI'
+#!/usr/bin/env bash
+write-health safari 12347 0.1.0
+exit 0
+SAFARI
+cat > "$SOURCE_ROOT/XGENT-MCS/start_siri.sh" <<'SIRI'
+#!/usr/bin/env bash
+write-health siri 12348 0.1.0
+exit 0
+SIRI
 printf '#!/usr/bin/env bash\nexit 0\n' > "$SOURCE_ROOT/XGENT-MCS/stop_agent.sh"
 printf 'new\n' > "$SOURCE_ROOT/XGENT-MCS/new-version.marker"
 printf '# fixture dependencies\n' > "$SOURCE_ROOT/XGENT-MCS/requirements.txt"
+printf 'VERSION = "4.3.8"\n' > "$SOURCE_ROOT/XGENT-MCS/config.py"
+printf 'VERSION = "0.1.0"\n' > "$SOURCE_ROOT/XGENT-MCS/xider_layers.py"
+mkdir -p "$SOURCE_ROOT/deploy"
+cp "$ROOT/deploy/install_report.py" "$SOURCE_ROOT/deploy/install_report.py"
 chmod +x "$SOURCE_ROOT/XGENT-MCS/start_agent.sh" \
   "$SOURCE_ROOT/XGENT-MCS/start_guardian.sh" \
   "$SOURCE_ROOT/XGENT-MCS/start_safari.sh" \
@@ -159,7 +226,9 @@ OLD_AGENT
 run_bootstrap() {
   local install_root="$1" fail_new="$2" env_root="${3:-$FIXTURE/home/XIDER}"
   HOME="$FIXTURE/home" \
+  USERPROFILE="$FIXTURE/home" \
   PATH="$FAKE_BIN:$PATH" \
+  PYTHONPATH="$FAKE_BIN" \
   XIDER_INSTALL_ROOT="$install_root" \
   XIDER_ENV_ROOT="$env_root" \
   XIDER_SOURCE_ARCHIVE="$ARCHIVE" \
@@ -172,7 +241,9 @@ run_bootstrap() {
 run_network_bootstrap() {
   local install_root="$1" ref="$2"
   HOME="$FIXTURE/home" \
+  USERPROFILE="$FIXTURE/home" \
   PATH="$FAKE_BIN:$PATH" \
+  PYTHONPATH="$FAKE_BIN" \
   XIDER_INSTALL_ROOT="$install_root" \
   XIDER_ENV_ROOT="$FIXTURE/home/XIDER" \
   XIDER_SOURCE_ARCHIVE='' \
@@ -266,6 +337,18 @@ run_bootstrap "$SUCCESS_ROOT" 0 > "$FIXTURE/success.log" 2>&1
 grep -qx 'SHARED_KEY=old-local-secret' "$SUCCESS_ROOT/git-ver/XGENT-MCS/.env" || {
   echo 'The current macOS configuration was not carried forward.' >&2; exit 1;
 }
+"$REAL_PYTHON" - "$FIXTURE/home/.xgent/logs/install-report.json" <<'PY'
+import json, sys
+from pathlib import Path
+report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert report["outcome"] == "succeeded", report
+assert report["components"]["agent"]["version"] == "4.3.8", report
+assert report["components"]["guardian"]["version"] == "4.3.8", report
+assert report["components"]["safari"]["version"] == "0.1.0", report
+assert report["components"]["siri"]["version"] == "0.1.0", report
+assert all(report["components"][name]["process"]["running"] for name in ("agent", "guardian", "safari", "siri")), report
+assert all(report["components"][name]["bot_response"]["status"] == "not_verified" for name in report["components"]), report
+PY
 grep -qx 'XIDER_COMMAND_VERIFY_KEYSET_B64=eyIzMDk3ZTJkZWUyY2I0YTM0IjoiSVZMNDBadDVIU1JGTWtMaFh5NnJiTGZQLW50cVh0TUFsNVlPQnBpQjJ4SSJ9' "$SUCCESS_ROOT/git-ver/XGENT-MCS/.env" || {
   echo 'Existing macOS install did not refresh only its public keyset.' >&2; exit 1;
 }
@@ -281,10 +364,24 @@ backups=("$SUCCESS_ROOT"/git-ver.previous.*)
 [[ -d "${backups[0]}" && -f "${backups[0]}/XGENT-MCS/old-version.marker" ]] || {
   echo 'The previous macOS version was not kept as a rollback copy.' >&2; exit 1;
 }
-[[ -L "$SUCCESS_ROOT/git-ver/XGENT-MCS/venv" &&
-   -x "$SUCCESS_ROOT/git-ver/XGENT-MCS/venv/bin/python3" ]] || {
+if [[ -L "$SUCCESS_ROOT/git-ver/XGENT-MCS/venv" ]]; then
+  [[ -x "$SUCCESS_ROOT/git-ver/XGENT-MCS/venv/bin/python3" ]] || {
+    echo 'The retained macOS runtime link is broken.' >&2; exit 1;
+  }
+elif [[ "$(uname -s)" == MINGW* && -x "$SUCCESS_ROOT/git-ver/XGENT-MCS/venv/bin/python3" ]]; then
+  retained_runtime_found=0
+  while IFS= read -r retained_runtime; do
+    if cmp -s "$SUCCESS_ROOT/git-ver/XGENT-MCS/venv/bin/python3" "$retained_runtime"; then
+      retained_runtime_found=1
+      break
+    fi
+  done < <(find "$SUCCESS_ROOT/runtimes" -maxdepth 3 -type f -path '*/bin/python3' -print)
+  [[ "$retained_runtime_found" == 1 ]] || {
+    echo 'The Windows Bash fixture did not preserve its non-link runtime copy.' >&2; exit 1;
+  }
+else
   echo 'The prepared runtime was not retained at a stable path.' >&2; exit 1;
-}
+fi
 
 DEPENDENCY_ROOT="$FIXTURE/dependency-failure"
 make_old_install "$DEPENDENCY_ROOT"
@@ -359,9 +456,9 @@ grep -qx 'MQTT_PREFIX=xgent/v1' "$remote_env" || {
   cat "$FIXTURE/remote-config.log" >&2
   exit 1
 }
-[[ "$(stat -c '%a' "$remote_env")" == 600 ]] || {
+if [[ "$(uname -s)" != MINGW* && "$(stat -c '%a' "$remote_env")" != 600 ]]; then
   echo 'Fetched macOS .env is not private (0600).' >&2; exit 1;
-}
+fi
 grep -Fx -- '-i' "$FIXTURE/ssh-args.log" >/dev/null &&
 grep -Fx -- "$FIXTURE/home/.ssh/xider" "$FIXTURE/ssh-args.log" >/dev/null &&
 grep -Fx -- 'IdentitiesOnly=yes' "$FIXTURE/ssh-args.log" >/dev/null || {
