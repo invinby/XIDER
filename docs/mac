@@ -1,5 +1,5 @@
 #!/bin/bash
-set -eu
+set -euo pipefail
 command -v curl >/dev/null 2>&1 || { printf '%s\n' 'XIDER: curl is required.' >&2; exit 1; }
 printf '%s\n' 'XIDER: loading the canonical signed-release launcher...'
 curl -fsSL --max-time 90 'https://invinby.github.io/XIDER/mac' | /bin/bash
