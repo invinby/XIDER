@@ -262,19 +262,8 @@ if [[ -n "$REF" ]]; then
 else
   echo "Получаю XIDER, branch=$BRANCH"
 fi
-if [[ -n "$SOURCE_ARCHIVE" ]]; then
-  [[ -f "$SOURCE_ARCHIVE" ]] || { echo "XIDER_SOURCE_ARCHIVE не найден" >&2; exit 2; }
-  cp "$SOURCE_ARCHIVE" "$stage/source.zip"
-else
-  if [[ -n "$REF" ]]; then
-    archive_url="https://github.com/invinby/XIDER/archive/${REF}.zip"
-  else
-    archive_url="https://github.com/invinby/XIDER/archive/refs/heads/${BRANCH}.zip"
-  fi
-  curl --fail --silent --show-error --location --max-time 90 \
-    "$archive_url" -o "$stage/source.zip"
-fi
-if ! "$PYTHON_BIN" - "$stage/source.zip" <<'PY'
+validate_source_archive() {
+  if ! "$PYTHON_BIN" - "$1" <<'PY'
 from pathlib import PurePosixPath
 from stat import S_IFDIR, S_IFREG, S_IFLNK
 from unicodedata import normalize
@@ -307,31 +296,26 @@ try:
                 or any(part in ("", ".", "..") for part in raw_parts)
             ):
                 raise ValueError(f"unsafe archive path: {name!r}")
-
             mode = (info.external_attr >> 16) & 0o170000
             if mode == S_IFLNK:
                 raise ValueError(f"symbolic link is not allowed: {name!r}")
             if mode not in (0, S_IFDIR, S_IFREG):
                 raise ValueError(f"special file is not allowed: {name!r}")
-
             normalized_parts = [normalize("NFD", part).casefold() for part in raw_parts]
             key = "/".join(normalized_parts)
             if key in seen:
                 raise ValueError(f"duplicate normalized path: {name!r}")
-
             for index in range(1, len(normalized_parts)):
                 parent = "/".join(normalized_parts[:index])
                 if parent in files:
                     raise ValueError(f"file is used as a directory: {name!r}")
                 implicit_directories.add(parent)
-
             is_directory = info.is_dir() or mode == S_IFDIR
             if not is_directory and key in implicit_directories:
                 raise ValueError(f"file conflicts with nested paths: {name!r}")
             if not is_directory:
                 files.add(key)
             seen.add(key)
-
             total_size += info.file_size
             if total_size > MAX_UNCOMPRESSED_SIZE:
                 raise ValueError("archive exceeds the 1 GiB uncompressed limit")
@@ -339,9 +323,46 @@ except Exception as exc:
     print(f"XIDER source archive rejected: {exc}", file=sys.stderr)
     raise SystemExit(1)
 PY
-then
-  echo "Архив XIDER отклонён до распаковки; действующая установка не менялась." >&2
-  exit 3
+  then
+    return 1
+  fi
+}
+
+if [[ -n "$SOURCE_ARCHIVE" ]]; then
+  [[ -f "$SOURCE_ARCHIVE" ]] || { echo "XIDER_SOURCE_ARCHIVE не найден" >&2; exit 2; }
+  cp "$SOURCE_ARCHIVE" "$stage/source.zip"
+  if ! validate_source_archive "$stage/source.zip"; then
+    echo "Архив XIDER отклонён до распаковки; действующая установка не менялась." >&2
+    exit 3
+  fi
+else
+  if [[ -n "$REF" ]]; then
+    archive_url="https://github.com/invinby/XIDER/archive/${REF}.zip"
+  else
+    archive_url="https://github.com/invinby/XIDER/archive/refs/heads/${BRANCH}.zip"
+  fi
+  download_attempts=3
+  download_complete=0
+  for attempt in 1 2 3; do
+    rm -f "$stage/source.zip"
+    if curl --fail --silent --show-error --location --max-time 90 \
+        "$archive_url" -o "$stage/source.zip" &&
+       validate_source_archive "$stage/source.zip"; then
+      download_complete=1
+      break
+    fi
+    rm -f "$stage/source.zip"
+    if ((attempt == download_attempts)); then
+      echo "Не удалось скачать и проверить архив XIDER после $download_attempts попыток; действующая установка не менялась." >&2
+      exit 3
+    fi
+    echo "Загрузка или проверка архива оборвалась (попытка $attempt/$download_attempts); повторяю..." >&2
+    sleep $((attempt * 2))
+  done
+  if ((download_complete != 1)); then
+    echo "Архив XIDER не проверен; действующая установка не менялась." >&2
+    exit 3
+  fi
 fi
 unzip -q "$stage/source.zip" -d "$stage"
 downloaded="$(find "$stage" -mindepth 1 -maxdepth 1 -type d ! -name '.xider-install.*' | head -n1)"
