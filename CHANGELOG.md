@@ -1,5 +1,17 @@
 # XIDER release history
 
+## X4.3.15-GUARD-QUIET+20261101 — quiet Guardian status checks
+
+### English
+
+- Guardian checks registered Windows Scheduled Tasks from their local task files instead of spawning schtasks.exe during every status refresh.
+- Task checks remain read-only and distinguish registered, missing, and unreadable task state.
+
+### Русский
+
+- Guardian проверяет зарегистрированные задачи Windows по локальным файлам планировщика и больше не запускает schtasks.exe при каждом обновлении статуса.
+- Проверка остаётся только для чтения и различает зарегистрированную, отсутствующую и недоступную задачу.
+
 ## X4.3.14-LOCK-TRACE+20261031 — Windows install lock diagnostics
 
 ### English

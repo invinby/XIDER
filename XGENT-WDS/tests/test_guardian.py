@@ -388,28 +388,28 @@ def test_guardian_periodically_publishes_fresh_update_capability(guardian_module
     assert guardian._last_health_write == 100.0
 
 
-def test_task_query_access_error_is_not_reported_as_missing(guardian_module, monkeypatch):
+def test_task_file_access_error_is_not_reported_as_missing(
+    guardian_module, monkeypatch, tmp_path
+):
     module = guardian_module
-    monkeypatch.setattr(
-        module.subprocess,
-        "run",
-        lambda *args, **kwargs: type(
-            "Result", (), {"returncode": 1, "stdout": "Access is denied.", "stderr": ""}
-        )(),
-    )
+    task_file = tmp_path / module.AGENT_TASK
+    task_file.write_text("<Task />", encoding="utf-8")
+    monkeypatch.setattr(module, "WINDOWS_TASKS_DIR", tmp_path)
+    original_open = Path.open
+
+    def open_task_file(path, *args, **kwargs):
+        if path == task_file:
+            raise PermissionError("Access is denied.")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", open_task_file)
 
     assert module._task_exists(module.AGENT_TASK) is None
 
 
-def test_task_query_recognizes_missing_task(guardian_module, monkeypatch):
+def test_task_file_check_recognizes_missing_task(guardian_module, monkeypatch, tmp_path):
     module = guardian_module
-    monkeypatch.setattr(
-        module.subprocess,
-        "run",
-        lambda *args, **kwargs: type(
-            "Result", (), {"returncode": 1, "stdout": "ERROR: The system cannot find the file specified.", "stderr": ""}
-        )(),
-    )
+    monkeypatch.setattr(module, "WINDOWS_TASKS_DIR", tmp_path)
 
     assert module._task_exists(module.AGENT_TASK) is False
 

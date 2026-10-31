@@ -123,6 +123,9 @@ STATE_FILE = CONFIG_DIR / "guardian.json"
 LEGACY_STATE_FILE = CONFIG_DIR / "guardian-windows.json"
 AGENT_TASK = "XIDER Agent"
 GUARDIAN_TASK = "XIDER Guardian"
+WINDOWS_TASKS_DIR = (
+    Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "Tasks"
+)
 AGENT_STABLE_SECONDS = 60.0
 AGENT_HEALTH_STALE_SECONDS = 180.0
 FROZEN_AGENT_UPDATE_PROTOCOL = 1
@@ -285,29 +288,28 @@ def _persist_update_receipt(payload: dict) -> dict:
 
 
 def _task_exists(task_name: str) -> bool | None:
-    """Return None when Task Scheduler could not prove either state."""
+    """Check the registered task file without spawning a console process.
+
+    Windows stores Task Scheduler definitions as readable XML files under
+    ``%SystemRoot%\\System32\\Tasks``.  The periodic Guardian status path
+    calls this function, so invoking ``schtasks.exe /Query`` here creates a
+    console subprocess on every status refresh.  Reading the task file keeps
+    that status check local, quiet, and read-only.
+    """
+    if not isinstance(task_name, str) or not task_name.strip():
+        return None
+    task_parts = task_name.replace("/", "\\").split("\\")
+    if any(part in {"", ".", ".."} or ":" in part for part in task_parts):
+        return None
+    task_file = WINDOWS_TASKS_DIR.joinpath(*task_parts)
     try:
-        result = subprocess.run(
-            ["schtasks.exe", "/Query", "/TN", task_name],
-            capture_output=True, text=True, check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
+        with task_file.open("rb") as stream:
+            stream.read(1)
+    except FileNotFoundError:
+        return False
     except OSError:
         return None
-    if result.returncode == 0:
-        return True
-    message = f"{result.stdout or ''}\n{result.stderr or ''}".casefold()
-    missing_markers = (
-        "cannot find the file specified",
-        "the system cannot find",
-        "не удается найти указанный файл",
-        "не удаётся найти указанный файл",
-        "системе не удается найти",
-        "системе не удаётся найти",
-    )
-    if any(marker in message for marker in missing_markers):
-        return False
-    return None
+    return True
 
 
 class Guardian:
