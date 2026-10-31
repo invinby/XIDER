@@ -312,6 +312,8 @@ $oldTasks = @{}
 $tasksStopped = $false
 $activationStarted = $false
 $taskInstallAttempted = $false
+$expectedAgentVersion = if ($ReleaseTag) { $ReleaseTag.Substring(1) } else { $null }
+$healthDirectory = Join-Path $env:USERPROFILE '.xgent'
 $installReportId = 'install-' + [guid]::NewGuid().ToString('N')
 $localAppData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { [Environment]::GetFolderPath('LocalApplicationData') }
 $installReportPath = Join-Path $localAppData 'XIDER\logs\install-report.json'
@@ -338,9 +340,8 @@ function Write-XiderInstallReport {
         $process = if ($pidValue -gt 0) { Get-Process -Id $pidValue -ErrorAction SilentlyContinue } else { $null }
         $connected = [bool]($health -and $health.connected -eq $true)
         $version = if ($health -and $health.version) { [string]$health.version } else { $null }
-        $installed = $Outcome -eq 'succeeded' -and $connected -and $process -and
-            $version -eq $RequestedVersion
-        $status = if ($installed) { 'installed' } elseif ($Outcome -eq 'failed') { 'failed' } else { 'unknown' }
+        $installed = $connected -and $process -and $version -eq $RequestedVersion
+        $status = if ($installed) { 'installed' } elseif ($Outcome -eq 'partial') { 'unknown' } else { 'failed' }
         $componentError = if ($status -ne 'installed') { $ErrorMessage } else { $null }
         $components[$component] = @{
             status = $status
@@ -412,6 +413,72 @@ function Write-XiderInstallReport {
     } finally {
         Remove-Item -LiteralPath $temporaryReportPath -Force -ErrorAction SilentlyContinue
     }
+}
+
+function Get-XiderActiveInstallVersion {
+    param([Parameter(Mandatory)][string]$AgentDirectory)
+
+    $configPath = Join-Path $AgentDirectory 'config.py'
+    if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+        $match = [regex]::Match((Get-Content -LiteralPath $configPath -Raw), '(?m)^VERSION\s*=\s*"(?<version>[^"]+)"')
+        if ($match.Success) { return $match.Groups['version'].Value }
+    }
+
+    $agentExecutable = Join-Path $AgentDirectory 'XGENT-WDS.exe'
+    if (Test-Path -LiteralPath $agentExecutable -PathType Leaf) {
+        $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($agentExecutable).ProductVersion
+        $match = [regex]::Match([string]$version, '^(?<version>\d+\.\d+\.\d+)(?:\.0)?$')
+        if ($match.Success) { return $match.Groups['version'].Value }
+    }
+    return $null
+}
+
+function Get-XiderVerifiedActiveHealth {
+    param(
+        [Parameter(Mandatory)][string]$AgentDirectory,
+        [Parameter(Mandatory)][string]$HealthDirectory,
+        [Parameter(Mandatory)][string]$ExpectedVersion,
+        [Parameter(Mandatory)][double]$StartedAt,
+        [Parameter(Mandatory)][int]$TimeoutSeconds
+    )
+
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $states = @{}
+        foreach ($component in @('agent', 'guardian')) {
+            $healthPath = Join-Path $HealthDirectory "$component-health.json"
+            if (-not (Test-Path -LiteralPath $healthPath -PathType Leaf)) { break }
+            try {
+                $health = Get-Content -LiteralPath $healthPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                $updatedAt = 0.0
+                $pidValue = 0
+                $timestampText = ([double]$health.updated_at).ToString('R', [Globalization.CultureInfo]::InvariantCulture)
+                $validTimestamp = [double]::TryParse(
+                    $timestampText, [Globalization.NumberStyles]::Float,
+                    [Globalization.CultureInfo]::InvariantCulture, [ref]$updatedAt
+                )
+                $validPid = [int]::TryParse([string]$health.pid, [ref]$pidValue)
+                if ([string]$health.component -ne $component -or
+                    [string]$health.version -ne $ExpectedVersion -or $health.connected -ne $true -or
+                    -not $validTimestamp -or -not $validPid -or $pidValue -le 0 -or
+                    $updatedAt -lt $StartedAt -or
+                    ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0 - $updatedAt) -gt 15) { break }
+                $process = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $pidValue" -ErrorAction Stop
+                if (-not $process -or -not (Test-XiderManagedProcess -Process $process -AgentDirectory $AgentDirectory)) { break }
+                $states[$component] = $health
+            } catch { break }
+        }
+        if ($states.Count -eq 2 -and [int]$states.agent.pid -ne [int]$states.guardian.pid) {
+            foreach ($taskName in @('XIDER Agent', 'XIDER Guardian')) {
+                $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+                if (-not $task -or $task.State -ne 'Running') { $states = @{}; break }
+            }
+            if ($states.Count -eq 2) { return [pscustomobject]@{ Verified = $true; HealthStates = $states } }
+        }
+        if ([DateTimeOffset]::UtcNow -lt $deadline) { Start-Sleep -Seconds 1 }
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+
+    return [pscustomobject]@{ Verified = $false; HealthStates = @{} }
 }
 
 function Merge-XiderCommandPublicKeyset {
@@ -1080,7 +1147,6 @@ try {
 
     # Task Scheduler's Running state only proves that a task was launched.
     # Clear per-process markers so a previous install cannot satisfy this one.
-    $healthDirectory = Join-Path $env:USERPROFILE '.xgent'
     foreach ($healthName in @('agent-health.json', 'guardian-health.json')) {
         $healthPath = Join-Path $healthDirectory $healthName
         if (Test-Path -LiteralPath $healthPath -PathType Leaf) {
@@ -1226,13 +1292,31 @@ catch {
         }
     }
     if (-not $PreflightOnly) {
-        $reportOutcome = if ($rollbackProblems.Count) { 'partial' } else { 'failed' }
+        $activeHealth = $null
+        try {
+            $activeVersion = if (Test-Path -LiteralPath $repo -PathType Container) {
+                Get-XiderActiveInstallVersion -AgentDirectory $agent
+            } else { $null }
+            if ($activeVersion) {
+                $activeHealth = Get-XiderVerifiedActiveHealth -AgentDirectory $agent `
+                    -HealthDirectory $healthDirectory -ExpectedVersion $activeVersion `
+                    -StartedAt ([DateTimeOffset]::UtcNow.AddSeconds(-15).ToUnixTimeMilliseconds() / 1000.0) `
+                    -TimeoutSeconds $HealthTimeoutSeconds
+            }
+        } catch {
+            $rollbackProblems += "Не удалось проверить активную версию: $($_.Exception.Message)"
+        }
+        $reportOutcome = if ($activeHealth -and $activeHealth.Verified) { 'failed' } else { 'partial' }
         $reportError = $originalError.Exception.Message
+        if (-not ($activeHealth -and $activeHealth.Verified)) {
+            $reportError += ' Не удалось подтвердить здоровье активной версии после отката.'
+        }
         if ($rollbackProblems.Count) {
             $reportError += ' Откат неполный: ' + ($rollbackProblems -join '; ')
         }
+        $reportHealthStates = if ($activeHealth -and $activeHealth.Verified) { $activeHealth.HealthStates } else { @{} }
         Write-XiderInstallReport -Outcome $reportOutcome -ErrorMessage $reportError `
-            -RequestedVersion $expectedAgentVersion -HealthStates $healthStates
+            -RequestedVersion $expectedAgentVersion -HealthStates $reportHealthStates
     }
     $problemText = if ($rollbackProblems.Count) { ' Откат неполный: ' + ($rollbackProblems -join '; ') } else { '' }
     throw "Установка Windows-агента не завершена: $($originalError.Exception.Message).$problemText"

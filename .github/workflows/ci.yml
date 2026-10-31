@@ -153,6 +153,10 @@ jobs:
         shell: powershell
         run: .\deploy\tests\test_bootstrap_agent_swap.ps1
 
+      - name: "Exercise Windows install report and rollback health"
+        shell: powershell
+        run: .\deploy\tests\test_install_report_windows.ps1
+
       - name: "Exercise full Windows bootstrap transaction"
         shell: pwsh
         run: ./deploy/tests/test_bootstrap_transaction.ps1
