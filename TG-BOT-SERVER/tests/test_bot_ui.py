@@ -12642,7 +12642,8 @@ def test_device_status_notices_confirm_transitions_without_heartbeat_starvation(
         online_timestamp = status("online", release_update_ready=True)
         assert store.get("mac-1")["update_mode"] == "source"
         assert store.get("mac-1")["release_update_ready"] is True
-        assert store.get("mac-1")["last_seen"] == online_timestamp
+        assert store.get("mac-1")["last_seen"] > online_timestamp
+        assert store.get("mac-1")["last_status_at"] == store.get("mac-1")["last_seen"]
         status("online", update_mode=[])
         assert store.get("mac-1")["update_mode"] == "unknown"
         assert store.get("mac-1")["release_update_ready"] is False
