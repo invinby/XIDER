@@ -17,7 +17,7 @@ MAX_AGE = 120  # секунд (anti-replay одно окно: сообщения
 _SEEN_NONCES_MAX = 2048  # максимум запомненных nonce (кольцевой буфер)
 _MAX_DIAGNOSTIC_DELTA_SECONDS = 10 * 365 * 24 * 60 * 60
 
-_seen = collections.deque(maxlen=_SEEN_NONCES_MAX)
+_seen = collections.deque()
 _seen_set = set()
 _seen_lock = threading.Lock()
 
@@ -28,10 +28,18 @@ def _mark_seen(nonce: str, ts: float) -> bool:
         # Выкидывать устаревшие (старше окна воспроизведения) из памяти, чтобы не росло.
 
         cutoff = time.time() - MAX_AGE
-        while _seen and _seen[0][1] < cutoff:
-            old = _seen.popleft()
-            _seen_set.discard(old[0])
+        # Messages may arrive out of timestamp order after reconnect/retry, so
+        # purge every expired nonce instead of assuming the deque is time-sorted.
+        if any(ts < cutoff for _, ts in _seen):
+            retained = [entry for entry in _seen if entry[1] >= cutoff]
+            _seen.clear()
+            _seen.extend(retained)
+            _seen_set.intersection_update(nonce for nonce, _ in retained)
         if nonce in _seen_set:
+            return False
+        # Fail closed at capacity: evicting a still-fresh nonce would reopen its
+        # replay window. The cache is bounded by the per-process hard limit.
+        if len(_seen) >= _SEEN_NONCES_MAX:
             return False
         _seen.append((nonce, ts))
         _seen_set.add(nonce)
