@@ -1,5 +1,23 @@
 # XIDER release history
 
+## X4.3.11-TARPED+20261031 — device identity and verified component health
+
+### English
+
+- The bot rejects delayed MQTT Last Will messages from retired device sessions and ignores retained historical status packets.
+- Windows and macOS publish replaceable status with QoS 0; command responses keep bounded retry queues and are freshly signed when resent.
+- macOS installation reports now match each Agent, Guard Keeper, Safari, and Siri health record to the active launchd process, version, and fresh timestamp. A running Agent no longer implies the layers are installed.
+- Windows update diagnostics include the process holding the install directory, and interrupted source downloads retry before the active version is changed.
+- This release is a signed Windows package and a signed macOS source-preview installer. The macOS runtime is not Apple-signed or notarized.
+
+### Русский
+
+- Бот отклоняет запоздавший MQTT Last Will от старой сессии устройства и игнорирует сохранённые брокером исторические статусы.
+- Windows и macOS отправляют заменяемые статусы с QoS 0; ответы на команды сохраняются в ограниченной очереди и при повторной отправке подписываются заново.
+- Отчёт macOS сверяет Agent, Guard Keeper, Safari и Siri с активным процессом launchd, версией и свежей записью здоровья. Работающий Agent больше не считается доказательством установки слоёв.
+- Диагностика Windows показывает процесс, удерживающий папку установки; оборванная загрузка исходников повторяется до переключения активной версии.
+- Это подписанный Windows-пакет и подписанный установщик macOS source-preview. Runtime macOS не подписан Apple и не нотарифицирован.
+
 ## X4.3.9-TARPED+20261031 — Windows fresh status delivery
 
 ### English

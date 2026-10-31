@@ -26,7 +26,7 @@ try {
   $ssh=$sshCommand.Source
   $tag=$env:XIDER_INSTALL_TAG
   if($tag -and $tag -notmatch '^v\d{1,6}\.\d{1,6}\.\d{1,6}$'){throw 'XIDER release tag is invalid.'}
-  $installerBase='https://github.com/invinby/XIDER/releases/download/v4.3.10'
+  $installerBase='https://github.com/invinby/XIDER/releases/download/v4.3.11'
   if($tag){$installerBase="https://github.com/invinby/XIDER/releases/download/$tag"}
   Write-Host 'XIDER: downloading the selected signed installer...'
   iwr -UseBasicParsing -TimeoutSec 90 -Uri "$installerBase/XIDER-install-windows.ps1" -OutFile $p
