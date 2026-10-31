@@ -53,6 +53,29 @@ def test_windows_preview_manifest_contains_shared_and_windows_assets_only(tmp_pa
     assert all(item["platform"] in {"all", "windows"} for item in manifest["assets"])
 
 
+def test_source_preview_manifest_lists_signed_macos_installer_but_not_missing_app_bundle(tmp_path):
+    selected = {
+        name: item for name, item in COMPONENTS.items()
+        if item[1] in {"all", "windows", "macos"}
+        and name != "XGENT-MCS-macos-bundle.zip"
+    }
+    for name in selected:
+        (tmp_path / name).write_bytes(name.encode())
+
+    manifest = build(
+        "v4.3.7", tmp_path, platforms={"windows", "macos"},
+        exclude_assets={"XGENT-MCS-macos-bundle.zip"},
+    )
+
+    names = {item["name"] for item in manifest["assets"]}
+    assert names == set(selected)
+    assert "XIDER-install-macos.sh" in names
+    assert "XIDER-install-macos.sh.sig" in names
+    assert "XIDER-bootstrap-macos.sh" in names
+    assert "XIDER-bootstrap-macos.sh.sig" in names
+    assert "XGENT-MCS-macos-bundle.zip" not in names
+
+
 def test_manifest_includes_exact_bootstrap_and_quickstart_assets(tmp_path):
     for name in COMPONENTS:
         (tmp_path / name).write_bytes(name.encode())

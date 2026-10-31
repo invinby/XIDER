@@ -1,5 +1,23 @@
 # XIDER release history
 
+## X4.3.7-TARPED+20261031 — Windows update diagnostics and macOS source preview
+
+### English
+
+- Windows update failures now report the blocking process PID, name, executable path, and start time; the signed bootstrap retries interrupted GitHub archive downloads before the active version is changed.
+- macOS Pages installer now selects the v4.3.7 source preview, pinned to the release commit. Its XIDER bootstrap and installer signatures are verified; the runtime is explicitly not Apple-signed or notarized.
+- macOS install status reports Agent, Guard Keeper, Safari, and Siri separately with process/version and local health evidence; disabled layers are reported as skipped.
+- Windows and macOS agents attach a session ID to signed status and Last Will messages, publish heartbeats at QoS 1 only while connected, and retry status on the next heartbeat.
+- Telegram status timestamps now use the signed message timestamp. A delayed offline Last Will is accepted only for the currently known MQTT session.
+
+### Русский
+
+- При ошибке обновления Windows теперь выводятся PID, имя, путь к исполняемому файлу и время запуска процесса, удерживающего папку установки; прерванная загрузка архива GitHub повторяется до переключения активной версии.
+- Установщик macOS в Pages теперь выбирает source-preview v4.3.7, закреплённый за commit релиза. Подписи XIDER-пакетов проверяются; сама runtime-сборка не имеет подписи Apple и нотариации, это явно указано.
+- Отчёт установки macOS отдельно показывает Agent, Guard Keeper, Safari и Siri, их процессы/версии и локальное состояние; выключенные владельцем слои отмечаются как пропущенные.
+- Windows- и macOS-агенты добавляют идентификатор сессии в подписанные статусы и Last Will, отправляют heartbeat с QoS 1 только при активном соединении и повторяют статус на следующем heartbeat.
+- Бот использует timestamp из подписанного сообщения. Запоздалый offline Last Will принимается только для текущей известной MQTT-сессии.
+
 ## X4.3.4-TARPED+20261030 — Windows preview release verification
 
 ### English

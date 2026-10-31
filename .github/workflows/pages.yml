@@ -52,8 +52,9 @@ jobs:
 
       - name: "Generate signed installer entry points"
         env:
-          XIDER_WINDOWS_INSTALLER_TAG: v4.3.6
-          XIDER_MACOS_INSTALLER_TAG: v4.2.1
+          XIDER_WINDOWS_INSTALLER_TAG: v4.3.7
+          XIDER_MACOS_INSTALLER_TAG: v4.3.7
+          XIDER_MACOS_SOURCE_PREVIEW: '1'
         run: python tools/build_pages_entrypoints.py site
 
       - name: "Check static site links and accessibility basics"

@@ -50,13 +50,18 @@ def build(
     *,
     signing_key_pem: bytes | None = None,
     platforms: set[str] | None = None,
+    exclude_assets: set[str] | None = None,
 ) -> dict:
     if not TAG.fullmatch(tag):
         raise ValueError("tag must be vMAJOR.MINOR.PATCH")
     assets = []
+    excluded = set() if exclude_assets is None else exclude_assets
+    unknown_excluded = excluded - set(COMPONENTS)
+    if unknown_excluded:
+        raise ValueError(f"unknown excluded release assets: {', '.join(sorted(unknown_excluded))}")
     selected = {
         name: value for name, value in COMPONENTS.items()
-        if platforms is None or value[1] in platforms or value[1] == "all"
+        if name not in excluded and (platforms is None or value[1] in platforms or value[1] == "all")
     }
     if not selected or (platforms is not None and not platforms <= {"windows", "macos", "linux"}):
         raise ValueError("platforms must be a non-empty subset of windows, macos, linux")
@@ -89,6 +94,10 @@ def main() -> None:
         help="Require a pinned Ed25519 key from XIDER_RELEASE_PRIVATE_KEY_B64.",
     )
     parser.add_argument("--platform", action="append", choices=("windows", "macos", "linux"), dest="platforms")
+    parser.add_argument(
+        "--exclude-asset", action="append", choices=tuple(COMPONENTS), default=[],
+        help="Omit a known asset that is intentionally absent from this preview release.",
+    )
     args = parser.parse_args()
     signing_key_pem = None
     if args.require_signature:
@@ -97,14 +106,22 @@ def main() -> None:
             parser.error("XIDER_RELEASE_PRIVATE_KEY_B64 is required for signed releases.")
         try:
             signing_key_pem = base64.b64decode(encoded_key, validate=True)
-            manifest = build(args.tag, args.directory, signing_key_pem=signing_key_pem, platforms=set(args.platforms) if args.platforms else None)
+            manifest = build(
+                args.tag, args.directory, signing_key_pem=signing_key_pem,
+                platforms=set(args.platforms) if args.platforms else None,
+                exclude_assets=set(args.exclude_asset),
+            )
         except (ValueError, TypeError) as exc:
             parser.error(str(exc))
         key_id = manifest["signature"]["key_id"]
         if key_id not in TRUSTED_RELEASE_KEYS:
             parser.error("Signing key does not match a public key pinned in XGENT-MCS/release_signature.py.")
     else:
-        manifest = build(args.tag, args.directory, platforms=set(args.platforms) if args.platforms else None)
+        manifest = build(
+            args.tag, args.directory,
+            platforms=set(args.platforms) if args.platforms else None,
+            exclude_assets=set(args.exclude_asset),
+        )
     destination = args.directory / "release-manifest.json"
     destination.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(destination)

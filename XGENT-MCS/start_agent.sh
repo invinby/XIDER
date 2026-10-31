@@ -31,6 +31,18 @@ if [[ "${1:-}" == "--stop" || "${1:-}" == "-x" ]]; then
 fi
 
 if [[ "${1:-}" == "--status" || "${1:-}" == "-s" ]]; then
+    if [[ -x XIDER.app/Contents/MacOS/XGENT-MCS ]]; then
+        XIDER.app/Contents/MacOS/XGENT-MCS --service status
+        exit $?
+    fi
+    if [[ -f "$ENTRY" ]]; then
+        PYTHON="$PWD/venv/bin/python3"
+        [[ -x "$PYTHON" ]] || PYTHON="$(command -v python3 || true)"
+        if [[ -n "$PYTHON" ]]; then
+            "$PYTHON" "$ENTRY" --service status
+            exit $?
+        fi
+    fi
     if command -v launchctl >/dev/null 2>&1; then
         LAUNCH_STATE="$(launchctl print "gui/$(id -u)/com.xgent.agent" 2>/dev/null || true)"
         if printf '%s\n' "$LAUNCH_STATE" | grep -Eq 'pid = [0-9]+|state = running'; then

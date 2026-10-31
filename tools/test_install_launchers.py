@@ -39,6 +39,15 @@ def test_release_installers_reuse_the_exact_commit_pinned_bootstrap_verifiers():
     assert f"XIDER_RELEASE_TAG='{TAG}'" in installers[INSTALLERS["macos"]]
 
 
+def test_macos_source_preview_installer_is_explicit_and_uses_source_path():
+    installer = build_installers(COMMIT, TAG, macos_source_preview=True)[INSTALLERS["macos"]]
+
+    assert "macOS source preview" in installer
+    assert "not Apple-signed or notarized" in installer
+    assert f"XIDER_REF='{COMMIT}' bash \"$p\"" in installer
+    assert "XIDER_RELEASE_TAG=" not in installer
+
+
 def test_all_client_bootstraps_default_to_the_current_xider_vps():
     expected_host = "16.16.200.207"
     powershell_defaults = []
@@ -102,7 +111,7 @@ def test_windows_pages_launcher_can_pin_a_windows_only_preview_release(monkeypat
     pages = build_pages_launchers()
 
     assert "$installerBase='https://github.com/invinby/XIDER/releases/download/v4.3.0'" in pages["win.ps1"]
-    assert "base='https://github.com/invinby/XIDER/releases/download/v4.2.1'" in pages["mac"]
+    assert "base='https://github.com/invinby/XIDER/releases/download/v4.3.7'" in pages["mac"]
 
 
 def test_macos_pages_launcher_can_pin_a_cross_platform_release(monkeypatch):
@@ -117,8 +126,17 @@ def test_macos_pages_launcher_can_pin_a_cross_platform_release(monkeypatch):
 def test_macos_pages_launcher_defaults_to_a_release_with_signed_macos_assets():
     pages = build_pages_launchers()
 
-    assert "base='https://github.com/invinby/XIDER/releases/download/v4.2.1'" in pages["mac"]
+    assert "base='https://github.com/invinby/XIDER/releases/download/v4.3.7'" in pages["mac"]
     assert "XIDER-install-macos.sh.sig" in pages["mac"]
+
+
+def test_macos_pages_launcher_marks_source_preview_when_requested(monkeypatch):
+    monkeypatch.setenv("XIDER_MACOS_SOURCE_PREVIEW", "1")
+
+    pages = build_pages_launchers()
+
+    assert "macOS source-preview installer" in pages["mac"]
+    assert "not Apple-signed or notarized" in pages["mac"]
 
 
 def test_macos_pages_launcher_rejects_an_invalid_release_tag(monkeypatch):

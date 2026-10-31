@@ -1303,6 +1303,7 @@ class XgentClient:
         self._lifecycle_lock = threading.RLock()
         self._update_cancelled = threading.Event()
         self._mqtt_connected = False
+        self._mqtt_session_id = uuid.uuid4().hex
         self._pending_command_subacks: set[int] = set()
         self._command_subscriptions_failed = False
         self._client = mqtt.Client(
@@ -1555,17 +1556,7 @@ class XgentClient:
             log.info("MQTT auth: %s (TLS=%s", MQTT_USERNAME, MQTT_TLS)
             self._client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
 
-        # LWT: мгновенный offline-статус при разрыве соединения (подписанный).
-        will_topic = f"{MQTT_PREFIX}/{DEVICE_ID}/status"
-        will_body = {
-            "type": "status", "device_id": DEVICE_ID, "name": DEVICE_NAME,
-            "os": PLATFORM, "version": VERSION, "status": "offline",
-        }
-        will_payload = sign_message(
-            encrypt_payload(will_body) if ENCRYPT_PAYLOAD else will_body
-        )
-        # QoS 1 делает LWT надёжным при резком обрыве Wi‑Fi или процесса.
-        self._client.will_set(will_topic, json.dumps(will_payload, ensure_ascii=False), qos=1, retain=False)
+        self._configure_mqtt_will()
 
         self._client.connect_async(MQTT_BROKER, MQTT_PORT, keepalive=60)
         self._client.loop_start()
@@ -1574,6 +1565,18 @@ class XgentClient:
         self._network_traffic_schedule.start()
         self._interface_status_history_thread.start()
         log.info("Клиент запущен: %s (%s)", DEVICE_NAME, DEVICE_ID)
+
+    def _configure_mqtt_will(self) -> None:
+        # Keep the small LWT envelope readable even when normal status payloads
+        # are encrypted. A stale Will is accepted only for its active session.
+        will_topic = f"{MQTT_PREFIX}/{DEVICE_ID}/status"
+        will_body = {
+            "type": "status", "device_id": DEVICE_ID,
+            "status": "offline", "mqtt_session_id": self._mqtt_session_id,
+        }
+        will_payload = sign_message(will_body)
+        # QoS 1 делает LWT надёжным при резком обрыве Wi‑Fi или процесса.
+        self._client.will_set(will_topic, json.dumps(will_payload, ensure_ascii=False), qos=1, retain=False)
 
     def stop(self) -> None:
         self._running.clear()
@@ -1723,6 +1726,11 @@ class XgentClient:
             self._pending_command_subacks.clear()
             self._command_subscriptions_failed = True
         if not self._running.is_set(): return
+        self._mqtt_session_id = uuid.uuid4().hex
+        try:
+            self._configure_mqtt_will()
+        except Exception:
+            log.exception("Не удалось обновить MQTT Last Will для следующего подключения")
         log.warning("Отключено от брокера (код %s); переподключение…", reason_code)
 
     def _on_message(self, client, userdata, message):
@@ -1901,6 +1909,7 @@ class XgentClient:
             "release_update_ready": trusted_release_keys_ready() and not _BUNDLED_RUNTIME,
             "update_manifest_binding_protocol": 1,
             "status": status,
+            "mqtt_session_id": self._mqtt_session_id,
             "companions": _layer_health_snapshot(),
         }
         if _command_approval_protocol_enabled(self):
@@ -1910,7 +1919,15 @@ class XgentClient:
             payload["agent_update"] = receipt
         body = encrypt_payload(payload) if ENCRYPT_PAYLOAD else payload
         envelope = sign_message(body)
-        self._client.publish(f"{MQTT_PREFIX}/{DEVICE_ID}/status", json.dumps(envelope, ensure_ascii=False), qos=0)
+        if not self._mqtt_connected:
+            return
+        result = self._client.publish(
+            f"{MQTT_PREFIX}/{DEVICE_ID}/status",
+            json.dumps(envelope, ensure_ascii=False),
+            qos=1,
+        )
+        if result.rc != mqtt.MQTT_ERR_SUCCESS:
+            log.warning("Статус не принят MQTT-транспортом (rc=%s); повторится на следующем heartbeat", result.rc)
 
     def _write_local_health(self, *, state: str = "running") -> None:
         try:

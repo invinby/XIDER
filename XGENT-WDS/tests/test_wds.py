@@ -208,12 +208,14 @@ def test_agent_mqtt_callbacks_write_connected_and_disconnected_health(client, mo
 
     client._client.subscribe.side_effect = [(0, 101), (0, 102)]
     client._on_connect(client._client, None, None, 0)
+    assert client._mqtt_connected is True
     assert written == []
     client._on_subscribe(client._client, None, 101, [0])
     assert written == []
     client._on_subscribe(client._client, None, 102, [0])
     client._on_disconnect(client._client, None, None, 7)
 
+    assert client._mqtt_connected is False
     assert written == [("agent", True), ("agent", False)]
 
 
@@ -1083,6 +1085,7 @@ def test_format_processes():
 @pytest.fixture
 def client(monkeypatch):
     c = wds.XgentClient()
+    c._mqtt_connected = True
     mock = __import__("unittest.mock", fromlist=["MagicMock"]).MagicMock()
     mock.publish.return_value.rc = 0
     monkeypatch.setattr(c, "_client", mock)
@@ -1244,6 +1247,16 @@ def test_windows_status_advertises_source_update_mode(client, monkeypatch):
     payload = wds.verify_message(envelope)
     assert payload["update_mode"] == "source"
     assert payload["release_update_ready"] is False
+    assert payload["mqtt_session_id"] == client._mqtt_session_id
+    assert client._client.publish.call_args.kwargs["qos"] == 1
+
+
+def test_windows_status_is_skipped_while_disconnected(client):
+    client._mqtt_connected = False
+
+    client._publish_status()
+
+    client._client.publish.assert_not_called()
 
 
 def test_windows_status_advertises_release_key_readiness(client, monkeypatch):

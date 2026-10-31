@@ -83,7 +83,11 @@ def _configured_dock_url(dock_url: str | None = None) -> str | None:
 
 
 def build_platform_commands(
-    commit_id: str, release_tag: str, dock_url: str | None = None
+    commit_id: str,
+    release_tag: str,
+    dock_url: str | None = None,
+    *,
+    macos_source_preview: bool = False,
 ) -> dict[str, str]:
     """Build the two verifier bodies used by quickstart and release installers."""
     if not isinstance(commit_id, str) or not COMMIT_ID.fullmatch(commit_id):
@@ -138,14 +142,23 @@ def build_platform_commands(
         f"printf 'XIDER-BOOTSTRAP-SHA256\\nmacos\\n{release_tag}\\n{ref}\\n%s\\n' \"$h\" | "
         f"ssh-keygen -Y verify -f \"$a\" -I {SIGNER_IDENTITY} -n {SIGNATURE_NAMESPACE} -s \"$s\"; "
         + (f"XIDER_DOCK_URL='{dock_url}' " if dock_url else "")
-        + f"XIDER_RELEASE_TAG='{release_tag}' XIDER_REF='{ref}' bash \"$p\""
+        + (
+            f"XIDER_REF='{ref}' bash \"$p\""
+            if macos_source_preview
+            else f"XIDER_RELEASE_TAG='{release_tag}' XIDER_REF='{ref}' bash \"$p\""
+        )
     )
     return {"windows": windows, "macos": macos}
 
 
-def build_commands(commit_id: str, release_tag: str) -> str:
+def build_commands(
+    commit_id: str, release_tag: str, *, macos_source_preview: bool = False
+) -> str:
     dock_url = _configured_dock_url()
-    commands = build_platform_commands(commit_id, release_tag, dock_url)
+    commands = build_platform_commands(
+        commit_id, release_tag, dock_url,
+        macos_source_preview=macos_source_preview,
+    )
     install_mode = "owner-approved X-DOCK enrollment" if dock_url else "agent-only bootstrap"
     return (
         f"XIDER quick install (signed {install_mode}; source pinned to this release commit)\n"
@@ -156,6 +169,10 @@ def build_commands(commit_id: str, release_tag: str) -> str:
         f"{commands['macos']}\n\n"
         "Both commands verify an OpenSSH Ed25519 signature over the downloaded bootstrap SHA-256, platform, release tag, and commit before execution.\n"
         "The source archive is pinned to the same full commit. OpenSSH ssh-keygen is required on the client.\n"
+        + (
+            "macOS is a source preview: XIDER publisher signatures are verified, but the runtime is not Apple-signed or notarized.\n"
+            if macos_source_preview else ""
+        )
     )
 
 
@@ -164,9 +181,16 @@ def main() -> None:
     parser.add_argument("commit_id")
     parser.add_argument("release_tag")
     parser.add_argument("output", type=Path)
+    parser.add_argument(
+        "--macos-source-preview", action="store_true",
+        help="Use the signed source installer instead of a notarized compiled macOS bundle.",
+    )
     args = parser.parse_args()
     try:
-        contents = build_commands(args.commit_id, args.release_tag)
+        contents = build_commands(
+            args.commit_id, args.release_tag,
+            macos_source_preview=args.macos_source_preview,
+        )
     except ValueError as exc:
         parser.error(str(exc))
     args.output.parent.mkdir(parents=True, exist_ok=True)

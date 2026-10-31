@@ -2021,6 +2021,8 @@ class XgentClient:
         self._running = threading.Event()
         self._running.set()
         self._update_health = threading.Event()
+        self._mqtt_connected = False
+        self._mqtt_session_id = uuid.uuid4().hex
         self._subscription_lock = threading.RLock()
         self._pending_command_subacks = set()
         self._command_subscriptions_failed = False
@@ -2274,16 +2276,7 @@ class XgentClient:
             log.info("MQTT auth: %s (TLS=%s", MQTT_USERNAME, MQTT_TLS)
             self._client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
 
-        # LWT: мгновенный offline-статус при разрыве соединения (подписанный).
-        will_topic = f"{MQTT_PREFIX}/{DEVICE_ID}/status"
-        will_body = {
-            "type": "status", "device_id": DEVICE_ID, "name": DEVICE_NAME,
-            "os": PLATFORM, "version": VERSION, "status": "offline",
-        }
-        will_payload = sign_message(
-            encrypt_payload(will_body) if ENCRYPT_PAYLOAD else will_body
-        )
-        self._client.will_set(will_topic, json.dumps(will_payload, ensure_ascii=False), qos=1, retain=False)
+        self._configure_mqtt_will()
 
         self._client.connect_async(MQTT_BROKER, MQTT_PORT, keepalive=60)
         self._client.loop_start()
@@ -2292,6 +2285,17 @@ class XgentClient:
         self._network_traffic_schedule.start()
         self._interface_status_history_thread.start()
         log.info("Клиент запущен: %s (%s)", DEVICE_NAME, DEVICE_ID)
+
+    def _configure_mqtt_will(self) -> None:
+        # Keep the small LWT envelope readable even when normal status payloads
+        # are encrypted. A stale Will is accepted only for its active session.
+        will_topic = f"{MQTT_PREFIX}/{DEVICE_ID}/status"
+        will_body = {
+            "type": "status", "device_id": DEVICE_ID,
+            "status": "offline", "mqtt_session_id": self._mqtt_session_id,
+        }
+        will_payload = sign_message(will_body)
+        self._client.will_set(will_topic, json.dumps(will_payload, ensure_ascii=False), qos=1, retain=False)
 
     def stop(self) -> None:
         self._running.clear()
@@ -2320,6 +2324,7 @@ class XgentClient:
     # ---------- колбэки paho-mqtt ----------
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
+        self._mqtt_connected = reason_code == 0
         with self._subscription_lock:
             self._pending_command_subacks.clear()
             self._command_subscriptions_failed = reason_code != 0
@@ -2412,6 +2417,7 @@ class XgentClient:
         )
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
+        self._mqtt_connected = False
         with self._subscription_lock:
             self._pending_command_subacks.clear()
             self._command_subscriptions_failed = True
@@ -2422,6 +2428,11 @@ class XgentClient:
         if not self._running.is_set():
             log.info("Отключение по команде остановки")
             return
+        self._mqtt_session_id = uuid.uuid4().hex
+        try:
+            self._configure_mqtt_will()
+        except Exception:
+            log.exception("Не удалось обновить MQTT Last Will для следующего подключения")
         log.warning("Отключено от брокера (код %s); переподключение…", reason_code)
 
     def _on_message(self, client, userdata, message):
@@ -2612,6 +2623,7 @@ class XgentClient:
             "release_update_ready": trusted_release_keys_ready() and not _BUNDLED_RUNTIME,
             "update_manifest_binding_protocol": 1,
             "status": status,
+            "mqtt_session_id": self._mqtt_session_id,
         }
         if _command_approval_protocol_enabled(self):
             payload["command_approval_protocol"] = 1
@@ -2621,11 +2633,15 @@ class XgentClient:
                 payload["agent_update"] = receipt
         body = encrypt_payload(payload) if ENCRYPT_PAYLOAD else payload
         envelope = sign_message(body)
-        self._client.publish(
+        if not self._mqtt_connected:
+            return
+        result = self._client.publish(
             f"{MQTT_PREFIX}/{DEVICE_ID}/status",
             json.dumps(envelope, ensure_ascii=False),
-            qos=0,
+            qos=1,
         )
+        if result.rc != mqtt.MQTT_ERR_SUCCESS:
+            log.warning("Status not accepted by MQTT transport (rc=%s); it will retry on the next heartbeat", result.rc)
 
     def _publish_response(self, topic_suffix: str, payload: dict) -> bool:
         """Отправить подписанный ответ в топик {prefix}/{device_id}/{suffix}."""

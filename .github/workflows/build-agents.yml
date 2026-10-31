@@ -12,7 +12,7 @@ on:
         description: Existing XIDER semantic-version tag to build without publishing a release.
         required: true
         type: string
-        default: v4.3.6
+        default: v4.3.7
 
 permissions:
   contents: read
@@ -61,6 +61,8 @@ jobs:
               version=$(sed -nE 's/^VERSION = "([0-9.]+)"$/\1/p' "$config" | head -n1)
               [[ "v$version" == "$tag" ]] || { echo "$config version $version does not match $tag." >&2; exit 1; }
             done
+            bot_version=$(sed -nE 's/^VERSION = "([0-9.]+)"$/\1/p' TG-BOT-SERVER/version.py | head -n1)
+            [[ "v$bot_version" == "$tag" ]] || { echo "TG-BOT-SERVER/version.py version $bot_version does not match $tag." >&2; exit 1; }
             echo "source_ref=$tag" >> "$GITHUB_OUTPUT"
           else
             echo "source_ref=$GITHUB_REF" >> "$GITHUB_OUTPUT"
@@ -132,6 +134,7 @@ jobs:
   build-macos:
     name: "Build compiled macOS Agent and recovery layers"
     needs: [source-state]
+    if: github.event_name == 'workflow_dispatch' || vars.XIDER_MACOS_RELEASE_READY == 'true'
     runs-on: macos-latest
     environment:
       name: xider-macos-signing

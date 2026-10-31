@@ -10,6 +10,18 @@ mkdir -p "$HOME/Library/LaunchAgents"
 chmod +x "$0"
 
 if [[ "${1:-}" == "--status" || "${1:-}" == "-s" ]]; then
+  if [[ -x "$GUARDIAN_APP_BIN" ]]; then
+    "$GUARDIAN_APP_BIN" --service status
+    exit $?
+  fi
+  if [[ -f "$GUARDIAN_SCRIPT" ]]; then
+    PYTHON="$PWD/venv/bin/python3"
+    [[ -x "$PYTHON" ]] || PYTHON="$(command -v python3 || true)"
+    if [[ -n "$PYTHON" ]]; then
+      "$PYTHON" "$GUARDIAN_SCRIPT" --service status
+      exit $?
+    fi
+  fi
   LAUNCH_STATE="$(launchctl print "gui/$(id -u)/com.xider.guardian" 2>/dev/null || true)"
   if printf '%s\n' "$LAUNCH_STATE" | grep -Eq 'pid = [0-9]+|state = running'; then
     echo "[OK] XIDER Guardian работает через LaunchAgent"

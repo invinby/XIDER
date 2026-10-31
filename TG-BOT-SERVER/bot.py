@@ -10036,8 +10036,26 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             topic,
         )
         return
-    # ENCRYPT_PAYLOAD: содержимое лежит внутри enc, расшифровываем до маршрутизации.
-    if ENCRYPT_PAYLOAD or ("enc" in payload):
+    signed_payload = data.get("payload") if isinstance(data, dict) else None
+    signed_timestamp = signed_payload.get("ts") if isinstance(signed_payload, dict) else None
+    observed_at = (
+        float(signed_timestamp)
+        if type(signed_timestamp) in (int, float) and math.isfinite(float(signed_timestamp))
+        else time.time()
+    )
+    # LWT exposes only its signed offline/session envelope. Everything else
+    # still requires the encrypted body whenever encryption is configured.
+    clear_lwt = (
+        msg_type == "status"
+        and payload.get("type") == "status"
+        and str(payload.get("status", "")).lower() == "offline"
+        and isinstance(payload.get("mqtt_session_id"), str)
+        and re.fullmatch(r"[0-9a-f]{32}", payload["mqtt_session_id"]) is not None
+    )
+    if ENCRYPT_PAYLOAD and "enc" not in payload and not clear_lwt:
+        log.warning("Незашифрованный MQTT-payload отклонён в топике %s", topic)
+        return
+    if "enc" in payload:
         inner = decrypt_payload(payload, key=message_key)
         if inner is None:
             log.warning("Не удалось расшифровать payload из %s", topic)
@@ -10070,6 +10088,14 @@ def on_mqtt_message(topic: str, data: dict) -> None:
         online = raw_status != "offline"
         is_standby = (raw_status == "standby")
         old = devices.get(device_id) or {}
+        session_id = payload.get("mqtt_session_id")
+        if not online and (
+            not isinstance(session_id, str)
+            or re.fullmatch(r"[0-9a-f]{32}", session_id) is None
+            or session_id != old.get("mqtt_session_id")
+        ):
+            log.info("Устаревший MQTT Last Will от %s отклонён: сессия уже сменилась", device_id)
+            return
         # Для LWT нельзя вычислять прошлое состояние через _status_dot():
         # старый online-агент может быть уже старше 120 секунд, но событие
         # «ушёл офлайн» всё равно должно прийти владельцу.
@@ -10082,6 +10108,12 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             "standby": is_standby,
             "command_approval_protocol": payload.get("command_approval_protocol") if type(payload.get("command_approval_protocol")) is int else 0,
         }
+        if online:
+            info["mqtt_session_id"] = (
+                session_id
+                if isinstance(session_id, str) and re.fullmatch(r"[0-9a-f]{32}", session_id)
+                else None
+            )
         if "companions" in payload:
             info["companion_records"] = companion_status.clean_layer_records(
                 payload.get("companions"), now=time.time(),
@@ -10097,8 +10129,13 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             and payload.get("release_update_ready") is True
         )
         info["update_manifest_binding_protocol"] = payload.get("update_manifest_binding_protocol") if type(payload.get("update_manifest_binding_protocol")) is int else 0
+        if not online:
+            # A minimal Will must not overwrite the known device label,
+            # platform, version, or last fresh heartbeat. Clearing the active
+            # session also makes this old Will single-use at the device state layer.
+            info = {**old, "online": False, "standby": False, "mqtt_session_id": None}
         if online:
-            info["last_seen"] = time.time()
+            info["last_seen"] = observed_at
         is_new = device_id not in devices.all()
         if is_new:
             info["approved"] = not bool(bot_settings.get("require_device_approval", True))
@@ -10491,7 +10528,7 @@ def on_mqtt_message(topic: str, data: dict) -> None:
                 "desired_running": bool(payload.get("desired_running")),
                 "agent_update_protocol": payload.get("agent_update_protocol") if type(payload.get("agent_update_protocol")) is int else 0,
             },
-            "guardian_last_seen": time.time(),
+            "guardian_last_seen": observed_at,
         }
         if "companions" in payload:
             guardian_update["companion_records"] = companion_status.clean_layer_records(
