@@ -136,7 +136,7 @@ def test_manual_tag_build_creates_signed_inventory_without_publishing_release():
 
 def test_manual_signed_build_inventory_is_owner_only_and_never_publishes_release():
     text = WORKFLOW.read_text(encoding="utf-8")
-    source_state = text.split("  release-state:", 1)[1].split("  release-ci:", 1)[0]
+    source_state = text.split("  source-state:", 1)[1].split("  release-ci:", 1)[0]
     inventory = text.split("  protected-build-inventory:", 1)[1].split("  create-release:", 1)[0]
     release = text.split("  create-release:", 1)[1]
 
@@ -249,7 +249,7 @@ def test_windows_preview_build_and_signed_assets_share_the_selected_tag_commit()
 
     build = text.split("  build-windows:", 1)[1].split("  publish-windows:", 1)[0]
     publish = text.split("  publish-windows:", 1)[1]
-    source_state = text.split("  source-state:", 1)[1].split("  release-ci:", 1)[0]
+    source_state = text.split("  release-state:", 1)[1].split("  release-ci:", 1)[0]
     assert "ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}" in source_state
     assert "source_commit: ${{ steps.check.outputs.source_commit }}" in source_state
     assert "ref: ${{ needs.release-state.outputs.source_commit }}" in build
