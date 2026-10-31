@@ -1086,6 +1086,7 @@ def test_format_processes():
 def client(monkeypatch):
     c = wds.XgentClient()
     c._mqtt_connected = True
+    c._mqtt_session_id = "a" * 32
     mock = __import__("unittest.mock", fromlist=["MagicMock"]).MagicMock()
     mock.publish.return_value.rc = 0
     monkeypatch.setattr(c, "_client", mock)

@@ -193,6 +193,7 @@ def _make_client():
     client._lifecycle_lock = threading.RLock()
     client._update_cancelled = threading.Event()
     client._mqtt_connected = False
+    client._mqtt_session_id = "a" * 32
     client._command_context = threading.local()
     client._pending_command_subacks = set()
     client._command_subscriptions_failed = False
@@ -337,6 +338,7 @@ def test_agent_status_request_does_not_fetch_release(monkeypatch):
 
 def test_mac_status_advertises_source_update_mode(monkeypatch):
     client = _make_client()
+    client._mqtt_connected = True
     client._client = MagicMock()
     monkeypatch.setattr(mcs, "ENCRYPT_PAYLOAD", False)
     monkeypatch.setattr(mcs.sys, "frozen", False, raising=False)
@@ -352,6 +354,7 @@ def test_mac_status_advertises_source_update_mode(monkeypatch):
 
 def test_mac_status_advertises_release_key_readiness(monkeypatch):
     client = _make_client()
+    client._mqtt_connected = True
     client._client = MagicMock()
     monkeypatch.setattr(mcs, "ENCRYPT_PAYLOAD", False)
     monkeypatch.setattr(mcs.sys, "frozen", False, raising=False)
