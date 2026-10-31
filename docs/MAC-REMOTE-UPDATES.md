@@ -323,7 +323,10 @@ source-preview, без Apple-подписи и нотариализации. В 
 installer через `releases/latest/download`, поэтому маршрут попал на последний
 стабильный `v4.2.1`, а не на новую preview-версию. В том commit отсутствуют
 `xider_layers.py`, `start_safari.sh` и `start_siri.sh`: этим объясняется, почему
-та установка не могла запустить Safari/Siri. Текущий Pages entrypoint уже
+та установка не могла запустить Safari/Siri. Хотя release `v4.2.1` содержал
+asset `XGENT-MCS-macos-bundle.zip`, bootstrap из закреплённого commit не
+скачивал и не активировал этот asset: он разворачивал только исходный архив.
+Текущий Pages entrypoint уже
 закрепляет `v4.3.14`; его исходный архив содержит эти компоненты. Строка
 `Guard Keeper recovery: v4.2.1` в старом transcript — версия резервного
 recovery-пакета, а не версия запущенного Guardian.
@@ -404,3 +407,16 @@ preview. Локальный установщик проверяет процес
 четырёх компонентов, но реального Mac install report после команды `/mac`
 `v4.3.14` по-прежнему нет. Apple code-signing/notarization и фактический запуск
 Safari/Siri на Mac не подтверждены.
+
+
+## Сверка релиза v4.3.15 и живых ответов · 2026-11-01
+
+GitHub Release `v4.3.15` опубликован как prerelease с Windows preview и macOS source preview; тег указывает на commit `78a7f885632639dcea6717d49126a70e78ca3a63`. Signed-release workflow собрал Windows Agent/Guard Keeper, опубликовал assets и запустил Pages deployment; Pages run `41240382727` завершился успешно. Живые `/win.txt` и `/mac` закреплены за `v4.3.15`. Исходный commit содержит `xider_layers.py`, `start_safari.sh` и `start_siri.sh`. В релизе нет `XGENT-MCS-macos-bundle.zip` или Apple-подписанных `.app`: Mac-установка остаётся publisher-signed source preview без Apple-подписи и нотариализации.
+
+На Windows install report от 2026-10-31 23:31 (UTC+05) всё ещё показывает установленную `4.3.14`: Agent PID `40224`, Guardian PID `27500`, оба локально подключены к MQTT. Их Telegram bot acknowledgement равен `not_verified`; Safari и Siri явно `not_applicable`. Новая `4.3.15` на этом устройстве ещё не подтверждена установочным отчётом.
+
+Наблюдение console-parent watcher в 2026-11-01 00:53 (UTC+05) поймало `conhost.exe`, созданный `schtasks.exe`, дочерним для `XIDER-Guard-Keeper.exe`. Это подтверждает ненужный консольный запуск Guardian и является вероятным источником мигающего окна; точный видимый foreground-window в этот момент не снят. Код `v4.3.15` заменяет периодический `schtasks.exe`-опрос чтением локальной задачи Task Scheduler. Установка этого фикса на физическом Windows ещё не подтверждена.
+
+Read-only SSH-сверка VPS в 2026-10-31 20:47 UTC подтвердила `xider-bot` и `xider-dock-mqtt` в состоянии `active`. Старый Mac `e981d949` продолжал слать `online` без корректного `mqtt_session_id`; сервер отбрасывал такие пакеты раз в минуту. Поэтому устройство остаётся offline для команд, включая удалённое обновление. Первый переход с Mac `4.2.1` на текущую версию требует локального запуска installer; после этого нужны свежий принятый heartbeat и реальная команда/ответ через бота.
+
+Отдельный test workflow для тега `v4.3.15` завершился ошибкой из-за устаревшего assert `config.VERSION == "4.3.14"` в `tests/test_agent_update.py`. Исправление assert есть в branch commit `b4195707a0bd70b2c2109cf4bdcc586642442ba0`, но повторного CI на этом commit ещё нет. Windows release-build/publish и Pages workflow прошли; это не заменяет зелёный полный test gate.
