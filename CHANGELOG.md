@@ -1,5 +1,19 @@
 # XIDER release history
 
+## X4.3.13-LOCK-TRACE+20261031 — Windows install lock diagnostics
+
+### English
+
+- Windows updates now retry the staged directory switch and report the exact process and parent process holding files if activation remains blocked.
+- Interrupted source archive downloads are retried and validated before the active version is touched.
+- macOS remains a signed source-preview installer; its runtime is not Apple-signed or notarized.
+
+### Русский
+
+- При обновлении Windows повторяется переключение подготовленной папки; если его блокируют открытые файлы, установщик показывает удерживающий процесс и его родителя.
+- Оборванная загрузка исходников повторяется и проверяется до изменения активной версии.
+- macOS остаётся подписанным source-preview установщиком; runtime не подписан Apple и не нотарифицирован.
+
 ## X4.3.12-RECOVERY+20261031 — verified rollback and replay bounds
 
 ### English

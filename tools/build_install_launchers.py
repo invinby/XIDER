@@ -26,7 +26,7 @@ INSTALLERS = {
     "macos": "XIDER-install-macos.sh",
 }
 INSTALLER_NAMESPACE = "xider-installer@xider.link"
-DEFAULT_MACOS_INSTALLER_TAG = "v4.3.12"
+DEFAULT_MACOS_INSTALLER_TAG = "v4.3.13"
 
 
 def build_installers(
