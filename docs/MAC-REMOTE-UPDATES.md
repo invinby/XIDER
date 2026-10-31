@@ -475,3 +475,22 @@ session ID, с `legacy_sessionless_status=true`. Это подтверждает
 heartbeat. Это ещё не подтверждает реальный запрос/ответ через Telegram. Для
 этого нужна безопасная команда с Mac и ответ, увиденный в боте; новый install
 report и запуск Safari/Siri также пока отсутствуют.
+
+### Повторная live-сверка · 2026-10-31 21:53 UTC
+
+Read-only SSH-снимок `known_devices.json` показал оба устройства онлайн:
+Windows `b07a8934c6cc`, `4.3.15`, протокол сессий `mqtt_session_id`;
+Mac `e981d9494650`, `4.2.1`, `legacy_sessionless_status=true`, без session ID.
+Последние heartbeat были приняты в `21:53:11Z` и `21:52:53Z` соответственно.
+Для Mac выставлено `release_update_ready=true` и `update_mode=source`, поэтому
+сервер разрешает ему выбрать опубликованную source-preview версию. На VPS
+`xider-bot` и `xider-dock-mqtt` остаются `active`, оба с `NRestarts=0`.
+
+В журнале после запуска обновлённого сервера пока есть только старт сервисов;
+запрос команды Mac и terminal response не зафиксированы. Следовательно,
+legacy heartbeat исправлен и оба устройства видны, но сквозной Telegram
+request/response ещё не доказан. Mac всё ещё `4.2.1`; отчёта новой установки,
+health Safari/Siri и Apple-подписи/нотаризации нет. Последний опубликованный
+`/mac` — signed source preview `v4.3.15`, pinned к commit
+`78a7f885632639dcea6717d49126a70e78ca3a63`; он содержит Safari/Siri launchers,
+но не является Apple-signed `.app` релизом.
