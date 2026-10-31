@@ -12717,7 +12717,112 @@ def test_device_status_notices_confirm_transitions_without_heartbeat_starvation(
         assert current["last_seen"] == current_last_seen
         assert current["name"] == "Mac" and current["version"] == "test"
 
+        # A different connection cannot replace a still-fresh active session,
+        # and a retired session cannot win merely by carrying a larger ts.
+        bot.on_mqtt_message(
+            f"{bot.MQTT_PREFIX}/mac-1/status",
+            {"payload": {
+                "ts": encrypted_timestamp + 1, "type": "status", "status": "online",
+                "name": "Stale Mac", "os": "macOS", "version": "test",
+                "mqtt_session_id": "b" * 32,
+            }},
+        )
+        current = store.get("mac-1")
+        assert current["mqtt_session_id"] == active_session
+        assert current["last_seen"] == current_last_seen
+        assert current["name"] == "Mac" and current["version"] == "test"
+
+        # Even after the active session goes stale, a retired session must not
+        # become current again by presenting a larger signed timestamp.
+        store.items["mac-1"]["last_seen"] = current_last_seen - bot._OFFLINE_TIMEOUT_SEC - 1
+        stale_session_timestamp = encrypted_timestamp + 2
+        bot.on_mqtt_message(
+            f"{bot.MQTT_PREFIX}/mac-1/status",
+            {"payload": {
+                "ts": stale_session_timestamp, "type": "status", "status": "online",
+                "name": "Retired Mac", "os": "old macOS", "version": "old",
+                "mqtt_session_id": retired_session,
+            }},
+        )
+        current = store.get("mac-1")
+        assert current["mqtt_session_id"] == active_session
+        assert current["last_seen"] == current_last_seen - bot._OFFLINE_TIMEOUT_SEC - 1
+        assert current["name"] == "Mac" and current["version"] == "test"
+
     asyncio.run(_run())
+
+
+def test_registered_v421_mac_accepts_fresh_legacy_status_without_session(monkeypatch):
+    class MemoryDevices:
+        def __init__(self):
+            self.items = {
+                "mac-legacy": {
+                    "name": "MacBook", "os": "macOS 27.0.1", "version": "4.2.1",
+                    "online": False, "last_seen": 0, "mqtt_session_id": None,
+                    "last_status_session_id": None,
+                },
+            }
+
+        def all(self):
+            return dict(self.items)
+
+        def get(self, device_id):
+            return self.items.get(device_id)
+
+        def upsert(self, device_id, info, **_kwargs):
+            self.items[device_id] = {**self.items.get(device_id, {}), **info}
+
+    store = MemoryDevices()
+    monkeypatch.setattr(bot, "devices", store)
+    monkeypatch.setattr(bot, "LOOP", None)
+    monkeypatch.setattr(bot, "ENCRYPT_PAYLOAD", False)
+    monkeypatch.setattr(
+        bot, "verify_message_detailed",
+        lambda envelope, **_kwargs: (envelope["payload"], "ok"),
+    )
+    monkeypatch.setattr(bot, "audit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(bot.bot_settings, "is_blocked", lambda _device_id: False)
+    monkeypatch.setattr(bot, "status_collector", type("Collector", (), {"submit": lambda *args: None})())
+    monkeypatch.setattr(bot, "multi_status", type("Collector", (), {"submit": lambda *args: None})())
+
+    first_timestamp = int(time.time()) - 1
+    message = {
+        "ts": first_timestamp, "type": "status", "status": "online",
+        "name": "MacBook", "os": "macOS 27.0.1", "version": "4.2.1",
+        "update_mode": "source", "release_update_ready": True,
+    }
+    bot.on_mqtt_message(f"{bot.MQTT_PREFIX}/mac-legacy/status", {"payload": message})
+    current = store.get("mac-legacy")
+    assert current["online"] is True
+    assert current["mqtt_session_id"] is None
+    assert current["legacy_sessionless_status"] is True
+    assert current["last_status_sender_ts"] == float(first_timestamp)
+
+    last_seen = current["last_seen"]
+    replay_with_new_nonce_timestamp = {
+        **message,
+        "ts": first_timestamp,
+        "name": "Stale Mac",
+    }
+    bot.on_mqtt_message(
+        f"{bot.MQTT_PREFIX}/mac-legacy/status",
+        {"payload": replay_with_new_nonce_timestamp},
+    )
+    current = store.get("mac-legacy")
+    assert current["last_seen"] == last_seen
+    assert current["name"] == "MacBook"
+
+    # The same exception must not downgrade a device once session binding exists.
+    store.items["mac-legacy"].update({
+        "version": "4.3.15", "mqtt_session_id": "c" * 32,
+        "last_status_session_id": "c" * 32,
+    })
+    bot.on_mqtt_message(
+        f"{bot.MQTT_PREFIX}/mac-legacy/status",
+        {"payload": {**message, "ts": first_timestamp + 1}},
+    )
+    assert store.get("mac-legacy")["version"] == "4.3.15"
+    assert store.get("mac-legacy")["mqtt_session_id"] == "c" * 32
 
 
 def test_response_collector_wait_for_and_race_safety():
