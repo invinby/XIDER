@@ -118,7 +118,7 @@ VPS. GitHub CI проверяет исходники и фикстуры уст�
 
 ## Статус
 
-Текущая версия исходников — 4.3.5. Смотри [GitHub Releases](https://github.com/invinby/XIDER/releases),
+Текущая версия исходников — 4.3.6. Смотри [GitHub Releases](https://github.com/invinby/XIDER/releases),
 чтобы найти опубликованные пакеты и подтверждения для конкретного релиза.
 Приёмку на Windows/macOS, в Telegram, MQTT и на production VPS нужно
 фиксировать отдельно: исходные тесты и этот README её не подтверждают.
