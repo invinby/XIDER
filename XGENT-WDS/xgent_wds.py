@@ -4979,7 +4979,10 @@ class XgentClient:
         try:
             os.startfile(app)  # type: ignore[attr-defined]
         except (AttributeError, FileNotFoundError, OSError):
-            subprocess.Popen(app, shell=False)
+            subprocess.Popen(
+                app, shell=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
 
     def _do_lock_screen(self, payload: dict) -> None:
         """Заблокировать экран Windows."""
