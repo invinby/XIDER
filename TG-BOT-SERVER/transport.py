@@ -168,6 +168,10 @@ class MQTTTransport:
         log.warning("Отключено от брокера (код %s)", reason_code)
 
     def _on_message(self, client, userdata, message):
+        if message.topic.endswith("/status") and bool(getattr(message, "retain", False)):
+            # Broker-delivered retained status is historical state, not proof of a live device.
+            log.info("Игнорируется сохранённый MQTT status из %s", message.topic)
+            return
         try:
             data = json.loads(message.payload.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
