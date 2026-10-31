@@ -15,6 +15,7 @@ permissions:
 
 jobs:
   release-state:
+    if: github.event_name == 'workflow_dispatch' || vars.XIDER_MACOS_RELEASE_READY != 'true'
     runs-on: ubuntu-latest
     outputs:
       exists: ${{ steps.check.outputs.exists }}
