@@ -494,3 +494,43 @@ health Safari/Siri и Apple-подписи/нотаризации нет. Пос
 `/mac` — signed source preview `v4.3.15`, pinned к commit
 `78a7f885632639dcea6717d49126a70e78ca3a63`; он содержит Safari/Siri launchers,
 но не является Apple-signed `.app` релизом.
+
+## Повторная проверка после установки v4.3.15 · 2026-10-31 22:08 UTC
+
+Свежий SSH-снимок VPS: `xider-bot` и `xider-dock-mqtt` активны. Windows
+`DESKTOP-Q46JPA2` (`b07a8934c6cc`) онлайн на `4.3.15`, последнее принятое
+сообщение `22:06:01Z`; MacBook-Air.local (`e981d9494650`) онлайн на `4.2.1`,
+`update_mode=source`, `release_update_ready=true`, последнее принятое сообщение
+`22:06:52Z`. У Windows включён новый session-bound протокол; Mac пока остаётся
+на legacy sessionless heartbeat. Это подтверждает свежий статус устройств, но не
+доставку отдельной команды и ответа через Telegram.
+
+GitHub API `releases/latest` возвращает стабильный `v4.2.1`, потому что `v4.3.15` помечен prerelease; Pages workflow отдельно выбирает самый свежий опубликованный semver, включая prerelease.
+Поэтому публичный `https://invinby.github.io/XIDER/mac` сейчас закреплён за `v4.3.15`.
+Подписанный installer запускает подписанный bootstrap с закреплённого commit
+`78a7f885632639dcea6717d49126a70e78ca3a63`; при source-preview он устанавливает
+source checkout с этого commit, а не требует отсутствующий compiled macOS bundle.
+В `XIDER-source.zip` релиза физически присутствуют `xider_layers.py`,
+`start_safari.sh`, `start_siri.sh` и `deploy/install_report.py`. Bootstrap
+отдельно проверяет свежие launchd PID/health-записи Agent, Guardian, Safari и
+Siri; отсутствие любой включённой компоненты делает установку неуспешной и
+запускает rollback. SHA-256 envelope подписи опубликованных
+`XIDER-install-macos.sh` и `XIDER-bootstrap-macos.sh` прошли локальную проверку
+закреплённым Ed25519 key (`SHA256:2CiDx93ua1o0v2+cD/KOosBvNQ6yGlvSxol4/SmHnxM`).
+Это издательская SSH-подпись XIDER; `v4.3.15` остаётся macOS source-preview и
+не имеет Apple code-signing/notarization или собранных `.app`.
+
+GitHub Actions на актуальном `main` (`5ad7b645`) завершил CI run `41245759260`
+успешно. Pages run `41240382727` и подписанный source-preview installer run
+`41237742588` также успешны. Полная сборка standalone agents run `41237742569`
+завершилась ошибкой, поэтому её нельзя называть полноценным Mac native release.
+Windows физическая установка `4.3.15` подтверждена локальным отчётом:
+Agent PID `34416` и Guard Keeper PID `408` работают. В отчёте обоих компонентов
+`bot_response=not_verified`; локальное MQTT-подключение не доказывает ответ
+Telegram-бота.
+
+Следующий обязательный шаг для завершения проверки Mac — обновить его командой
+`curl -fsSL https://invinby.github.io/XIDER/mac | bash`, затем получить свежий
+install report по четырём компонентам и выполнить одну безопасную команду с
+наблюдаемым ответом в Telegram. До этих двух наблюдений Mac update и сквозной
+Mac request/response считаются неподтверждёнными.
