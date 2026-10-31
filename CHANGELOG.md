@@ -1,5 +1,23 @@
 # XIDER release history
 
+## X4.3.12-RECOVERY+20261031 — verified rollback and replay bounds
+
+### English
+
+- Failed Windows updates now report the requested version separately from the active version. A rollback is reported as recovered only when fresh Agent and Guardian health, distinct live managed PIDs, and running scheduled tasks are verified; otherwise the report is partial.
+- Windows install reports derive Agent and Guardian status separately from their own version, process, and fresh health evidence.
+- Server, Windows, and macOS replay caches now stay bounded without evicting still-valid nonces. If the cache reaches capacity, new messages fail closed until expired entries can be removed.
+- Bot status freshness uses server receipt time after signature and replay validation, so delayed valid packets do not make a live device appear stale.
+- Windows is a publisher-signed preview. macOS is a publisher-signed source preview; the runtime is not Apple-signed or notarized, and this is not the full compiled Mac app release.
+
+### Русский
+
+- После сбоя обновления Windows отчёт отдельно показывает запрошенную и активную версии. Откат считается восстановленным только после проверки свежего здоровья Agent и Guardian, разных живых PID управляемых процессов и запущенных задач; иначе результат — `partial`.
+- Статусы Agent и Guardian в отчёте установки Windows вычисляются раздельно по версии, процессу и свежему health-ответу каждого компонента.
+- Кэши защиты от повторов на сервере, Windows и macOS ограничены по размеру и не выкидывают ещё действующие nonce. При заполнении новые сообщения отклоняются до освобождения места просроченными записями.
+- Свежесть статуса бота считается по времени приёма сервером после проверки подписи и повтора: задержанный, но допустимый пакет больше не помечает подключённое устройство устаревшим.
+- Windows — подписанный издателем preview. macOS — подписанный издателем source-preview; runtime не подписан Apple и не нотарифицирован, это не полный собранный Mac-релиз.
+
 ## X4.3.11-TARPED+20261031 — device identity and verified component health
 
 ### English
