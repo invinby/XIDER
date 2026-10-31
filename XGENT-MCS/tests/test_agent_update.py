@@ -180,7 +180,7 @@ def test_macos_app_builder_uses_the_current_agent_release_version():
         })
     assert captured["info_plist"]["CFBundleShortVersionString"] == config.VERSION
     assert captured["info_plist"]["CFBundleVersion"] == config.VERSION
-    assert config.VERSION == "4.3.5"
+    assert config.VERSION == "4.3.6"
 
 
 def _make_client():

@@ -111,9 +111,16 @@ try {
     if ($nativeProbe.ExitCode -eq 0 -or $nativeProbe.Output.Count -ne 0) {
         throw 'A missing Python runtime must be treated as a probe miss, not as a bootstrap-stopping error.'
     }
+    $pythonScriptProbeFunction = $bootstrapAst.Find({ param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Invoke-XiderPythonScriptProbe'
+    }, $true)
+    if (-not $pythonScriptProbeFunction) { throw 'PowerShell 5-safe Python script probe helper is missing.' }
+    Invoke-Expression $pythonScriptProbeFunction.Extent.Text
     $safeVersionProbe = 'import sys; print(sys.version_info[0]*100 + sys.version_info[1])'
-    if ([regex]::Matches($bootstrapSource, 'print\(sys\.version_info\[0\]\*100 \+ sys\.version_info\[1\]\)').Count -lt 3) {
-        throw 'Python version checks must use the PowerShell 5.1-safe, quote-free probe.'
+    if ($bootstrapSource -notmatch 'Invoke-XiderPythonScriptProbe' -or
+        $bootstrapSource -match "Invoke-XiderNativeProbe[^\r\n]*'-c'") {
+        throw 'Python bootstrap probes must use temporary script files, not inline -c arguments.'
     }
     $pythonCandidates = @(
         @(
@@ -122,7 +129,7 @@ try {
         ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -Unique
     )
     if ($pythonCandidates.Count -gt 0) {
-        $versionProbe = Invoke-XiderNativeProbe -Executable $pythonCandidates[0] -Arguments @('-c', $safeVersionProbe)
+        $versionProbe = Invoke-XiderPythonScriptProbe -Executable $pythonCandidates[0] -Code $safeVersionProbe
         if ($versionProbe.ExitCode -ne 0 -or $versionProbe.Output.Count -ne 1 -or
             [string]$versionProbe.Output[0] -notmatch '^3(?:11|12|14)$') {
             throw 'The PowerShell 5.1 Python version probe did not return a supported runtime version.'
