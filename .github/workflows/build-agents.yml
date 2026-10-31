@@ -12,7 +12,7 @@ on:
         description: Existing XIDER semantic-version tag to build without publishing a release.
         required: true
         type: string
-        default: v4.3.15
+        default: v4.3.16
 
 permissions:
   contents: read
@@ -73,7 +73,7 @@ jobs:
 
   release-ci:
     name: "Release test gate"
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'workflow_dispatch' || (startsWith(github.ref, 'refs/tags/v') && vars.XIDER_MACOS_RELEASE_READY == 'true')
     needs: [source-state]
     uses: ./.github/workflows/ci.yml
     with:
@@ -83,7 +83,8 @@ jobs:
 
   build-windows:
     name: "Build Windows Agent (EXE)"
-    needs: [source-state]
+    needs: [source-state, release-ci]
+    if: github.event_name == 'workflow_dispatch' || (startsWith(github.ref, 'refs/tags/v') && vars.XIDER_MACOS_RELEASE_READY == 'true')
     runs-on: windows-latest
 
     steps:

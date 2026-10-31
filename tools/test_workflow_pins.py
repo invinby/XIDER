@@ -27,7 +27,7 @@ def test_every_github_action_uses_an_explicit_immutable_commit_pin():
         uses_lines = re.findall(r"(?m)^\s*uses:\s*(.+?)\s*$", text)
         for value in uses_lines:
             if value == "./.github/workflows/ci.yml":
-                assert workflow.name == "build-agents.yml"
+                assert workflow.name in {"build-agents.yml", "release-windows-preview.yml"}
                 assert (ROOT / ".github" / "workflows" / "ci.yml").is_file()
                 continue
             if value == "./.github/workflows/pages.yml":
@@ -96,15 +96,22 @@ def test_tagged_release_uses_version_specific_bilingual_release_notes():
 
 def test_tagged_release_waits_for_the_full_ci_workflow():
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    release_workflow = WORKFLOW.read_text(encoding="utf-8")
-    release = release_workflow.split("  create-release:", 1)[1]
+    native_release = WORKFLOW.read_text(encoding="utf-8")
+    preview_release = WINDOWS_PREVIEW_WORKFLOW.read_text(encoding="utf-8")
 
     assert "workflow_call:" in ci and "source_ref:" in ci
-    assert "  release-ci:\n    name: \"Release test gate\"" in release_workflow
-    assert "    uses: ./.github/workflows/ci.yml" in release_workflow
-    assert "    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')" in release_workflow
-    assert "source_ref: ${{ needs.source-state.outputs.source_commit }}" in release_workflow
-    assert "needs: [release-ci, source-state, build-windows, build-macos, pack-components]" in release
+    assert 'if: github.event_name == \'workflow_dispatch\' || (startsWith(github.ref, \'refs/tags/v\') && vars.XIDER_MACOS_RELEASE_READY == \'true\')' in native_release
+    assert "    uses: ./.github/workflows/ci.yml" in native_release
+    assert "source_ref: ${{ needs.source-state.outputs.source_commit }}" in native_release
+    native_release_job = native_release.split("  create-release:", 1)[1]
+    assert "needs: [release-ci, source-state, build-windows, build-macos, pack-components]" in native_release_job
+
+    assert "  release-ci:\n    name: Release test gate" in preview_release
+    assert "    uses: ./.github/workflows/ci.yml" in preview_release
+    assert "    if: needs.release-state.outputs.exists == 'false'" in preview_release
+    assert "source_ref: ${{ needs.release-state.outputs.source_commit }}" in preview_release
+    assert "needs: [release-state, release-ci]" in preview_release.split("  build-windows:", 1)[1].split("  publish-windows:", 1)[0]
+    assert "needs: [release-state, release-ci, build-windows]" in preview_release.split("  publish-windows:", 1)[1].split("  dispatch-pages:", 1)[0]
 
 
 def test_manual_tag_build_creates_signed_inventory_without_publishing_release():
@@ -242,7 +249,10 @@ def test_windows_preview_build_and_signed_assets_share_the_selected_tag_commit()
 
     build = text.split("  build-windows:", 1)[1].split("  publish-windows:", 1)[0]
     publish = text.split("  publish-windows:", 1)[1]
-    assert "ref: ${{ needs.release-state.outputs.tag }}" in build
+    source_state = text.split("  release-state:", 1)[1].split("  release-ci:", 1)[0]
+    assert "ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}" in source_state
+    assert "source_commit: ${{ steps.check.outputs.source_commit }}" in source_state
+    assert "ref: ${{ needs.release-state.outputs.source_commit }}" in build
     assert "source_commit: ${{ steps.source.outputs.commit }}" in build
     assert "git rev-parse HEAD" in build
     assert "ref: ${{ needs.build-windows.outputs.source_commit }}" in publish
