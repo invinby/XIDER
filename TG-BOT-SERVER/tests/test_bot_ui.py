@@ -12617,13 +12617,16 @@ def test_device_status_notices_confirm_transitions_without_heartbeat_starvation(
         session_counter = 0
         active_session = "a" * 32
         last_status = None
+        status_sequence = 0
+        status_timestamp = int(time.time()) - 90
 
         def status(value, update_mode="source", release_update_ready=False):
-            nonlocal session_counter, active_session, last_status
+            nonlocal session_counter, active_session, last_status, status_sequence
             if value == "online" and last_status == "offline":
                 session_counter += 1
                 active_session = f"{session_counter:032x}"
-            timestamp = int(time.time()) - 1
+            status_sequence += 1
+            timestamp = status_timestamp + status_sequence
             bot.on_mqtt_message(
                 f"{bot.MQTT_PREFIX}/mac-1/status",
                 {
@@ -12672,10 +12675,44 @@ def test_device_status_notices_confirm_transitions_without_heartbeat_starvation(
         await asyncio.sleep(0.05)
         assert len(notices) == 2
 
+        retired_session = active_session
         status("online")
-        assert store.get("mac-1")["mqtt_session_id"] == active_session
+        current = store.get("mac-1")
+        assert current["mqtt_session_id"] == active_session
         await asyncio.sleep(0.05)
         assert len(notices) == 3 and "вернулся онлайн" in notices[2]
+
+        # The authenticated timestamp lives outside the encrypted body. Keep
+        # it when decrypting so later delayed packets can still be ordered.
+        encrypted_timestamp = status_timestamp + status_sequence + 1
+        monkeypatch.setattr(bot, "ENCRYPT_PAYLOAD", True)
+        monkeypatch.setattr(
+            bot, "decrypt_payload",
+            lambda _payload, **_kwargs: {
+                "type": "status", "status": "online", "name": "Mac",
+                "os": "macOS", "version": "test", "mqtt_session_id": active_session,
+            },
+        )
+        bot.on_mqtt_message(
+            f"{bot.MQTT_PREFIX}/mac-1/status",
+            {"payload": {"ts": encrypted_timestamp, "nonce": "encrypted-heartbeat", "enc": "ciphertext"}},
+        )
+        current = store.get("mac-1")
+        assert current["last_status_sender_ts"] == float(encrypted_timestamp)
+
+        current_last_seen = current["last_seen"]
+        bot.on_mqtt_message(
+            f"{bot.MQTT_PREFIX}/mac-1/status",
+            {"payload": {
+                "ts": encrypted_timestamp - 1,
+                "type": "status", "status": "online", "name": "Retired Mac",
+                "os": "old macOS", "version": "old", "mqtt_session_id": retired_session,
+            }},
+        )
+        current = store.get("mac-1")
+        assert current["mqtt_session_id"] == active_session
+        assert current["last_seen"] == current_last_seen
+        assert current["name"] == "Mac" and current["version"] == "test"
 
     asyncio.run(_run())
 
