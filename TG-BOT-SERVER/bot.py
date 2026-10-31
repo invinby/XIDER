@@ -10100,11 +10100,28 @@ def on_mqtt_message(topic: str, data: dict) -> None:
         # старый online-агент может быть уже старше 120 секунд, но событие
         # «ушёл офлайн» всё равно должно прийти владельцу.
         was_online = bool(old.get("online", False))
+        mqtt_session_id = payload.get("mqtt_session_id")
+        valid_mqtt_session = (
+            isinstance(mqtt_session_id, str)
+            and re.fullmatch(r"[0-9a-f]{32}", mqtt_session_id) is not None
+        )
+        active_mqtt_session = old.get("mqtt_session_id")
+        if not online and (
+            not valid_mqtt_session
+            or not isinstance(active_mqtt_session, str)
+            or mqtt_session_id != active_mqtt_session
+        ):
+            # A delayed QoS 1 Last Will from a prior MQTT connection must not
+            # mark the newly reconnected device offline.
+            log.info("Rejected stale MQTT offline status for %s (session mismatch)", device_id)
+            audit("stale_device_lwt_rejected", device_id=device_id)
+            return
         info = {
             "name": str(payload.get("name") or device_id),
             "os": str(payload.get("os") or "unknown"),
             "version": str(payload.get("version") or "?"),
             "online": online,
+            "mqtt_session_id": mqtt_session_id if valid_mqtt_session else None,
             "standby": is_standby,
             "command_approval_protocol": payload.get("command_approval_protocol") if type(payload.get("command_approval_protocol")) is int else 0,
         }
