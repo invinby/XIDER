@@ -119,7 +119,7 @@ device completed the action.
 
 ## Status
 
-The current source version is 4.3.5. Check [GitHub Releases](https://github.com/invinby/XIDER/releases)
+The current source version is 4.3.6. Check [GitHub Releases](https://github.com/invinby/XIDER/releases)
 for published packages and release-specific evidence. Live Windows/macOS,
 Telegram, MQTT, and production VPS acceptance must be recorded separately; it
 is not implied by source tests or this README.
