@@ -609,3 +609,21 @@ Read-only снимок VPS в `22:37 UTC`:
 Следующий шаг не меняется: физически запустить опубликованный `/mac` installer,
 получить свежий четырёхкомпонентный install report и проверить один ответ боту.
 До этого Mac, Safari/Siri и сквозной request/response остаются непроверенными.
+
+## Актуальный runtime-снимок VPS · 2026-10-31 22:51 UTC
+
+Повторная read-only SSH-проверка подтвердила, что `xider-bot` и `xider-dock-mqtt`
+работают. На сервере checkout `HEAD` всё ещё указывает на `9d14237` (`v4.3.14`),
+но рабочие файлы bot/version и основные Windows/macOS runtime-модули совпадают по
+Git blob SHA с текущим `origin/main`; файл bot/version был обновлён в `21:43:22
+UTC`, за семь секунд до запуска процесса. Checkout остаётся dirty из-за release
+файлов и generated state, поэтому `HEAD` сам по себе не является доказательством
+запущенной версии.
+
+На `22:51:30 UTC` сервер принял свежий Windows heartbeat: `b07a8934c6cc`,
+`4.3.15`, online. Mac `e981d9494650` остаётся `4.2.1` и offline в реестре;
+последний принятый status — `22:23:51 UTC`, а попытка со stale timestamp в
+`22:25:27 UTC` была отвергнута. После неё свежий Mac status в доступном журнале
+не подтверждён. Локальный Windows `install-report.json` отдельно подтверждает
+Agent PID `34416` и Guard Keeper PID `408`, оба `4.3.15` и running; Telegram ACK
+для обоих компонентов остаётся `not_verified`.
