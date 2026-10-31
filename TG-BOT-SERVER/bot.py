@@ -10096,6 +10096,18 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             isinstance(session_id, str)
             and re.fullmatch(r"[0-9a-f]{32}", session_id) is not None
         )
+        if online and not valid_session_id:
+            # An online heartbeat without a connection identity cannot be
+            # ordered against a previous MQTT connection. Accepting it lets a
+            # legacy/replayed status refresh receipt-time liveness and erase
+            # the active session used to validate the broker's Last Will.
+            log.info("Online MQTT status without a valid session ID from %s ignored", device_id)
+            audit(
+                "stale_device_online_rejected",
+                device_id=device_id,
+                reason="missing_or_invalid_session_id",
+            )
+            return
         if online:
             try:
                 sender_timestamp = (

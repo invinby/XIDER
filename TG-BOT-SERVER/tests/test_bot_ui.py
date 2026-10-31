@@ -954,9 +954,12 @@ def test_signed_status_preserves_protocol_and_legacy_report_revokes_it(monkeypat
     monkeypatch.setattr(bot, "ENCRYPT_PAYLOAD", False)
     monkeypatch.setattr(bot.bot_settings, "is_blocked", lambda _id: False)
     topic = f"{bot.MQTT_PREFIX}/a/status"
-    bot.on_mqtt_message(topic, {"type": "status", "command_approval_protocol": 1})
+    bot.on_mqtt_message(topic, {
+        "type": "status", "command_approval_protocol": 1,
+        "mqtt_session_id": "a" * 32,
+    })
     assert bot._shell_request_allowed(bot.ADMIN_ID, "a")
-    bot.on_mqtt_message(topic, {"type": "status"})
+    bot.on_mqtt_message(topic, {"type": "status", "mqtt_session_id": "a" * 32})
     assert not bot._shell_request_allowed(bot.ADMIN_ID, "a")
 
 
