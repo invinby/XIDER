@@ -643,6 +643,7 @@ function Get-XiderManagedProcesses {
         if (Test-XiderManagedProcess -Process $process -AgentDirectory $AgentDirectory) {
             [pscustomobject]@{
                 ProcessId = [int]$process.ProcessId
+                ParentProcessId = [int]$process.ParentProcessId
                 Name = [string]$process.Name
                 ExecutablePath = [string]$process.ExecutablePath
                 CommandLine = [string]$process.CommandLine
@@ -675,7 +676,13 @@ function Stop-XiderManagedProcesses {
         try { Stop-Process -Id $processId -Force -ErrorAction Stop }
         catch {
             if (Get-Process -Id $processId -ErrorAction SilentlyContinue) {
-                throw "Не удалось остановить процесс XIDER PID $processId перед заменой файлов."
+                $lockOwners = @(Get-XiderDirectoryLockOwners -DirectoryPath $AgentDirectory)
+                $lockSummary = @($lockOwners | ForEach-Object {
+                    if ($_.Path) { '{0} PID {1} ({2})' -f $_.Name, $_.ProcessId, $_.Path }
+                    else { '{0} PID {1}' -f $_.Name, $_.ProcessId }
+                }) -join '; '
+                if (-not $lockSummary) { $lockSummary = 'Restart Manager не вернул владельцев блокировки.' }
+                throw "Не удалось остановить процесс XIDER PID $processId перед заменой файлов. Владельцы блокировок: $lockSummary"
             }
         }
     }
@@ -685,9 +692,191 @@ function Stop-XiderManagedProcesses {
         Start-Sleep -Seconds 1
     }
     $remainingSummary = @($remaining | ForEach-Object {
-        '{0} ({1}; {2}; started {3})' -f $_.ProcessId, $_.Name, $_.ExecutablePath, $_.CreationDate
+        $parent = if ($_.ParentProcessId -gt 0) {
+            Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $($_.ParentProcessId)" -ErrorAction SilentlyContinue
+        }
+        $parentInfo = if ($parent) { 'parent PID {0} {1} ({2})' -f $_.ParentProcessId, $parent.Name, $parent.ExecutablePath }
+        else { 'parent PID {0} unavailable' -f $_.ParentProcessId }
+        '{0} ({1}; {2}; started {3}; {4})' -f $_.ProcessId, $_.Name, $_.ExecutablePath, $_.CreationDate, $parentInfo
     }) -join '; '
-    throw "Процессы XIDER всё ещё используют каталог агента: $remainingSummary"
+    $lockOwners = @(Get-XiderDirectoryLockOwners -DirectoryPath $AgentDirectory)
+    $lockSummary = @($lockOwners | ForEach-Object {
+        if ($_.Path) { '{0} PID {1} ({2})' -f $_.Name, $_.ProcessId, $_.Path }
+        else { '{0} PID {1}' -f $_.Name, $_.ProcessId }
+    }) -join '; '
+    if (-not $lockSummary) { $lockSummary = 'Restart Manager не вернул владельцев блокировки.' }
+    throw "Процессы XIDER всё ещё используют каталог агента: $remainingSummary. Владельцы блокировок: $lockSummary"
+}
+
+function Get-XiderDirectoryLockOwners {
+    param([Parameter(Mandatory)][string]$DirectoryPath)
+
+    try {
+        if (-not ('XiderRestartManagerInterop' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+
+public static class XiderRestartManagerInterop {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct UniqueProcess {
+        public int ProcessId;
+        public FILETIME ProcessStartTime;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct ProcessInfo {
+        public UniqueProcess Process;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string ApplicationName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)] public string ServiceShortName;
+        public int ApplicationType;
+        public uint ApplicationStatus;
+        public uint TerminalSessionId;
+        [MarshalAs(UnmanagedType.Bool)] public bool Restartable;
+    }
+
+    [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)]
+    public static extern int RmStartSession(out uint sessionHandle, int flags, string sessionKey);
+
+    [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)]
+    public static extern int RmRegisterResources(
+        uint sessionHandle, uint fileCount,
+        [MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 1, ArraySubType = UnmanagedType.LPWStr)] string[] fileNames,
+        uint applicationCount, [In, MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 3)] UniqueProcess[] applications,
+        uint serviceCount,
+        [MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 5, ArraySubType = UnmanagedType.LPWStr)] string[] serviceNames);
+
+    [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)]
+    public static extern int RmGetList(
+        uint sessionHandle, out uint processInfoNeeded, ref uint processInfoCount,
+        [In, Out, MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 2)] ProcessInfo[] processInfo,
+        ref uint rebootReasons);
+
+    [DllImport("rstrtmgr.dll")]
+    public static extern int RmEndSession(uint sessionHandle);
+}
+'@
+        }
+    } catch { return @() }
+
+    # Restart Manager registers file paths, not directories. Register concrete
+    # managed files so a bad directory entry cannot make the whole query fail.
+    $resources = [System.Collections.Generic.List[string]]::new()
+    foreach ($relativePath in @(
+        'XGENT-WDS.exe', 'XIDER-Guard-Keeper.exe',
+        'xgent_wds.py', 'xider_guardian_wds.py',
+        'venv\Scripts\python.exe', 'venv\Scripts\pythonw.exe'
+    )) {
+        $priorityPath = Join-Path $DirectoryPath $relativePath
+        if ((Test-Path -LiteralPath $priorityPath -PathType Leaf) -and $resources.Count -lt 256) {
+            $resources.Add([IO.Path]::GetFullPath($priorityPath))
+        }
+    }
+    $pendingDirectories = [System.Collections.Generic.Stack[string]]::new()
+    $pendingDirectories.Push([IO.Path]::GetFullPath($DirectoryPath))
+    while ($pendingDirectories.Count -gt 0 -and $resources.Count -lt 256) {
+        $currentDirectory = $pendingDirectories.Pop()
+        try {
+            foreach ($item in Get-ChildItem -LiteralPath $currentDirectory -Force -ErrorAction SilentlyContinue) {
+                if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
+                if ($item.PSIsContainer) {
+                    $pendingDirectories.Push([IO.Path]::GetFullPath($item.FullName))
+                } else {
+                    $resources.Add([IO.Path]::GetFullPath($item.FullName))
+                    if ($resources.Count -ge 256) { break }
+                }
+            }
+        } catch { }
+    }
+
+    [uint32]$session = 0
+    try {
+        $status = [XiderRestartManagerInterop]::RmStartSession(
+            [ref]$session, 0, [guid]::NewGuid().ToString('N')
+        )
+    } catch { return @() }
+    if ($status -ne 0) { return @() }
+    try {
+        $files = [string[]]$resources.ToArray()
+        $status = [XiderRestartManagerInterop]::RmRegisterResources(
+            $session, [uint32]$files.Length, $files, 0, $null, 0, $null
+        )
+        if ($status -ne 0) { return @() }
+
+        [uint32]$needed = 0
+        [uint32]$count = 0
+        [uint32]$rebootReasons = 0
+        $status = [XiderRestartManagerInterop]::RmGetList(
+            $session, [ref]$needed, [ref]$count, $null, [ref]$rebootReasons
+        )
+        if ($status -ne 234 -or $needed -eq 0) { return @() }
+        for ($attempt = 0; $attempt -lt 3; $attempt++) {
+            $count = $needed
+            $processes = [Array]::CreateInstance([XiderRestartManagerInterop+ProcessInfo], [int]$count)
+            $status = [XiderRestartManagerInterop]::RmGetList(
+                $session, [ref]$needed, [ref]$count, $processes, [ref]$rebootReasons
+            )
+            if ($status -eq 0) {
+                foreach ($item in $processes) {
+                    if ($item.Process.ProcessId -gt 0) {
+                        $process = Get-CimInstance -ClassName Win32_Process `
+                            -Filter "ProcessId = $($item.Process.ProcessId)" -ErrorAction SilentlyContinue
+                        $processName = if ($process -and $process.Name) {
+                            [string]$process.Name
+                        } elseif ($item.ApplicationName) {
+                            [string]$item.ApplicationName
+                        } else { 'unknown process' }
+                        [pscustomobject]@{
+                            ProcessId = [int]$item.Process.ProcessId
+                            Name = $processName
+                            Path = if ($process) { [string]$process.ExecutablePath } else { $null }
+                            Application = [string]$item.ApplicationName
+                            Service = [string]$item.ServiceShortName
+                        }
+                    }
+                }
+                return
+            }
+            if ($status -ne 234 -or $needed -eq 0) { return @() }
+        }
+        return @()
+    } catch {
+        return @()
+    } finally {
+        try { [void][XiderRestartManagerInterop]::RmEndSession($session) } catch { }
+    }
+}
+
+function Move-XiderDirectoryWithDiagnostics {
+    param(
+        [Parameter(Mandatory)][string]$SourcePath,
+        [Parameter(Mandatory)][string]$DestinationPath
+    )
+
+    $lastError = $null
+    $owners = @()
+    for ($attempt = 0; $attempt -lt 3; $attempt++) {
+        try {
+            [IO.Directory]::Move($SourcePath, $DestinationPath)
+            return
+        } catch [System.IO.IOException] {
+            $lastError = $_.Exception.Message
+        } catch [System.UnauthorizedAccessException] {
+            $lastError = $_.Exception.Message
+        }
+        $owners = @(Get-XiderDirectoryLockOwners -DirectoryPath $SourcePath)
+        if ($attempt -lt 2) { Start-Sleep -Seconds 1 }
+    }
+    $ownerText = if ($owners.Count) {
+        @($owners | ForEach-Object {
+            if ($_.Path) { '{0} (PID {1}; {2})' -f $_.Name, $_.ProcessId, $_.Path }
+            else { '{0} (PID {1})' -f $_.Name, $_.ProcessId }
+        }) -join ', '
+    } else {
+        'Restart Manager не сообщил процесс, удерживающий файлы каталога.'
+    }
+    throw "Не удалось переключить каталог '$SourcePath' в '$DestinationPath': $lastError. $ownerText"
 }
 
 function Expand-XiderArchiveSafely {
@@ -1123,9 +1312,9 @@ try {
     if ($stillRunning.Count) { throw "Прежние задачи не остановились: $($stillRunning -join ', ')" }
     if (Test-Path -LiteralPath $repo) {
         Stop-XiderManagedProcesses -AgentDirectory (Join-Path $repo 'XGENT-WDS')
-        [IO.Directory]::Move($repo, $backup)
+        Move-XiderDirectoryWithDiagnostics -SourcePath $repo -DestinationPath $backup
     }
-    [IO.Directory]::Move($stage, $repo)
+    Move-XiderDirectoryWithDiagnostics -SourcePath $stage -DestinationPath $repo
     $activationStarted = $true
     if ($ReleaseTag) {
         $expectedAgentVersion = $releaseVersion
@@ -1263,13 +1452,13 @@ catch {
     if ($activationStarted -and (Test-Path -LiteralPath $repo)) {
         try {
             Stop-XiderManagedProcesses -AgentDirectory (Join-Path $repo 'XGENT-WDS')
-            [IO.Directory]::Move($repo, $failed)
+            Move-XiderDirectoryWithDiagnostics -SourcePath $repo -DestinationPath $failed
             $failedEnv = Join-Path $failed 'XGENT-WDS\.env'
             if (Test-Path -LiteralPath $failedEnv) { Remove-XiderPrivateFile -Path $failedEnv }
         } catch { $rollbackProblems += "Не удалось убрать неудачную версию: $($_.Exception.Message)" }
     }
     if ($backup -and (Test-Path -LiteralPath $backup) -and -not (Test-Path -LiteralPath $repo)) {
-        try { [IO.Directory]::Move($backup, $repo) }
+        try { Move-XiderDirectoryWithDiagnostics -SourcePath $backup -DestinationPath $repo }
         catch { $rollbackProblems += "Не удалось вернуть предыдущие файлы: $($_.Exception.Message)" }
     }
     if ($taskInstallAttempted) {
