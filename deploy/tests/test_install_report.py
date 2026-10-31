@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from deploy.install_report import write_install_report
+from install_report import write_install_report
 
 
 def _report():
