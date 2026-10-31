@@ -199,3 +199,14 @@ jobs:
             artifacts/XIDER-install-macos.sh.sig
             artifacts/XIDER-QUICKSTART.txt
             artifacts/release-manifest.json
+
+  publish-pages:
+    needs: [release-state, publish-windows]
+    if: needs.release-state.outputs.exists == 'false'
+    uses: ./.github/workflows/pages.yml
+    with:
+      installer_tag: ${{ needs.release-state.outputs.tag }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
