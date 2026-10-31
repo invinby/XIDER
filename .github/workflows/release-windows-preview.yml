@@ -200,13 +200,17 @@ jobs:
             artifacts/XIDER-QUICKSTART.txt
             artifacts/release-manifest.json
 
-  publish-pages:
+  dispatch-pages:
+    name: "Dispatch Pages deployment from the allowed main branch"
     needs: [release-state, publish-windows]
     if: needs.release-state.outputs.exists == 'false'
-    uses: ./.github/workflows/pages.yml
-    with:
-      installer_tag: ${{ needs.release-state.outputs.tag }}
+    runs-on: ubuntu-latest
     permissions:
-      contents: read
-      pages: write
-      id-token: write
+      actions: write
+    steps:
+      - name: "Dispatch Pages for the exact published release tag"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.release-state.outputs.tag }}
+        run: gh workflow run pages.yml --repo "$REPOSITORY" --ref main -f installer_tag="$RELEASE_TAG"

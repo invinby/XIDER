@@ -27,13 +27,11 @@ on:
       - "XGENT-MCS/release_signature.py"
       - ".github/workflows/pages.yml"
       - ".github/workflows/ci.yml"
-  release:
-    types: [published]
-  workflow_call:
+  workflow_dispatch:
     inputs:
       installer_tag:
-        description: Published XIDER release tag whose installers Pages should promote.
-        required: true
+        description: Published XIDER release tag whose installers Pages should promote (blank selects latest).
+        required: false
         type: string
 
 permissions:
@@ -63,10 +61,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REQUESTED_TAG: ${{ inputs.installer_tag }}
-          RELEASE_EVENT_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
         run: |
           set -euo pipefail
-          tag="${REQUESTED_TAG:-${RELEASE_EVENT_TAG:-}}"
+          tag="${REQUESTED_TAG:-}"
           if [[ -z "$tag" ]]; then
             tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq '[.[] | select(.draft == false and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")))] | sort_by(.published_at) | last | .tag_name')"
           fi
@@ -90,7 +87,7 @@ jobs:
 
   deploy:
     name: "Publish validated site"
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'release' && github.event.action == 'published') || inputs.installer_tag != ''
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     needs: build
     runs-on: ubuntu-latest
     permissions:

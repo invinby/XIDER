@@ -13,8 +13,8 @@ def test_pages_workflow_validates_pull_requests_and_gates_production_deploy_even
     workflow = PAGES_WORKFLOW.read_text(encoding="utf-8")
 
     assert re.search(r"^\s*pull_request:\s*$", workflow, re.MULTILINE)
-    assert re.search(r"^\s*workflow_call:\s*\n\s+inputs:\s*\n\s+installer_tag:\s*$", workflow, re.MULTILINE)
-    assert re.search(r"^\s*required:\s*true\s*$", workflow, re.MULTILINE)
+    assert re.search(r"^\s*workflow_dispatch:\s*\n\s+inputs:\s*\n\s+installer_tag:\s*$", workflow, re.MULTILINE)
+    assert re.search(r"^\s*required:\s*false\s*$", workflow, re.MULTILINE)
     assert re.search(r"^\s*type:\s*string\s*$", workflow, re.MULTILINE)
     assert re.search(r"^permissions:\s*\n\s+contents:\s*read\s*$", workflow, re.MULTILINE)
 
@@ -22,7 +22,7 @@ def test_pages_workflow_validates_pull_requests_and_gates_production_deploy_even
     assert deploy, "Pages deploy must be an explicit, separate job"
     body = deploy.group("body")
     assert re.search(
-        r"^    if:\s*\(github\.event_name == 'push' && github\.ref == 'refs/heads/main'\) \|\| \(github\.event_name == 'release' && github\.event\.action == 'published'\) \|\| inputs\.installer_tag != ''\s*$",
+        r"^    if:\s*\(github\.event_name == 'push' && github\.ref == 'refs/heads/main'\) \|\| \(github\.event_name == 'workflow_dispatch' && github\.ref == 'refs/heads/main'\)\s*$",
         body,
         re.MULTILINE,
     )
@@ -53,10 +53,10 @@ def test_pages_generates_signed_installers_before_checking_and_uploading_site() 
     assert workflow.index(generate) < workflow.index(upload)
     assert "gh api \"repos/${GITHUB_REPOSITORY}/releases?per_page=100\"" in workflow
     assert "REQUESTED_TAG: ${{ inputs.installer_tag }}" in workflow
-    assert "RELEASE_EVENT_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}" in workflow
+    assert "RELEASE_EVENT_TAG:" not in workflow
     assert "XIDER_WINDOWS_INSTALLER_TAG: ${{ steps.release-tag.outputs.tag }}" in workflow
     assert "XIDER_MACOS_INSTALLER_TAG: ${{ steps.release-tag.outputs.tag }}" in workflow
-    assert re.search(r"^\s*release:\s*\n\s+types:\s*\[published\]\s*$", workflow, re.MULTILINE)
+    assert re.search(r"^\s*workflow_dispatch:\s*$", workflow, re.MULTILINE)
     assert re.search(r"^\s+XIDER_MACOS_SOURCE_PREVIEW:\s*'1'\s*$", workflow, re.MULTILINE)
 
     for source in (
