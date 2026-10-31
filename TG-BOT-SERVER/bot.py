@@ -10036,13 +10036,10 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             topic,
         )
         return
-    signed_payload = data.get("payload") if isinstance(data, dict) else None
-    signed_timestamp = signed_payload.get("ts") if isinstance(signed_payload, dict) else None
-    observed_at = (
-        float(signed_timestamp)
-        if type(signed_timestamp) in (int, float) and math.isfinite(float(signed_timestamp))
-        else time.time()
-    )
+    # verify_message_detailed already validates the sender timestamp and replay
+    # nonce. Use server receipt time for freshness: a valid but slightly delayed
+    # packet must not make a live device look offline immediately after receipt.
+    received_at = time.time()
     # LWT exposes only its signed offline/session envelope. Everything else
     # still requires the encrypted body whenever encryption is configured.
     clear_lwt = (
@@ -10152,7 +10149,8 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             # session also makes this old Will single-use at the device state layer.
             info = {**old, "online": False, "standby": False, "mqtt_session_id": None}
         if online:
-            info["last_seen"] = observed_at
+            info["last_seen"] = received_at
+            info["last_status_at"] = received_at
         is_new = device_id not in devices.all()
         if is_new:
             info["approved"] = not bool(bot_settings.get("require_device_approval", True))
@@ -10545,7 +10543,7 @@ def on_mqtt_message(topic: str, data: dict) -> None:
                 "desired_running": bool(payload.get("desired_running")),
                 "agent_update_protocol": payload.get("agent_update_protocol") if type(payload.get("agent_update_protocol")) is int else 0,
             },
-            "guardian_last_seen": observed_at,
+            "guardian_last_seen": received_at,
         }
         if "companions" in payload:
             guardian_update["companion_records"] = companion_status.clean_layer_records(
@@ -10556,7 +10554,7 @@ def on_mqtt_message(topic: str, data: dict) -> None:
                 and not bot_settings.is_blocked(device_id)):
             try:
                 update_coordinator.reconcile(
-                    device_id, payload, received_at=time.time(), heartbeat_at=guardian_update["guardian_last_seen"],
+                    device_id, payload, received_at=received_at, heartbeat_at=guardian_update["guardian_last_seen"],
                 )
             except (OSError, ValueError):
                 log.warning("Update journal unavailable; Guardian result remains unconfirmed")
