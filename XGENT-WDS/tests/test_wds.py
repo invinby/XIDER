@@ -1249,7 +1249,7 @@ def test_windows_status_advertises_source_update_mode(client, monkeypatch):
     assert payload["update_mode"] == "source"
     assert payload["release_update_ready"] is False
     assert payload["mqtt_session_id"] == client._mqtt_session_id
-    assert client._client.publish.call_args.kwargs["qos"] == 1
+    assert client._client.publish.call_args.kwargs["qos"] == 0
 
 
 def test_windows_status_is_skipped_while_disconnected(client):

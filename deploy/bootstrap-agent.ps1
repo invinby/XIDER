@@ -341,7 +341,7 @@ function Write-XiderInstallReport {
         $installed = $Outcome -eq 'succeeded' -and $connected -and $process -and
             $version -eq $RequestedVersion
         $status = if ($installed) { 'installed' } elseif ($Outcome -eq 'failed') { 'failed' } else { 'unknown' }
-        $componentError = if ($status -eq 'failed') { $ErrorMessage } else { $null }
+        $componentError = if ($status -ne 'installed') { $ErrorMessage } else { $null }
         $components[$component] = @{
             status = $status
             version = $version
@@ -877,6 +877,7 @@ try {
     if ($ReleaseTag) {
         Write-Host "Проверяю подписанный Windows-пакет $ReleaseTag до изменения установки..."
         $releaseVersion = $ReleaseTag.Substring(1)
+        $expectedAgentVersion = $releaseVersion
         $sourceVersionMatch = [regex]::Match(
             (Get-Content -LiteralPath (Join-Path $downloaded.FullName 'XGENT-WDS\config.py') -Raw),
             '(?m)^VERSION\s*=\s*"(?<version>[^"]+)"'
@@ -1007,6 +1008,14 @@ try {
     if ($ReleaseTag) {
         Write-Host '[4/5] Подписанные Agent и Guard Keeper подготовлены; Python-исходники не устанавливаются.'
     } else {
+        $stageVersionMatch = [regex]::Match(
+            (Get-Content -LiteralPath (Join-Path $stageAgent 'config.py') -Raw),
+            '(?m)^VERSION\s*=\s*"(?<version>[^"]+)"'
+        )
+        if (-not $stageVersionMatch.Success) {
+            throw 'Не удалось определить версию исходного агента до переключения; рабочая версия не изменена.'
+        }
+        $expectedAgentVersion = $stageVersionMatch.Groups['version'].Value
         Write-Host '[4/5] Собираю отдельное окружение Python и ставлю зависимости...'
         $venv = Join-Path $stageAgent 'venv'
         $pythonExe = Get-XiderPythonExecutable
@@ -1217,7 +1226,12 @@ catch {
         }
     }
     if (-not $PreflightOnly) {
-        Write-XiderInstallReport -Outcome failed -ErrorMessage $originalError.Exception.Message `
+        $reportOutcome = if ($rollbackProblems.Count) { 'partial' } else { 'failed' }
+        $reportError = $originalError.Exception.Message
+        if ($rollbackProblems.Count) {
+            $reportError += ' Откат неполный: ' + ($rollbackProblems -join '; ')
+        }
+        Write-XiderInstallReport -Outcome $reportOutcome -ErrorMessage $reportError `
             -RequestedVersion $expectedAgentVersion -HealthStates $healthStates
     }
     $problemText = if ($rollbackProblems.Count) { ' Откат неполный: ' + ($rollbackProblems -join '; ') } else { '' }
