@@ -10105,9 +10105,8 @@ def on_mqtt_message(topic: str, data: dict) -> None:
             except (OverflowError, ValueError):
                 sender_timestamp = math.nan
             if not math.isfinite(sender_timestamp):
-                log.info("MQTT online status without a valid sender timestamp from %s ignored", device_id)
-                return
-        if online and type(previous_sender_timestamp) in (int, float):
+                sender_timestamp = None
+        if online and sender_timestamp is not None and type(previous_sender_timestamp) in (int, float):
             previous_timestamp = float(previous_sender_timestamp)
             session_changed = valid_session_id and session_id != old.get("mqtt_session_id")
             if (
@@ -10172,7 +10171,8 @@ def on_mqtt_message(topic: str, data: dict) -> None:
                 if valid_session_id
                 else None
             )
-            info["last_status_sender_ts"] = float(sender_timestamp)
+            if sender_timestamp is not None:
+                info["last_status_sender_ts"] = sender_timestamp
             if valid_session_id:
                 info["last_status_session_id"] = session_id
         if "companions" in payload:
