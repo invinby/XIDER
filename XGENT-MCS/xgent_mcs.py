@@ -77,6 +77,7 @@ from media_request_control import MEDIA_REQUEST_ACTIONS, MediaRequestRegistry
 from mac_service_control import (
     LABELS as MAC_SERVICE_LABELS,
     app_install_root as mac_app_install_root,
+    launch_agent_pid,
     launch_agent_running,
     start_launch_agent,
     stop_launch_agent,
@@ -6318,21 +6319,23 @@ def main() -> None:
             except (OSError, ValueError, json.JSONDecodeError):
                 health = {}
             age = time.time() - health.get("updated_at", 0) if type(health.get("updated_at")) in (int, float) else float("inf")
+            service_pid = launch_agent_pid(MAC_SERVICE_LABELS["agent"])
             fresh = (
                 health.get("schema") == 1 and health.get("component") == "agent"
                 and health.get("state") == "running" and 0 <= age < 180
                 and type(health.get("pid")) is int and health["pid"] > 0
+                and health["pid"] == service_pid
                 and isinstance(health.get("version"), str)
                 and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", health["version"])
                 and type(health.get("connected")) is bool
             )
             if running and fresh:
                 mqtt_state = "connected" if health["connected"] else "disconnected"
-                print(f"[OK] Agent v{health['version']}; PID={health['pid']}; process=LaunchAgent-running; MQTT={mqtt_state}; Telegram=not-confirmed")
+                print(f"[OK] Agent v{health['version']}; PID={service_pid}; process=LaunchAgent-running; MQTT={mqtt_state}; Telegram=not-confirmed")
                 print(f"[HEALTH] fresh; age={age:.1f}s")
             elif running:
-                print("[WARN] Agent process=LaunchAgent-running; version=unknown; PID=unknown; MQTT=unknown; Telegram=not-confirmed")
-                print("[HEALTH] missing, stale, or invalid agent-health.json")
+                print(f"[WARN] Agent process=LaunchAgent-running; PID={service_pid or 'unknown'}; version=unknown; MQTT=unknown; Telegram=not-confirmed")
+                print("[HEALTH] missing, stale, invalid, or PID-mismatched agent-health.json")
             else:
                 print("[STOPPED] Agent process=LaunchAgent-stopped; MQTT=unknown; Telegram=not-confirmed")
             print(f"[LOG] {CONFIG_DIR / 'xgent.log'}")

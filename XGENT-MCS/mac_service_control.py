@@ -47,6 +47,20 @@ def launch_agent_running(label: str) -> bool:
     )
 
 
+def launch_agent_pid(label: str) -> int | None:
+    """Return the PID currently owned by launchd for a known XIDER label."""
+    if label not in LABELS.values():
+        return None
+    try:
+        result = _run_launchctl(["print", f"gui/{os.getuid()}/{label}"], timeout=8)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    match = re.search(r"(?m)^\s*pid = ([1-9][0-9]*)\s*$", result.stdout)
+    return int(match.group(1)) if match else None
+
+
 def launch_agent_loaded(label: str) -> bool:
     if label not in LABELS.values():
         return False

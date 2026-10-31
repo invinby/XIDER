@@ -55,6 +55,7 @@ from update_package import (
 from xgencrypto import decrypt_payload, encrypt_payload
 from mac_service_control import (
     LABELS as MAC_SERVICE_LABELS,
+    launch_agent_pid,
     launch_agent_running,
     start_launch_agent,
     stop_launch_agent,
@@ -1050,21 +1051,23 @@ def main() -> int:
                 except (OSError, ValueError, json.JSONDecodeError):
                     health = {}
                 age = time.time() - health.get("updated_at", 0) if type(health.get("updated_at")) in (int, float) else float("inf")
+                service_pid = launch_agent_pid(label)
                 fresh = (
                     health.get("schema") == 1 and health.get("component") == "guardian"
                     and health.get("state") == "running" and 0 <= age < 180
                     and type(health.get("pid")) is int and health["pid"] > 0
+                    and health["pid"] == service_pid
                     and isinstance(health.get("version"), str)
-                and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", health["version"])
+                    and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", health["version"])
                     and type(health.get("connected")) is bool
                 )
                 if running and fresh:
                     mqtt_state = "connected" if health["connected"] else "disconnected"
-                    print(f"[OK] Guard Keeper v{health['version']}; PID={health['pid']}; process=LaunchAgent-running; MQTT={mqtt_state}; Telegram=not-confirmed")
+                    print(f"[OK] Guard Keeper v{health['version']}; PID={service_pid}; process=LaunchAgent-running; MQTT={mqtt_state}; Telegram=not-confirmed")
                     print(f"[HEALTH] fresh; age={age:.1f}s")
                 elif running:
-                    print("[WARN] Guard Keeper process=LaunchAgent-running; version=unknown; PID=unknown; MQTT=unknown; Telegram=not-confirmed")
-                    print("[HEALTH] missing, stale, or invalid guardian-health.json")
+                    print(f"[WARN] Guard Keeper process=LaunchAgent-running; PID={service_pid or 'unknown'}; version=unknown; MQTT=unknown; Telegram=not-confirmed")
+                    print("[HEALTH] missing, stale, invalid, or PID-mismatched guardian-health.json")
                 else:
                     print("[STOPPED] Guard Keeper process=LaunchAgent-stopped; MQTT=unknown; Telegram=not-confirmed")
                 print(f"[LOG] {CONFIG_DIR / 'guardian.log'}")
