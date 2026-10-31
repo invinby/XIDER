@@ -121,6 +121,25 @@ def test_multiple_unique_nonces_accepted():
         assert m.verify_message(env) is not None
 
 
+def test_nonce_cache_eviction_also_clears_replay_set(monkeypatch):
+    import collections
+
+    now = time.time()
+    seen = collections.deque()
+    seen_set = set()
+    monkeypatch.setattr(m, "_SEEN_NONCES_MAX", 2)
+    monkeypatch.setattr(m, "_seen", seen)
+    monkeypatch.setattr(m, "_seen_set", seen_set)
+
+    assert m._mark_seen("first", now)
+    assert m._mark_seen("second", now)
+    assert not m._mark_seen("third", now)
+    assert not m._mark_seen("first", now)
+
+    assert list(seen) == [("first", now), ("second", now)]
+    assert seen_set == {"first", "second"}
+
+
 def test_timestamp_delta_diagnostic_is_signed_and_rejects_invalid_values():
     assert m.timestamp_delta_seconds({"payload": {"ts": 700}}, now=1000) == 300
     assert m.timestamp_delta_seconds({"payload": {"ts": 1060}}, now=1000) == -60
