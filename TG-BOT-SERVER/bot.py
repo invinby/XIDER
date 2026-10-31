@@ -10040,6 +10040,9 @@ def on_mqtt_message(topic: str, data: dict) -> None:
     # nonce. Use server receipt time for freshness: a valid but slightly delayed
     # packet must not make a live device look offline immediately after receipt.
     received_at = time.time()
+    # Preserve the authenticated outer timestamp before decrypting, because
+    # encrypted payloads do not contain HMAC envelope metadata.
+    signed_sender_timestamp = payload.get("ts")
     # LWT exposes only its signed offline/session envelope. Everything else
     # still requires the encrypted body whenever encryption is configured.
     clear_lwt = (
@@ -10086,6 +10089,47 @@ def on_mqtt_message(topic: str, data: dict) -> None:
         is_standby = (raw_status == "standby")
         old = devices.get(device_id) or {}
         session_id = payload.get("mqtt_session_id")
+        sender_timestamp = signed_sender_timestamp
+        previous_sender_timestamp = old.get("last_status_sender_ts")
+        previous_session_id = old.get("last_status_session_id") or old.get("mqtt_session_id")
+        valid_session_id = (
+            isinstance(session_id, str)
+            and re.fullmatch(r"[0-9a-f]{32}", session_id) is not None
+        )
+        if online:
+            try:
+                sender_timestamp = (
+                    float(sender_timestamp)
+                    if type(sender_timestamp) in (int, float) else math.nan
+                )
+            except (OverflowError, ValueError):
+                sender_timestamp = math.nan
+            if not math.isfinite(sender_timestamp):
+                log.info("MQTT online status without a valid sender timestamp from %s ignored", device_id)
+                return
+        if online and type(previous_sender_timestamp) in (int, float):
+            previous_timestamp = float(previous_sender_timestamp)
+            session_changed = valid_session_id and session_id != old.get("mqtt_session_id")
+            if (
+                sender_timestamp < previous_timestamp
+                or (sender_timestamp == previous_timestamp and session_changed)
+            ):
+                # QoS/reconnect delivery can put a signed heartbeat from an
+                # older MQTT session behind a newer one. Receipt time alone
+                # would make that stale packet look fresh and replace the
+                # active session, so retain the sender's signed ordering too.
+                log.info("Out-of-order MQTT online status from %s ignored", device_id)
+                audit("stale_device_online_rejected", device_id=device_id)
+                return
+        if (
+            online and not old.get("online", False) and valid_session_id
+            and session_id == previous_session_id
+        ):
+            # Once a session has gone offline, its delayed QoS heartbeat must
+            # not resurrect it. Reconnects receive a new session identifier.
+            log.info("Retired MQTT session tried to restore online status for %s", device_id)
+            audit("stale_device_online_rejected", device_id=device_id)
+            return
         if not online and (
             not isinstance(session_id, str)
             or re.fullmatch(r"[0-9a-f]{32}", session_id) is None
@@ -10125,9 +10169,12 @@ def on_mqtt_message(topic: str, data: dict) -> None:
         if online:
             info["mqtt_session_id"] = (
                 session_id
-                if isinstance(session_id, str) and re.fullmatch(r"[0-9a-f]{32}", session_id)
+                if valid_session_id
                 else None
             )
+            info["last_status_sender_ts"] = float(sender_timestamp)
+            if valid_session_id:
+                info["last_status_session_id"] = session_id
         if "companions" in payload:
             info["companion_records"] = companion_status.clean_layer_records(
                 payload.get("companions"), now=time.time(),
