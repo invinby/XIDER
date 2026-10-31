@@ -82,10 +82,12 @@ jobs:
           Copy-Item XGENT-WDS/.env.example XGENT-WDS/dist/nuitka/.env.example
           python tools/verify_command_approval_bundle.py --nuitka-executable XGENT-WDS/dist/nuitka/XGENT-WDS.exe
           $expected = @('.env.example', 'XGENT-WDS.exe', 'XIDER-Guard-Keeper.exe') | Sort-Object
-          $actual = @(Get-ChildItem XGENT-WDS/dist/nuitka -File | ForEach-Object Name | Sort-Object)
+          $actual = @(Get-ChildItem XGENT-WDS/dist/nuitka -Force -File | ForEach-Object Name | Sort-Object)
+          Write-Host "Compiled Windows package files: $($actual -join ', ')"
           if (Compare-Object $expected $actual) { throw "Unexpected compiled Windows package contents: $($actual -join ', ')" }
           $package = Join-Path $env:RUNNER_TEMP 'XGENT-WDS-Windows.zip'
-          Compress-Archive -Path 'XGENT-WDS/dist/nuitka/*' -DestinationPath $package -Force
+          $packageFiles = @($expected | ForEach-Object { Join-Path 'XGENT-WDS/dist/nuitka' $_ })
+          Compress-Archive -LiteralPath $packageFiles -DestinationPath $package -Force
           python tools/verify_command_approval_bundle.py --public-only-zip $package
           New-Item -ItemType Directory -Path artifacts -Force | Out-Null
           Copy-Item XGENT-WDS/dist/nuitka/XGENT-WDS.exe artifacts/
