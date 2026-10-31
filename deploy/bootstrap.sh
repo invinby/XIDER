@@ -186,19 +186,46 @@ for name, label in labels.items():
     process = process_name(pid)
     running = pid is not None and process is not None
     version = record.get("version") if isinstance(record.get("version"), str) else None
-    fresh = type(record.get("updated_at")) in (int, float) and 0 <= now - record["updated_at"] <= 35
+    record_valid = record.get("schema") == 1 and record.get("component") == name
+    health_pid = record.get("pid")
+    pid_matches = type(health_pid) is int and health_pid == pid
+    stamp = record.get("updated_at")
+    fresh = type(stamp) in (int, float) and 0 <= now - stamp <= 35
     if name in {"agent", "guardian"}:
-        ready = running and fresh and record.get("connected") is True and version == expected_versions[name]
         enabled = True
+        ready = (
+            running and record_valid and pid_matches and fresh
+            and record.get("connected") is True
+            and version == expected_versions[name]
+        )
     else:
         enabled = layer_state[name]
-        ready = enabled and running and fresh and record.get("state") == "running" and version == expected_versions[name]
-    state = "disabled" if not enabled else ("installed" if ready else ("failed" if outcome == "failed" else "unknown"))
+        ready = (
+            enabled and running and record_valid and pid_matches and fresh
+            and record.get("state") == "running"
+            and version == expected_versions[name]
+        )
+    state = "disabled" if not enabled else ("installed" if ready else "failed")
     component_error = None
-    if state == "failed":
-        component_error = error_message or f"Fresh process/health confirmation failed; inspect {health_root / (name + '.log')}"
-    if state == "disabled":
-        component_error = None
+    if enabled and not ready:
+        reasons = []
+        if not running:
+            reasons.append("launchd process is not running")
+        if not record_valid:
+            reasons.append("component health record is missing or invalid")
+        if not fresh:
+            reasons.append("component health record is stale")
+        if not pid_matches:
+            reasons.append("health PID does not match the active launchd PID")
+        if version != expected_versions[name]:
+            reasons.append(f"expected version {expected_versions[name]}, got {version or 'unknown'}")
+        if name in {"agent", "guardian"} and record.get("connected") is not True:
+            reasons.append("MQTT connection was not confirmed")
+        if name in {"safari", "siri"} and record.get("state") != "running":
+            reasons.append(f"layer state is {record.get('state') or 'unknown'}")
+        component_error = "; ".join(reasons) or error_message or "component health was not confirmed"
+        if error_message:
+            component_error = f"{component_error}; installer: {error_message}"
     if name in {"agent", "guardian"}:
         bot_status = "not_verified"
         bot_detail = "Local MQTT connection was checked; no bot acknowledgement was observed by the installer."
