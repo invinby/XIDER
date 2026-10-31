@@ -7,7 +7,7 @@
 XIDER is source code for managing owner-authorized Windows and macOS devices
 through Telegram. The bot checks access and routes a command over MQTT; an
 agent on the selected device performs it and returns a result. Repository
-version 4.3.5 identifies source metadata, not proof that a package is published
+version 4.3.6 identifies source metadata, not proof that a package is published
 or installed.
 
 ## Architecture
