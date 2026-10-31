@@ -84,6 +84,13 @@ from network_traffic_schedule import load_schedule as load_network_traffic_sched
 import window_capture
 from media_request_control import MEDIA_REQUEST_ACTIONS, MediaRequestRegistry
 
+def _run_without_console(function, *args, **kwargs):
+    """Run a captured system command without flashing a console window."""
+    if os.name == "nt":
+        kwargs.setdefault("creationflags", getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return function(*args, **kwargs)
+
+
 _NUITKA_RUNTIME = bool("__compiled__" in globals() and not getattr(sys, "frozen", False))
 _BUNDLED_RUNTIME = bool(getattr(sys, "frozen", False) or _NUITKA_RUNTIME)
 
@@ -124,7 +131,7 @@ def _read_pending_restart_snapshot() -> dict:
     )
     unknown = {"state": "unknown", "source": _PENDING_RESTART_SOURCE, "pending": None, "reasons": [], "completeness": "unknown"}
     try:
-        completed = subprocess.run(
+        completed = _run_without_console(subprocess.run, 
             [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True, text=True, timeout=12, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -149,7 +156,7 @@ def _read_os_support_identity() -> dict:
         "build=[string]$p.CurrentBuild;edition=[string]$p.EditionID}|ConvertTo-Json -Compress"
     )
     try:
-        completed = subprocess.run(
+        completed = _run_without_console(subprocess.run, 
             [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True, text=True, timeout=12, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -194,7 +201,7 @@ def _read_hardware_inventory_snapshot() -> dict:
         "graphics=$gpu}|ConvertTo-Json -Compress"
     )
     try:
-        completed = subprocess.run(
+        completed = _run_without_console(subprocess.run, 
             [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True, text=True, timeout=12, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -247,7 +254,7 @@ def _read_driver_inventory_snapshot() -> dict:
         "ConvertTo-Json -InputObject $rows -Depth 2 -Compress"
     )
     try:
-        completed = subprocess.run(
+        completed = _run_without_console(subprocess.run, 
             [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True, text=True, timeout=20, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -298,7 +305,7 @@ def _read_installed_app_inventory_snapshot() -> dict:
         "if($rows.Count -gt 500){exit 3}; ConvertTo-Json -InputObject $rows -Depth 2 -Compress"
     )
     try:
-        completed = subprocess.run(
+        completed = _run_without_console(subprocess.run, 
             [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True, text=True, timeout=20, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -352,7 +359,7 @@ def _read_startup_inventory_snapshot() -> dict:
         "if($rows.Count -gt 300){exit 3}; ConvertTo-Json -InputObject $rows -Depth 2 -Compress"
     )
     try:
-        completed = subprocess.run(
+        completed = _run_without_console(subprocess.run, 
             [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True, text=True, timeout=20, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -393,7 +400,7 @@ def _read_service_inventory_snapshot() -> dict:
         "if($rows.Count -gt 500){exit 3}; ConvertTo-Json -InputObject $rows -Depth 2 -Compress"
     )
     try:
-        completed = subprocess.run(
+        completed = _run_without_console(subprocess.run, 
             [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True, text=True, timeout=20, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -437,7 +444,7 @@ def _read_crash_summary_snapshot() -> dict:
         "if($rows.Count -gt 100){exit 3}; ConvertTo-Json -InputObject $rows -Depth 2 -Compress"
     )
     try:
-        completed = subprocess.run(
+        completed = _run_without_console(subprocess.run, 
             [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True, text=True, timeout=20, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -481,7 +488,7 @@ def _read_smart_trend_snapshot() -> dict:
         "ConvertTo-Json -InputObject @($rows) -Compress -Depth 3"
     )
     try:
-        completed = subprocess.run(
+        completed = _run_without_console(subprocess.run, 
             [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True, text=True, timeout=20, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -546,7 +553,7 @@ def _read_volume_topology_snapshot() -> dict:
         "ConvertTo-Json -InputObject @($rows) -Compress -Depth 3"
     )
     try:
-        completed = subprocess.run(
+        completed = _run_without_console(subprocess.run, 
             [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True, text=True, timeout=15, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -626,7 +633,7 @@ def _read_startup_duration_snapshot() -> dict:
         "}else{'{}'}"
     )
     try:
-        completed = subprocess.run(
+        completed = _run_without_console(subprocess.run, 
             [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True, text=True, timeout=12, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -653,7 +660,7 @@ def _read_sleep_wake_history_snapshot() -> dict:
         "$rows=@($kp)+@($pt); ConvertTo-Json -InputObject $rows -Depth 2 -Compress"
     )
     try:
-        completed = subprocess.run(
+        completed = _run_without_console(subprocess.run, 
             [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True, text=True, timeout=12, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -679,7 +686,7 @@ def _read_battery_health_snapshot() -> dict:
         "ConvertTo-Json -InputObject @{design=$design;full=$full} -Depth 3 -Compress"
     )
     try:
-        completed = subprocess.run(
+        completed = _run_without_console(subprocess.run, 
             [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True, text=True, timeout=10, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -742,7 +749,7 @@ def _read_battery_cycle_snapshot() -> dict:
         "ConvertTo-Json -InputObject $rows -Depth 2 -Compress"
     )
     try:
-        completed = subprocess.run(
+        completed = _run_without_console(subprocess.run, 
             [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True, text=True, timeout=10, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -791,7 +798,7 @@ def _read_energy_usage_snapshot() -> dict:
     try:
         with tempfile.NamedTemporaryFile(prefix="xider-energy-", suffix=".csv", delete=False) as handle:
             export_path = handle.name
-        completed = subprocess.run(
+        completed = _run_without_console(subprocess.run, 
             [powercfg, "/srumutil", "/output", export_path, "/csv"],
             capture_output=True, text=True, timeout=20, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -830,7 +837,7 @@ def _read_thermal_snapshot() -> dict:
         "ConvertTo-Json -InputObject $rows -Compress"
     )
     try:
-        completed = subprocess.run(
+        completed = _run_without_console(subprocess.run, 
             [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True, text=True, timeout=8, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -1242,7 +1249,7 @@ def acquire_instance_lock() -> bool:
 
 def _scheduled_task_exists(task_name: str = WINDOWS_TASK_NAME) -> bool:
     """Проверить реальный Scheduled Task, которым устанавливается агент."""
-    result = subprocess.run(
+    result = _run_without_console(subprocess.run, 
         ["schtasks.exe", "/Query", "/TN", task_name],
         capture_output=True, text=True, check=False,
     )
@@ -1261,11 +1268,11 @@ def _remove_scheduled_task(
     """
     try:
         if stop_running:
-            subprocess.run(
+            _run_without_console(subprocess.run, 
                 ["schtasks.exe", "/End", "/TN", task_name],
                 capture_output=True, text=True, check=False,
             )
-        delete = subprocess.run(
+        delete = _run_without_console(subprocess.run, 
             ["schtasks.exe", "/Delete", "/TN", task_name, "/F"],
             capture_output=True, text=True, check=False,
         )
@@ -2383,12 +2390,12 @@ class XgentClient:
                 # /End may report that an idle task was not running. /Run is the
                 # authoritative result: it starts the already registered task
                 # with its existing owner, action, and permissions.
-                subprocess.run(
+                _run_without_console(subprocess.run, 
                     ["schtasks.exe", "/End", "/TN", WINDOWS_GUARDIAN_TASK_NAME],
                     capture_output=True, text=True, check=False, timeout=10,
                 )
                 time.sleep(0.5)
-                started = subprocess.run(
+                started = _run_without_console(subprocess.run, 
                     ["schtasks.exe", "/Run", "/TN", WINDOWS_GUARDIAN_TASK_NAME],
                     capture_output=True, text=True, check=False, timeout=10,
                 )
@@ -4771,7 +4778,7 @@ class XgentClient:
 
     def _do_wifi_info(self, payload: dict) -> None:
         try:
-            out = subprocess.check_output(
+            out = _run_without_console(subprocess.check_output, 
                 ["netsh", "wlan", "show", "interfaces"],
                 text=True, stderr=subprocess.DEVNULL, timeout=10,
             )
@@ -4784,7 +4791,7 @@ class XgentClient:
 
     def _do_usb_devices(self, payload: dict) -> None:
         try:
-            out = subprocess.check_output(
+            out = _run_without_console(subprocess.check_output, 
                 ["powershell", "-NoProfile", "-Command",
                  "Get-PnpDevice -PresentOnly -Class USB | "
                  "Select-Object -First 25 -ExpandProperty FriendlyName"],
@@ -4802,7 +4809,7 @@ class XgentClient:
         names = []
         try:
             for hive in ("HKCU", "HKLM"):
-                out = subprocess.check_output(
+                out = _run_without_console(subprocess.check_output, 
                     ["reg", "query",
                      f"{hive}\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"],
                     text=True, stderr=subprocess.DEVNULL, timeout=10,
@@ -4825,7 +4832,7 @@ class XgentClient:
 
     def _do_netstat(self, payload: dict) -> None:
         try:
-            out = subprocess.check_output(
+            out = _run_without_console(subprocess.check_output, 
                 ["netstat", "-an", "-p", "tcp"],
                 text=True, stderr=subprocess.DEVNULL, timeout=15,
             )
@@ -4843,7 +4850,7 @@ class XgentClient:
             os.path.expanduser("~"), "Downloads", os.path.basename(url.split("?")[0]) or "xgent_download.bin"
         )
         try:
-            result = subprocess.run(
+            result = _run_without_console(subprocess.run, 
                 ["curl", "-L", "--max-time", "120", "-o", dest, url],
                 capture_output=True, text=True, timeout=130,
             )
@@ -5096,7 +5103,7 @@ class XgentClient:
                     publish("confirmed", True, "😴 Windows подтвердила переход в спящий режим.", effect_confirmed=True)
                     return
                 try:
-                    fallback = subprocess.run(
+                    fallback = _run_without_console(subprocess.run, 
                         ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
                          "Add-Type -AssemblyName System.Windows.Forms; "
                          "$r=[System.Windows.Forms.Application]::SetSuspendState("
@@ -5328,7 +5335,7 @@ class XgentClient:
         ps_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
         def powershell(script: str):
-            return subprocess.run(
+            return _run_without_console(subprocess.run, 
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
                 capture_output=True, text=True, timeout=8, check=False,
                 creationflags=ps_flags,
@@ -5463,7 +5470,7 @@ class XgentClient:
     def _do_net_wifi_passwords(self, payload: dict) -> None:
         """Список сохранённых Wi-Fi сетей и паролей (netsh key=clear)."""
         try:
-            profiles_out = subprocess.check_output(
+            profiles_out = _run_without_console(subprocess.check_output, 
                 ["netsh", "wlan", "show", "profiles"],
                 text=True, stderr=subprocess.DEVNULL, timeout=10, encoding="utf-8", errors="ignore",
             )
@@ -5474,7 +5481,7 @@ class XgentClient:
                 rows, shown = [], names[:15]
                 for n in shown:
                     try:
-                        out = subprocess.check_output(
+                        out = _run_without_console(subprocess.check_output, 
                             ["netsh", "wlan", "show", "profile", f"name={n}", "key=clear"],
                             text=True, stderr=subprocess.DEVNULL, timeout=10,
                             encoding="utf-8", errors="ignore",
@@ -5496,7 +5503,7 @@ class XgentClient:
     def _do_net_bluetooth_list(self, payload: dict) -> None:
         """Список активных Bluetooth-устройств (Get-PnpDevice)."""
         try:
-            out = subprocess.check_output(
+            out = _run_without_console(subprocess.check_output, 
                 ["powershell", "-NoProfile", "-Command",
                  "Get-PnpDevice -Class Bluetooth -Status OK | Select-Object -First 20 -ExpandProperty FriendlyName"],
                 text=True, stderr=subprocess.DEVNULL, timeout=15,
@@ -5527,7 +5534,7 @@ class XgentClient:
             "} | ConvertTo-Json -Compress"
         )
         try:
-            out = subprocess.check_output(
+            out = _run_without_console(subprocess.check_output, 
                 ["powershell", "-NoProfile", "-Command", ps],
                 text=True, stderr=subprocess.DEVNULL, timeout=20,
             ).strip()
@@ -5568,7 +5575,7 @@ class XgentClient:
             "$names | Sort-Object -Unique"
         )
         try:
-            out = subprocess.check_output(
+            out = _run_without_console(subprocess.check_output, 
                 ["powershell", "-NoProfile", "-Command", ps],
                 text=True, stderr=subprocess.DEVNULL, timeout=25,
             )
@@ -5650,14 +5657,14 @@ class XgentClient:
                 raise RuntimeError(
                     f"Задача «{WINDOWS_TASK_NAME}» отсутствует; переустанови подписанный Windows-пакет."
                 )
-            task = subprocess.run(
+            task = _run_without_console(subprocess.run, 
                 ["schtasks.exe", "/Change", "/TN", WINDOWS_TASK_NAME, "/ENABLE"],
                 capture_output=True, text=True, timeout=20, check=False,
             )
             if task.returncode != 0:
                 raise RuntimeError((task.stderr or task.stdout or "не удалось включить Scheduled Task").strip())
             set_guardian_startup_enabled(True)
-            result = subprocess.run(
+            result = _run_without_console(subprocess.run, 
                 ["schtasks.exe", "/Run", "/TN", WINDOWS_TASK_NAME],
                 capture_output=True, text=True, timeout=20, check=False,
             )
@@ -5679,7 +5686,7 @@ class XgentClient:
             set_guardian_startup_enabled(False)
             startup_state_changed = True
             if _scheduled_task_exists():
-                disabled = subprocess.run(
+                disabled = _run_without_console(subprocess.run, 
                     ["schtasks.exe", "/Change", "/TN", WINDOWS_TASK_NAME, "/DISABLE"],
                     capture_output=True, text=True, check=False,
                 )
@@ -5769,7 +5776,7 @@ class XgentClient:
         host = payload.get("host", "8.8.8.8")
         host = re.sub(r"[^\w\.-]", "", str(host)) or "8.8.8.8"
         try:
-            res = subprocess.run(
+            res = _run_without_console(subprocess.run, 
                 ["ping", "-n", "4", host],
                 capture_output=True, text=True, timeout=10,
             )
@@ -7525,7 +7532,7 @@ setTimeout(()=>window.close(),15000);
             text += "\n\n⚠️ <i>Инициирован перезапуск процесса агента...</i>"
             def _reboot_agent():
                 time.sleep(1.5)
-                subprocess.Popen([sys.executable] + sys.argv)
+                _run_without_console(subprocess.Popen, [sys.executable] + sys.argv)
                 os._exit(0)
             threading.Thread(target=_reboot_agent, daemon=True).start()
         self._publish_response("output", {"type": "agent_update", "device_id": DEVICE_ID, "ok": True, "text": text})
