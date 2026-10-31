@@ -206,7 +206,11 @@ def test_matching_status_health_receipt_reconciles_update(coordinator, monkeypat
     monkeypatch.setattr(bot, 'audit', lambda *args, **kwargs: None)
     monkeypatch.setattr(bot.status_collector, 'submit', lambda *args: None)
     monkeypatch.setattr(bot.multi_status, 'submit', lambda *args: None)
-    bot.on_mqtt_message(f'{bot.MQTT_PREFIX}/mac1/status', {'type': 'status', 'os': 'macOS 27', 'status': 'online', 'agent_update': {'operation_id': op.operation_id, 'release_tag': 'v4.2.0', 'manifest_digest': op.manifest_digest, 'update_state': 'succeeded', 'updated_at': 1010}})
+    bot.on_mqtt_message(f'{bot.MQTT_PREFIX}/mac1/status', {
+        'type': 'status', 'os': 'macOS 27', 'status': 'online',
+        'mqtt_session_id': 'c' * 32,
+        'agent_update': {'operation_id': op.operation_id, 'release_tag': 'v4.2.0', 'manifest_digest': op.manifest_digest, 'update_state': 'succeeded', 'updated_at': 1010},
+    })
     assert c.store.get(op.operation_id).state == 'succeeded'
 
 
