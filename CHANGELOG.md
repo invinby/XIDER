@@ -1,5 +1,21 @@
 # XIDER release history
 
+## X4.3.21-VERIFIED-OBFUSCATION+20261102 — synchronized release metadata
+
+### English
+
+- Carries forward the PyObfus dynamic command-approval API compatibility correction.
+- Synchronizes source versions, Windows PE numeric and string versions, and RU/EN Pages source labels at `4.3.21`.
+- Supersedes the unpublished `v4.3.20` tag, whose release gate found stale Windows PE and Pages metadata. No assets were published from that tag.
+- Publication remains blocked until the complete release gate passes. macOS native runtime signing/notarization and physical endpoint acceptance remain open.
+
+### Русский
+
+- Сохраняет исправление совместимости PyObfus с динамическим API подтверждения команд.
+- Синхронизирует версии исходников, числовые и текстовые поля Windows PE и метки RU/EN Pages на `4.3.21`.
+- Заменяет неопубликованный тег `v4.3.20`: его release gate обнаружил устаревшие версии Windows PE и страниц. Артефакты с этого тега не публиковались.
+- Публикация ждёт успешного полного release gate. Подпись/notarization нативного macOS runtime и физическая приёмка устройств остаются открытыми.
+
 ## X4.3.19-VERIFIED-OBFUSCATION+20261102 — verified agent obfuscation
 
 ### English
