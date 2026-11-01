@@ -1,5 +1,21 @@
 # XIDER release history
 
+## X4.3.18-COMPONENT-LEDGER+20261101 — signed component build status
+
+### English
+
+- Version details in Telegram now show a component's build mode and obfuscation status only from a verified signed report. macOS Agent, Safari, and Siri are listed separately.
+- The Windows + macOS source-preview release attaches a signed per-component build inventory and includes the server source archive in the signed release inventory.
+- Nuitka is reported as compilation, not obfuscation. Missing macOS native packages are reported as `not_built`; this remains a source preview, not an Apple-signed or notarized macOS app.
+- Bot, Windows Agent, and macOS Agent version metadata is synchronized at `4.3.18`.
+
+### Русский
+
+- Карточки версий Telegram показывают тип сборки и статус обфускации только по проверенному подписанному отчёту. Agent, Safari и Siri для macOS выводятся отдельно.
+- Windows + macOS source-preview прикрепляет подписанный компонентный inventory; исходники сервера включены в подписанный состав релиза.
+- Nuitka указан как компиляция, а не обфускация. Отсутствующие нативные сборки macOS отмечаются `not_built`; это всё ещё source-preview, не приложение с подписью Apple и нотариализацией.
+- Версии бота, Windows Agent и macOS Agent синхронизированы на `4.3.18`.
+
 ## X4.3.17-PRANK-HUB+20261101 — categorized entertainment hub and signed preview release
 
 ### English

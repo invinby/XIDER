@@ -149,7 +149,8 @@ def verify_protected_build_metadata(release: Release, protected: dict, release_m
     """Validate component build claims and bind every package hash to the release inventory."""
     try:
         release_manifest = release_manifest if release_manifest is not None else release.manifest
-        if not verify_release_metadata(release, release_manifest):
+        if (_PROTECTED_BUILD_MANIFEST not in release.asset_names
+                or not verify_release_metadata(release, release_manifest)):
             return False
         verify_manifest_signature(protected)
         if (protected.get("schema") != 1 or protected.get("source_ref") != release.tag
@@ -216,6 +217,11 @@ def verify_protected_build_metadata(release: Release, protected: dict, release_m
             mode = row.get("build_mode")
             if row.get("platform") != platform or row.get("version") != release.tag:
                 return False
+            obfuscation = row.get("obfuscation")
+            if not isinstance(obfuscation, dict) or obfuscation.get("state") not in {
+                "obfuscated", "not_applied", "partial", "not_obfuscated",
+            }:
+                return False
             if mode == "not_built":
                 if (row.get("package_asset") is not None or row.get("entrypoint") is not None
                         or row.get("output_sha256") is not None or package_asset in member_hashes_by_asset):
@@ -229,11 +235,6 @@ def verify_protected_build_metadata(release: Release, protected: dict, release_m
                 return False
             digest = member_hashes_by_asset[package_asset].get(entrypoint)
             if digest is None or row.get("output_sha256") != digest:
-                return False
-            obfuscation = row.get("obfuscation")
-            if not isinstance(obfuscation, dict) or obfuscation.get("state") not in {
-                "obfuscated", "not_applied", "partial", "not_obfuscated",
-            }:
                 return False
         return True
     except (ValueError, TypeError, KeyError, AttributeError):

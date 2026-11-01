@@ -104,8 +104,17 @@ def test_signed_component_build_report_is_bound_to_release_package_hashes(monkey
     assert [row["id"] for row in loaded.protected_components("mac_agent")] == [
         "macos_agent", "safari", "siri",
     ]
+    unadvertised = dataclasses.replace(
+        release, asset_names=release.asset_names - {"protected-build-manifest.json"},
+    )
+    assert not ledger.verify_protected_build_metadata(unadvertised, protected_manifest, release_manifest)
     protected_manifest["assets"][0]["sha256"] = "d" * 64
     assert not ledger.verify_protected_build_metadata(release, protected_manifest, release_manifest)
+    malformed = {key: copy.deepcopy(value) for key, value in protected_manifest.items() if key != "signature"}
+    malformed["assets"][0]["sha256"] = archive_digest
+    malformed["components"][1]["obfuscation"] = []
+    malformed = release_signature.sign_manifest(malformed, private_pem)
+    assert not ledger.verify_protected_build_metadata(release, malformed, release_manifest)
     invalid_catalog = ledger.Catalog(
         loader=lambda: [{
             "tag_name": release.tag, "name": release.name, "published_at": release.published_at,
