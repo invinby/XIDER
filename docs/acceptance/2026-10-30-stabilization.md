@@ -128,3 +128,22 @@ The X-MAP snapshot contains 404 platform/action rows. Every row has expected-res
 | 10. Versions and RU/EN copy | Source, previews, stable package defaults, generated registry and local copy tests are synchronized and documented | Hosted Pages/release view after an owner-approved publish |
 | Agent Files | Owner-only bounded inventory and explicit component details are implemented; no secret contents are exposed by default | Inspect actual installed paths and platform signatures on both devices |
 | Build protection | Protected workflow builds only tagged source, signs/verifies an archive-member manifest, reports obfuscation accurately, and keeps owner inspection/uninstall/rollback available | Run the protected workflow and inspect its hosted artifact |
+
+## Signed VPS update · 2026-11-02
+
+- GitHub Actions run `41359628318` built and signed the server source bundle for
+  exact commit `d690fd6fa4c5bb56c25afc9bc4f6b775156ce4a8`; release:
+  [server-deploy-20261102](https://github.com/invinby/XIDER/releases/tag/server-deploy-20261102).
+- The release manifest was verified locally and again on the VPS by its
+  root-owned verifier before installation. `xider-server-ops update` applied
+  the bundle transactionally and created
+  `/var/backups/xider/xider-20261101T225820Z-566173.tar.gz`.
+- Post-update: `xider-bot.service` is `enabled` and `active/running`,
+  `NRestarts=0`; its PID changed from `4012877` to `567824`. The live
+  `TG-BOT-SERVER/bot.py` normalized SHA-256 matches the checked-out source
+  (`fc9a7b1e…b114715b`). `/etc/xider/bot.env` remains present with mode `0640`.
+  These are process and file-integrity checks, not a Telegram→MQTT round-trip.
+- The sanitized device registry did not change: Windows `DESKTOP-Q46JPA2` is
+  still on `4.3.15`, online, with update mode `frozen`; `MacBook-Air.local` is
+  on `4.2.1` and offline. Neither device currently reports Guardian/Safari/Siri
+  versions. The VPS source update does not update endpoint agents.
