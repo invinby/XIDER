@@ -82,6 +82,14 @@ def test_tagged_release_builds_and_publishes_signed_source_package():
         assert f"artifacts/{asset}" in published_assets
 
 
+
+def test_windows_source_preview_release_attaches_signed_component_status_manifest():
+    release = WINDOWS_PREVIEW_WORKFLOW.read_text(encoding="utf-8")
+    assert 'python tools/build_protected_build_manifest.py artifacts --source-ref "$TAG" --source-commit "$COMMIT" --require-signature --allow-missing-platforms' in release
+    assert 'git archive --format=zip --output=artifacts/X-STAB-server.zip "$COMMIT" TG-BOT-SERVER deploy XGENT-MCS/release_signature.py' in release
+    assert "artifacts/protected-build-manifest.json" in release
+
+
 def test_tagged_release_uses_version_specific_bilingual_release_notes():
     text = WORKFLOW.read_text(encoding="utf-8")
     release = text.split("  create-release:", 1)[1]

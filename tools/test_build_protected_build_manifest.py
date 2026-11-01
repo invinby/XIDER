@@ -93,6 +93,33 @@ def test_component_inventory_reports_safari_and_siri_as_one_shared_bundle(tmp_pa
     assert all(row["obfuscation"]["state"] == "not_applied" for row in manifest["components"])
 
 
+def test_preview_inventory_marks_every_missing_macos_component_not_built(tmp_path):
+    _archives(tmp_path)
+    (tmp_path / "XGENT-MCS-macos-bundle.zip").unlink()
+    (tmp_path / "Guard-Keeper-macOS.zip").unlink()
+
+    manifest = build_manifest(
+        tmp_path, source_ref="v4.3.17", source_commit=COMMIT, allow_missing_platforms=True,
+    )
+
+    missing = [row for row in manifest["components"] if row["platform"] == "macos"]
+    assert {row["id"] for row in missing} == {
+        "macos_agent", "macos_guard_keeper", "safari", "siri",
+    }
+    assert all(row["build_mode"] == "not_built" for row in missing)
+    assert all(row["package_asset"] is None and row["output_sha256"] is None for row in missing)
+    assert manifest["platform_signing"]["macos"] == "source_preview_no_native_package"
+    assert manifest["components"][0]["build_mode"] == "nuitka_compiled"
+
+
+def test_full_build_inventory_still_requires_macos_archives(tmp_path):
+    _archives(tmp_path)
+    (tmp_path / "XGENT-MCS-macos-bundle.zip").unlink()
+
+    with pytest.raises(ValueError, match="Build archive set mismatch"):
+        build_manifest(tmp_path, source_ref="v4.3.17", source_commit=COMMIT)
+
+
 def test_manifest_rejects_missing_component_entrypoint(tmp_path):
     _archives(tmp_path, "XGENT-WDS-Windows.zip", {"unexpected.bin": b"not the agent"})
 

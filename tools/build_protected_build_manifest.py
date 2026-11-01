@@ -63,7 +63,9 @@ def _safe_member_name(name: str) -> bool:
             and ".." not in path.parts and "\\" not in name and "\x00" not in name)
 
 
-def build_manifest(directory: Path, *, source_ref: str, source_commit: str) -> dict:
+def build_manifest(
+    directory: Path, *, source_ref: str, source_commit: str, allow_missing_platforms: bool = False,
+) -> dict:
     if not isinstance(source_ref, str) or not TAG.fullmatch(source_ref):
         raise ValueError("source_ref must be a published semantic-version tag (vMAJOR.MINOR.PATCH)")
     if not isinstance(source_commit, str) or not COMMIT.fullmatch(source_commit):
@@ -71,8 +73,12 @@ def build_manifest(directory: Path, *, source_ref: str, source_commit: str) -> d
     directory = Path(directory)
     archives = sorted(path for path in directory.glob("*.zip") if path.is_file())
     names = {path.name for path in archives}
-    if names != EXPECTED_ARCHIVES:
-        missing = sorted(EXPECTED_ARCHIVES - names)
+    required_archives = EXPECTED_ARCHIVES - (
+        {"XGENT-MCS-macos-bundle.zip", "Guard-Keeper-macOS.zip"}
+        if allow_missing_platforms else set()
+    )
+    if not required_archives <= names or names - EXPECTED_ARCHIVES:
+        missing = sorted(required_archives - names)
         unexpected = sorted(names - EXPECTED_ARCHIVES)
         raise ValueError(f"Build archive set mismatch; missing={missing}, unexpected={unexpected}")
 
@@ -113,7 +119,28 @@ def build_manifest(directory: Path, *, source_ref: str, source_commit: str) -> d
     assets_by_name = {asset["name"]: asset for asset in assets}
     components = []
     for component_id, platform, asset_name, entrypoint in COMPONENT_OUTPUTS:
-        asset = assets_by_name[asset_name]
+        asset = assets_by_name.get(asset_name)
+        if asset is None:
+            components.append({
+                "id": component_id,
+                "platform": platform,
+                "version": source_ref,
+                "package_asset": None,
+                "entrypoint": None,
+                "build_mode": "not_built",
+                "compiler": None,
+                "source_included": None,
+                "obfuscation": {
+                    "state": "not_applied",
+                    "tool": None,
+                    "version": None,
+                    "configuration": None,
+                    "reason": "This preview release contains no native package for this platform component.",
+                },
+                "output_sha256": None,
+                "output_verification": "not_available_no_package",
+            })
+            continue
         member = next((row for row in asset["members"] if row["path"] == entrypoint), None)
         if member is None:
             raise ValueError(f"Required {component_id} entrypoint is missing from {asset_name}: {entrypoint}")
@@ -152,7 +179,10 @@ def build_manifest(directory: Path, *, source_ref: str, source_commit: str) -> d
         "components": components,
         "platform_signing": {
             "windows": "not_claimed",
-            "macos": "unsigned_preview",
+            "macos": (
+                "source_preview_no_native_package"
+                if "XGENT-MCS-macos-bundle.zip" not in assets_by_name else "unsigned_preview"
+            ),
             "inventory": "signed_and_verified",
         },
         "assets": assets,
@@ -175,9 +205,16 @@ def main() -> None:
     parser.add_argument("--source-ref", required=True)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--require-signature", action="store_true")
+    parser.add_argument(
+        "--allow-missing-platforms", action="store_true",
+        help="Allow the two macOS app archives to be absent and record each component as not_built.",
+    )
     args = parser.parse_args()
 
-    manifest = build_manifest(args.directory, source_ref=args.source_ref, source_commit=args.source_commit)
+    manifest = build_manifest(
+        args.directory, source_ref=args.source_ref, source_commit=args.source_commit,
+        allow_missing_platforms=args.allow_missing_platforms,
+    )
     if args.require_signature:
         encoded = os.environ.get("XIDER_RELEASE_PRIVATE_KEY_B64", "")
         if not encoded:

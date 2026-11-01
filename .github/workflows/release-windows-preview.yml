@@ -167,6 +167,7 @@ jobs:
           COMMIT=$(git rev-parse "${BUILD_SHA}^{commit}")
           mkdir -p artifacts
           git archive --format=zip --prefix=XIDER-source/ "$COMMIT" > artifacts/XIDER-source.zip
+          git archive --format=zip --output=artifacts/X-STAB-server.zip "$COMMIT" TG-BOT-SERVER deploy XGENT-MCS/release_signature.py
           git show "${COMMIT}:deploy/bootstrap-agent.ps1" > artifacts/XIDER-bootstrap-windows.ps1
           git show "${COMMIT}:deploy/bootstrap.sh" > artifacts/XIDER-bootstrap-macos.sh
           (cd artifacts && zip -q Guard-Keeper-Windows.zip XIDER-Guard-Keeper.exe)
@@ -189,6 +190,7 @@ jobs:
           )
           PY
           python tools/build_release_manifest.py "$TAG" artifacts --platform windows --platform macos --exclude-asset XGENT-MCS-macos-bundle.zip --exclude-asset Guard-Keeper-macOS.zip --require-signature
+          python tools/build_protected_build_manifest.py artifacts --source-ref "$TAG" --source-commit "$COMMIT" --require-signature --allow-missing-platforms
           python - <<'PY'
           import json
           import sys
@@ -212,6 +214,7 @@ jobs:
             The signed manifest pins the exact source commit used to build these assets.
           files: |
             artifacts/XIDER-source.zip
+            artifacts/X-STAB-server.zip
             artifacts/XGENT-WDS.exe
             artifacts/XIDER-Guard-Keeper.exe
             artifacts/Guard-Keeper-Windows.zip
@@ -226,6 +229,7 @@ jobs:
             artifacts/XIDER-install-macos.sh.sig
             artifacts/XIDER-QUICKSTART.txt
             artifacts/release-manifest.json
+            artifacts/protected-build-manifest.json
 
   dispatch-pages:
     name: "Dispatch Pages deployment from the allowed main branch"
