@@ -12,6 +12,8 @@ on:
       - "tools/build_install_launchers.py"
       - "tools/build_bootstrap_commands.py"
       - "XGENT-MCS/release_signature.py"
+      - "XGENT-WDS/config.py"
+      - "XGENT-MCS/config.py"
       - ".github/workflows/pages.yml"
       - ".github/workflows/ci.yml"
   pull_request:
@@ -25,6 +27,8 @@ on:
       - "tools/build_install_launchers.py"
       - "tools/build_bootstrap_commands.py"
       - "XGENT-MCS/release_signature.py"
+      - "XGENT-WDS/config.py"
+      - "XGENT-MCS/config.py"
       - ".github/workflows/pages.yml"
       - ".github/workflows/ci.yml"
   workflow_dispatch:

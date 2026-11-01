@@ -64,6 +64,8 @@ def test_pages_generates_signed_installers_before_checking_and_uploading_site() 
         '"tools/build_install_launchers.py"',
         '"tools/build_bootstrap_commands.py"',
         '"XGENT-MCS/release_signature.py"',
+        '"XGENT-WDS/config.py"',
+        '"XGENT-MCS/config.py"',
     ):
         assert source in workflow, f"Pages must rebuild when launcher input changes: {source}"
 
