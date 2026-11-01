@@ -736,3 +736,16 @@ Nuitka-сборки исключают открытые Python-файлы из �
 macOS-пакет остаётся неподписанным и не notarized preview: Apple signing и notarization
 шаги были пропущены. Успешная сборка и fixture/CI-проверки не доказывают запуск
 этих новых версий на физических Windows и Mac.
+
+Опубликованный prerelease `v4.3.17` проверен отдельно от ручной сборки: Ed25519-подпись
+`release-manifest.json` валидна по закреплённому ключу `521c56c0c89f0ddd`; SHA-256
+всех 13 перечисленных manifest assets совпал с загруженными файлами. Живые
+`/win.txt` и `/mac` закреплены за этим тегом и проверяют подписи установщиков.
+В опубликованном manifest Windows ZIP имеет SHA-256
+`d339b2a1327487997a032cd9db228fa82bd11622006f880ad5a2e2e2ae52c730`, EXE —
+`bc2302bec1bf846d26c2bc33d0fa1d1c9a651104e6f07ef8574788fe784a2bbe`.
+Это не те же байты, что в новой ручной Actions-сборке из того же тега; сборка пока
+не воспроизводима побайтно. В опубликованных assets нет собранного macOS app, только
+macOS installer/bootstrap и source bundle; сам prerelease назван Windows preview +
+macOS source preview. Значит Windows установочная команда проверяет опубликованный
+подписанный manifest, а готовый macOS app-релиз всё ещё отсутствует.
