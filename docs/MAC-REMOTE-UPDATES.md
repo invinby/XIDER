@@ -686,10 +686,10 @@ Safari и Siri запускаются через `XIDER-Layers.app`. В обои
 бинарников на физическом Mac. Шаги Apple signing и notarization были пропущены;
 пакет остаётся unsigned preview.
 
-На момент последней проверки Windows build всё ещё был `in_progress` на компиляции
-двух EXE; Windows artifact и подписанный `XIDER-Protected-Build-Inventory` ещё не
-появились. Поэтому эту ручную сборку нельзя считать законченным или опубликованным
-релизом.
+После публикации этой записи Windows build завершился успешно, но inventory job
+завершился `failure` до выдачи runner и до выполнения шагов. Поэтому подписанного
+`XIDER-Protected-Build-Inventory` нет, а ручная сборка не является подписанным
+или опубликованным релизом.
 
 Свежий read-only снимок VPS: Windows `b07a8934c6cc`, версия `4.3.15`, online;
 сервер принял подписанный status с timestamp `2026-11-01T14:29:49Z`, а Guardian
@@ -706,3 +706,33 @@ Safari и Siri запускаются через `XIDER-Layers.app`. В обои
 что точная сетевая причина неизвестна. На физическом Windows пока подтверждена
 версия `4.3.15`, а не `4.3.17`. На физическом Mac не подтверждены установка
 `4.3.17`, Guardian, Safari/Siri и ответ боту.
+
+## Результат ручной сборки v4.3.17 · 2026-11-01 14:38 UTC
+
+Workflow `41314163997` закончил сборочные job успешно: Windows EXE, macOS app,
+component packages и release gates (Python 3.11/3.12/3.14, Windows installer
+transaction/rollback и Unix/macOS bootstrap fixtures). Windows job подтвердил
+компиляцию Agent и Guard Keeper, проверку публичного command-approval bundle и
+отсутствие открытых `.py`, helper-скриптов и приватного `.env` в пакете.
+
+Windows artifact `XGENT-WDS-Windows`, ID `13088220154`, GitHub digest
+`sha256:c73d203ee77f0db95ba38ce1a3cc6ce8414d50b8d93213f33bcac03c4924b759`.
+Внутренний ZIP имеет SHA-256
+`9bd4a2cdad10a29b0284ec5a56f9d6feeb9f43af3e20ff03209dac7865812543`;
+`XGENT-WDS.exe` — `9118535c6b22e48779d17f649d03d7c1074f3c6193757e299cca952f8baf5309`,
+`XIDER-Guard-Keeper.exe` —
+`6e25ae8a9e07e623414285105fa1bb01a12bdb49ade87b44492e4631d8ccd7d0`.
+Артефакт собран из tag commit `7277c19199d6c0203e05e7981a1caacbdf6b2658`.
+
+`Sign owner-requested build inventory` (job `124879557854`) завершился с ошибкой,
+не получив runner (`runner_id=0`, шаги отсутствуют). Доступный API не раскрыл причину;
+не утверждаю, что это отсутствие секрета или отказ environment approval без логов.
+Подписанный inventory не создан, общий workflow имеет итог `failure`, а шаг
+публикации GitHub Release был пропущен. Эти Actions artifacts — проверяемые
+preview-пакеты, но не опубликованный подписанный релиз.
+
+Nuitka-сборки исключают открытые Python-файлы из установочных пакетов; это не
+отдельная обфускация. Windows EXE не заявлены как Authenticode-подписанные.
+macOS-пакет остаётся неподписанным и не notarized preview: Apple signing и notarization
+шаги были пропущены. Успешная сборка и fixture/CI-проверки не доказывают запуск
+этих новых версий на физических Windows и Mac.
