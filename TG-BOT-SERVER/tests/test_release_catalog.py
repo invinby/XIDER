@@ -45,6 +45,80 @@ def test_valid_signed_manifest_and_checksum_inventory(signed_release):
     assert ledger.verify_release_metadata(release, manifest)
 
 
+def test_signed_component_build_report_is_bound_to_release_package_hashes(monkeypatch):
+    key = Ed25519PrivateKey.generate()
+    public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    monkeypatch.setattr(release_signature, "TRUSTED_RELEASE_KEYS", {release_signature.release_key_id(public): public})
+    private_pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    archive_digest = "a" * 64
+    assets = [
+        {"name": "XGENT-WDS-Windows.zip", "component": "windows_agent", "platform": "windows", "size": 100, "sha256": archive_digest},
+        {"name": "XIDER-source.zip", "component": "source", "platform": "all", "size": 200, "sha256": "b" * 64},
+    ]
+    release = ledger.Release(
+        "v4.3.18", (4, 3, 18), "preview", "2026-11-01", "notes",
+        frozenset({"XGENT-WDS-Windows.zip", "XIDER-source.zip", "release-manifest.json", "protected-build-manifest.json"}),
+    )
+    release_manifest = release_signature.sign_manifest(
+        {"schema": 1, "release": release.tag, "assets": assets}, private_pem,
+    )
+    component = {
+        "id": "windows_agent", "platform": "windows", "version": release.tag,
+        "package_asset": "XGENT-WDS-Windows.zip", "entrypoint": "XGENT-WDS.exe",
+        "build_mode": "nuitka_compiled", "compiler": "Nuitka 4.3.1", "source_included": False,
+        "obfuscation": {"state": "not_applied"}, "output_sha256": "c" * 64,
+        "output_verification": "sha256_in_signed_member_inventory",
+    }
+    rows = [component] + [
+        {"id": component_id, "platform": platform, "version": release.tag,
+         "package_asset": None, "entrypoint": None, "build_mode": "not_built",
+         "compiler": None, "source_included": None,
+         "obfuscation": {"state": "not_applied"}, "output_sha256": None,
+         "output_verification": "not_available_no_package"}
+        for component_id, (platform, _asset, _entrypoint) in ledger._BUILD_COMPONENTS.items()
+        if component_id != "windows_agent"
+    ]
+    protected_manifest = release_signature.sign_manifest({
+        "schema": 1, "source_ref": release.tag, "source_commit": "1" * 40,
+        "build_kind": "artifact_inventory", "components": rows,
+        "platform_signing": {
+            "windows": "not_claimed", "macos": "source_preview_no_native_package",
+            "inventory": "signed_and_verified",
+        },
+        "assets": [{"name": "XGENT-WDS-Windows.zip", "size": 100, "sha256": archive_digest,
+                    "members": [{"path": "XGENT-WDS.exe", "size": 50, "sha256": "c" * 64}]}],
+    }, private_pem)
+
+    assert ledger.verify_protected_build_metadata(release, protected_manifest, release_manifest)
+    catalog = ledger.Catalog(
+        loader=lambda: [{
+            "tag_name": release.tag, "name": release.name, "published_at": release.published_at,
+            "body": release.notes, "prerelease": True,
+            "assets": [{"name": name} for name in release.asset_names],
+        }],
+        manifest_loader=lambda _release: release_manifest,
+        protected_manifest_loader=lambda _release: protected_manifest,
+    )
+    loaded = catalog.list(refresh=True)[0]
+    assert loaded.protected_component("windows_agent")["build_mode"] == "nuitka_compiled"
+    assert [row["id"] for row in loaded.protected_components("mac_agent")] == [
+        "macos_agent", "safari", "siri",
+    ]
+    protected_manifest["assets"][0]["sha256"] = "d" * 64
+    assert not ledger.verify_protected_build_metadata(release, protected_manifest, release_manifest)
+    invalid_catalog = ledger.Catalog(
+        loader=lambda: [{
+            "tag_name": release.tag, "name": release.name, "published_at": release.published_at,
+            "body": release.notes, "prerelease": True,
+            "assets": [{"name": name} for name in release.asset_names],
+        }],
+        manifest_loader=lambda _release: release_manifest,
+        protected_manifest_loader=lambda _release: protected_manifest,
+    )
+    invalid_loaded = invalid_catalog.list(refresh=True)[0]
+    assert invalid_loaded.protected_component("windows_agent") is None
+
+
 @pytest.mark.parametrize("mutation", ["hash", "signature", "missing", "tag", "platform", "component"])
 def test_invalid_signed_catalogue_fails_closed(signed_release, mutation):
     release, original = signed_release

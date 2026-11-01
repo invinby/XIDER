@@ -189,7 +189,7 @@ jobs:
               encoding="utf-8",
           )
           PY
-          python tools/build_release_manifest.py "$TAG" artifacts --platform windows --platform macos --exclude-asset XGENT-MCS-macos-bundle.zip --exclude-asset Guard-Keeper-macOS.zip --require-signature
+          python tools/build_release_manifest.py "$TAG" artifacts --platform windows --platform macos --platform linux --exclude-asset XGENT-MCS-macos-bundle.zip --exclude-asset Guard-Keeper-macOS.zip --require-signature
           python tools/build_protected_build_manifest.py artifacts --source-ref "$TAG" --source-commit "$COMMIT" --require-signature --allow-missing-platforms
           python - <<'PY'
           import json

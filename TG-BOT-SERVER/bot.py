@@ -28363,6 +28363,7 @@ async def on_versions_detail(cq: CallbackQuery):
         return
     available = release.signed_package(component)
     status = _lex("versions_package_found" if available else "versions_package_missing")
+    protection = _version_protection_summary(release, component)
     notes = release.notes.strip() or _lex("versions_notes_empty")
     note_chunks = await asyncio.to_thread(_split_html_escaped_text, notes)
     note_count = len(note_chunks)
@@ -28408,13 +28409,81 @@ async def on_versions_detail(cq: CallbackQuery):
         f"{_version_state_text(current, release, component)}\n"
         f"{channel}"
         f"{_lex_html('versions_published', date=release.published_at[:10] or '—')}\n"
-        f"{html.escape(status)}\n\n"
+        f"{html.escape(status)}\n"
+        f"{protection}\n\n"
         f"<b>{_lex('versions_notes_title', page=str(notes_page + 1), count=str(note_count))}</b>\n"
         f"<pre>{html.escape(note_chunk)}</pre>\n\n"
         f"{_lex(install_reason or 'versions_install_ready')}",
         reply_markup=kb.as_markup(),
     )
     await cq.answer()
+
+
+def _version_protection_summary(release: release_catalog.Release, component: str) -> str:
+    """Show only signed per-component build facts, never infer from a release tag."""
+    protected_asset = "protected-build-manifest.json" in release.asset_names
+    rows = release.protected_components(component)
+    if rows is None:
+        if protected_asset:
+            return _ui_phrase(
+                "🧾 Build report: signature or package-hash binding failed verification.",
+                "🧾 Отчёт сборки: подпись или связь хешей пакетов не прошла проверку.",
+                "🧾 Проверка отчёта сборки не прошла; статус компонентов неизвестен.",
+            )
+        return _ui_phrase(
+            "🧾 Build report: not published; component protection is unknown.",
+            "🧾 Отчёт сборки не опубликован; защита компонента неизвестна.",
+            "🧾 Для этой версии нет проверенного отчёта по сборке.",
+        )
+
+    component_names = {
+        "windows_agent": _ui_phrase("Windows Agent", "Windows Agent", "агент Windows"),
+        "windows_guard_keeper": _ui_phrase("Windows Guard Keeper", "Windows Guard Keeper", "сторож Windows"),
+        "macos_agent": _ui_phrase("macOS Agent", "агент macOS", "агент macOS"),
+        "macos_guard_keeper": _ui_phrase("macOS Guard Keeper", "Guard Keeper macOS", "сторож macOS"),
+        "safari": "Safari", "siri": "Siri",
+    }
+    mode_labels = {
+        "not_built": _ui_phrase("not built", "не собран", "не собран"),
+        "nuitka_compiled": _ui_phrase("Nuitka compiled", "скомпилирован Nuitka", "собран через Nuitka"),
+        "python_source": _ui_phrase("Python source package", "пакет с Python-исходниками", "исходный Python-пакет"),
+    }
+    obfuscation_labels = {
+        "not_applied": _ui_phrase("obfuscation not applied", "обфускация не применялась", "обфускации нет"),
+        "obfuscated": _ui_phrase("obfuscation applied", "обфускация применена", "обфускация применена"),
+        "partial": _ui_phrase("partial obfuscation", "частичная обфускация", "частично обфусцирован"),
+        "not_obfuscated": _ui_phrase("not obfuscated", "без обфускации", "не обфусцирован"),
+    }
+    lines = ["🧾 " + _ui_phrase(
+        "Signed component build report", "Подписанный отчёт сборок компонентов",
+        "Подписанный отчёт сборок компонентов",
+    )]
+    for row in rows:
+        mode = row.get("build_mode", "unknown")
+        obfuscation = (row.get("obfuscation") or {}).get("state", "unknown")
+        label = component_names.get(row.get("id"), row.get("id", "component"))
+        detail = f"• {label}: {mode_labels.get(mode, mode_labels.get('not_built'))}; "
+        detail += obfuscation_labels.get(
+            obfuscation,
+            _ui_phrase("obfuscation unknown", "обфускация неизвестна", "статус обфускации неизвестен"),
+        ) + "."
+        if row.get("output_verification") == "sha256_in_signed_member_inventory":
+            detail += " " + _ui_phrase(
+                "Entry-point hash is bound to the signed release inventory.",
+                "Хеш точки запуска связан с подписанным inventory релиза.",
+                "Хеш запуска привязан к подписанному составу релиза.",
+            )
+        lines.append(detail)
+    if component in {"mac_agent", "mac_keeper"}:
+        signing_report = (release.protected_manifest or {}).get("platform_signing")
+        signing = signing_report.get("macos") if isinstance(signing_report, dict) else None
+        if signing in {"unsigned_preview", "source_preview_no_native_package"}:
+            lines.append(_ui_phrase(
+                "macOS app is not Apple-signed or notarized.",
+                "Приложение macOS не подписано Apple и не notarized.",
+                "macOS-приложение не подписано Apple и не прошло notarization.",
+            ))
+    return html.escape("\n".join(lines))
 
 
 @router.callback_query(OwnerFilter(), F.data.startswith("versions:bootstrap:"))

@@ -10012,6 +10012,34 @@ def test_agent_release_catalog_has_a_direct_install_action(monkeypatch, signed_c
     assert "versions:install:agent:v4.2.0" in callbacks
 
 
+def test_version_detail_protection_summary_uses_component_report_and_does_not_call_nuitka_obfuscation(monkeypatch):
+    import release_catalog
+    release = release_catalog.Release(
+        "v4.3.18", (4, 3, 18), "release", "", "", frozenset({"protected-build-manifest.json"}),
+        protected_manifest={"platform_signing": {"macos": "source_preview_no_native_package"}},
+    )
+    monkeypatch.setattr(release_catalog.Release, "protected_components", lambda _release, _component: [
+        {"id": component_id, "build_mode": "nuitka_compiled", "obfuscation": {"state": "not_applied"},
+         "output_verification": "sha256_in_signed_member_inventory"}
+        for component_id in ("macos_agent", "safari", "siri")
+    ])
+    summary = bot._version_protection_summary(release, "mac_agent")
+    assert "Nuitka" in summary
+    assert "obfuscation not applied" in summary
+    assert "not Apple-signed" in summary
+    assert "bound to the signed release inventory" in summary
+    assert "Safari" in summary and "Siri" in summary
+
+
+def test_version_detail_without_component_report_shows_unknown_not_assumed(monkeypatch):
+    import release_catalog
+    release = release_catalog.Release("v4.3.17", (4, 3, 17), "release", "", "", frozenset())
+    monkeypatch.setattr(release_catalog.Release, "protected_components", lambda _release, _component: None)
+    summary = bot._version_protection_summary(release, "windows_agent")
+    assert "Build report: not published" in summary
+    assert "protection is unknown" in summary
+
+
 def test_selected_release_install_fails_closed_without_pinned_trust(monkeypatch):
     import release_catalog
     from types import SimpleNamespace

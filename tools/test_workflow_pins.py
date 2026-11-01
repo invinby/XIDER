@@ -270,7 +270,7 @@ def test_windows_preview_build_and_signed_assets_share_the_selected_tag_commit()
     assert "build_install_launchers.py \"$COMMIT\" \"$TAG\" artifacts --macos-source-preview" in publish
     assert "sign_bootstrap.py \"$TAG\" \"$COMMIT\" artifacts" in publish
     assert "sign_installers.py artifacts" in publish
-    assert "--platform windows --platform macos --exclude-asset XGENT-MCS-macos-bundle.zip --exclude-asset Guard-Keeper-macOS.zip --require-signature" in publish
+    assert "--platform windows --platform macos --platform linux --exclude-asset XGENT-MCS-macos-bundle.zip --exclude-asset Guard-Keeper-macOS.zip --require-signature" in publish
     assert "artifacts/XIDER-install-macos.sh.sig" in publish
     assert "runtime is not Apple-signed or notarized" in publish
     assert "${{ github.sha }}" not in build + publish

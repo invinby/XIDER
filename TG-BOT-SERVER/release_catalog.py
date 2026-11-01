@@ -32,6 +32,19 @@ _ASSET_NAMES = {
     "server": {"X-STAB-server.zip"},
 }
 _SOURCE_UPDATE_ASSETS = frozenset({"XIDER-source.zip", "release-manifest.json"})
+_PROTECTED_BUILD_MANIFEST = "protected-build-manifest.json"
+_BUILD_COMPONENTS = {
+    "windows_agent": ("windows", "XGENT-WDS-Windows.zip", "XGENT-WDS.exe"),
+    "windows_guard_keeper": ("windows", "Guard-Keeper-Windows.zip", "XIDER-Guard-Keeper.exe"),
+    "macos_agent": ("macos", "XGENT-MCS-macos-bundle.zip", "XIDER.app/Contents/MacOS/XGENT-MCS"),
+    "macos_guard_keeper": ("macos", "Guard-Keeper-macOS.zip", "XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper"),
+    "safari": ("macos", "XGENT-MCS-macos-bundle.zip", "XIDER-Layers.app/Contents/MacOS/XIDER-Layers"),
+    "siri": ("macos", "XGENT-MCS-macos-bundle.zip", "XIDER-Layers.app/Contents/MacOS/XIDER-Layers"),
+}
+_BUILD_COMPONENT_FOR_RELEASE_COMPONENT = {
+    "windows_agent": "windows_agent", "windows_keeper": "windows_guard_keeper",
+    "mac_agent": "macos_agent", "mac_keeper": "macos_guard_keeper",
+}
 
 
 @dataclass(frozen=True)
@@ -43,6 +56,7 @@ class Release:
     notes: str
     asset_names: frozenset[str]
     manifest: dict | None = None
+    protected_manifest: dict | None = None
     prerelease: bool = False
 
     def signed_package(self, component: str) -> bool:
@@ -68,6 +82,23 @@ class Release:
             asset["name"] == "XIDER-source.zip" and asset["component"] == "source"
             for asset in self.manifest["assets"]
         )
+
+    def protected_component(self, component: str) -> dict | None:
+        """Return only a component row from a signed report bound to this release."""
+        rows = self.protected_components(component)
+        return rows[0] if rows else None
+
+    def protected_components(self, component: str) -> list[dict] | None:
+        """Return signed build rows represented by a selectable release component."""
+        component_id = _BUILD_COMPONENT_FOR_RELEASE_COMPONENT.get(component)
+        manifest = self.protected_manifest
+        if component_id is None or not verify_protected_build_metadata(self, manifest, self.manifest):
+            return None
+        component_ids = [component_id]
+        if component == "mac_agent":
+            component_ids.extend(("safari", "siri"))
+        by_id = {row["id"]: row for row in manifest["components"]}
+        return [by_id[item] for item in component_ids]
 
 
 def component_for(os_name: str, keeper: bool = False) -> str | None:
@@ -114,6 +145,101 @@ def verify_release_metadata(release: Release, manifest: dict) -> bool:
         return False
 
 
+def verify_protected_build_metadata(release: Release, protected: dict, release_manifest: dict | None = None) -> bool:
+    """Validate component build claims and bind every package hash to the release inventory."""
+    try:
+        release_manifest = release_manifest if release_manifest is not None else release.manifest
+        if not verify_release_metadata(release, release_manifest):
+            return False
+        verify_manifest_signature(protected)
+        if (protected.get("schema") != 1 or protected.get("source_ref") != release.tag
+                or not re.fullmatch(r"[0-9a-f]{40}", str(protected.get("source_commit", "")))
+                or protected.get("build_kind") != "artifact_inventory"):
+            return False
+        platform_signing = protected.get("platform_signing")
+        if (not isinstance(platform_signing, dict)
+                or platform_signing.get("windows") not in {"not_claimed", "authenticode_signed"}
+                or platform_signing.get("macos") not in {
+                    "source_preview_no_native_package", "unsigned_preview", "apple_signed_notarized",
+                }
+                or platform_signing.get("inventory") != "signed_and_verified"):
+            return False
+
+        release_assets = {row["name"]: row for row in release_manifest["assets"]}
+        assets = protected.get("assets")
+        if not isinstance(assets, list) or not assets or len(assets) > 32:
+            return False
+        member_hashes_by_asset = {}
+        for asset in assets:
+            if not isinstance(asset, dict):
+                return False
+            name = asset.get("name")
+            size = asset.get("size")
+            digest = asset.get("sha256")
+            published = release_assets.get(name) if isinstance(name, str) else None
+            if (published is None or name in member_hashes_by_asset or not name.endswith(".zip")
+                    or type(size) is not int or type(published.get("size")) is not int
+                    or size != published["size"]
+                    or not re.fullmatch(r"[0-9a-f]{64}", str(digest or ""))
+                    or digest != published.get("sha256")):
+                return False
+            members = asset.get("members")
+            if not isinstance(members, list) or not members or len(members) > 20000:
+                return False
+            member_hashes = {}
+            for member in members:
+                if not isinstance(member, dict):
+                    return False
+                path = member.get("path")
+                member_digest = member.get("sha256")
+                member_size = member.get("size")
+                if (not isinstance(path, str) or not path or len(path) > 500 or path in member_hashes
+                        or type(member_size) is not int or member_size < 0
+                        or not re.fullmatch(r"[0-9a-f]{64}", str(member_digest or ""))):
+                    return False
+                member_hashes[path] = member_digest
+            member_hashes_by_asset[name] = member_hashes
+
+        rows = protected.get("components")
+        if not isinstance(rows, list) or len(rows) != len(_BUILD_COMPONENTS):
+            return False
+        rows_by_id = {}
+        for row in rows:
+            if not isinstance(row, dict) or row.get("id") not in _BUILD_COMPONENTS or row["id"] in rows_by_id:
+                return False
+            rows_by_id[row["id"]] = row
+        if set(rows_by_id) != set(_BUILD_COMPONENTS):
+            return False
+
+        for component_id, (platform, package_asset, entrypoint) in _BUILD_COMPONENTS.items():
+            row = rows_by_id[component_id]
+            mode = row.get("build_mode")
+            if row.get("platform") != platform or row.get("version") != release.tag:
+                return False
+            if mode == "not_built":
+                if (row.get("package_asset") is not None or row.get("entrypoint") is not None
+                        or row.get("output_sha256") is not None or package_asset in member_hashes_by_asset):
+                    return False
+                continue
+            if mode not in {"nuitka_compiled", "python_source"} or row.get("package_asset") != package_asset:
+                return False
+            if row.get("entrypoint") != entrypoint or package_asset not in member_hashes_by_asset:
+                return False
+            if row.get("source_included") is not (mode == "python_source"):
+                return False
+            digest = member_hashes_by_asset[package_asset].get(entrypoint)
+            if digest is None or row.get("output_sha256") != digest:
+                return False
+            obfuscation = row.get("obfuscation")
+            if not isinstance(obfuscation, dict) or obfuscation.get("state") not in {
+                "obfuscated", "not_applied", "partial", "not_obfuscated",
+            }:
+                return False
+        return True
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return False
+
+
 def version_state(current: str, release: Release, component: str, manifest: dict | None = None) -> dict:
     metadata = manifest if manifest is not None else release.manifest
     verified = verify_release_metadata(release, metadata)
@@ -134,6 +260,18 @@ def _download_manifest(release: Release) -> dict:
         raw = response.read(1_000_001)
     if len(raw) > 1_000_000:
         raise ValueError("Manifest too large")
+    return json.loads(raw.decode("utf-8"))
+
+
+def _download_protected_manifest(release: Release) -> dict:
+    request = urllib.request.Request(
+        f"https://github.com/invinby/XIDER/releases/download/{release.tag}/{_PROTECTED_BUILD_MANIFEST}",
+        headers={"User-Agent": "XIDER-X-LEDGER"},
+    )
+    with urllib.request.urlopen(request, timeout=6) as response:
+        raw = response.read(1_000_001)
+    if len(raw) > 1_000_000:
+        raise ValueError("Protected build manifest too large")
     return json.loads(raw.decode("utf-8"))
 
 
@@ -185,9 +323,15 @@ def _download() -> object:
 
 
 class Catalog:
-    def __init__(self, loader: Callable[[], object] = _download, manifest_loader: Callable[[Release], dict] = _download_manifest) -> None:
+    def __init__(
+        self,
+        loader: Callable[[], object] = _download,
+        manifest_loader: Callable[[Release], dict] = _download_manifest,
+        protected_manifest_loader: Callable[[Release], dict] = _download_protected_manifest,
+    ) -> None:
         self._loader = loader
         self._manifest_loader = manifest_loader
+        self._protected_manifest_loader = protected_manifest_loader
         self._lock = threading.Lock()
         self._releases: list[Release] = []
         self._fetched_at = 0.0
@@ -208,6 +352,13 @@ class Catalog:
                             manifest = self._manifest_loader(release)
                             if verify_release_metadata(release, manifest):
                                 release = replace(release, manifest=manifest)
+                        except (OSError, ValueError):
+                            pass
+                    if release.manifest and _PROTECTED_BUILD_MANIFEST in release.asset_names:
+                        try:
+                            protected = self._protected_manifest_loader(release)
+                            if verify_protected_build_metadata(release, protected, release.manifest):
+                                release = replace(release, protected_manifest=protected)
                         except (OSError, ValueError):
                             pass
                     signed.append(release)
