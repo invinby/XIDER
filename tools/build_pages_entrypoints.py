@@ -70,8 +70,9 @@ def main() -> None:
         parser.error(str(exc))
     for path in write_files(args.output, pages):
         print(path)
-    version = sync_source_versions(args.output)
-    print(f"Synchronized bilingual source version: {version}")
+    if (args.output / "index.html").is_file() and (args.output / "ru.html").is_file():
+        version = sync_source_versions(args.output)
+        print(f"Synchronized bilingual source version: {version}")
 
 
 if __name__ == "__main__":
