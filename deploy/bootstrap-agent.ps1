@@ -76,7 +76,8 @@ function Invoke-XiderPythonScriptProbe {
     param(
         [Parameter(Mandatory)][string]$Executable,
         [Parameter(Mandatory)][string]$Code,
-        [string[]]$Arguments = @()
+        [string[]]$Arguments = @(),
+        [string[]]$ScriptArguments = @()
     )
 
     # Avoid PowerShell 5 native-argument quoting differences for Python -c.
@@ -88,7 +89,7 @@ function Invoke-XiderPythonScriptProbe {
             $Code + [Environment]::NewLine,
             [Text.Encoding]::ASCII
         )
-        $probeArguments = @($Arguments) + $scriptPath
+        $probeArguments = @($Arguments) + $scriptPath + @($ScriptArguments)
         return Invoke-XiderNativeProbe -Executable $Executable -Arguments $probeArguments
     } finally {
         Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
@@ -1159,8 +1160,10 @@ try {
             $manifestPath = Join-Path $extract 'windows-release-manifest.json'
             $compiledPackage = Join-Path $extract 'XGENT-WDS-Windows.zip'
             $verifyCode = "import sys; from pathlib import Path; from update_package import download_verified_release_asset; print(download_verified_release_asset(Path(sys.argv[1]), Path(sys.argv[2]), 'XGENT-WDS-Windows.zip', release_tag=sys.argv[3]))"
-            & $releasePython -c $verifyCode $manifestPath $compiledPackage $ReleaseTag
-            if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $compiledPackage -PathType Leaf)) {
+            $verifyResult = Invoke-XiderPythonScriptProbe -Executable $releasePython `
+                -Code $verifyCode `
+                -ScriptArguments @($manifestPath, $compiledPackage, $ReleaseTag)
+            if ($verifyResult.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $compiledPackage -PathType Leaf)) {
                 throw 'Подписанный Windows-пакет не прошёл проверку release manifest.'
             }
         }

@@ -122,6 +122,10 @@ try {
         $bootstrapSource -match "Invoke-XiderNativeProbe[^\r\n]*'-c'") {
         throw 'Python bootstrap probes must use temporary script files, not inline -c arguments.'
     }
+    if ($bootstrapSource -match '(?m)&\s+\$releasePython\s+-c\s+\$verifyCode' -or
+        $bootstrapSource -notmatch '(?s)Invoke-XiderPythonScriptProbe\s+-Executable\s+\$releasePython.*?-ScriptArguments') {
+        throw 'Signed release verification must pass its script and arguments through the PowerShell 5-safe file probe.'
+    }
     $pythonCandidates = @(
         @(
             (Join-Path $PSScriptRoot '..\..\.venv312\Scripts\python.exe'),
@@ -133,6 +137,13 @@ try {
         if ($versionProbe.ExitCode -ne 0 -or $versionProbe.Output.Count -ne 1 -or
             [string]$versionProbe.Output[0] -notmatch '^3\d{2}$') {
             throw 'The PowerShell 5.1 Python version probe did not return a numeric major/minor version.'
+        }
+        $argumentProbe = Invoke-XiderPythonScriptProbe -Executable $pythonCandidates[0] `
+            -Code 'import sys; print("|".join(sys.argv[1:]))' `
+            -ScriptArguments @('path with spaces\manifest.json', 'v4.3.17')
+        if ($argumentProbe.ExitCode -ne 0 -or $argumentProbe.Output.Count -ne 1 -or
+            [string]$argumentProbe.Output[0] -ne 'path with spaces\manifest.json|v4.3.17') {
+            throw 'PowerShell 5.1 changed the release manifest arguments passed to Python.'
         }
     }
     if ($bootstrapSource -notmatch "candidate\[-1\] -match '\^3\(\?:11\|12\|14\)\$'" -or
