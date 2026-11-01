@@ -90,7 +90,7 @@ def obfuscate_tree(source: Path, destination: Path, report_path: Path, *, platfo
         "source_tree": source.name,
         "state": "applied",
         "tool": {"name": "PyObfus", "version": PYOBFUS_VERSION, "edition": "Community"},
-        "configuration": "cross-file; preserve unproved module attributes and load_component public API; no private mapping shipped",
+        "configuration": "cross-file; preserve dynamic command-approval public API; no private mapping shipped",
         "scope": "first-party Python modules in the named source tree; third-party packages are excluded",
         "source_files_processed": outputs["file_count"],
         "names_obfuscated": names_obfuscated,

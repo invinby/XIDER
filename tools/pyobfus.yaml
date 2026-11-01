@@ -1,6 +1,17 @@
 obfuscation:
   level: community
   # command_module_loader is reached through a dynamically loaded module object.
-  # Keep its public entry point stable while obfuscating its implementation.
+  # Keep only its externally resolved API stable; internal implementation names
+  # remain eligible for obfuscation.
   exclude_names:
     - load_component
+    - verify_approved_command
+    - trusted_command_keys_ready
+    - CommandReplayLedger
+    - reserve
+    - ensure_available
+    - inspect_shell_runner
+    - shell_timeout
+    - bounded_stream
+    - execute_shell
+    - cancel_shell

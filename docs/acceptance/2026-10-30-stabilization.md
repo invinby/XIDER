@@ -95,9 +95,9 @@ Until these device steps are completed, physical behavior and live Telegram inte
 
 - The first hosted unsigned preview compiled the Agent, Guard Keeper, and Layers Nuitka apps, then failed the command-approval bundle probe: the obfuscated `command_module_loader` no longer exposed the dynamically accessed `load_component` attribute.
 - Cause: `xgent_mcs.py` loads the trusted helper as a module object and calls `.load_component(...)`; PyObfus cannot safely rewrite a dynamic module-object attribute from static name binding alone.
-- Fix in source: `tools/pyobfus.yaml` explicitly preserves the `load_component` public entry-point name while the rest of the project remains eligible for obfuscation. The build tool now passes this config explicitly and records the preserved API in its report.
+- Fix in source: `tools/pyobfus.yaml` explicitly preserves the names resolved dynamically across the command-approval loader/signing/replay/execution modules; internal implementation names remain eligible for obfuscation. The build tool passes this config explicitly and records the preserved API boundary in its report.
 - The preview job condition is narrowed: unsigned preview builds run only for owner pushes to `xider-local-prep-*`; workflow dispatch remains available to the repository owner, and tagged release builds require the release-ready flag.
-- Verification is pending a fresh hosted preview. Until its command-approval probe and artifact upload pass, no macOS preview package is claimed as ready.
+- First config-backed retry preserved `load_component` and advanced further, then exposed another dynamically resolved API (`shell_timeout`) in the same service-free probe. The preserved-name set has been expanded to the full external module/class/method contract. Verification is pending a fresh hosted preview; no macOS preview package is claimed as ready.
 
 ## Outcome matrix coverage
 
