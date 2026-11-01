@@ -4,7 +4,7 @@ for tool in curl base64 shasum ssh-keygen; do
   command -v "$tool" >/dev/null 2>&1 || { printf 'XIDER: required tool missing: %s\n' "$tool" >&2; exit 1; }
 done
 printf '%s\n' 'XIDER: selecting the signed macOS source-preview installer (runtime is not Apple-signed or notarized)...'
-base='https://github.com/invinby/XIDER/releases/download/v4.3.12'
+base='https://github.com/invinby/XIDER/releases/download/v4.3.15'
 tag="${XIDER_INSTALL_TAG:-}"
 if [ -n "$tag" ]; then
   [[ "$tag" =~ ^v[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}$ ]] || { printf '%s\n' 'XIDER: invalid release tag.' >&2; exit 1; }

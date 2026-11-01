@@ -1,5 +1,19 @@
 # XIDER release history
 
+## X4.3.17-PRANK-HUB+20261101 — categorized entertainment hub and signed preview release
+
+### English
+
+- Reorganized the Telegram Entertainment menu into a category hub; category pages now have one return button, and Stop All stays visible.
+- Synchronized bot, Windows Agent, and macOS Agent version metadata at `4.3.17`.
+- Release publication remains gated on the full CI suite for the exact tag. Windows is a compiled preview; macOS remains a publisher-signed source preview, not an Apple-signed or notarized app.
+
+### Русский
+
+- Раздел «Развлечения» переработан в каталог категорий; внутри категории оставлена одна кнопка возврата, «Остановить всё» видно сразу.
+- Версии бота, Windows Agent и macOS Agent синхронизированы на `4.3.17`.
+- Публикация релиза проходит только после полного CI для точного тега. Windows поставляется как скомпилированный preview; macOS остаётся source-preview с подписью XIDER, без Apple-подписи и нотариализации.
+
 ## X4.3.16-RELEASE-GATE+20261101 — verified source-preview publication
 
 ### English
