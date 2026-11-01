@@ -3207,6 +3207,8 @@ def test_completed_xlex_screen_copy_has_six_distinct_voices():
         "category_terminal",
         "category_power",
         "category_pranks",
+        "prank_hub_intro",
+        "prank_tab_hub",
         "category_device_settings",
         "events_menu_intro",
         "quiet_hours_intro",
@@ -11936,12 +11938,67 @@ def test_pranks_menu_has_stop_all_button(monkeypatch):
             "get",
             lambda key, default=None, selected=style: selected if key == "ui_style" else default,
         )
-        for page in range(1, 6):
+        for page in range(0, 6):
             markup = bot.pranks_menu(page=page)
             cbs = _callback_data(markup)
             assert "prank:stop_all" in cbs
             texts = [b.text.lower() for row in markup.inline_keyboard for b in row]
             assert any("стоп" in text or "останов" in text for text in texts)
+
+
+def test_pranks_default_menu_is_a_category_hub_without_effect_launchers(monkeypatch):
+    _setup(monkeypatch, {"pc": {"name": "PC", "os": "Windows"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "pc"})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
+
+    markup = bot.pranks_menu(target="pc", user_id=bot.ADMIN_ID)
+    callbacks = _callback_data(markup)
+
+    assert {f"prankpage:{page}" for page in range(1, 6)} <= set(callbacks)
+    assert "prank:stop_all" in callbacks
+    assert "cat:device" in callbacks
+    assert not any(callback.startswith("cmd:prank_") for callback in callbacks)
+    assert not any(callback in {"prank:screamer", "prank:siren", "prank:swapmouse"} for callback in callbacks)
+
+
+def test_prank_category_has_one_hub_return_instead_of_five_category_tabs(monkeypatch):
+    _setup(monkeypatch, {"pc": {"name": "PC", "os": "Windows"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "pc"})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
+
+    callbacks = _callback_data(bot.pranks_menu(page=1, target="pc", user_id=bot.ADMIN_ID))
+
+    assert "prankpage:0" in callbacks
+    assert not any(f"prankpage:{page}" in callbacks for page in range(2, 6))
+    assert "prank:stop_all" in callbacks
+    assert "cmd:prank_fake_update" in callbacks
+
+
+def test_prank_hub_page_uses_localized_hub_copy(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(bot.bot_settings, "get", lambda key, default=None: "xperson" if key == "ui_style" else default)
+    monkeypatch.setattr(bot, "SESSION", {"target": "pc"})
+    monkeypatch.setattr(bot, "target_label", lambda _target: "PC")
+    captured = {}
+
+    async def replace_card(_callback, text, **_kwargs):
+        captured["text"] = text
+
+    class FakeCallback:
+        data = "prankpage:0"
+        from_user = SimpleNamespace(id=bot.ADMIN_ID)
+
+        async def answer(self, *_args, **_kwargs):
+            pass
+
+    monkeypatch.setattr(bot, "_replace_callback_message", replace_card)
+    asyncio.run(bot.on_prank_page(FakeCallback()))
+
+    assert "Развлечения" in captured["text"]
+    assert "Стр. 0" not in captured["text"]
 
 
 def test_prank_action_rows_are_backed_by_declarative_navigation(monkeypatch):
@@ -11985,7 +12042,7 @@ def test_prank_action_rows_are_backed_by_declarative_navigation(monkeypatch):
         declared = {str(row["callback"]) for row in rows}
         rendered = set(_callback_data(bot.pranks_menu(page=page_number, target="pc", user_id=100)))
         action_callbacks = rendered - {
-            f"prankpage:{index}" for index in range(1, 6)
+            f"prankpage:{index}" for index in range(0, 6)
         } - {"cat:device", "back:device", "menu:main"}
         assert declared == expected[parent]
         assert action_callbacks == declared
@@ -11994,7 +12051,7 @@ def test_prank_action_rows_are_backed_by_declarative_navigation(monkeypatch):
         bot.feature_catalog.load_registry(), parent="prank.tabs", role="owner", grants=set(), platform="windows",
     )
     assert {str(row["callback"]) for row in tab_rows} == {
-        "prankpage:1", "prankpage:2", "prankpage:3", "prankpage:4", "prankpage:5",
+        "prankpage:0", "prankpage:1", "prankpage:2", "prankpage:3", "prankpage:4", "prankpage:5",
     }
 
 
@@ -12029,36 +12086,36 @@ def test_pranks_menu_toggle_states(monkeypatch):
 
 
 @pytest.mark.parametrize("page,style,expected", [
-    (1, "xtech", "Визуальный модуль"),
+    (1, "xtech", "Визуальные сцены"),
     (1, "xperson", "Визуальные приколы"),
-    (1, "xpikmi", "Красивенький экранчик ♡"),
-    (1, "xtarped", "Экранные эффекты"),
-    (1, "xcore", "Демо визуальных эффектов"),
-    (1, "xadam", "Экранный режим"),
-    (2, "xtech", "Звуковой модуль"),
-    (2, "xperson", "Звуковые приколы"),
-    (2, "xpikmi", "Звуковые вкусняшки ♡"),
-    (2, "xtarped", "Звук и голос"),
-    (2, "xcore", "Демо аудиоэффектов"),
+    (1, "xpikmi", "Экранные красотки ♡"),
+    (1, "xtarped", "Экран и анимации"),
+    (1, "xcore", "Визуальные демо"),
+    (1, "xadam", "Экранный арсенал"),
+    (2, "xtech", "Звуковые сцены"),
+    (2, "xperson", "Звук и голос"),
+    (2, "xpikmi", "Звуковые приколюхи ♡"),
+    (2, "xtarped", "Аудиоэффекты"),
+    (2, "xcore", "Аудиодемо"),
     (2, "xadam", "Аудиоканал"),
-    (3, "xtech", "Контроль ввода"),
+    (3, "xtech", "Курсор и ввод"),
     (3, "xperson", "Мышь и клавиатура"),
-    (3, "xpikmi", "Мышечка и клавиатурка ♡"),
-    (3, "xtarped", "Управление вводом"),
-    (3, "xcore", "Демо устройств ввода"),
+    (3, "xpikmi", "Мышечка и кнопочки ♡"),
+    (3, "xtarped", "Ввод и управление"),
+    (3, "xcore", "Демо ввода"),
     (3, "xadam", "Тактический ввод"),
-    (4, "xtech", "Системные имитации"),
+    (4, "xtech", "Системные демо"),
     (4, "xperson", "Фальшивые предупреждения"),
     (4, "xpikmi", "Страшилки понарошку ♡"),
-    (4, "xtarped", "Имитации и хаос"),
-    (4, "xcore", "Симуляции системы"),
-    (4, "xadam", "Контролируемый хаос"),
-    (5, "xtech", "Медиаблок"),
-    (5, "xperson", "Мемы и экранные розыгрыши"),
+    (4, "xtarped", "Фальшивые уведомления"),
+    (4, "xcore", "Системные симуляции"),
+    (4, "xadam", "Контролируемые эффекты"),
+    (5, "xtech", "Медиа и мемы"),
+    (5, "xperson", "Мемы и сюрпризы"),
     (5, "xpikmi", "Котики и мемчики ♡"),
     (5, "xtarped", "Мемы и анимации"),
-    (5, "xcore", "Визуальные розыгрыши"),
-    (5, "xadam", "Мемы без компромиссов")
+    (5, "xcore", "Визуальные приколы"),
+    (5, "xadam", "Медиа-режим")
 ])
 def test_prank_page_heading_uses_selected_xlex_voice(monkeypatch, page, style, expected):
     from types import SimpleNamespace
@@ -12122,8 +12179,8 @@ def test_prank_visual_page_uses_all_six_xlex_voices_without_changing_actions(mon
     assert len({tuple(labels) for labels in labels_by_style.values()}) >= 5
     assert "🎬 Скример (full)" in labels_by_style["xtech"]
     assert "🫥 Скрыть иконки" in labels_by_style["xtech"]
-    assert "🔘 [Визуал]" in labels_by_style["xtech"]
-    assert "🔘 [Экранчик ♡]" in labels_by_style["xpikmi"]
+    assert "🗂 Категории" in labels_by_style["xtech"]
+    assert "🎀 Все приколюхи ♡" in labels_by_style["xpikmi"]
     assert "🔴 [ВКЛ] Иконки скрыты" in hidden_labels_by_style["xtech"]
     assert hidden_labels_by_style["xtech"] != ["🫥 Скрыть иконки"]
 
@@ -12164,8 +12221,8 @@ def test_prank_sound_and_input_pages_use_all_six_voices_without_changing_actions
         assert len({tuple(labels) for labels in labels_by_style[page].values()}) >= 5
     assert "🔊 Сирена тревоги" in labels_by_style[2]["xtech"]
     assert "🖱 Инверсия мыши" in labels_by_style[3]["xtech"]
-    assert "🔘 [Звук]" in labels_by_style[2]["xtech"]
-    assert "🔘 [Ввод]" in labels_by_style[3]["xtech"]
+    assert "🗂 Категории" in labels_by_style[2]["xtech"]
+    assert "🗂 Категории" in labels_by_style[3]["xtech"]
     assert "🔴 [ВКЛ] Инверсия мыши" in swapped_labels_by_style["xtech"]
     assert swapped_labels_by_style["xtech"] != ["🖱 Инверсия мыши"]
 
@@ -12194,8 +12251,8 @@ def test_prank_chaos_and_meme_pages_use_all_six_voices_without_changing_actions(
     assert "🦠 Вирус Pivko" in labels_by_page[4]["xtech"]
     assert "💀 Удаление System32" in labels_by_page[4]["xtech"]
     assert "🐈 Выкуп котиками" in labels_by_page[5]["xtech"]
-    assert "🔘 [Хаос]" in labels_by_page[4]["xtech"]
-    assert "🔘 [Мемы]" in labels_by_page[5]["xtech"]
+    assert "🗂 Категории" in labels_by_page[4]["xtech"]
+    assert "🗂 Категории" in labels_by_page[5]["xtech"]
     assert any("фальшив" in label.lower() for label in labels_by_page[5]["xperson"])
 
 
