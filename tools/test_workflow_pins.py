@@ -57,6 +57,10 @@ def test_tagged_release_builds_and_publishes_signed_source_package():
     assert "--output=artifacts/XIDER-source.zip HEAD" in packaging
     assert "path: artifacts/*.zip" in packaging
     assert "cp artifacts/windows/XGENT-WDS-Windows.zip artifacts/XGENT-WDS-Windows.zip" in release
+    assert "zip -q Guard-Keeper-Windows.zip XIDER-Guard-Keeper.exe xider-obfuscation-report.json" in packaging
+    assert "unzip -Z1 artifacts/XGENT-WDS-Windows.zip | grep -Fxq xider-obfuscation-report.json" in packaging
+    assert "unzip -Z1 artifacts/Guard-Keeper-Windows.zip | grep -Fxq xider-obfuscation-report.json" in packaging
+    assert "unzip -Z1 artifacts/macos/XGENT-MCS-macos-bundle.zip | grep -Fxq xider-obfuscation-report.json" in packaging
     assert "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in release
     assert 'python tools/build_release_manifest.py "${GITHUB_REF_NAME}" artifacts --require-signature' in release
 
@@ -200,6 +204,7 @@ def test_guard_keeper_macos_package_uses_compiled_app_without_python_helpers():
     packaging = text.split("  pack-components:", 1)[1].split("  create-release:", 1)[0]
     assert "cp artifacts/macos/Guard-Keeper-macOS.zip artifacts/Guard-Keeper-macOS.zip" in packaging
     assert "unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Fq 'XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper'" in packaging
+    assert "unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Fxq xider-obfuscation-report.json" in packaging
     assert "grep -Eq '(^|/)(guardian_recovery|release_signature|update_package)\\.py$'" in packaging
 
 

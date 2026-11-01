@@ -127,8 +127,9 @@ def test_inventory_reports_macos_code_signature_and_still_marks_integrity_unveri
     assert binary_row["signature_state"] == "verified"
     assert binary_row["signature_evidence"] == "codesign_verify_exit_0"
     assert binary_row["integrity_state"] == "unverified"
-    assert report["protection"]["obfuscation_state"] == "not_applied"
-    assert all(component["obfuscation_state"] == "not_applied" for component in report["components"])
+    assert report["protection"]["obfuscation_state"] == "unknown"
+    assert all(component["obfuscation_state"] == "unknown" for component in report["components"])
+    assert "signed release inventory" in report["protection"]["evidence"]
     assert all(component["build_mode"] == "nuitka_compiled" for component in report["components"])
 
 

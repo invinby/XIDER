@@ -104,11 +104,11 @@ jobs:
           $version = $versionMatch.Matches.Groups[1].Value
           if ("v$version" -ne $env:RELEASE_TAG) { throw "Source version $version does not match release tag $env:RELEASE_TAG." }
           python -m pip install --upgrade pip
-          python -m pip install -r XGENT-WDS/requirements.txt nuitka==4.3.1
+          python -m pip install -r XGENT-WDS/requirements.txt nuitka==4.3.1 pyobfus==0.11.1
           python tools/build_nuitka_windows.py
           Copy-Item XGENT-WDS/.env.example XGENT-WDS/dist/nuitka/.env.example
           python tools/verify_command_approval_bundle.py --nuitka-executable XGENT-WDS/dist/nuitka/XGENT-WDS.exe
-          $expected = @('.env.example', 'XGENT-WDS.exe', 'XIDER-Guard-Keeper.exe') | Sort-Object
+          $expected = @('.env.example', 'XGENT-WDS.exe', 'XIDER-Guard-Keeper.exe', 'xider-obfuscation-report.json') | Sort-Object
           $actual = @(Get-ChildItem XGENT-WDS/dist/nuitka -Force -File | ForEach-Object Name | Sort-Object)
           Write-Host "Compiled Windows package files: $($actual -join ', ')"
           if (Compare-Object $expected $actual) { throw "Unexpected compiled Windows package contents: $($actual -join ', ')" }
@@ -119,6 +119,7 @@ jobs:
           New-Item -ItemType Directory -Path artifacts -Force | Out-Null
           Copy-Item XGENT-WDS/dist/nuitka/XGENT-WDS.exe artifacts/
           Copy-Item XGENT-WDS/dist/nuitka/XIDER-Guard-Keeper.exe artifacts/
+          Copy-Item XGENT-WDS/dist/nuitka/xider-obfuscation-report.json artifacts/
           Copy-Item $package artifacts/XGENT-WDS-Windows.zip
 
       - name: Upload compiled Windows package
@@ -170,7 +171,7 @@ jobs:
           git archive --format=zip --output=artifacts/X-STAB-server.zip "$COMMIT" TG-BOT-SERVER deploy XGENT-MCS/release_signature.py
           git show "${COMMIT}:deploy/bootstrap-agent.ps1" > artifacts/XIDER-bootstrap-windows.ps1
           git show "${COMMIT}:deploy/bootstrap.sh" > artifacts/XIDER-bootstrap-macos.sh
-          (cd artifacts && zip -q Guard-Keeper-Windows.zip XIDER-Guard-Keeper.exe)
+          (cd artifacts && zip -q Guard-Keeper-Windows.zip XIDER-Guard-Keeper.exe xider-obfuscation-report.json)
           python tools/build_install_launchers.py "$COMMIT" "$TAG" artifacts --macos-source-preview
           python tools/sign_bootstrap.py "$TAG" "$COMMIT" artifacts
           python tools/sign_installers.py artifacts

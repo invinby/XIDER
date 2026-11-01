@@ -60,13 +60,15 @@ def test_inventory_reports_guard_keeper_as_separate_component(tmp_path):
     assert next(row for row in guardian["files"] if row["name"] == "XIDER-Guard-Keeper.exe")["state"] == "unsupported"
 
 
-def test_compiled_windows_components_report_nuitka_without_obfuscation(tmp_path, monkeypatch):
+def test_compiled_windows_components_report_obfuscation_as_unverified(tmp_path, monkeypatch):
     monkeypatch.setattr(inventory.sys, "executable", r"C:\XIDER\XGENT-WDS.exe")
 
     result = inventory.collect_agent_file_inventory(tmp_path)
 
     assert all(component["build_mode"] == "nuitka_compiled" for component in result["components"])
-    assert all(component["obfuscation_state"] == "not_applied" for component in result["components"])
+    assert all(component["obfuscation_state"] == "unknown" for component in result["components"])
+    assert result["protection"]["obfuscation_state"] == "unknown"
+    assert "signed release inventory" in result["protection"]["evidence"]
 
 
 def test_component_is_partial_when_only_one_allowlisted_file_is_found(tmp_path):

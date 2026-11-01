@@ -1,8 +1,4 @@
-"""Build and verify a signed inventory for a manually requested XIDER build.
-
-This is an artifact inventory, not an obfuscator. Nuitka-built binaries are
-reported as compiled/source-free; no obfuscation is claimed or performed.
-"""
+"""Build and verify a signed inventory for a manually requested XIDER build."""
 
 from __future__ import annotations
 
@@ -28,6 +24,8 @@ from release_signature import TRUSTED_RELEASE_KEYS, sign_manifest, verify_manife
 TAG = re.compile(r"^v\d+\.\d+\.\d+$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 OUTPUT_NAME = "protected-build-manifest.json"
+OBFUSCATION_REPORT_NAME = "xider-obfuscation-report.json"
+OBFUSCATION_REPORT_SCHEMA = "xider.obfuscation-report.v1"
 SOURCE_SUFFIXES = {".py", ".ps1", ".psm1", ".bat", ".cmd", ".sh"}
 EXPECTED_ARCHIVES = {
     "XIDER-source.zip",
@@ -54,6 +52,55 @@ def _hash_stream(stream) -> tuple[int, str]:
         size += len(block)
         digest.update(block)
     return size, digest.hexdigest()
+
+
+def _obfuscation_report(archive_path: Path, asset: dict, *, platform: str, source_tree: str) -> tuple[dict, str]:
+    """Read and validate the report shipped inside a compiled package."""
+    matches = [row for row in asset["members"] if row["path"] == OBFUSCATION_REPORT_NAME]
+    if len(matches) != 1:
+        raise ValueError(f"Compiled package must contain exactly one {OBFUSCATION_REPORT_NAME}: {archive_path.name}")
+    with zipfile.ZipFile(archive_path) as archive:
+        try:
+            report = json.loads(archive.read(OBFUSCATION_REPORT_NAME))
+        except (KeyError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValueError(f"Invalid obfuscation report in {archive_path.name}") from exc
+    if not isinstance(report, dict):
+        raise ValueError(f"Invalid obfuscation report in {archive_path.name}")
+    tool = report.get("tool", {})
+    preflight = report.get("preflight", {})
+    component_rows = report.get("components")
+    component_ids = (
+        [row.get("id") for row in component_rows if isinstance(row, dict)]
+        if isinstance(component_rows, list) else []
+    )
+    if (
+        not isinstance(tool, dict)
+        or not isinstance(preflight, dict)
+        or not isinstance(component_rows, list)
+        or len(component_ids) != len(component_rows)
+        or not component_ids
+        or any(not isinstance(item, str) for item in component_ids)
+        or len(set(component_ids)) != len(component_ids)
+        or any(row.get("state") != "applied" for row in component_rows)
+        or any(row.get("source_tree") != source_tree for row in component_rows)
+        or report.get("schema") != OBFUSCATION_REPORT_SCHEMA
+        or report.get("state") != "applied"
+        or tool.get("name") != "PyObfus"
+        or tool.get("version") != "0.11.1"
+        or type(report.get("source_files_processed")) is not int
+        or report["source_files_processed"] < 1
+        or type(report.get("names_obfuscated")) is not int
+        or report["names_obfuscated"] < 1
+        or not report.get("syntax_verified")
+        or not report.get("name_binding_verified")
+        or report.get("execution_performed_by_obfuscator") is not False
+        or preflight.get("high_risk_findings") != 0
+        or preflight.get("parse_errors") != 0
+        or report.get("platform") != platform
+        or report.get("source_tree") != source_tree
+    ):
+        raise ValueError(f"Obfuscation report does not satisfy the release policy: {archive_path.name}")
+    return report, matches[0]["sha256"]
 
 
 def _safe_member_name(name: str) -> bool:
@@ -117,6 +164,18 @@ def build_manifest(
         })
 
     assets_by_name = {asset["name"]: asset for asset in assets}
+    obfuscation_by_asset = {}
+    for asset_name, platform, source_tree in (
+        ("XGENT-WDS-Windows.zip", "windows", "XGENT-WDS"),
+        ("Guard-Keeper-Windows.zip", "windows", "XGENT-WDS"),
+        ("XGENT-MCS-macos-bundle.zip", "macos", "XGENT-MCS"),
+        ("Guard-Keeper-macOS.zip", "macos", "XGENT-MCS"),
+    ):
+        asset = assets_by_name.get(asset_name)
+        if asset is not None:
+            obfuscation_by_asset[asset_name] = _obfuscation_report(
+                directory / asset_name, asset, platform=platform, source_tree=source_tree,
+            )
     components = []
     for component_id, platform, asset_name, entrypoint in COMPONENT_OUTPUTS:
         asset = assets_by_name.get(asset_name)
@@ -147,6 +206,16 @@ def build_manifest(
         source_included = any(Path(row["path"]).suffix.lower() in SOURCE_SUFFIXES for row in asset["members"])
         if source_included:
             raise ValueError(f"Compiled component archive unexpectedly includes plaintext source: {asset_name}")
+        obfuscation_report, obfuscation_report_sha256 = obfuscation_by_asset[asset_name]
+        component_evidence = next(
+            (row for row in obfuscation_report.get("components", []) if row.get("id") == component_id), None,
+        )
+        if (
+            not component_evidence
+            or component_evidence.get("state") != "applied"
+            or component_evidence.get("source_tree") != obfuscation_report["source_tree"]
+        ):
+            raise ValueError(f"Obfuscation evidence is missing for {component_id} in {asset_name}")
         components.append({
             "id": component_id,
             "platform": platform,
@@ -157,25 +226,34 @@ def build_manifest(
             "compiler": "Nuitka 4.3.1",
             "source_included": source_included,
             "obfuscation": {
-                "state": "not_applied",
-                "tool": None,
-                "version": None,
-                "configuration": None,
-                "reason": "No reproducible supported obfuscation step is configured; compilation is not obfuscation.",
+                "state": "obfuscated",
+                "tool": obfuscation_report["tool"]["name"],
+                "version": obfuscation_report["tool"]["version"],
+                "configuration": obfuscation_report["configuration"],
+                "source_tree": obfuscation_report["source_tree"],
+                "source_files_processed": obfuscation_report["source_files_processed"],
+                "names_obfuscated": obfuscation_report.get("names_obfuscated"),
+                "syntax_verified": obfuscation_report["syntax_verified"],
+                "name_binding_verified": obfuscation_report["name_binding_verified"],
+                "report_member": OBFUSCATION_REPORT_NAME,
+                "report_sha256": obfuscation_report_sha256,
+                "signed_package_asset": asset_name,
             },
             "output_sha256": member["sha256"] if member else None,
             "output_verification": "sha256_in_signed_member_inventory",
         })
 
+    built_obfuscated = sum(row["build_mode"] == "nuitka_compiled" for row in components)
+    applied_obfuscated = sum(row["obfuscation"]["state"] == "obfuscated" for row in components)
+    obfuscation_state = "obfuscated" if built_obfuscated and built_obfuscated == applied_obfuscated else (
+        "not_built" if not built_obfuscated else "partial"
+    )
     return {
         "schema": 1,
         "source_ref": source_ref,
         "source_commit": source_commit,
         "build_kind": "artifact_inventory",
-        "obfuscation": {
-            "state": "not_applied",
-            "reason": "No reproducible supported obfuscation step is configured; compilation is not obfuscation.",
-        },
+        "obfuscation": {"state": obfuscation_state, "tool": "PyObfus 0.11.1", "compiler": "Nuitka 4.3.1"},
         "components": components,
         "platform_signing": {
             "windows": "not_claimed",

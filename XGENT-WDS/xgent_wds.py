@@ -7,6 +7,7 @@
 
 import base64
 import binascii
+import ast
 import csv
 import ctypes
 import ctypes.wintypes
@@ -7432,7 +7433,7 @@ setTimeout(()=>window.close(),15000);
                     )
                     for name in files:
                         candidate = source / name
-                        compile(candidate.read_text(encoding="utf-8"), str(candidate), "exec")
+                        ast.parse(candidate.read_text(encoding="utf-8"), filename=str(candidate), mode="exec")
                     self._publish_update_progress(operation_id, "installing")
                     backup_dir = install_agent_files(
                         source,

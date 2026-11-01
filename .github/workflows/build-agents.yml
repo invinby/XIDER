@@ -103,7 +103,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r XGENT-WDS/requirements.txt
-          pip install nuitka==4.3.1
+          pip install nuitka==4.3.1 pyobfus==0.11.1
 
       - name: "Build Windows Agent and Guard Keeper as compiled one-file apps"
         run: |
@@ -114,7 +114,7 @@ jobs:
             $_.Name -match '\.(py[co]?|ps1|psm1|bat|cmd|sh)$' -or ($_.Name -eq '.env')
           }
           if ($unexpected) { throw ('Unexpected plaintext helper/source or private .env in Windows release: ' + ($unexpected.FullName -join ', ')) }
-          $expected = @('.env.example', 'XGENT-WDS.exe', 'XIDER-Guard-Keeper.exe')
+          $expected = @('.env.example', 'XGENT-WDS.exe', 'XIDER-Guard-Keeper.exe', 'xider-obfuscation-report.json')
           $actual = @(Get-ChildItem XGENT-WDS/dist/nuitka -File | ForEach-Object Name | Sort-Object)
           $expectedSorted = @($expected | Sort-Object)
           if (Compare-Object $expectedSorted $actual) {
@@ -178,7 +178,7 @@ jobs:
       - name: "Install dependencies"
         run: |
           python -m pip install --upgrade pip
-          pip install -r XGENT-MCS/requirements.txt nuitka==4.3.1
+          pip install -r XGENT-MCS/requirements.txt nuitka==4.3.1 pyobfus==0.11.1
 
       - name: "Compile macOS bundles with Nuitka"
         run: |
@@ -215,12 +215,14 @@ jobs:
           cd XGENT-MCS
           mkdir -p dist
           cp .env.example dist/.env.example
+          cp dist/nuitka/xider-obfuscation-report.json dist/xider-obfuscation-report.json
           ditto -c -k --sequesterRsrc --keepParent dist/nuitka/XIDER-Guard-Keeper.app dist/Guard-Keeper-macOS.zip
+          (cd dist && zip -q Guard-Keeper-macOS.zip xider-obfuscation-report.json)
           ditto dist/nuitka/XIDER-Guard-Keeper.app dist/XIDER-Guard-Keeper.app
           ditto dist/nuitka/XIDER-Layers.app dist/XIDER-Layers.app
           ditto dist/nuitka/XIDER.app dist/XIDER.app
           cd dist
-          zip -r XGENT-MCS-macos-bundle.zip XIDER.app XIDER-Guard-Keeper.app XIDER-Layers.app .env.example
+          zip -r XGENT-MCS-macos-bundle.zip XIDER.app XIDER-Guard-Keeper.app XIDER-Layers.app .env.example xider-obfuscation-report.json
           if unzip -Z1 XGENT-MCS-macos-bundle.zip | grep -Eiq '\.(py[co]?|ps1|psm1|bat|cmd|sh)$'; then
             echo 'Release bundle unexpectedly contains plaintext source or helper scripts.' >&2
             exit 1
@@ -285,12 +287,15 @@ jobs:
           cp artifacts/windows/XIDER-Guard-Keeper.exe artifacts/
           cp artifacts/windows/XGENT-WDS-Windows.zip artifacts/XGENT-WDS-Windows.zip
           cp artifacts/macos/XGENT-MCS-macos-bundle.zip artifacts/XGENT-MCS-macos-bundle.zip
-          (cd artifacts && zip -q Guard-Keeper-Windows.zip XIDER-Guard-Keeper.exe)
+          cp artifacts/windows/xider-obfuscation-report.json artifacts/xider-obfuscation-report.json
+          (cd artifacts && zip -q Guard-Keeper-Windows.zip XIDER-Guard-Keeper.exe xider-obfuscation-report.json)
+          rm artifacts/xider-obfuscation-report.json
           cp artifacts/macos/Guard-Keeper-macOS.zip artifacts/Guard-Keeper-macOS.zip
           for asset in Guard-Keeper-Windows.zip Guard-Keeper-macOS.zip; do
             unzip -t "artifacts/$asset"
           done
           unzip -Z1 artifacts/Guard-Keeper-Windows.zip | grep -Fxq XIDER-Guard-Keeper.exe
+          unzip -Z1 artifacts/Guard-Keeper-Windows.zip | grep -Fxq xider-obfuscation-report.json
           unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Fq 'XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper'
           if unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Eq '(^|/)(guardian_recovery|release_signature|update_package)\.py$'; then
             echo 'Guard Keeper package unexpectedly contains Python recovery sources.' >&2
@@ -300,6 +305,7 @@ jobs:
           unzip -Z1 artifacts/XGENT-WDS-Windows.zip | grep -Fxq XGENT-WDS.exe
           unzip -Z1 artifacts/XGENT-WDS-Windows.zip | grep -Fxq XIDER-Guard-Keeper.exe
           unzip -Z1 artifacts/XGENT-WDS-Windows.zip | grep -Fxq .env.example
+          unzip -Z1 artifacts/XGENT-WDS-Windows.zip | grep -Fxq xider-obfuscation-report.json
           if unzip -Z1 artifacts/XGENT-WDS-Windows.zip | grep -Eiq '\.(py[co]?|ps1|psm1|bat|cmd|sh)$'; then
             echo 'Windows release package contains plaintext source or helper scripts.' >&2
             exit 1
@@ -308,6 +314,8 @@ jobs:
           unzip -Z1 artifacts/macos/XGENT-MCS-macos-bundle.zip | grep -Fq 'XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper'
           unzip -Z1 artifacts/macos/XGENT-MCS-macos-bundle.zip | grep -Fq 'XIDER-Layers.app/Contents/MacOS/XIDER-Layers'
           unzip -Z1 artifacts/macos/XGENT-MCS-macos-bundle.zip | grep -Fq .env.example
+          unzip -Z1 artifacts/macos/XGENT-MCS-macos-bundle.zip | grep -Fxq xider-obfuscation-report.json
+          unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Fxq xider-obfuscation-report.json
           if unzip -Z1 artifacts/macos/XGENT-MCS-macos-bundle.zip | grep -Eiq '\.(py[co]?|ps1|psm1|bat|cmd|sh)$'; then
             echo 'macOS release package contains plaintext source or helper scripts.' >&2
             exit 1

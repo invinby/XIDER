@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
 import shutil
 import subprocess
@@ -64,7 +65,7 @@ def measure_packet_loss(*, address: str, platform: str | None = None,
         executable = which("ping.exe") or which("ping")
         args_for = lambda: [executable, "-n", "1", "-w", "1000", target]
     elif selected in {"darwin", "macos"}:
-        executable = which("ping") or ("/sbin/ping" if __import__("os").path.exists("/sbin/ping") else None)
+        executable = which("ping") or ("/sbin/ping" if os.path.exists("/sbin/ping") else None)
         args_for = lambda: [executable, "-n", "-c", "1", "-W", "1", target]
     else:
         return _unknown(target, "platform_unsupported")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import os
 from pathlib import Path
 import shutil
@@ -10,8 +11,13 @@ import subprocess
 import sys
 import tempfile
 
-
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tools.obfuscation_build import REPORT_NAME, obfuscate_tree
+
+
 WDS = ROOT / "XGENT-WDS"
 MCS = ROOT / "XGENT-MCS"
 TOOLS = ROOT / "tools"
@@ -44,7 +50,7 @@ def _build(entry: Path, output_dir: Path, output_name: str, modules: tuple[str, 
     # MinGW's archive contains deep paths; a short cache root avoids Windows
     # extraction failures under the default AppData cache path.
     environment.setdefault("NUITKA_CACHE_DIR", r"C:\NuitkaCache")
-    search_paths = (WDS, MCS, TOOLS)
+    search_paths = (entry.parent, MCS, TOOLS, WDS)
     environment["PYTHONPATH"] = os.pathsep.join(
         [str(path) for path in search_paths]
         + ([environment["PYTHONPATH"]] if environment.get("PYTHONPATH") else [])
@@ -112,11 +118,23 @@ def build_packages() -> tuple[Path, Path]:
     OUTPUT.mkdir(parents=True, exist_ok=True)
     BUILD_PARENT.mkdir(parents=True, exist_ok=True)
     build_root = Path(tempfile.mkdtemp(prefix="nuitka-windows-", dir=BUILD_PARENT))
+    obfuscated_wds = build_root / "obfuscated-wds"
+    report_path = build_root / REPORT_NAME
+    report = obfuscate_tree(WDS, obfuscated_wds, report_path, platform="windows")
+    report["components"] = [
+        {"id": "windows_agent", "state": "applied", "source_tree": "XGENT-WDS"},
+        {"id": "windows_guard_keeper", "state": "applied", "source_tree": "XGENT-WDS"},
+    ]
+    report["unobfuscated_first_party_scope"] = (
+        "MCS helper modules loaded from XGENT-MCS and build-only helpers from tools; "
+        "Nuitka compiles these modules but they are not counted as obfuscated."
+    )
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     agent = _build(
-        WDS / "xgent_wds.py", build_root / "agent", "XGENT-WDS.exe", _hidden_imports(),
+        obfuscated_wds / "xgent_wds.py", build_root / "agent", "XGENT-WDS.exe", _hidden_imports(),
     )
     guardian = _build(
-        WDS / "xider_guardian_wds.py", build_root / "guardian", "XIDER-Guard-Keeper.exe",
+        obfuscated_wds / "xider_guardian_wds.py", build_root / "guardian", "XIDER-Guard-Keeper.exe",
         ("update_package", "release_signature"),
     )
     # Copy only compiled executables into the release root. Nuitka's generated
@@ -127,6 +145,7 @@ def build_packages() -> tuple[Path, Path]:
         if artifact != destination:
             shutil.copy2(artifact, destination)
         published_paths.append(destination)
+    shutil.copy2(report_path, OUTPUT / REPORT_NAME)
     # Both executables are safely copied. Remove only this invocation's fresh
     # Nuitka intermediates; failed staging remains available for diagnosis.
     try:

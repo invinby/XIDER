@@ -1,5 +1,19 @@
 # XIDER release history
 
+## Unreleased — reproducible agent obfuscation
+
+### English
+
+- Windows and macOS build pipelines now transform first-party Python modules with pinned PyObfus before Nuitka compilation and attach a verified obfuscation report to compiled packages.
+- The signed protected-build inventory binds each component to the report hash and rejects missing, mismatched, or incomplete evidence.
+- Local Windows Agent and Guard Keeper binaries were built and the Agent passed signature/tamper/replay verification. The macOS transform passed syntax/name/import checks, but native macOS compilation and device acceptance remain open. These changes are not published.
+
+### Русский
+
+- Сборщики Windows и macOS теперь преобразуют first-party Python-модули закреплённым PyObfus до компиляции Nuitka и кладут проверяемый отчёт обфускации в пакеты.
+- Подписанный protected-build inventory связывает каждый компонент с хешем отчёта и отклоняет отсутствующие, несоответствующие или неполные доказательства.
+- Локально собраны Windows Agent и Guard Keeper; Agent прошёл проверку подписи, tamper и replay. Преобразование macOS прошло проверки синтаксиса, связей имён и импорта, но нативная сборка и проверка на Mac ещё открыты. Эти изменения не опубликованы.
+
 ## X4.3.18-COMPONENT-LEDGER+20261101 — signed component build status
 
 ### English

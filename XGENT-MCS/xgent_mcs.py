@@ -4,6 +4,7 @@
 и выполняет их на этой машине.
 """
 import argparse
+import ast
 import base64
 import binascii
 import datetime
@@ -6038,7 +6039,7 @@ end tell'''
                 for name in files:
                     candidate = source / name
                     if candidate.suffix == ".py":
-                        compile(candidate.read_text(encoding="utf-8"), str(candidate), "exec")
+                        ast.parse(candidate.read_text(encoding="utf-8"), filename=str(candidate), mode="exec")
                 with self._lifecycle_lock:
                     if self._update_cancelled.is_set() or not self._running.is_set():
                         raise RuntimeError("Установка отменена командой остановки или удаления.")

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
 import shutil
 import subprocess
@@ -44,7 +45,7 @@ def probe_ipv4_mtu(target: object, payload_size: int, *, platform: str | None = 
             return "unsupported"
         args = [executable, "/n", "1", "/w", "800", "/f", "/l", str(payload_size), "/4", normalized]
     elif platform == "macos":
-        executable = which("ping") or ("/sbin/ping" if __import__("os").path.exists("/sbin/ping") else None)
+        executable = which("ping") or ("/sbin/ping" if os.path.exists("/sbin/ping") else None)
         if not executable:
             return "unsupported"
         args = [executable, "-D", "-c", "1", "-W", "800", "-s", str(payload_size), "-n", normalized]

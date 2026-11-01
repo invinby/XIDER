@@ -300,7 +300,7 @@ def _component(root: Path, component_id: str, names: tuple[str, ...], version: s
         "state": state,
         "version": version if entrypoint_present else None,
         "build_mode": "nuitka_compiled" if runtime_kind == "compiled" else "python_source",
-        "obfuscation_state": "not_applied",
+        "obfuscation_state": "unknown" if runtime_kind == "compiled" else "not_applied",
         "install_path": str(root) if present else None,
         "files": files,
     }
@@ -339,8 +339,12 @@ def collect_agent_file_inventory(
         "generated_at": generated_at,
         "components": [agent, guardian],
         "protection": {
-            "obfuscation_state": "not_applied",
+            "obfuscation_state": "unknown" if runtime_kind == "compiled" else "not_applied",
             "integrity_state": "unverified",
-            "evidence": "Build pipeline uses no separate obfuscator; file integrity has no trusted per-file manifest.",
+            "evidence": (
+                "Compiled package status is not verified by this local file view; check the signed release inventory."
+                if runtime_kind == "compiled" else
+                "Source runtime; no separate obfuscation applied."
+            ),
         },
     }

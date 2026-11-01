@@ -86,8 +86,9 @@ class _QuotaFile:
         except Exception:
             pass
 
-    def __getattr__(self, name):
-        return getattr(self._file, name)
+    @property
+    def name(self):
+        return self._file.name
 
 
 def _owned_usage(root: Path) -> tuple[int, int]:

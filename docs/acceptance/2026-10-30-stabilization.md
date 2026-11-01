@@ -62,6 +62,14 @@ This is hosted artifact and workflow evidence. It does not establish successful 
 
 Until these device steps are completed, physical behavior, live Telegram interaction, GitHub-hosted release execution, and published Pages state remain unverified.
 
+## Follow-up build-protection work — local, not published
+
+- Both Nuitka builders now pin PyObfus 0.11.1, require offline preflight with zero parse/high-risk findings, verify generated syntax and cross-file names without executing transformed source, and emit `xider-obfuscation-report.json`.
+- Local Windows transform: 50 source files processed, 2,875 names transformed; both Windows executables built. The Agent passed the embedded valid-signature, tamper-rejection, and durable-replay verifier. The report was accepted by the protected manifest builder as `obfuscated` for the actual Windows packages.
+- macOS transform: 59 source files processed, 3,318 names transformed; syntax/name checks and transformed-module import smoke passed on Windows. This is not a native macOS build or Mac-device test.
+- Focused local checks: protected manifest/workflow/release catalog 30 + 31 passed; Windows and macOS file inventory 12 + 13 passed. These are local changes on `main`; they have not been pushed or published. The hosted v4.3.18 release still has the older truthful status: Windows compiled, macOS native packages `not_built`, obfuscation `not_applied`.
+- Remaining release gates: push these source changes, pass GitHub Actions on the exact commit, build the Mac bundles on a macOS runner, inspect and verify the signed package manifests, then run owner-device installation and behavior checks. PyObfus obfuscation raises inspection effort; it is not encryption and does not prevent reverse engineering.
+
 ## Outcome matrix coverage
 
 The X-MAP snapshot contains 404 platform/action rows. Every row has expected-result evidence and a stability/evidence state. Counts: 389 source-only unverified, 3 dependency-gated unverified, 10 known source-limited, and 2 reported issues not retested. No row lacks evidence text. The shared contract distinguishes broker delivery acceptance from device confirmation, then preserves confirmed, failed, timed-out, unsupported, and unknown outcomes. This is source/documentation coverage; it is not a claim that every command and every branch was exercised on a physical device.

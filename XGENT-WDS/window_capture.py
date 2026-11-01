@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import re
 
 MAX_WINDOWS = 32
@@ -85,7 +86,7 @@ def encode_window_image(image, window_id, title, app):
 
 
 def _enumerate_native_windows():
-    if __import__("os").name != "nt":
+    if os.name != "nt":
         raise OSError("Windows window capture is unsupported on this platform")
     import ctypes
     from ctypes import wintypes

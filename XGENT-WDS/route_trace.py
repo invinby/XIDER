@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
 import shutil
 import subprocess
@@ -61,7 +62,7 @@ def parse_trace_output(output: object, target: str, *, max_hops: int = MAX_HOPS)
 def trace_route(target: object, *, platform: str | None = None,
                 runner: Callable = subprocess.run, which: Callable = shutil.which) -> dict:
     normalized = normalize_target(target)
-    selected_platform = platform or ("windows" if __import__("os").name == "nt" else "macos")
+    selected_platform = platform or ("windows" if os.name == "nt" else "macos")
     family = ipaddress.ip_address(normalized).version
     if selected_platform == "windows":
         executable = which("tracert.exe") or which("tracert")
@@ -72,7 +73,7 @@ def trace_route(target: object, *, platform: str | None = None,
         source = WINDOWS_SOURCE
         timeout = 12
     elif selected_platform == "macos":
-        executable = which("traceroute") or ("/sbin/traceroute" if __import__("os").path.exists("/sbin/traceroute") else None)
+        executable = which("traceroute") or ("/sbin/traceroute" if os.path.exists("/sbin/traceroute") else None)
         if not executable:
             return {"state": "unsupported", "target": normalized, "reached": False, "hops": [],
                     "source": MACOS_SOURCE, "detail": "traceroute_unavailable"}

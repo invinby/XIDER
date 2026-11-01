@@ -342,7 +342,7 @@ def _component(root: Path | None, component_id: str, version: str | None,
         "state": state,
         "files": entries,
         "build_mode": "nuitka_compiled" if runtime_kind == "compiled" else "python_source",
-        "obfuscation_state": "not_applied",
+        "obfuscation_state": "unknown" if runtime_kind == "compiled" else "not_applied",
         "evidence": "bounded_allowlist; file_contents_not_returned",
     }
 
@@ -394,8 +394,12 @@ def collect_agent_file_inventory(
         "generated_at": _utc_now(),
         "components": components,
         "protection": {
-            "obfuscation_state": "not_applied",
+            "obfuscation_state": "unknown" if runtime_kind == "compiled" else "not_applied",
             "integrity_state": "unverified",
-            "evidence": "build_pipeline_uses_no_separate_obfuscator; no_signed_per_file_manifest",
+            "evidence": (
+                "Compiled package status is not verified by this local file view; check the signed release inventory."
+                if runtime_kind == "compiled" else
+                "source_runtime_no_separate_obfuscation_applied"
+            ),
         },
     }

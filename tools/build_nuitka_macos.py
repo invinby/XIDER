@@ -4,15 +4,22 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
 import os
 from pathlib import Path
 import plistlib
 import shutil
 import subprocess
 import sys
-
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tools.obfuscation_build import REPORT_NAME, obfuscate_tree
+
+
 MCS = ROOT / "XGENT-MCS"
 OUTPUT = MCS / "dist" / "nuitka"
 BUILD_ROOT = MCS / "build" / "nuitka-macos"
@@ -149,7 +156,7 @@ def _build(
         bundle_id=bundle_id, modules=modules, protected_resources=resources,
     )
     environment = os.environ.copy()
-    search_paths = (MCS, ROOT / "tools")
+    search_paths = (entry.parent, MCS, ROOT / "tools")
     environment["PYTHONPATH"] = os.pathsep.join(
         [str(path) for path in search_paths]
         + ([environment["PYTHONPATH"]] if environment.get("PYTHONPATH") else [])
@@ -213,18 +220,33 @@ def main() -> int:
         raise SystemExit("A Developer ID Application identity is required outside unsigned preview builds.")
     version = _version()
     OUTPUT.mkdir(parents=True, exist_ok=True)
+    BUILD_ROOT.mkdir(parents=True, exist_ok=True)
+    obfuscation_root = Path(tempfile.mkdtemp(prefix="obfuscated-mcs-", dir=BUILD_ROOT))
+    obfuscated_mcs = obfuscation_root / "source"
+    report_path = obfuscation_root / REPORT_NAME
+    report = obfuscate_tree(MCS, obfuscated_mcs, report_path, platform="macos")
+    report["components"] = [
+        {"id": "macos_agent", "state": "applied", "source_tree": "XGENT-MCS"},
+        {"id": "macos_guard_keeper", "state": "applied", "source_tree": "XGENT-MCS"},
+        {"id": "safari", "state": "applied", "source_tree": "XGENT-MCS"},
+        {"id": "siri", "state": "applied", "source_tree": "XGENT-MCS"},
+    ]
+    report["unobfuscated_first_party_scope"] = (
+        "Build-only helper modules loaded from tools and third-party dependencies are not counted as obfuscated."
+    )
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     agent, executable = _build(
-        MCS / "xgent_mcs.py", "XGENT-MCS", "XIDER", "com.xider.agent", version=version,
+        obfuscated_mcs / "xgent_mcs.py", "XGENT-MCS", "XIDER", "com.xider.agent", version=version,
         modules=_hidden_imports(), resources=AGENT_RESOURCES,
         signing_identity=identity,
         entitlements=MCS / "location.entitlements",
     )
     guardian, _ = _build(
-        MCS / "xider_guardian.py", "XIDER-Guard-Keeper", "XIDER-Guard-Keeper", "com.xider.guardian",
+        obfuscated_mcs / "xider_guardian.py", "XIDER-Guard-Keeper", "XIDER-Guard-Keeper", "com.xider.guardian",
         version=version, signing_identity=identity,
     )
     layers, _ = _build(
-        MCS / "xider_layers.py", "XIDER-Layers", "XIDER-Layers", "com.xider.layers",
+        obfuscated_mcs / "xider_layers.py", "XIDER-Layers", "XIDER-Layers", "com.xider.layers",
         version=version, signing_identity=identity,
     )
     destinations = (
@@ -236,6 +258,11 @@ def main() -> int:
         if destination.exists():
             shutil.rmtree(destination)
         shutil.copytree(source, destination, symlinks=True)
+    shutil.copy2(report_path, OUTPUT / REPORT_NAME)
+    try:
+        shutil.rmtree(obfuscation_root)
+    except OSError:
+        print(f"Warning: successful obfuscation staging remains for cleanup: {obfuscation_root}")
     if identity:
         subprocess.run([sys.executable, str(ROOT / "tools" / "verify_macos_bundle.py"),
                         str(OUTPUT / "XIDER.app")], cwd=ROOT, check=True)
