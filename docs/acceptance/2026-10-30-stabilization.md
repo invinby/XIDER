@@ -1,4 +1,4 @@
-# XIDER stabilization acceptance matrix — 2026-10-30
+# XIDER stabilization acceptance matrix — updated 2026-11-01
 
 This matrix separates repository evidence from physical-device and hosted-service evidence. A passing source test does not mean the feature was exercised on a user's Mac or Windows PC.
 
@@ -12,21 +12,32 @@ This matrix separates repository evidence from physical-device and hosted-servic
 | Windows source/installer fixtures | Pass | Windows suite: 554 passed; PowerShell 5.1 bootstrap, setup-selection, and transaction fixtures passed | Fresh install, permissions, recovery, and terminal-window behavior on a physical Windows device |
 | macOS source/installer fixtures | Pass | macOS suite: 663 passed, 1 skipped; shell/integration fixtures available on Windows were run | Fresh install, update/rollback, permissions, camera, screenshot, GPS, and recovery on a physical Mac |
 | Agent Files inventory | Pass at source/unit level; integrity remains unverified without a trusted per-file manifest | Windows/macOS inventory tests and Telegram owner callbacks included in full suite | Inspect actual installed component list/signature on each owner device |
-| Windows build-cache cleanup | Policy and mocked cleanup tests pass; no build output deleted in this work | `tools/test_build_nuitka_windows.py`; next successful local Windows build removes only recognized legacy intermediate directories | Run a successful packaged build, then confirm final artifacts remain and cache space is reclaimed |
+| Windows build-cache cleanup | Policy and mocked cleanup tests pass; tagged Windows release package built successfully on GitHub Actions | `tools/test_build_nuitka_windows.py`; release workflow `41327801306`; both Windows executables are present in signed release assets | Local Windows cache cleanup and physical install still need owner-device confirmation |
 | Feature registry | Pass | 510 unique features across 17 areas; registry tests and validator pass | None for the generated local registry |
-| Signed release workflow | Source/workflow contract passes; not executed on GitHub | Protected manual build workflow, manifest/signature tests, release-tool suite | Run owner-approved workflow and inspect signed artifact before publishing |
+| Signed release workflow | `v4.3.18` published successfully as a Windows + macOS source-preview release; three CI Python matrices and Unix installer validation passed | [Release v4.3.18](https://github.com/invinby/XIDER/releases/tag/v4.3.18); release workflow `41327801306`; Pages workflow `41331208446`; Ed25519 signatures verified locally against pinned key `521c56c0c89f0ddd` | Physical Windows/Mac installation and command-result checks remain owner-device work; macOS native package is not built |
 
 ## Version and copy snapshot
 
-| Surface | Version/state on 2026-10-30 | Meaning |
+| Surface | Version/state on 2026-11-01 | Meaning |
 |---|---|---|
-| Bot, agent source, registry/docs source | 4.3.4 | Current repository source version |
-| GitHub `v4.3.4` | Windows-only preview | Explicit preview, not the stable cross-platform release |
-| Latest stable signed release | `v4.2.1` | Current default for the macOS signed installer |
-| Windows Pages installer default | `v4.3.4` | Deliberately tracks the Windows preview |
-| macOS Pages installer default | `v4.2.1` | Deliberately remains on the latest stable signed cross-platform package |
+| Bot, agent source, registry/docs source | 4.3.18 | Current repository source version |
+| GitHub `v4.3.18` | Windows compiled preview + macOS source preview | Windows Agent and Guard Keeper are Nuitka-compiled; macOS Agent, Guard Keeper, Safari, and Siri are explicitly reported `not_built` |
+| Windows Pages installer default | `v4.3.18` | Live `win.txt` returns HTTP 200 and selects the signed v4.3.18 release assets |
+| macOS Pages installer | `v4.3.18` source preview | Live `/mac` returns HTTP 200 and points at the v4.3.18 source-preview bootstrap; it states the native runtime is not Apple-signed or notarized |
 
-The Telegram version picker can select an explicitly published version; the launchers validate the tag and verify the matching signed installer before execution. Version/copy checks and the full test runner passed locally. No GitHub release, Pages deployment, or VPS change was made.
+The Telegram version picker can select an explicitly published version; the launchers validate the tag and verify the matching signed installer before execution. This update did not change the VPS. The release and Pages state were checked against GitHub and the live site after publication.
+
+## Hosted release evidence — 2026-11-01
+
+- Tag `v4.3.18` points to commit `f69f01faa648498ac3cb575c3b9466f8c477aaf9`; repository tree was clean at publication.
+- Release workflow `41327801306` completed successfully. Unix installer validation and the Python 3.11, 3.12, and 3.14 gates passed; Windows Agent and Guard Keeper compilation and publication passed.
+- Pages workflow `41331208446` completed successfully. Live `win.txt` and `/mac` each returned HTTP 200 and reference v4.3.18.
+- Both `release-manifest.json` and `protected-build-manifest.json` verified with pinned Ed25519 key `521c56c0c89f0ddd`.
+- Downloaded `XGENT-WDS-Windows.zip`, `Guard-Keeper-Windows.zip`, and `X-STAB-server.zip`; byte sizes and SHA-256 digests matched the signed release manifest.
+- Protected build inventory reports Windows Agent and Guard Keeper as Nuitka 4.3.1 compiled, with `source_included: false`. It explicitly reports obfuscation as `not_applied`; compilation is not represented as obfuscation.
+- The same inventory reports macOS Agent, macOS Guard Keeper, Safari, and Siri as `not_built`. The release is not a native signed/notarized macOS build and is not cross-platform complete.
+
+This is hosted artifact and workflow evidence. It does not establish successful installation or runtime behavior on the owner's physical devices.
 
 ## Full local verification
 
