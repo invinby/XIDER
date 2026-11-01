@@ -102,7 +102,9 @@ Until these device steps are completed, physical behavior and live Telegram inte
 - Hosted unsigned preview run `41354547268` on commit `b569b903b3613f19ce91839b5a2fc380d4938fd1` passed the compiled-bundle probe and package checks, then uploaded artifact `XGENT-MCS-macOS` (113,464,495 bytes; SHA-256 `e73f0e51e18a3e0347eb3e9b5e48c9560c3b35a01b9e08ad8dadbb1d683f94ce`). It contains `XIDER.app`, `XIDER-Guard-Keeper.app`, `XIDER-Layers.app` (the shared Safari/Siri runtime), `.env.example`, and an obfuscation report. The ZIP checks reject first-party Python/script files and credential-like/private-key material. The service-free probe confirms command loader presence, valid Ed25519 approval, tamper rejection, and durable replay rejection.
 - This is hosted build/probe evidence only. The artifact is explicitly unsigned and not distributable; it has no Apple Developer ID signature/notarization and no protected signed release manifest. No physical Mac install or runtime behavior is claimed.
 - Full CI run `41354547389` passed on Python 3.11, 3.12, 3.14 and Unix installer fixtures.
-- Windows branch preview is being enabled on the same owner-only branch trigger so the current PyObfus config and command-approval contract receive a native Windows Nuitka build/probe before the next version is tagged.
+- The owner-only Windows preview lane is now enabled. Current combined preview run `41355642609` on commit `09f23b0c09103262530e66f62d5f5c30d53e7f33` completed the macOS build, bundle probe, ZIP checks, and artifact upload. Artifact `XGENT-MCS-macOS`: 113,464,809 bytes; SHA-256 `b8e93656a03c0f14d0f49b42745bca59aef2676bd86e31e556c4ad091da3c712`.
+- At the latest status check (2026-11-01 22:35 UTC), the Windows job remained `in_progress` in `Build Windows Agent and Guard Keeper as compiled one-file apps`; no Windows artifact or component package was available yet. Do not count the lane as successful until the job, bundle verification, and upload finish.
+- CI run `41355642686` on the same commit completed successfully. This is source/CI evidence, not physical device acceptance.
 
 ## Outcome matrix coverage
 
