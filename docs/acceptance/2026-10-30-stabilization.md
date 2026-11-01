@@ -103,7 +103,8 @@ Until these device steps are completed, physical behavior and live Telegram inte
 - This is hosted build/probe evidence only. The artifact is explicitly unsigned and not distributable; it has no Apple Developer ID signature/notarization and no protected signed release manifest. No physical Mac install or runtime behavior is claimed.
 - Full CI run `41354547389` passed on Python 3.11, 3.12, 3.14 and Unix installer fixtures.
 - The owner-only Windows preview lane is now enabled. Current combined preview run `41355642609` on commit `09f23b0c09103262530e66f62d5f5c30d53e7f33` completed the macOS build, bundle probe, ZIP checks, and artifact upload. Artifact `XGENT-MCS-macOS`: 113,464,809 bytes; SHA-256 `b8e93656a03c0f14d0f49b42745bca59aef2676bd86e31e556c4ad091da3c712`.
-- At the latest status check (2026-11-01 22:35 UTC), the Windows job remained `in_progress` in `Build Windows Agent and Guard Keeper as compiled one-file apps`; no Windows artifact or component package was available yet. Do not count the lane as successful until the job, bundle verification, and upload finish.
+- The Windows job then completed successfully: `Build Windows Agent and Guard Keeper as compiled one-file apps` and `Upload Windows EXE Artifact` both passed. Artifact `XGENT-WDS-Windows` is 153,385,931 bytes with SHA-256 `14eee75d3b47bfacb59e3db300cdb2515d9280b33875ca13a24ac628abcd74e8`.
+- The current run uploaded separate Windows and macOS preview artifacts. `Package Guard Keeper and server components`, signed build inventory, and GitHub Release publication were skipped by this owner-only preview lane; no new stable release or signed protected inventory was created.
 - CI run `41355642686` on the same commit completed successfully. This is source/CI evidence, not physical device acceptance.
 
 ## Outcome matrix coverage
