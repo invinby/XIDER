@@ -84,7 +84,13 @@ jobs:
   build-windows:
     name: "Build Windows Agent (EXE)"
     needs: [source-state, release-ci]
-    if: github.event_name == 'workflow_dispatch' || (startsWith(github.ref, 'refs/tags/v') && vars.XIDER_MACOS_RELEASE_READY == 'true')
+    if: >-
+      always() && needs.source-state.result == 'success' &&
+      (((github.event_name == 'workflow_dispatch' ||
+         (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.XIDER_MACOS_RELEASE_READY == 'true')) &&
+        needs.release-ci.result == 'success') ||
+       (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/xider-local-prep-') &&
+        github.actor == github.repository_owner))
     runs-on: windows-latest
 
     steps:
