@@ -37,6 +37,14 @@ EXPECTED_ARCHIVES = {
     "Guard-Keeper-macOS.zip",
     "X-STAB-server.zip",
 }
+COMPONENT_OUTPUTS = (
+    ("windows_agent", "windows", "XGENT-WDS-Windows.zip", "XGENT-WDS.exe"),
+    ("windows_guard_keeper", "windows", "Guard-Keeper-Windows.zip", "XIDER-Guard-Keeper.exe"),
+    ("macos_agent", "macos", "XGENT-MCS-macos-bundle.zip", "XIDER.app/Contents/MacOS/XGENT-MCS"),
+    ("macos_guard_keeper", "macos", "Guard-Keeper-macOS.zip", "XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper"),
+    ("safari", "macos", "XGENT-MCS-macos-bundle.zip", "XIDER-Layers.app/Contents/MacOS/XIDER-Layers"),
+    ("siri", "macos", "XGENT-MCS-macos-bundle.zip", "XIDER-Layers.app/Contents/MacOS/XIDER-Layers"),
+)
 
 
 def _hash_stream(stream) -> tuple[int, str]:
@@ -102,6 +110,36 @@ def build_manifest(directory: Path, *, source_ref: str, source_commit: str) -> d
             "members": members,
         })
 
+    assets_by_name = {asset["name"]: asset for asset in assets}
+    components = []
+    for component_id, platform, asset_name, entrypoint in COMPONENT_OUTPUTS:
+        asset = assets_by_name[asset_name]
+        member = next((row for row in asset["members"] if row["path"] == entrypoint), None)
+        if member is None:
+            raise ValueError(f"Required {component_id} entrypoint is missing from {asset_name}: {entrypoint}")
+        source_included = any(Path(row["path"]).suffix.lower() in SOURCE_SUFFIXES for row in asset["members"])
+        if source_included:
+            raise ValueError(f"Compiled component archive unexpectedly includes plaintext source: {asset_name}")
+        components.append({
+            "id": component_id,
+            "platform": platform,
+            "version": source_ref,
+            "package_asset": asset_name,
+            "entrypoint": entrypoint,
+            "build_mode": "nuitka_compiled",
+            "compiler": "Nuitka 4.3.1",
+            "source_included": source_included,
+            "obfuscation": {
+                "state": "not_applied",
+                "tool": None,
+                "version": None,
+                "configuration": None,
+                "reason": "No reproducible supported obfuscation step is configured; compilation is not obfuscation.",
+            },
+            "output_sha256": member["sha256"] if member else None,
+            "output_verification": "sha256_in_signed_member_inventory",
+        })
+
     return {
         "schema": 1,
         "source_ref": source_ref,
@@ -111,6 +149,7 @@ def build_manifest(directory: Path, *, source_ref: str, source_commit: str) -> d
             "state": "not_applied",
             "reason": "No reproducible supported obfuscation step is configured; compilation is not obfuscation.",
         },
+        "components": components,
         "platform_signing": {
             "windows": "not_claimed",
             "macos": "unsigned_preview",

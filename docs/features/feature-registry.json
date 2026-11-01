@@ -11161,6 +11161,82 @@
       "support_state": "implemented",
       "style": "primary",
       "presentation": "nav"
+    },
+    {
+      "page_id": "prank.tabs.favorites",
+      "parent": "prank.tabs",
+      "label_id": "prank_catalog_favorites_button",
+      "callback": "prankpage:6",
+      "roles": [
+        "owner",
+        "user"
+      ],
+      "grants": [],
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "permissions": [],
+      "support_state": "implemented",
+      "style": "primary",
+      "presentation": "nav"
+    },
+    {
+      "page_id": "prank.tabs.search",
+      "parent": "prank.tabs",
+      "label_id": "prank_catalog_search_button",
+      "callback": "prankpage:7",
+      "roles": [
+        "owner",
+        "user"
+      ],
+      "grants": [],
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "permissions": [],
+      "support_state": "implemented",
+      "style": "primary",
+      "presentation": "nav"
+    },
+    {
+      "page_id": "prank.cards.detail",
+      "parent": "prank.cards",
+      "label_id": "prank_card_launch_button",
+      "callback": "prankcard:*",
+      "roles": [
+        "owner",
+        "user"
+      ],
+      "grants": [],
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "permissions": [],
+      "support_state": "implemented",
+      "style": "primary",
+      "presentation": "nav"
+    },
+    {
+      "page_id": "prank.cards.favorite",
+      "parent": "prank.cards",
+      "label_id": "prank_card_favorite_add_button",
+      "callback": "prankpage:fav:*",
+      "roles": [
+        "owner",
+        "user"
+      ],
+      "grants": [],
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "permissions": [],
+      "support_state": "implemented",
+      "style": "primary",
+      "presentation": "nav"
     }
   ],
   "features": [

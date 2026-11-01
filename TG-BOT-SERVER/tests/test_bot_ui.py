@@ -3340,19 +3340,10 @@ def test_system_geo_callback_uses_system_location_copy_not_ip_copy(monkeypatch):
 
 
 def test_all_stateless_prank_menu_commands_have_xlex_labels():
-    actions = {
-        callback[4:]
-        for page in range(1, 6)
-        for callback in _callback_data(bot.pranks_menu(page=page))
-        if callback.startswith("cmd:prank_")
-    }
-
-    assert actions
-    assert actions <= set(bot._SIMPLE_COMMAND_LABELS)
-    assert all(
-        bot._SIMPLE_COMMAND_LABELS[action][0] in bot.xlex.COPY
-        for action in actions
-    )
+    items = bot._prank_catalog_items("pc", bot.ADMIN_ID)
+    assert items
+    assert all(item["label_id"] in bot.xlex.COPY for item in items)
+    assert all(bot._lex(str(item["label_id"])) != str(item["label_id"]) for item in items)
 
 
 @pytest.mark.parametrize("result,key", [
@@ -10690,7 +10681,7 @@ def _expected_callback_gate(callback):
     assert callback == "noop" or callback.startswith((
         "cmd:", "cat:", "dev:", "back:", "all:", "ev:", "adm:", "quiet:", "digest:",
         "files:", "media:", "fun:", "power:", "power_confirm:", "proc:", "kill:", "killq:", "rotate:",
-        "volq:", "vol:", "mic:", "micdur:", "prank:", "prankpage:", "fav:", "hist:", "rep:",
+        "volq:", "vol:", "mic:", "micdur:", "prank:", "prankpage:", "prankcard:", "fav:", "hist:", "rep:",
         "cfm:", "openapp:", "stop:", "stopall:", "guardianstop:", "sleep:", "menu:", "versions:",
     )), f"Unclassified access contract: {callback}"
     return "AdminFilter"
@@ -10869,6 +10860,15 @@ on_pinned_devices_list on_device_pin_toggle
 
 
 _DEPENDENT_ACTION_CONTRACTS = {
+    "on_prank_page": dict(category="pranks", os_support=("Telegram",), timeout=0.0,
+                          result_sensitivity="prank catalog filter/search navigation",
+                          risk="device-grant-filtered UI navigation; no agent command"),
+    "on_prank_card": dict(category="pranks", os_support=("Telegram",), timeout=0.0,
+                          result_sensitivity="one currently authorized prank action card",
+                          risk="rechecks current device grant; rendering the card does not launch the action"),
+    "on_prank_favorite_toggle": dict(category="pranks", os_support=("Telegram",), timeout=0.0,
+                                      result_sensitivity="selected device's prank favorites",
+                                      risk="local reversible preference change; no agent command"),
     "on_shell_late_results": dict(category="terminal", os_support=("Telegram",), timeout=0.0,
                                    result_sensitivity="one correlated late shell result",
                                    risk="owner-only exact correlation; one-use view; never reruns command"),
@@ -11961,10 +11961,11 @@ def test_pranks_menu_has_stop_all_button(monkeypatch):
             "get",
             lambda key, default=None, selected=style: selected if key == "ui_style" else default,
         )
-        for page in range(0, 6):
+        for page in range(0, 9):
             markup = bot.pranks_menu(page=page)
             cbs = _callback_data(markup)
             assert "prank:stop_all" in cbs
+            assert markup.inline_keyboard[0][0].callback_data == "prank:stop_all"
             texts = [b.text.lower() for row in markup.inline_keyboard for b in row]
             assert any("стоп" in text or "останов" in text for text in texts)
 
@@ -11979,10 +11980,23 @@ def test_pranks_default_menu_is_a_category_hub_without_effect_launchers(monkeypa
     callbacks = _callback_data(markup)
 
     assert {f"prankpage:{page}" for page in range(1, 6)} <= set(callbacks)
+    assert "prankpage:6" in callbacks
+    assert "prankpage:7" in callbacks
     assert "prank:stop_all" in callbacks
     assert "cat:device" in callbacks
     assert not any(callback.startswith("cmd:prank_") for callback in callbacks)
     assert not any(callback in {"prank:screamer", "prank:siren", "prank:swapmouse"} for callback in callbacks)
+
+
+def test_pranks_hub_pins_stop_all_before_catalog_filters(monkeypatch):
+    _setup(monkeypatch, {"pc": {"name": "PC", "os": "Windows"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "pc"})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
+
+    markup = bot.pranks_menu(target="pc", user_id=bot.ADMIN_ID)
+
+    assert markup.inline_keyboard[0][0].callback_data == "prank:stop_all"
 
 
 def test_prank_category_has_one_hub_return_instead_of_five_category_tabs(monkeypatch):
@@ -11996,7 +12010,178 @@ def test_prank_category_has_one_hub_return_instead_of_five_category_tabs(monkeyp
     assert "prankpage:0" in callbacks
     assert not any(f"prankpage:{page}" in callbacks for page in range(2, 6))
     assert "prank:stop_all" in callbacks
-    assert "cmd:prank_fake_update" in callbacks
+    assert f"prankcard:{bot._prank_item_id('cmd:prank_fake_update')}" in callbacks
+
+
+def test_prank_favorites_filter_is_scoped_to_selected_device(monkeypatch):
+    target = "pc"
+    favorite_id = bot._prank_item_id("prank:screamer")
+    _setup(monkeypatch, {
+        target: {"name": "PC", "os": "Windows", "favorites": [f"prank:{favorite_id}"]},
+        "other": {"name": "Other", "os": "Windows", "favorites": []},
+    })
+    monkeypatch.setattr(bot, "SESSION", {"target": target})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
+
+    favorite_ids = {
+        callback.removeprefix("prankcard:")
+        for callback in _callback_data(bot.pranks_menu(page=6, target=target, user_id=bot.ADMIN_ID))
+        if callback.startswith("prankcard:")
+    }
+    other_ids = {
+        callback.removeprefix("prankcard:")
+        for callback in _callback_data(bot.pranks_menu(page=6, target="other", user_id=bot.ADMIN_ID))
+        if callback.startswith("prankcard:")
+    }
+
+    assert favorite_ids == {favorite_id}
+    assert other_ids == set()
+
+
+def test_prank_action_card_requires_explicit_launch_and_pins_stop(monkeypatch):
+    from types import SimpleNamespace
+
+    _setup(monkeypatch, {"pc": {"name": "PC", "os": "Windows"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "pc"})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
+    captured = {}
+
+    async def replace_card(_callback, text, **kwargs):
+        captured.update(text=text, markup=kwargs.get("reply_markup"))
+
+    class FakeCallback:
+        data = f"prankcard:{bot._prank_item_id('prank:screamer')}"
+        from_user = SimpleNamespace(id=bot.ADMIN_ID)
+
+        async def answer(self, *_args, **_kwargs):
+            pass
+
+    monkeypatch.setattr(bot, "_replace_callback_message", replace_card)
+    asyncio.run(bot.on_prank_card(FakeCallback()))
+
+    callbacks = _callback_data(captured["markup"])
+    assert callbacks[0] == "prank:stop_all"
+    assert "prank:screamer" in callbacks
+    assert "Скример" in captured["text"]
+    assert "физический запуск не подтверждён" in captured["text"]
+
+
+def test_prank_search_results_filter_by_label_and_do_not_launch(monkeypatch):
+    target, actor_id = "pc", bot.ADMIN_ID
+    _setup(monkeypatch, {target: {"name": "PC", "os": "Windows"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": target, f"prank_search:{actor_id}:{target}": "сирена"})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
+
+    callbacks = _callback_data(bot.pranks_menu(page=8, target=target, user_id=actor_id))
+
+    assert f"prankcard:{bot._prank_item_id('prank:siren')}" in callbacks
+    assert not any(callback in {"prank:siren", "cmd:prank_siren"} for callback in callbacks)
+    assert not any(callback.startswith("prankcard:") and callback != f"prankcard:{bot._prank_item_id('prank:siren')}" for callback in callbacks)
+
+
+def test_prank_search_prompt_and_input_stay_on_the_selected_device(monkeypatch):
+    from types import SimpleNamespace
+
+    target, actor_id = "pc", bot.ADMIN_ID
+    _setup(monkeypatch, {target: {"name": "PC", "os": "Windows"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": target})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
+    edits = []
+
+    async def replace(source, text, **kwargs):
+        edits.append((source, text, kwargs.get("reply_markup")))
+
+    class State:
+        current = None
+        data = {}
+        async def set_state(self, value):
+            self.current = value
+        async def update_data(self, **values):
+            self.data.update(values)
+        async def get_state(self):
+            return self.current
+        async def get_data(self):
+            return dict(self.data)
+        async def clear(self):
+            self.current = None
+            self.data.clear()
+
+    class Callback:
+        data = "prankpage:7"
+        from_user = SimpleNamespace(id=actor_id)
+        async def answer(self, *_args, **_kwargs):
+            pass
+
+    class Message:
+        from_user = SimpleNamespace(id=actor_id)
+        chat = SimpleNamespace(id=actor_id)
+        message_id = 31
+        text = "сирена"
+
+    async def scenario():
+        state = State()
+        await bot.on_prank_page(Callback(), state)
+        assert state.current == bot.Form.wait_prank_search.state
+        assert state.data["prank_search_target"] == target
+        await bot.on_prank_search_input(Message(), state)
+        assert state.current is None
+        assert state.data == {}
+        Callback.data = "prankpage:0"
+        await bot.on_prank_page(Callback(), state)
+
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    monkeypatch.setattr(bot, "_replace_user_card", replace)
+    asyncio.run(scenario())
+
+    assert len(edits) == 3
+    assert "prank_search:" not in edits[0][1]
+    callbacks = _callback_data(edits[1][2])
+    assert f"prankcard:{bot._prank_item_id('prank:siren')}" in callbacks
+    assert not any(callback in {"prank:siren", "cmd:prank_siren"} for callback in callbacks)
+    assert f"prank_search:{actor_id}:{target}" not in bot.SESSION
+
+
+def test_prank_favorite_toggle_updates_card_and_stays_scoped(monkeypatch):
+    from types import SimpleNamespace
+
+    target, actor_id = "pc", bot.ADMIN_ID
+    item_id = bot._prank_item_id("prank:screamer")
+    favorite_values = set()
+    devices = FakeDevices({target: {"name": "PC", "os": "Windows"}})
+    devices.toggle_favorite = lambda device_id, value: (
+        favorite_values.remove(value) if value in favorite_values else favorite_values.add(value)
+    ) or (value in favorite_values)
+    devices.get_favorites = lambda device_id: list(favorite_values) if device_id == target else []
+    _setup(monkeypatch, {})
+    monkeypatch.setattr(bot, "devices", devices)
+    monkeypatch.setattr(bot, "SESSION", {"target": target})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
+    captured = {}
+
+    async def replace(_callback, text, **kwargs):
+        captured.update(text=text, markup=kwargs.get("reply_markup"))
+
+    class Callback:
+        data = f"prankpage:fav:{item_id}"
+        from_user = SimpleNamespace(id=actor_id)
+        answers = []
+        async def answer(self, text="", **_kwargs):
+            self.answers.append(text)
+
+    callback = Callback()
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+    asyncio.run(bot.on_prank_favorite_toggle(callback))
+
+    assert favorite_values == {f"prank:{item_id}"}
+    assert "Скример" in captured["text"]
+    assert "prankpage:fav:" + item_id in _callback_data(captured["markup"])
+    assert any("из избранного" in button.text for row in captured["markup"].inline_keyboard for button in row)
+    assert callback.answers == ["Добавил в избранное ⭐"]
 
 
 def test_prank_hub_page_uses_localized_hub_copy(monkeypatch):
@@ -12068,44 +12253,46 @@ def test_prank_action_rows_are_backed_by_declarative_navigation(monkeypatch):
             f"prankpage:{index}" for index in range(0, 6)
         } - {"cat:device", "back:device", "menu:main"}
         assert declared == expected[parent]
-        assert action_callbacks == declared
+        expected_cards = {bot._prank_item_id(callback) for callback in declared if callback != "prank:stop_all"}
+        rendered_cards = {
+            callback.removeprefix("prankcard:")
+            for callback in rendered
+            if callback.startswith("prankcard:")
+        }
+        assert expected_cards <= rendered_cards
+        assert not any(callback.startswith("cmd:prank_") for callback in rendered)
 
     tab_rows = bot.feature_catalog.visible_navigation_pages(
         bot.feature_catalog.load_registry(), parent="prank.tabs", role="owner", grants=set(), platform="windows",
     )
     assert {str(row["callback"]) for row in tab_rows} == {
         "prankpage:0", "prankpage:1", "prankpage:2", "prankpage:3", "prankpage:4", "prankpage:5",
+        "prankpage:6", "prankpage:7",
     }
+    card_routes = {
+        str(row["callback"])
+        for row in bot.feature_catalog.load_registry()["navigation"]
+        if row.get("parent") == "prank.cards"
+    }
+    assert card_routes == {"prankcard:*", "prankpage:fav:*"}
 
 
-def test_pranks_menu_toggle_states(monkeypatch):
-    """Проверяет динамическое изменение кнопок при активных приколах (инверсия мыши, скрытые иконки)."""
-    monkeypatch.setattr(
-        bot.bot_settings,
-        "get",
-        lambda key, default=None: "technical" if key == "ui_style" else default,
-    )
-    target = "pc_test_1"
-    monkeypatch.setitem(bot.SESSION, f"mouse_swapped_{target}", False)
-    monkeypatch.setitem(bot.SESSION, f"desktop_hidden_{target}", False)
+def test_unverified_pranks_are_disabled_with_reason_on_the_card(monkeypatch):
+    _setup(monkeypatch, {"pc": {"name": "PC", "os": "Windows"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "pc"})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
 
-    # Стандартный вид
-    m_off_p1 = bot.pranks_menu(page=1, target=target)
-    m_off_p3 = bot.pranks_menu(page=3, target=target)
-    texts_p1_off = [b.text for row in m_off_p1.inline_keyboard for b in row]
-    texts_p3_off = [b.text for row in m_off_p3.inline_keyboard for b in row]
-    assert "🫥 Скрыть иконки" in texts_p1_off
-    assert "🖱 Инверсия мыши" in texts_p3_off
-
-    # Включаем приколы
-    monkeypatch.setitem(bot.SESSION, f"mouse_swapped_{target}", True)
-    monkeypatch.setitem(bot.SESSION, f"desktop_hidden_{target}", True)
-    m_on_p1 = bot.pranks_menu(page=1, target=target)
-    m_on_p3 = bot.pranks_menu(page=3, target=target)
-    texts_p1_on = [b.text for row in m_on_p1.inline_keyboard for b in row]
-    texts_p3_on = [b.text for row in m_on_p3.inline_keyboard for b in row]
-    assert any("[ВКЛ] Иконки скрыты" in t for t in texts_p1_on)
-    assert any("[ВКЛ] Инверсия мыши" in t for t in texts_p3_on)
+    items = {row["callback"]: row for row in bot._prank_catalog_items("pc", bot.ADMIN_ID)}
+    for callback in (
+        "prank:matrix", "prank:rickroll50", "prank:swapmouse", "prank:hidedesktop",
+        "cmd:prank_invert_screen", "cmd:prank_glitch_cursor", "cmd:prank_cursor_circle",
+        "cmd:prank_open_calc_spam", "cmd:prank_fake_delete_sys32", "cmd:prank_alert_loop",
+    ):
+        assert callback in items
+        assert not items[callback]["available"]
+        assert items[callback]["unavailable_reason"]
+        assert "не запускать" in bot._prank_card_text(items[callback])
 
 
 @pytest.mark.parametrize("page,style,expected", [
@@ -12194,25 +12381,21 @@ def test_prank_visual_page_uses_all_six_xlex_voices_without_changing_actions(mon
             for button in row
             if button.callback_data == "prank:hidedesktop"
         ]
-        assert len(hidden_labels_by_style[style]) == 1
+        assert len(hidden_labels_by_style[style]) == 0
         monkeypatch.setitem(bot.SESSION, f"desktop_hidden_{target}", False)
 
     baseline = callbacks_by_style[bot.xlex.STYLES[0]]
     assert all(callbacks == baseline for callbacks in callbacks_by_style.values())
     assert len({tuple(labels) for labels in labels_by_style.values()}) >= 5
-    assert "🎬 Скример (full)" in labels_by_style["xtech"]
-    assert "🫥 Скрыть иконки" in labels_by_style["xtech"]
-    assert "🗂 Категории" in labels_by_style["xtech"]
-    assert "🎀 Все приколюхи ♡" in labels_by_style["xpikmi"]
-    assert "🔴 [ВКЛ] Иконки скрыты" in hidden_labels_by_style["xtech"]
-    assert hidden_labels_by_style["xtech"] != ["🫥 Скрыть иконки"]
+    assert any("🎬 Скример (full)" in label for label in labels_by_style["xtech"])
+    assert any("Скрыть иконки" in label for label in labels_by_style["xtech"])
+    assert len(hidden_labels_by_style["xtech"]) == 0
 
 
 def test_prank_sound_and_input_pages_use_all_six_voices_without_changing_actions(monkeypatch):
     target = "pc_prank_test"
     callbacks_by_style = {2: {}, 3: {}}
     labels_by_style = {2: {}, 3: {}}
-    swapped_labels_by_style = {}
 
     for style in bot.xlex.STYLES:
         monkeypatch.setattr(
@@ -12220,7 +12403,6 @@ def test_prank_sound_and_input_pages_use_all_six_voices_without_changing_actions
             "get",
             lambda key, default=None, selected=style: selected if key == "ui_style" else default,
         )
-        monkeypatch.setitem(bot.SESSION, f"mouse_swapped_{target}", False)
         for page in (2, 3):
             menu = bot.pranks_menu(page=page, target=target)
             callbacks_by_style[page][style] = _callback_data(menu)
@@ -12228,29 +12410,20 @@ def test_prank_sound_and_input_pages_use_all_six_voices_without_changing_actions
             labels_by_style[page][style] = labels
             assert all(len(label.encode("utf-16-le")) // 2 <= 64 for label in labels)
 
-        monkeypatch.setitem(bot.SESSION, f"mouse_swapped_{target}", True)
-        swapped_menu = bot.pranks_menu(page=3, target=target)
-        swapped_labels_by_style[style] = [
-            button.text
-            for row in swapped_menu.inline_keyboard
-            for button in row
-            if button.callback_data == "prank:swapmouse"
-        ]
-        assert len(swapped_labels_by_style[style]) == 1
 
     for page in (2, 3):
         baseline = callbacks_by_style[page][bot.xlex.STYLES[0]]
         assert all(callbacks == baseline for callbacks in callbacks_by_style[page].values())
         assert len({tuple(labels) for labels in labels_by_style[page].values()}) >= 5
-    assert "🔊 Сирена тревоги" in labels_by_style[2]["xtech"]
-    assert "🖱 Инверсия мыши" in labels_by_style[3]["xtech"]
-    assert "🗂 Категории" in labels_by_style[2]["xtech"]
-    assert "🗂 Категории" in labels_by_style[3]["xtech"]
-    assert "🔴 [ВКЛ] Инверсия мыши" in swapped_labels_by_style["xtech"]
-    assert swapped_labels_by_style["xtech"] != ["🖱 Инверсия мыши"]
+    assert any("Сирена тревоги" in label for label in labels_by_style[2]["xtech"])
+    assert any("Инверсия мыши" in label for label in labels_by_style[3]["xtech"])
 
 
 def test_prank_chaos_and_meme_pages_use_all_six_voices_without_changing_actions(monkeypatch):
+    _setup(monkeypatch, {"pc": {"name": "PC", "os": "Windows"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": "pc"})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
     callbacks_by_page = {4: {}, 5: {}}
     labels_by_page = {4: {}, 5: {}}
 
@@ -12261,7 +12434,7 @@ def test_prank_chaos_and_meme_pages_use_all_six_voices_without_changing_actions(
             lambda key, default=None, selected=style: selected if key == "ui_style" else default,
         )
         for page in (4, 5):
-            menu = bot.pranks_menu(page=page)
+            menu = bot.pranks_menu(page=page, target="pc", user_id=bot.ADMIN_ID)
             callbacks_by_page[page][style] = _callback_data(menu)
             labels = [button.text for row in menu.inline_keyboard for button in row]
             labels_by_page[page][style] = labels
@@ -12271,11 +12444,9 @@ def test_prank_chaos_and_meme_pages_use_all_six_voices_without_changing_actions(
         baseline = callbacks_by_page[page][bot.xlex.STYLES[0]]
         assert all(callbacks == baseline for callbacks in callbacks_by_page[page].values())
         assert len({tuple(labels) for labels in labels_by_page[page].values()}) >= 5
-    assert "🦠 Вирус Pivko" in labels_by_page[4]["xtech"]
-    assert "💀 Удаление System32" in labels_by_page[4]["xtech"]
-    assert "🐈 Выкуп котиками" in labels_by_page[5]["xtech"]
-    assert "🗂 Категории" in labels_by_page[4]["xtech"]
-    assert "🗂 Категории" in labels_by_page[5]["xtech"]
+    assert any("Вирус Pivko" in label for label in labels_by_page[4]["xtech"])
+    assert any("Удаление System32" in label for label in labels_by_page[4]["xtech"])
+    assert any("Выкуп котиками" in label for label in labels_by_page[5]["xtech"])
     assert any("фальшив" in label.lower() for label in labels_by_page[5]["xperson"])
 
 

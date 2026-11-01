@@ -1445,6 +1445,19 @@ def test_shell_remains_owner_only_even_if_a_user_callback_is_granted(monkeypatch
     assert store.can_use_callback(200, "cmd:status", 100, "other-device") is False
 
 
+def test_prank_catalog_card_navigation_requires_a_prank_grant(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    store.register_start(_user(200))
+    assert store.set_role(100, 200, store.Role.USER, 100)
+    assert store.toggle_device(100, 200, "laptop-a", 100)
+
+    assert store.can_use_callback(200, "prankcard:opaque-id", 100, "laptop-a") is False
+    assert store.toggle_callback(100, 200, "prank:siren", 100)
+    assert store.can_use_callback(200, "prankpage:6", 100, "laptop-a") is True
+    assert store.can_use_callback(200, "prankcard:opaque-id", 100, "laptop-a") is True
+    assert store.can_use_callback(200, "prankcard:opaque-id", 100, "other-device") is False
+
+
 def test_shell_request_grant_cannot_approve_shell_execution(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     store.register_start(_user(200))

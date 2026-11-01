@@ -121,8 +121,11 @@ CATEGORY_REQUIRED_GRANT_PREFIXES = {
     # settings remain separately filtered inside it, so users with only a
     # settings grant can still reach their permitted panel without seeing
     # any ungranted prank action.
-    "cat:pranks": ("prank:", "cmd:prank_", "fav:", "hist:", "cmd:autorun_"),
+    "cat:pranks": ("prank:", "cmd:prank_", "prankcard:", "prankpage:", "fav:", "hist:", "cmd:autorun_"),
     "prankpage:": ("prank:", "cmd:prank_"),
+    # Card IDs are opaque hashes. The detail handler re-resolves the exact
+    # action through the registry and current device grants before rendering it.
+    "prankcard:": ("prank:", "cmd:prank_"),
 }
 
 # `full_device` expands only into callbacks that operate on the currently
@@ -131,7 +134,7 @@ CATEGORY_REQUIRED_GRANT_PREFIXES = {
 DEVICE_ACTION_PREFIXES = (
     "cmd:", "cat:", "files:", "fun:", "power:", "power_confirm:", "cpu:",
     "proc:", "kill:", "killq:", "rotate:", "volq:", "micdur:",
-    "prank:", "prankpage:", "fav:", "rep:", "cfm:",
+    "prank:", "prankpage:", "prankcard:", "fav:", "rep:", "cfm:",
 )
 DEVICE_ACTION_CALLBACKS = frozenset({
     "menu:wallpaper", "noop", "vol:opts", "mic:opts", "hist:0",

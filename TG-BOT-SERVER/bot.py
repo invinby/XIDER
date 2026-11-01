@@ -159,6 +159,7 @@ def audit(event: str, **fields) -> None:
 
 class Form(StatesGroup):
     wait_catalog_search = State()
+    wait_prank_search = State()
     wait_device_search = State()
     wait_device_os_filter = State()
     wait_device_heartbeat_filter = State()
@@ -7826,77 +7827,148 @@ def guardian_menu(user_id: int | None = None):
     return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
+_PRANK_FILTERS = {
+    1: ("prank.visual", "prank_tab_visual"),
+    2: ("prank.sound", "prank_tab_sound"),
+    3: ("prank.input", "prank_tab_input"),
+    4: ("prank.chaos", "prank_tab_chaos"),
+    5: ("prank.memes", "prank_tab_memes"),
+}
+_PRANK_DISABLED = {
+    "prank:matrix": "Эффект ещё не прошёл проверку на устройстве.",
+    "prank:rickroll50": "Открывает слишком много вкладок за один запуск.",
+    "prank:swapmouse": "Обработчик не подтвердил успешное переключение мыши.",
+    "prank:hidedesktop": "Изменение Finder может пережить остановку эффекта; восстановление не подтверждено.",
+    "cmd:prank_invert_screen": "Реальный обработчик не подтвердил выполнение эффекта.",
+    "cmd:prank_glitch_cursor": "Поддержка курсора нестабильна и не подтверждена.",
+    "cmd:prank_cursor_circle": "Поддержка курсора нестабильна и не подтверждена.",
+    "cmd:prank_open_calc_spam": "Открывает несколько окон без надёжного ограничения нагрузки.",
+    "cmd:prank_fake_delete_sys32": "Вместо лёгкой имитации выполняет дорогой обход файловой системы.",
+    "cmd:prank_alert_loop": "Название обещает удаление сети, а обработчик показывает только фальшивый диалог.",
+}
+
+
+def _prank_platform(target: str) -> str | None:
+    os_name = str((devices.get(target) or {}).get("os") or "").lower()
+    return "macos" if "mac" in os_name or "darwin" in os_name else "windows" if "win" in os_name else None
+
+
+def _prank_item_id(callback: str) -> str:
+    return hashlib.sha256(callback.encode("utf-8")).hexdigest()[:12]
+
+
+def _prank_catalog_items(target: str, user_id: int) -> list[dict]:
+    registry = feature_catalog.load_registry()
+    role = get_user_role(user_id)
+    grants = set(access_store.get_effective_grants(user_id)["callbacks"])
+    platform = _prank_platform(target)
+    items = []
+    for page, (parent, _label_key) in _PRANK_FILTERS.items():
+        visible = feature_catalog.visible_navigation_pages(
+            registry, parent=parent, role=role, grants=grants, platform=platform,
+        )
+        for item in visible:
+            callback = str(item.get("callback") or "")
+            if callback == "prank:stop_all":
+                continue
+            entry = dict(item)
+            entry["filter_page"] = page
+            entry["item_id"] = _prank_item_id(callback)
+            entry["available"] = callback not in _PRANK_DISABLED
+            entry["unavailable_reason"] = _PRANK_DISABLED.get(callback, "")
+            items.append(entry)
+
+    # Surface the one explicitly unverified prank as a disabled catalog card.
+    for item in registry.get("navigation", []):
+        if not isinstance(item, dict) or item.get("support_state") != "needs_device_test":
+            continue
+        if item.get("parent") != "prank.visual" or item.get("callback") != "prank:matrix":
+            continue
+        if role not in item.get("roles", []) or (platform and platform not in item.get("platforms", [])):
+            continue
+        if not access_store.can_use_callback(user_id, "prank:matrix", ADMIN_ID, target):
+            continue
+        entry = dict(item)
+        entry["filter_page"] = 1
+        entry["item_id"] = _prank_item_id("prank:matrix")
+        entry["available"] = False
+        entry["unavailable_reason"] = _PRANK_DISABLED["prank:matrix"]
+        if not any(existing.get("callback") == "prank:matrix" for existing in items):
+            items.append(entry)
+    return items
+
+
+def _prank_item_keyboard(item: dict, *, user_id: int, target: str, is_favorite: bool):
+    kb = InlineKeyboardBuilder()
+    _action_button(kb, text=_lex("prank_stop_all_button"), callback="prank:stop_all", style="danger", user_id=user_id)
+    if item.get("available"):
+        _action_button(
+            kb, text=_lex("prank_card_launch_button"), callback=str(item["callback"]),
+            style=str(item.get("style") or "primary"), user_id=user_id,
+        )
+    kb.button(
+        text=_lex("prank_card_favorite_remove_button" if is_favorite else "prank_card_favorite_add_button"),
+        callback_data=f"prankpage:fav:{item['item_id']}",
+    )
+    kb.button(text=_lex("prank_card_back_button"), callback_data=f"prankpage:{item['filter_page']}")
+    kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
+    kb.adjust(1)
+    return _filter_device_keyboard(kb.as_markup(), user_id)
+
+
 def pranks_menu(page: int = 0, target: str | None = None, user_id: int | None = None):
     target = target or SESSION.get("target") or ""
     user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
-    mouse_swapped = bool(SESSION.get(f"mouse_swapped_{target}", False))
-    desktop_hidden = bool(SESSION.get(f"desktop_hidden_{target}", False))
     kb = InlineKeyboardBuilder()
-    prank_parents = {
-        1: "prank.visual", 2: "prank.sound", 3: "prank.input",
-        4: "prank.chaos", 5: "prank.memes",
-    }
-    parent = prank_parents.get(page, "prank.visual")
-    target_info = devices.get(target) or {}
-    os_name = str(target_info.get("os") or "").lower()
-    platform = "macos" if "mac" in os_name or "darwin" in os_name else "windows" if "win" in os_name else None
-    registry = feature_catalog.load_registry()
-    grants = set(access_store.get_effective_grants(user_id)["callbacks"])
-    categories = feature_catalog.visible_navigation_pages(
-        registry, parent="prank.tabs", role=get_user_role(user_id),
-        grants=grants, platform=platform,
+    items = _prank_catalog_items(str(target), user_id)
+    stop_item = next(
+        item for item in feature_catalog.visible_navigation_pages(
+            feature_catalog.load_registry(), parent="prank.visual", role=get_user_role(user_id),
+            grants=set(access_store.get_effective_grants(user_id)["callbacks"]),
+            platform=_prank_platform(str(target)),
+        ) if item["callback"] == "prank:stop_all"
+    )
+    _action_button(
+        kb, text=_lex(str(stop_item["label_id"])), callback="prank:stop_all",
+        style="danger", user_id=user_id,
     )
 
     if page == 0:
-        for item in categories:
-            callback = str(item["callback"])
-            if callback == "prankpage:0":
-                continue
+        for filter_page, (_parent, label_key) in _PRANK_FILTERS.items():
             _action_button(
-                kb, text=_lex(str(item["label_id"])), callback=callback,
-                style=str(item["style"]), user_id=user_id,
+                kb, text=_lex(label_key), callback=f"prankpage:{filter_page}",
+                style="primary", user_id=user_id,
             )
-        stop_item = next(
-            item for item in feature_catalog.visible_navigation_pages(
-                registry, parent="prank.visual", role=get_user_role(user_id),
-                grants=grants, platform=platform,
-            ) if item["callback"] == "prank:stop_all"
-        )
-        _action_button(
-            kb, text=_lex(str(stop_item["label_id"])), callback="prank:stop_all",
-            style="danger", user_id=user_id,
-        )
+        _action_button(kb, text=_lex("prank_catalog_favorites_button"), callback="prankpage:6", user_id=user_id)
+        _action_button(kb, text=_lex("prank_catalog_search_button"), callback="prankpage:7", user_id=user_id)
+        display_items = []
+    elif page in _PRANK_FILTERS:
+        display_items = [item for item in items if item["filter_page"] == page]
+    elif page == 6:
+        favorite_keys = set(devices.get_favorites(str(target)))
+        display_items = [item for item in items if f"prank:{item['item_id']}" in favorite_keys]
+    elif page == 8:
+        query = str(SESSION.get(f"prank_search:{user_id}:{target}") or "").casefold()
+        display_items = [
+            item for item in items
+            if query and query in " ".join((str(item.get("callback") or ""), _lex(str(item.get("label_id") or "")))).casefold()
+        ]
     else:
-        navigation = feature_catalog.visible_navigation_pages(
-            registry, parent=parent, role=get_user_role(user_id),
-            grants=grants, platform=platform,
-        )
-        for item in navigation:
-            callback = str(item["callback"])
-            label_id = str(item["label_id"])
-            style = str(item["style"])
-            if callback == "prank:hidedesktop" and desktop_hidden:
-                label_id, style = "prank_icons_hidden_button", "danger"
-            elif callback == "prank:swapmouse" and mouse_swapped:
-                label_id, style = "prank_mouse_swapped_button", "danger"
-            _action_button(kb, text=_lex(label_id), callback=callback, style=style, user_id=user_id)
+        display_items = []
 
-        hub_item = next(item for item in categories if item["callback"] == "prankpage:0")
+    for item in display_items:
+        prefix = "⚠️ " if not item.get("available") else "🃏 "
         _action_button(
-            kb, text=_lex(str(hub_item["label_id"])), callback="prankpage:0",
-            style=str(hub_item["style"]), user_id=user_id,
+            kb, text=prefix + _lex(str(item.get("label_id") or "")),
+            callback=f"prankcard:{item['item_id']}", user_id=user_id,
         )
 
-    _action_button(
-        kb, text=_nav("device_settings"), callback="cat:device", user_id=user_id,
-    )
+    if page != 0:
+        _action_button(kb, text=_lex("prank_card_back_button"), callback="prankpage:0", user_id=user_id)
+    _action_button(kb, text=_nav("device_settings"), callback="cat:device", user_id=user_id)
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
-
-    if page == 0:
-        kb.adjust(2, 2, 1, 1, 2, 2)
-    else:
-        kb.adjust(1, 2)
+    kb.adjust(1, 2)
     return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
@@ -27625,13 +27697,103 @@ async def on_prockill_input(message: Message, state: FSMContext):
 #  Новые хендлеры: 🎭 Пагинация приколов и запуск розыгрышей
 # =====================================================================
 
+def _prank_card_text(item: dict) -> str:
+    callback = str(item.get("callback") or "")
+    category_key = _PRANK_FILTERS.get(int(item.get("filter_page") or 0), ("", "prank_tab_visual"))[1]
+    reason = str(item.get("unavailable_reason") or "")
+    if reason:
+        state = "не запускать · недоступно"
+        restore = "не гарантировано"
+        warning = f"⚠️ Не запускается: {reason}"
+    else:
+        state = f"{item.get('support_state', 'unknown')} · физический запуск не подтверждён"
+        restore = "не обещано; зависит от подтверждённого ответа агента"
+        warning = "Запуск — отдельной кнопкой; отсутствие ответа не будет считаться успехом."
+    platforms = ", ".join(str(value) for value in item.get("platforms", []) if value in {"windows", "macos"}) or "не указаны"
+    return _lex_html(
+        "prank_card_details",
+        effect=_lex(str(item.get("label_id") or "")),
+        category=_lex(category_key),
+        platforms=platforms,
+        state=state,
+        restore=restore,
+        warning=warning,
+    )
+
+
+@router.callback_query(AdminFilter(), F.data.startswith("prankpage:fav:"))
+async def on_prank_favorite_toggle(cq: CallbackQuery):
+    target = str(SESSION.get("target") or "")
+    actor_id = cq.from_user.id if cq.from_user else None
+    item_id = str(cq.data or "").removeprefix("prankpage:fav:")
+    if not target or target == "all" or actor_id is None:
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
+    item = next((row for row in _prank_catalog_items(target, actor_id) if row["item_id"] == item_id), None)
+    if item is None:
+        await cq.answer("Карточка больше недоступна: обнови каталог и проверь права.", show_alert=True)
+        return
+    added = devices.toggle_favorite(target, f"prank:{item_id}")
+    is_favorite = f"prank:{item_id}" in devices.get_favorites(target)
+    await _replace_callback_message(
+        cq, _prank_card_text(item),
+        reply_markup=_prank_item_keyboard(item, user_id=actor_id, target=target, is_favorite=is_favorite),
+    )
+    await cq.answer("Добавил в избранное ⭐" if added else "Убрал из избранного")
+
+
+@router.callback_query(AdminFilter(), F.data.startswith("prankcard:"))
+async def on_prank_card(cq: CallbackQuery):
+    target = str(SESSION.get("target") or "")
+    actor_id = cq.from_user.id if cq.from_user else None
+    item_id = str(cq.data or "").removeprefix("prankcard:")
+    if not target or actor_id is None:
+        await cq.answer(_lex("device_required"), show_alert=True)
+        return
+    item = next((row for row in _prank_catalog_items(target, actor_id) if row["item_id"] == item_id), None)
+    if item is None:
+        await cq.answer("Карточка больше недоступна: обнови каталог и проверь права.", show_alert=True)
+        return
+    is_favorite = f"prank:{item_id}" in devices.get_favorites(target)
+    await _replace_callback_message(
+        cq, _prank_card_text(item),
+        reply_markup=_prank_item_keyboard(item, user_id=actor_id, target=target, is_favorite=is_favorite),
+    )
+    await cq.answer()
+
+
 @router.callback_query(AdminFilter(), F.data.startswith("prankpage:"))
-async def on_prank_page(cq: CallbackQuery):
+async def on_prank_page(cq: CallbackQuery, state: FSMContext | None = None):
     target = SESSION.get("target")
     if not target:
         await cq.answer(_lex("device_required"), show_alert=True)
         return
-    page = int(cq.data.split(":", 1)[1])
+    try:
+        page = int(cq.data.split(":", 1)[1])
+    except (TypeError, ValueError):
+        await cq.answer("Фильтр каталога не распознан.", show_alert=True)
+        return
+    actor_id = cq.from_user.id if cq.from_user else None
+    if actor_id is None:
+        await cq.answer(_lex("access_denied"), show_alert=True)
+        return
+    search_key = f"prank_search:{actor_id}:{target}"
+    if page != 8:
+        SESSION.pop(search_key, None)
+    if page == 7:
+        if state is None:
+            await cq.answer("Поиск недоступен в этом контексте.", show_alert=True)
+            return
+        await state.set_state(Form.wait_prank_search)
+        await state.update_data(prank_search_target=str(target))
+        await _replace_callback_message(
+            cq, _lex("prank_search_prompt"),
+            reply_markup=pranks_menu(page=7, target=str(target), user_id=actor_id),
+        )
+        await cq.answer()
+        return
+    if state is not None and await state.get_state() == Form.wait_prank_search.state:
+        await state.clear()
     page_name_keys = {
         1: "prank_page_visual_name",
         2: "prank_page_sound_name",
@@ -27641,15 +27803,48 @@ async def on_prank_page(cq: CallbackQuery):
     }
     if page == 0:
         text = _lex_html("prank_hub_intro", device=target_label(target))
+    elif page == 6:
+        text = _lex_html("prank_page_intro", page="Избранное", device=target_label(target))
+    elif page == 8:
+        query = str(SESSION.get(f"prank_search:{actor_id}:{target}") or "")
+        text = _lex_html("prank_search_results_title", query=query)
     else:
         page_name_key = page_name_keys.get(page)
         p_name = _lex(page_name_key) if page_name_key else f"Стр. {page}"
         text = _lex_html("prank_page_intro", page=p_name, device=target_label(target))
     await _replace_callback_message(
         cq, text,
-        reply_markup=pranks_menu(page, user_id=cq.from_user.id if cq.from_user else None),
+        reply_markup=pranks_menu(page, target=str(target), user_id=actor_id),
     )
     await cq.answer()
+
+
+@router.message(AdminFilter(), Form.wait_prank_search)
+async def on_prank_search_input(message: Message, state: FSMContext):
+    actor_id = message.from_user.id if message.from_user else None
+    data = await state.get_data()
+    await state.clear()
+    target = str(data.get("prank_search_target") or "")
+    query = " ".join((message.text or "").split())
+    if actor_id is None or not target or target != str(SESSION.get("target") or ""):
+        if target:
+            SESSION.pop(f"prank_search:{actor_id}:{target}", None)
+        await _replace_user_card(message, "Поиск отменён: выбранное устройство изменилось.", reply_markup=back_to_device_kb())
+        return
+    if not query or len(query) > 80:
+        SESSION.pop(f"prank_search:{actor_id}:{target}", None)
+        await _replace_user_card(message, "Запрос пустой или длиннее 80 символов. Открой поиск заново.", reply_markup=pranks_menu(user_id=actor_id))
+        return
+    SESSION[f"prank_search:{actor_id}:{target}"] = query
+    items = pranks_menu(page=8, target=target, user_id=actor_id)
+    count = sum(
+        1 for row in _prank_catalog_items(target, actor_id)
+        if query.casefold() in " ".join((str(row.get("callback") or ""), _lex(str(row.get("label_id") or "")))).casefold()
+    )
+    title = _lex_html("prank_search_results_title", query=query)
+    if not count:
+        title += "\nСовпадений нет. Попробуй другое название или фильтр."
+    await _replace_user_card(message, title, reply_markup=items)
 
 
 @router.callback_query(AdminFilter(), F.data.startswith("cmd:prank_"))

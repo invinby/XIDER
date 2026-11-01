@@ -52,6 +52,25 @@ Workspace: `C:\Users\invin\Documents\Codex\2026-10-26\XIDER-TARPED-worktree`, br
 
 ## Work Packages
 
+### WP6 — Unified prank catalog (owner-approved design, 2026-11-01)
+
+- [x] Replace the legacy five-page prank menu with one searchable catalog. Category controls act as filters rather than separate disconnected menus.
+- [x] Keep **Stop all** as the first, persistent control on the hub, filtered catalog, favorites, and action-detail views.
+- [x] Add text search over displayed action names and stable callback identifiers, plus per-device favorites using the existing device-favorites persistence without mixing prank IDs with normal command favorites in the UI.
+- [x] Open each action as a detail card before dispatch. Show the registered effect label, supported OS, support state, whether physical behavior is unconfirmed, Stop all, and conservative restoration/unknown behavior. The card's launch button reuses the existing registered callback and passes current role/grant/device checks.
+- [ ] Keep unsupported actions visible as unavailable with the reason; mark `needs_device_test` as unverified and prevent dispatch. Do not silently present it as stable.
+- [ ] Audit each registered prank callback against the Windows/macOS handler and its result path. Remove or disable misleading successes, destructive-looking simulations that do unnecessary work, and actions without reliable cancellation/recovery until their behavior is fixed.
+- [x] Preserve a direct route back to the device and home screens. Do not let search input or detail pages leave stale FSM state behind.
+- [ ] Acceptance: keyboard evidence confirms Stop all is first; category/search/favorites filters return only currently authorized actions; card contents match registry/handler evidence; blocked and unsupported routes do not publish; favorites persist per device; search cancel/back clears the pending input state.
+
+### WP7 — Obfuscation build evidence
+
+- [x] Keep source-free compilation and obfuscation as distinct build properties in all reports.
+- [x] Evaluate a reproducible obfuscation step for Windows and macOS component builds without introducing a non-reproducible local-only transformation or a license dependency the release workflow cannot access. Decision: do not add PyArmor yet. Its current licensing docs say the CI license does not work on runners with their own disk; hosted Windows/macOS runners therefore need a compatible Pro license path. Its Nuitka integration page also says the combination has not been tested by the maintainer. No PyArmor license or successful end-to-end package PoC is available, so claiming it now would be false. Sources: [PyArmor license types](https://pyarmor.readthedocs.io/en/latest/licenses.html), [PyArmor and Nuitka](https://pyarmor.readthedocs.io/en/stable/how-to/third-party.html).
+- [ ] Record component-level build evidence for Agent, Guard Keeper/Guardian, Safari, and Siri: source inclusion, compiler, obfuscator/version/configuration, output hashes, and verification result. Current manifests now include a row for each component with release version, Nuitka version, explicit `not_applied`, source-inclusion result, and exact entrypoint hash; the builder fails closed if a required entrypoint is absent or plaintext source appears. Physical device integrity remains separate.
+- [ ] Verify package contents and a signed manifest from the resulting artifacts. Keep server source packages clearly labeled; do not embed tokens, passwords, signing keys, or other secrets in any client package.
+- [ ] Do not claim obfuscation until the release artifact proves the configured step ran and the produced components were checked. If a platform/component cannot be transformed or verified, report `not_applied` or `unknown` for that component.
+
 ### WP1 — Device catalog layout and navigation
 
 - [x] Move device-catalog filter/management actions behind a compact `Фильтры и инструменты` entry; keep device rows and basic navigation on the first screen.
@@ -183,3 +202,5 @@ Workspace: `C:\Users\invin\Documents\Codex\2026-10-26\XIDER-TARPED-worktree`, br
 - [x] Add `docs/acceptance/2026-10-30-stabilization.md` with the local acceptance evidence, deliberate source/preview/stable version split, physical-device gaps, and owner next steps.
 - [x] Audit X-MAP coverage counts from the generated JSON: 202 worker/Guardian commands × two platforms = 404 rows; every row has expected-result and stability evidence. Added counts and outcome definitions to `docs/X-MAP.md` and the acceptance matrix; this does not promote source evidence to device acceptance.
 - [x] Close source/mock review of reported screenshots, Mac/Windows regression paths, and temporary-file/build-cache growth. Device-level screenshot/permission/install acceptance remains listed as owner testing, not implied by this code audit.
+- [x] WP6 progress: replaced direct prank launch buttons with filterable action cards; Stop All is first on every hub/filter/card page; favorites are per-device; search is bound to the selected device and clears its FSM/query state on Back or invalid input. Card view rechecks current grants and separates viewing from explicit launch. Disabled ten actions with known false/unstable behavior. Full `test_bot_ui.py`: 870 passed; `test_access_store.py`: 133 passed. Remaining: complete handler/result/restoration audit for every registered prank callback; physical Windows/macOS effects remain unverified.
+- [x] WP7 progress: evaluated PyArmor against hosted runner licensing and its documented unverified Nuitka pairing; decision and links are recorded in `docs/BUILD-PROTECTION.md`. Protected build manifest now emits six component rows (Windows Agent/Guard Keeper, macOS Agent/Guard Keeper, shared Safari/Siri Layers), with Nuitka version, source-inclusion result, explicit per-component `not_applied`, and entrypoint SHA-256. Manifest generation fails for missing entrypoints or plaintext source. Build-manifest tests: 9 passed. Remaining: run and inspect a signed hosted build artifact; no obfuscator or physical artifact build is claimed.

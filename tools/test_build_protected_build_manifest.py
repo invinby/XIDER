@@ -31,8 +31,19 @@ def _key():
 
 
 def _archives(directory, override_name=None, override_members=None):
+    members_by_archive = {
+        "XGENT-WDS-Windows.zip": {"XGENT-WDS.exe": b"windows-agent"},
+        "Guard-Keeper-Windows.zip": {"XIDER-Guard-Keeper.exe": b"windows-keeper"},
+        "XGENT-MCS-macos-bundle.zip": {
+            "XIDER.app/Contents/MacOS/XGENT-MCS": b"macos-agent",
+            "XIDER-Layers.app/Contents/MacOS/XIDER-Layers": b"macos-layers",
+        },
+        "Guard-Keeper-macOS.zip": {
+            "XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper": b"macos-keeper",
+        },
+    }
     for name in EXPECTED_ARCHIVES:
-        members = override_members if name == override_name else {"package.bin": name.encode()}
+        members = override_members if name == override_name else members_by_archive.get(name, {"package.bin": name.encode()})
         with zipfile.ZipFile(directory / name, "w") as package:
             for member_name, content in members.items():
                 package.writestr(member_name, content)
@@ -60,6 +71,33 @@ def test_manifest_hashes_archives_and_each_member_and_states_no_obfuscation(tmp_
         "XGENT-WDS.exe", "XIDER-Guard-Keeper.exe",
     ]
     assert asset["members"][0]["sha256"] == hashlib.sha256(b"compiled-agent").hexdigest()
+    component = next(row for row in manifest["components"] if row["id"] == "windows_agent")
+    assert component["version"] == "v4.3.4"
+    assert component["compiler"] == "Nuitka 4.3.1"
+    assert component["source_included"] is False
+    assert component["obfuscation"]["state"] == "not_applied"
+    assert component["output_sha256"] == hashlib.sha256(b"compiled-agent").hexdigest()
+    assert component["output_verification"] == "sha256_in_signed_member_inventory"
+
+
+def test_component_inventory_reports_safari_and_siri_as_one_shared_bundle(tmp_path):
+    _archives(tmp_path)
+
+    manifest = build_manifest(tmp_path, source_ref="v4.3.4", source_commit=COMMIT)
+
+    safari = next(row for row in manifest["components"] if row["id"] == "safari")
+    siri = next(row for row in manifest["components"] if row["id"] == "siri")
+    assert safari["package_asset"] == siri["package_asset"] == "XGENT-MCS-macos-bundle.zip"
+    assert safari["entrypoint"] == siri["entrypoint"]
+    assert safari["output_sha256"] == siri["output_sha256"] == hashlib.sha256(b"macos-layers").hexdigest()
+    assert all(row["obfuscation"]["state"] == "not_applied" for row in manifest["components"])
+
+
+def test_manifest_rejects_missing_component_entrypoint(tmp_path):
+    _archives(tmp_path, "XGENT-WDS-Windows.zip", {"unexpected.bin": b"not the agent"})
+
+    with pytest.raises(ValueError, match="windows_agent entrypoint is missing"):
+        build_manifest(tmp_path, source_ref="v4.3.4", source_commit=COMMIT)
 
 
 def test_manifest_must_be_signed_by_a_pinned_release_key(tmp_path):
