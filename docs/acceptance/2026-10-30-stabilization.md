@@ -14,14 +14,15 @@ This matrix separates repository evidence from physical-device and hosted-servic
 | Agent Files inventory | Pass at source/unit level; integrity remains unverified without a trusted per-file manifest | Windows/macOS inventory tests and Telegram owner callbacks included in full suite | Inspect actual installed component list/signature on each owner device |
 | Windows build-cache cleanup | Policy and mocked cleanup tests pass; v4.3.19 Windows release package built successfully on GitHub Actions | `tools/test_build_nuitka_windows.py`; release workflow `41341904538`; both Windows executables are present in signed release assets | Local Windows cache cleanup and physical install still need owner-device confirmation |
 | Feature registry | Pass | 510 unique features across 17 areas; registry tests and validator pass | None for the generated local registry |
-| Signed release workflow | `v4.3.19` published as a Windows compiled preview + macOS source preview | [Release v4.3.19](https://github.com/invinby/XIDER/releases/tag/v4.3.19); release workflow `41341904538`; Pages workflow `41345558775`; Ed25519 manifests signed and verified in the hosted workflow | Physical Windows/Mac installation and command-result checks remain owner-device work; macOS native packages remain `not_built` |
+| Signed release workflow | `v4.3.19` is a GitHub prerelease: Windows compiled preview + macOS source preview | [Release v4.3.19](https://github.com/invinby/XIDER/releases/tag/v4.3.19); release workflow `41341904538`; Pages workflow `41345558775`; Ed25519 manifests signed and verified in the hosted workflow. GitHub's latest non-prerelease endpoint currently returns `v4.2.1` | Physical Windows/Mac installation and command-result checks remain owner-device work; macOS native packages remain `not_built` |
 
 ## Version and copy snapshot
 
 | Surface | Version/state on 2026-11-02 | Meaning |
 |---|---|---|
-| Last published GitHub release | 4.3.19 | Windows compiled preview + macOS source preview; no native Mac runtime package |
-| GitHub `v4.3.19` | Windows compiled preview + macOS source preview | Windows Agent and Guard Keeper are PyObfus-transformed then Nuitka-compiled; macOS Agent, Guard Keeper, Safari, and Siri are explicitly reported `not_built` |
+| Latest published prerelease | 4.3.19 | Windows compiled preview + macOS source preview; no native Mac runtime package |
+| Latest non-prerelease from GitHub Releases API | 4.2.1 | GitHub classifies v4.3.19 as prerelease; do not report it as stable |
+| GitHub `v4.3.19` | Windows compiled preview + macOS source preview | Windows Agent and Guard Keeper are PyObfus-transformed then Nuitka-compiled; native macOS Agent, Guard Keeper, Safari, and Siri are `not_built` in its protected manifest |
 | Windows Pages installer default | `v4.3.19` | Live `win.txt` returns HTTP 200 and selects signed v4.3.19 release assets |
 | macOS Pages installer | `v4.3.19` source preview | Live `/mac` returns HTTP 200 and selects signed v4.3.19 installer scripts; runtime is not Apple-signed or notarized |
 
@@ -104,7 +105,7 @@ Until these device steps are completed, physical behavior and live Telegram inte
 - Full CI run `41354547389` passed on Python 3.11, 3.12, 3.14 and Unix installer fixtures.
 - The owner-only Windows preview lane is now enabled. Current combined preview run `41355642609` on commit `09f23b0c09103262530e66f62d5f5c30d53e7f33` completed the macOS build, bundle probe, ZIP checks, and artifact upload. Artifact `XGENT-MCS-macOS`: 113,464,809 bytes; SHA-256 `b8e93656a03c0f14d0f49b42745bca59aef2676bd86e31e556c4ad091da3c712`.
 - The Windows job then completed successfully: `Build Windows Agent and Guard Keeper as compiled one-file apps` and `Upload Windows EXE Artifact` both passed. Artifact `XGENT-WDS-Windows` is 153,385,931 bytes with SHA-256 `14eee75d3b47bfacb59e3db300cdb2515d9280b33875ca13a24ac628abcd74e8`.
-- The current run uploaded separate Windows and macOS preview artifacts. `Package Guard Keeper and server components`, signed build inventory, and GitHub Release publication were skipped by this owner-only preview lane; no new stable release or signed protected inventory was created.
+- The current run uploaded separate Windows and macOS preview artifacts. `Package Guard Keeper and server components`, signed build inventory, and GitHub Release publication were skipped. The aggregator needs an explicit owner-preview condition because its release CI dependency is intentionally skipped; this is being corrected before the next preview run. No new release or signed protected inventory was created.
 - CI run `41355642686` on the same commit completed successfully. This is source/CI evidence, not physical device acceptance.
 
 ## Outcome matrix coverage
