@@ -136,7 +136,8 @@ jobs:
     name: "Build compiled macOS Agent and recovery layers"
     needs: [source-state]
     if: >-
-      github.event_name == 'workflow_dispatch' || vars.XIDER_MACOS_RELEASE_READY == 'true' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.XIDER_MACOS_RELEASE_READY == 'true') ||
       (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/xider-local-prep-') &&
        github.actor == github.repository_owner)
     runs-on: macos-latest

@@ -91,6 +91,14 @@ Until these device steps are completed, physical behavior and live Telegram inte
 - Mac Agent, Guard Keeper, Safari, and Siri remain `not_built` with `not_applied` obfuscation; bootstrap/installer scripts are publisher-signed, but the runtime is not Apple-signed or notarized. Physical install/update/rollback and runtime checks remain unverified. PyObfus increases inspection effort; it is not encryption and does not prevent reverse engineering.
 - The `build-agents.yml` owner-triggered `workflow_dispatch` path and owner-only `xider-local-prep-*` branch path build an unsigned macOS preview and upload it as a workflow artifact. They use the separate `xider-macos-preview` environment, so the preview path does not wait for Apple signing secrets or the signing environment's approval rules. It remains a test artifact, not a distributable or signed/notarized release. Tagged release builds continue to use `xider-macos-signing` and fail closed until valid Apple credentials are configured.
 
+## macOS preview probe failure — 2026-11-02
+
+- The first hosted unsigned preview compiled the Agent, Guard Keeper, and Layers Nuitka apps, then failed the command-approval bundle probe: the obfuscated `command_module_loader` no longer exposed the dynamically accessed `load_component` attribute.
+- Cause: `xgent_mcs.py` loads the trusted helper as a module object and calls `.load_component(...)`; PyObfus cannot safely rewrite a dynamic module-object attribute from static name binding alone.
+- Fix in source: `tools/pyobfus.yaml` explicitly preserves the `load_component` public entry-point name while the rest of the project remains eligible for obfuscation. The build tool now passes this config explicitly and records the preserved API in its report.
+- The preview job condition is narrowed: unsigned preview builds run only for owner pushes to `xider-local-prep-*`; workflow dispatch remains available to the repository owner, and tagged release builds require the release-ready flag.
+- Verification is pending a fresh hosted preview. Until its command-approval probe and artifact upload pass, no macOS preview package is claimed as ready.
+
 ## Outcome matrix coverage
 
 The X-MAP snapshot contains 404 platform/action rows. Every row has expected-result evidence and a stability/evidence state. Counts: 389 source-only unverified, 3 dependency-gated unverified, 10 known source-limited, and 2 reported issues not retested. No row lacks evidence text. The shared contract distinguishes broker delivery acceptance from device confirmation, then preserves confirmed, failed, timed-out, unsupported, and unknown outcomes. This is source/documentation coverage; it is not a claim that every command and every branch was exercised on a physical device.

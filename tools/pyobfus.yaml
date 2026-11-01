@@ -1,0 +1,6 @@
+obfuscation:
+  level: community
+  # command_module_loader is reached through a dynamically loaded module object.
+  # Keep its public entry point stable while obfuscating its implementation.
+  exclude_names:
+    - load_component

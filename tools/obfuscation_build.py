@@ -11,6 +11,7 @@ import sys
 
 PYOBFUS_VERSION = "0.11.1"
 REPORT_NAME = "xider-obfuscation-report.json"
+PYOBFUS_CONFIG = Path(__file__).with_name("pyobfus.yaml")
 
 
 def obfuscate_tree(source: Path, destination: Path, report_path: Path, *, platform: str) -> dict:
@@ -27,6 +28,8 @@ def obfuscate_tree(source: Path, destination: Path, report_path: Path, *, platfo
     installed_version = importlib.metadata.version("pyobfus")
     if installed_version != PYOBFUS_VERSION:
         raise RuntimeError(f"Expected pyobfus=={PYOBFUS_VERSION}, found {installed_version}.")
+    if not PYOBFUS_CONFIG.is_file():
+        raise RuntimeError(f"PyObfus project configuration is missing: {PYOBFUS_CONFIG}")
 
     check = subprocess.run(
         [sys.executable, "-m", "pyobfus", "--check", str(source), "--json", "--offline", "--no-config"],
@@ -43,6 +46,7 @@ def obfuscate_tree(source: Path, destination: Path, report_path: Path, *, platfo
     subprocess.run(
         [
             sys.executable, "-m", "pyobfus", str(source), "-o", str(destination),
+            "--config", str(PYOBFUS_CONFIG),
             "--verify-syntax", "--verify-names", "--preserve-unproved-module-attributes",
             "--build-report", str(raw_report),
         ],
@@ -86,7 +90,7 @@ def obfuscate_tree(source: Path, destination: Path, report_path: Path, *, platfo
         "source_tree": source.name,
         "state": "applied",
         "tool": {"name": "PyObfus", "version": PYOBFUS_VERSION, "edition": "Community"},
-        "configuration": "cross-file; preserve unproved module attributes; no private mapping shipped",
+        "configuration": "cross-file; preserve unproved module attributes and load_component public API; no private mapping shipped",
         "scope": "first-party Python modules in the named source tree; third-party packages are excluded",
         "source_files_processed": outputs["file_count"],
         "names_obfuscated": names_obfuscated,
