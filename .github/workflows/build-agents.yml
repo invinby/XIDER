@@ -138,7 +138,10 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || vars.XIDER_MACOS_RELEASE_READY == 'true'
     runs-on: macos-latest
     environment:
-      name: xider-macos-signing
+      # Keep the owner-triggered unsigned preview independent from Apple
+      # signing secrets and approval gates. Tagged distributable builds still
+      # use the protected signing environment.
+      name: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && 'xider-macos-signing' || 'xider-macos-preview' }}
     env:
       XIDER_RELEASE_MODE: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
       XIDER_MACOS_SIGNING_IDENTITY: ${{ secrets.XIDER_MACOS_SIGNING_IDENTITY }}
