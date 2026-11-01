@@ -1,4 +1,4 @@
-# XIDER stabilization acceptance matrix — updated 2026-11-01
+# XIDER stabilization acceptance matrix — updated 2026-11-02
 
 This matrix separates repository evidence from physical-device and hosted-service evidence. A passing source test does not mean the feature was exercised on a user's Mac or Windows PC.
 
@@ -6,11 +6,11 @@ This matrix separates repository evidence from physical-device and hosted-servic
 
 | Area | Result | Evidence | Still needed |
 |---|---|---|---|
-| Telegram device navigation | Pass at source/unit level | `TG-BOT-SERVER/tests/test_tarped.py`, `tests/test_bot_ui.py`; full Telegram suite: 1,752 passed, 4 skipped | Owner checks compact device/tools screens and Back history in Telegram |
+| Telegram device navigation | Pass at source/unit level | `TG-BOT-SERVER/tests/test_tarped.py`, `tests/test_bot_ui.py`; hosted Python 3.12 suite: 1,805 passed, 4 skipped | Owner checks compact device/tools screens and Back history in Telegram |
 | Owner approval switch and command hiding | Pass at source/unit level | Bot settings/UI and server operation tests in the full suite | Owner confirms preferred setting behavior in Telegram |
 | Agent command/result contracts | Matrix generated for 195 workers and 7 Guardian commands on both platforms; source tests pass | `docs/x-map-command-matrix.json`; X-MAP suite: 11 passed | Exercise representative actions on both physical OSes; confirm each effect and correlated response |
-| Windows source/installer fixtures | Pass | Windows suite: 554 passed; PowerShell 5.1 bootstrap, setup-selection, and transaction fixtures passed | Fresh install, permissions, recovery, and terminal-window behavior on a physical Windows device |
-| macOS source/installer fixtures | Pass | macOS suite: 663 passed, 1 skipped; shell/integration fixtures available on Windows were run | Fresh install, update/rollback, permissions, camera, screenshot, GPS, and recovery on a physical Mac |
+| Windows source/installer fixtures | Pass | Hosted Python 3.12 suite: 556 passed; PowerShell 5.1 bootstrap, setup-selection, and transaction fixtures passed | Fresh install, permissions, recovery, and terminal-window behavior on a physical Windows device |
+| macOS source/installer fixtures | Pass | Hosted Python 3.12 suite: 670 passed, 1 skipped; shell/integration fixtures available on Windows were run | Fresh install, update/rollback, permissions, camera, screenshot, GPS, and recovery on a physical Mac |
 | Agent Files inventory | Pass at source/unit level; integrity remains unverified without a trusted per-file manifest | Windows/macOS inventory tests and Telegram owner callbacks included in full suite | Inspect actual installed component list/signature on each owner device |
 | Windows build-cache cleanup | Policy and mocked cleanup tests pass; tagged Windows release package built successfully on GitHub Actions | `tools/test_build_nuitka_windows.py`; release workflow `41327801306`; both Windows executables are present in signed release assets | Local Windows cache cleanup and physical install still need owner-device confirmation |
 | Feature registry | Pass | 510 unique features across 17 areas; registry tests and validator pass | None for the generated local registry |
@@ -20,7 +20,7 @@ This matrix separates repository evidence from physical-device and hosted-servic
 
 | Surface | Version/state on 2026-11-01 | Meaning |
 |---|---|---|
-| Bot, agent source, registry/docs source | 4.3.18 | Current repository source version |
+| Last published GitHub release | 4.3.18 | Windows compiled preview + macOS source preview; current source has a prepared `4.3.19` candidate |
 | GitHub `v4.3.18` | Windows compiled preview + macOS source preview | Windows Agent and Guard Keeper are Nuitka-compiled; macOS Agent, Guard Keeper, Safari, and Siri are explicitly reported `not_built` |
 | Windows Pages installer default | `v4.3.18` | Live `win.txt` returns HTTP 200 and selects the signed v4.3.18 release assets |
 | macOS Pages installer | `v4.3.18` source preview | Live `/mac` returns HTTP 200 and points at the v4.3.18 source-preview bootstrap; it states the native runtime is not Apple-signed or notarized |
@@ -39,7 +39,16 @@ The Telegram version picker can select an explicitly published version; the laun
 
 This is hosted artifact and workflow evidence. It does not establish successful installation or runtime behavior on the owner's physical devices.
 
-## Full local verification
+## Full hosted CI — 2026-11-02
+
+- Main commit `9bba45d0962329766978502e98daf14ca5bc500a` passed `CI - Test Suite` run `41339547834` (run 431), including Python 3.11, 3.12, and 3.14 plus the Unix installer checks.
+- The three Windows matrices installed the pinned `pyobfus==0.11.1`, then completed the full isolated component suites and Windows installer/rollback fixtures.
+- In the Python 3.12 matrix: Telegram 1,805 passed / 4 skipped; Windows 556 passed; macOS 670 passed / 1 skipped; operations 30 passed; release/build tools 209 passed / 6 skipped / 2 subtests; deployment archive/signature checks 27 passed / 27 skipped.
+- GitHub Pages workflow `41339547832` passed its static-source validation and published the validated site. This does not publish a new agent release or deploy the bot VPS.
+
+The next source version is prepared as `4.3.19`; it has not yet been tagged or published. The hosted `v4.3.18` manifests remain unchanged and correctly say obfuscation was not applied.
+
+## Earlier full local verification — 2026-11-01
 
 `tools/run_tests.py` completed with exit code 0:
 
@@ -62,13 +71,13 @@ This is hosted artifact and workflow evidence. It does not establish successful 
 
 Until these device steps are completed, physical behavior, live Telegram interaction, GitHub-hosted release execution, and published Pages state remain unverified.
 
-## Follow-up build-protection work — local, not published
+## Follow-up build-protection work — main CI passed; release candidate prepared
 
 - Both Nuitka builders now pin PyObfus 0.11.1, require offline preflight with zero parse/high-risk findings, verify generated syntax and cross-file names without executing transformed source, and emit `xider-obfuscation-report.json`.
 - Local Windows transform: 50 source files processed, 2,875 names transformed; both Windows executables built. The Agent passed the embedded valid-signature, tamper-rejection, and durable-replay verifier. The report was accepted by the protected manifest builder as `obfuscated` for the actual Windows packages.
 - macOS transform: 59 source files processed, 3,318 names transformed; syntax/name checks and transformed-module import smoke passed on Windows. This is not a native macOS build or Mac-device test.
-- Focused local checks: protected manifest/workflow/release catalog 30 + 31 passed; Windows and macOS file inventory 12 + 13 passed. These are local changes on `main`; they have not been pushed or published. The hosted v4.3.18 release still has the older truthful status: Windows compiled, macOS native packages `not_built`, obfuscation `not_applied`.
-- Remaining release gates: push these source changes, pass GitHub Actions on the exact commit, build the Mac bundles on a macOS runner, inspect and verify the signed package manifests, then run owner-device installation and behavior checks. PyObfus obfuscation raises inspection effort; it is not encryption and does not prevent reverse engineering.
+- Focused local checks: protected manifest/workflow/release catalog 30 + 31 passed; Windows and macOS file inventory 12 + 13 passed. Source changes are pushed on `main` and full hosted CI passed at `9bba45d`; the published v4.3.18 release still truthfully says obfuscation was not applied.
+- The `4.3.19` release candidate adds the Windows compiled obfuscated package and keeps macOS labeled as a source preview until native Mac compilation and Apple signing/notarization are available. Remaining gates are the exact-tag release build, signed artifact inspection, and owner-device installation/behavior checks. PyObfus obfuscation raises inspection effort; it is not encryption and does not prevent reverse engineering.
 
 ## Outcome matrix coverage
 

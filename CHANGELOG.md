@@ -1,6 +1,22 @@
 # XIDER release history
 
-## Unreleased — reproducible agent obfuscation
+## X4.3.19-VERIFIED-OBFUSCATION+20261102 — verified agent obfuscation
+
+### English
+
+- Windows Agent and Guard Keeper are built from the pinned PyObfus transformation; each signed package carries a checked report bound into the protected build inventory.
+- The Windows Agent passed the embedded signature, tamper, and replay verifier on the local release build.
+- This is a Windows compiled preview plus a macOS source preview. Native macOS Agent, Guard Keeper, Safari, and Siri binaries remain `not_built`; the macOS runtime is not Apple-signed or notarized.
+- Bot, Windows Agent, and macOS Agent source versions are synchronized at `4.3.19`.
+
+### Русский
+
+- Windows Agent и Guard Keeper собираются после преобразования закреплённым PyObfus; каждый подписанный пакет содержит проверенный отчёт, хеш которого включён в protected build inventory.
+- Windows Agent в локальной сборке прошёл встроенную проверку подписи, tamper и replay.
+- Это скомпилированный preview для Windows и source-preview для macOS. Нативные бинарники macOS Agent, Guard Keeper, Safari и Siri пока `not_built`; runtime macOS не подписан Apple и не notarized.
+- Версии исходников бота, Windows Agent и macOS Agent синхронизированы на `4.3.19`.
+
+## Unreleased
 
 ### English
 
