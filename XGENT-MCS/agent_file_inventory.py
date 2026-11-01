@@ -310,7 +310,8 @@ def _component(root: Path | None, component_id: str, version: str | None,
     if root is None:
         return {
             "id": component_id, "version": None, "install_path": None,
-            "state": "unknown", "files": [], "evidence": "install_root_unavailable",
+            "state": "unknown", "build_mode": "unknown", "obfuscation_state": "unknown",
+            "files": [], "evidence": "install_root_unavailable",
         }
     entries = []
     present = set()
@@ -340,6 +341,8 @@ def _component(root: Path | None, component_id: str, version: str | None,
         "install_path": install_path or str(root),
         "state": state,
         "files": entries,
+        "build_mode": "nuitka_compiled" if runtime_kind == "compiled" else "python_source",
+        "obfuscation_state": "not_applied",
         "evidence": "bounded_allowlist; file_contents_not_returned",
     }
 
@@ -391,8 +394,8 @@ def collect_agent_file_inventory(
         "generated_at": _utc_now(),
         "components": components,
         "protection": {
-            "obfuscation_state": "unknown",
+            "obfuscation_state": "not_applied",
             "integrity_state": "unverified",
-            "evidence": "no_signed_per_file_manifest",
+            "evidence": "build_pipeline_uses_no_separate_obfuscator; no_signed_per_file_manifest",
         },
     }

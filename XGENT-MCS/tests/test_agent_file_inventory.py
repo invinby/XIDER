@@ -28,6 +28,8 @@ def test_inventory_hashes_only_allowlisted_regular_files_and_never_returns_conte
     assert source_row["integrity_state"] == "unverified"
     assert source_row["signature_state"] == "not_applicable"
     assert agent["version"] == "4.3.4"
+    assert agent["build_mode"] == "python_source"
+    assert agent["obfuscation_state"] == "not_applied"
     serialized = json.dumps(report)
     for sentinel in ("private-source-sentinel", "secret-sentinel", "log-sentinel", "unrelated-sentinel"):
         assert sentinel not in serialized
@@ -109,6 +111,7 @@ def test_inventory_reports_macos_code_signature_and_still_marks_integrity_unveri
     binary.parent.mkdir(parents=True)
     binary.write_bytes(b"fixture-binary")
     monkeypatch.setattr(inventory.sys, "platform", "darwin")
+    monkeypatch.setattr(inventory.sys, "executable", "/Applications/XIDER.app/Contents/MacOS/XGENT-MCS")
     monkeypatch.setattr(inventory.shutil, "which", lambda name: "/usr/bin/codesign")
 
     class Result:
@@ -124,7 +127,9 @@ def test_inventory_reports_macos_code_signature_and_still_marks_integrity_unveri
     assert binary_row["signature_state"] == "verified"
     assert binary_row["signature_evidence"] == "codesign_verify_exit_0"
     assert binary_row["integrity_state"] == "unverified"
-    assert report["protection"]["obfuscation_state"] == "unknown"
+    assert report["protection"]["obfuscation_state"] == "not_applied"
+    assert all(component["obfuscation_state"] == "not_applied" for component in report["components"])
+    assert all(component["build_mode"] == "nuitka_compiled" for component in report["components"])
 
 
 def test_agent_files_command_publishes_correlated_bounded_inventory(tmp_path, monkeypatch):
@@ -147,7 +152,7 @@ def test_agent_files_command_publishes_correlated_bounded_inventory(tmp_path, mo
     assert result["device_id"] == "mac-device"
     assert result["id"] == result["request_id"] == "inventory-ticket"
     assert result["state"] == "partial"
-    assert result["protection"]["obfuscation_state"] == "unknown"
+    assert result["protection"]["obfuscation_state"] == "not_applied"
     assert "source-only" not in str(result)
 
 

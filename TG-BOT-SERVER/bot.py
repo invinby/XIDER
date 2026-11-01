@@ -19159,6 +19159,12 @@ def _agent_files_normalize_report(payload: dict, *, target: str, command_id: str
         component_state = raw.get("state")
         if not isinstance(component_state, str) or component_state not in {"available", "partial", "present", "missing", "absent", "unknown"}:
             component_state = "unknown"
+        build_mode = raw.get("build_mode")
+        if not isinstance(build_mode, str) or build_mode not in {"nuitka_compiled", "python_source"}:
+            build_mode = "unknown"
+        component_obfuscation = raw.get("obfuscation_state")
+        if not isinstance(component_obfuscation, str) or component_obfuscation not in {"obfuscated", "not_applied", "not_obfuscated", "partial", "unknown"}:
+            component_obfuscation = "unknown"
         version = raw.get("version")
         if not isinstance(version, str) or len(version) > 40:
             version = None
@@ -19198,13 +19204,15 @@ def _agent_files_normalize_report(payload: dict, *, target: str, command_id: str
                 })
         components.append({
             "id": component_id, "state": component_state,
-            "version": version, "install_path": install_path, "files": files,
+            "version": version, "build_mode": build_mode,
+            "obfuscation_state": component_obfuscation,
+            "install_path": install_path, "files": files,
         })
     protection = payload.get("protection")
     if not isinstance(protection, dict):
         protection = {}
     obfuscation = protection.get("obfuscation_state")
-    if not isinstance(obfuscation, str) or obfuscation not in {"obfuscated", "not_obfuscated", "unknown", "partial"}:
+    if not isinstance(obfuscation, str) or obfuscation not in {"obfuscated", "not_applied", "not_obfuscated", "unknown", "partial"}:
         obfuscation = "unknown"
     integrity = protection.get("integrity_state")
     if not isinstance(integrity, str) or integrity not in {"verified", "unverified", "failed", "unknown"}:
@@ -19256,8 +19264,14 @@ _AGENT_FILES_STATUS_COPY = {
     },
     "obfuscation": {
         "obfuscated": "agent_files_obfuscation_obfuscated",
+        "not_applied": "agent_files_obfuscation_not_applied",
         "not_obfuscated": "agent_files_obfuscation_plain",
         "partial": "agent_files_obfuscation_partial", "unknown": "agent_files_status_unknown",
+    },
+    "build_mode": {
+        "nuitka_compiled": "agent_files_build_nuitka",
+        "python_source": "agent_files_build_python_source",
+        "unknown": "agent_files_status_unknown",
     },
     "signature": {
         "verified": "agent_files_signature_verified", "unsigned": "agent_files_signature_unsigned",
@@ -19313,6 +19327,8 @@ def _agent_files_render_page(token: str, page: int, *, owner_id: int, now: float
             component=html.escape(_agent_files_component_label(component["id"])),
             status=html.escape(_agent_files_status_label("component", component["state"])),
             version=version, count=len(component["files"]),
+            build_mode=html.escape(_agent_files_status_label("build_mode", component.get("build_mode", "unknown"))),
+            obfuscation=html.escape(_agent_files_status_label("obfuscation", component.get("obfuscation_state", "unknown"))),
         )
         )
     markup = InlineKeyboardBuilder()

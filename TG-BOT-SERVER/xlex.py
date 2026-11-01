@@ -1236,6 +1236,18 @@ COPY.update({
         "xtech": "not obfuscated", "xperson": "не обфусцирована",
         "xpikmi": "без обфускации", "xtarped": "не обфусцирована", "xcore": "не обфусцирована", "xadam": "не обфусцирована",
     },
+    "agent_files_obfuscation_not_applied": {
+        "xtech": "not applied", "xperson": "не применялась",
+        "xpikmi": "не применялась ♡", "xtarped": "не применялась", "xcore": "не применялась", "xadam": "не применялась",
+    },
+    "agent_files_build_nuitka": {
+        "xtech": "Nuitka compiled", "xperson": "собрана Nuitka",
+        "xpikmi": "собрано Nuitka ♡", "xtarped": "собрана Nuitka", "xcore": "сборка Nuitka", "xadam": "собрана Nuitka",
+    },
+    "agent_files_build_python_source": {
+        "xtech": "Python source", "xperson": "исходный Python",
+        "xpikmi": "исходники Python ♡", "xtarped": "исходный Python", "xcore": "исходники Python", "xadam": "исходный Python",
+    },
     "agent_files_obfuscation_partial": {
         "xtech": "partially obfuscated", "xperson": "частично обфусцирована",
         "xpikmi": "обфусцирована частично", "xtarped": "частично обфусцирована", "xcore": "частично обфусцирована", "xadam": "частично обфусцирована",
@@ -1285,12 +1297,12 @@ COPY.update({
         "xtarped": "{component}", "xcore": "{component}", "xadam": "{component}",
     },
     "agent_files_component_summary": {
-        "xtech": "<b>{component}</b>: <code>{status}</code>{version} · files {count}",
-        "xperson": "<b>{component}</b>: <code>{status}</code>{version} · файлов {count}",
-        "xpikmi": "<b>{component}</b>: <code>{status}</code>{version} · файликов {count}",
-        "xtarped": "<b>{component}</b>: <code>{status}</code>{version} · файлов {count}",
-        "xcore": "<b>{component}</b>: <code>{status}</code>{version} · файлов {count}",
-        "xadam": "<b>{component}</b>: <code>{status}</code>{version} · файлов {count}",
+        "xtech": "<b>{component}</b>: <code>{status}</code>{version} · {build_mode} · obfuscation {obfuscation} · files {count}",
+        "xperson": "<b>{component}</b>: <code>{status}</code>{version} · сборка: {build_mode} · обфускация: {obfuscation} · файлов {count}",
+        "xpikmi": "<b>{component}</b>: <code>{status}</code>{version} · сборочка: {build_mode} · обфускация: {obfuscation} · файликов {count}",
+        "xtarped": "<b>{component}</b>: <code>{status}</code>{version} · сборка: {build_mode} · обфускация: {obfuscation} · файлов {count}",
+        "xcore": "<b>{component}</b>: <code>{status}</code>{version} · сборка: {build_mode} · обфускация: {obfuscation} · файлов {count}",
+        "xadam": "<b>{component}</b>: <code>{status}</code>{version} · сборка: {build_mode} · обфускация: {obfuscation} · файлов {count}",
     },
     "agent_files_open_component_button": {
         "xtech": "🔎 {component}", "xperson": "🔎 {component}", "xpikmi": "🔎 {component}",

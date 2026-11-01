@@ -9056,6 +9056,7 @@ def test_agent_files_owner_view_requires_exact_response_and_renders_only_metadat
             "generated_at": "2026-10-30T01:15:00Z",
             "components": [{
                 "id": "agent", "state": "available", "version": "4.3.3",
+                "build_mode": "nuitka_compiled", "obfuscation_state": "not_applied",
                 "install_path": "/Users/test/XIDER", "files": [{
                     "file_id": "agent-version",
                     "path": "/Users/test/XIDER/xgent_mcs.py", "size_bytes": 321,
@@ -9088,12 +9089,34 @@ def test_agent_files_owner_view_requires_exact_response_and_renders_only_metadat
     text, kwargs = rendered[-1]
     assert "xgent_mcs.py" in text
     assert "unverified" in text
+    assert "Nuitka" in text
+    assert "not applied" in text or "не применялась" in text
     assert "2026-10-30T01:15:00Z" in text
     assert "SHOULD_NOT_APPEAR" not in text
     buttons = [button.callback_data for row in kwargs["reply_markup"].inline_keyboard for button in row]
     assert any(value.startswith("agentfiles:component:") for value in buttons)
     assert not any(value.startswith("agentfiles:file:") for value in buttons)
     assert "back:device" in buttons
+
+
+def test_agent_files_normalizer_preserves_component_build_protection():
+    payload = {
+        "type": "agent_files", "device_id": "win-1", "id": "request-1",
+        "schema": "xider.agent-files.v1", "state": "available",
+        "generated_at": "2026-10-30T01:15:00Z",
+        "components": [{
+            "id": "agent", "state": "present", "version": "4.3.17",
+            "build_mode": "nuitka_compiled", "obfuscation_state": "not_applied",
+            "install_path": "C:/XIDER", "files": [],
+        }],
+        "protection": {"obfuscation_state": "not_applied", "integrity_state": "unverified"},
+    }
+
+    report = bot._agent_files_normalize_report(payload, target="win-1", command_id="request-1")
+
+    assert report["components"][0]["build_mode"] == "nuitka_compiled"
+    assert report["components"][0]["obfuscation_state"] == "not_applied"
+    assert report["obfuscation_state"] == "not_applied"
 
 
 def test_agent_files_pagination_is_owner_and_ttl_scoped():

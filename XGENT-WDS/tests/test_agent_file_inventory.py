@@ -30,12 +30,14 @@ def test_inventory_is_bounded_metadata_only_and_hashes_known_regular_files(tmp_p
     assert result["state"] == "partial"
     assert result["components"][0]["id"] == "agent"
     assert result["components"][0]["version"] == "4.3.4"
+    assert result["components"][0]["build_mode"] == "python_source"
+    assert result["components"][0]["obfuscation_state"] == "not_applied"
     record = next(row for row in result["components"][0]["files"] if row["path"].endswith("XGENT-WDS.exe"))
     assert record["size_bytes"] == len(b"agent binary")
     assert record["sha256"] == hashlib.sha256(b"agent binary").hexdigest()
     assert record["signature_state"] == "verified"
     assert record["integrity_state"] == "unverified"
-    assert result["protection"]["obfuscation_state"] == "unknown"
+    assert result["protection"]["obfuscation_state"] == "not_applied"
     assert ".env" not in str(result)
     assert "should not be returned" not in str(result)
     assert "MQTT_PASSWORD" not in str(result)
@@ -56,6 +58,15 @@ def test_inventory_reports_guard_keeper_as_separate_component(tmp_path):
     assert guardian["version"] == "1.0-windows"
     assert len(guardian["files"]) == len(inventory._GUARDIAN_FILES)
     assert next(row for row in guardian["files"] if row["name"] == "XIDER-Guard-Keeper.exe")["state"] == "unsupported"
+
+
+def test_compiled_windows_components_report_nuitka_without_obfuscation(tmp_path, monkeypatch):
+    monkeypatch.setattr(inventory.sys, "executable", r"C:\XIDER\XGENT-WDS.exe")
+
+    result = inventory.collect_agent_file_inventory(tmp_path)
+
+    assert all(component["build_mode"] == "nuitka_compiled" for component in result["components"])
+    assert all(component["obfuscation_state"] == "not_applied" for component in result["components"])
 
 
 def test_component_is_partial_when_only_one_allowlisted_file_is_found(tmp_path):
