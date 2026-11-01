@@ -12116,7 +12116,8 @@ def test_prank_action_card_requires_explicit_launch_and_pins_stop(monkeypatch):
     assert "Скример" in captured["text"]
     assert "физический запуск не подтверждён" in captured["text"]
     assert "короткие эффекты могут завершиться только по таймеру" in captured["text"]
-    assert "остальные исходные настройки не угадываются" in captured["text"]
+    assert "возвращается только состояние, сохранённое конкретным эффектом" in captured["text"]
+    assert "другие исходные настройки не угадываются" in captured["text"]
 
 
 def test_prank_search_results_filter_by_label_and_do_not_launch(monkeypatch):
