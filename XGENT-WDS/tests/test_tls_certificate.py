@@ -65,7 +65,9 @@ def test_verified_certificate_reports_only_validated_leaf_dates_and_fingerprint(
         connector=lambda address, timeout: raw, context_factory=lambda verify: context)
     assert result["state"] == "valid" and result["detail"] is None
     assert result["source"] == tls_certificate.SOURCE
-    assert result["data"]["not_after"].startswith((datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=29)).date().isoformat()[:7])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    not_after = datetime.datetime.fromisoformat(result["data"]["not_after"].replace("Z", "+00:00"))
+    assert now + datetime.timedelta(days=29) <= not_after <= now + datetime.timedelta(days=31)
     assert len(result["data"]["sha256"]) == 64
     assert context.hostname == "example.com" and context.verify is True
     assert context.tls.closed
