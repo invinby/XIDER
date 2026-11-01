@@ -627,3 +627,44 @@ UTC`, за семь секунд до запуска процесса. Checkout 
 не подтверждён. Локальный Windows `install-report.json` отдельно подтверждает
 Agent PID `34416` и Guard Keeper PID `408`, оба `4.3.15` и running; Telegram ACK
 для обоих компонентов остаётся `not_verified`.
+
+## Повторная проверка опубликованного v4.3.17 и локальных журналов · 2026-11-01
+
+Текущий `main` — `7277c19199d6c0203e05e7981a1caacbdf6b2658`. Release `v4.3.17`
+опубликован как prerelease `Windows preview + macOS source preview`. Живые
+`/win.txt` и `/mac` отвечают HTTP 200 и закрепляют release base за `v4.3.17`.
+GitHub API `releases/latest` при этом по-прежнему возвращает stable `v4.2.1`,
+поскольку GitHub исключает prerelease из этого маршрута. В `v4.3.17` есть
+Windows Agent/Guard Keeper пакеты и подписанный manifest; macOS compiled bundle
+отсутствует. Mac-команда честно называет себя source-preview; runtime не имеет
+Apple code signature и notarization.
+
+`build-agents.yml` содержит отдельный `workflow_dispatch` путь: он компилирует
+Mac Agent, Guard Keeper и Layers через Nuitka в unsigned preview, проверяет ZIP
+на отсутствие открытых Python-файлов и загружает artifact. Это не полноценный
+распространяемый Mac-релиз. Для owner-triggered запуска `protected-build-inventory`
+может подписать inventory собранных пакетов ключом издателя XIDER; эта подпись
+подтверждает содержимое и хеши, но не заменяет Apple-подпись. В текущей сессии
+Actions workflow не был запущен, поэтому свежего такого Mac artifact нет.
+
+Последний локальный Windows install report (`install-20261101-015409.log`)
+подтверждает только установленный `4.3.15`: Agent PID `34416` и Guard Keeper
+PID `408` были запущены, оба подключились к MQTT, а ответ бота остался
+`not_verified`. Это не подтверждает установку `4.3.17` на физический Windows.
+Исторический `4.3.5` lock log содержит PID `27776`, но не имя/путь процесса;
+следующий `Unexpected EOF` возник на этапе `[1/5]` загрузки checkout, до
+staging и переключения. Сохранившихся данных недостаточно, чтобы назвать
+процесс или точную сетевую причину.
+
+В захвате мигающих окон от 2026-11-01 02:19 один PowerShell-процесс был дочерним
+для `agy.exe` (Antigravity) и выполнял переданный ему `adb`-скрипт. Этот конкретный
+захват не указывает на XIDER Agent/Guardian как источник окна; он не доказывает,
+что все ранее замеченные окна имели тот же источник.
+
+Для macOS в доступном физическом transcript остаётся только старая установка
+`4.2.1` с Agent и Guardian; отдельный свежий install report и health для Safari
+и Siri отсутствуют. Поэтому текущая `/mac` версии `v4.3.17`, работа всех четырёх
+компонентов на устройстве и Telegram request/response остаются неподтверждёнными.
+Текущий серверный снимок также недоступен: сохранённая SSH-запись `xider-aws`
+сейчас не разрешается в hostname, поэтому свежие MQTT acceptance/rejection logs
+не проверены.
