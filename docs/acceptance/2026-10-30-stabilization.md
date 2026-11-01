@@ -147,3 +147,20 @@ The X-MAP snapshot contains 404 platform/action rows. Every row has expected-res
   still on `4.3.15`, online, with update mode `frozen`; `MacBook-Air.local` is
   on `4.2.1` and offline. Neither device currently reports Guardian/Safari/Siri
   versions. The VPS source update does not update endpoint agents.
+
+## Combined owner preview build · 2026-11-02
+
+- Workflow run `41358849463` on commit `d690fd6fa4c5bb56c25afc9bc4f6b775156ce4a8`
+  completed successfully. Full CI runs `41358844118` (`main`) and
+  `41358849529` (preview branch) also passed on that exact commit.
+- The unsigned Windows artifact `XGENT-WDS-Windows` is 153,385,794 bytes,
+  SHA-256 `fc4d8c0cf211b38b5a8c3aad2931e58aeaf5d1b35302bd8948bad6fca5531308`.
+- The unsigned macOS artifact `XGENT-MCS-macOS` is 113,464,362 bytes,
+  SHA-256 `0067dcf5f7359fdf7e2b4864e59897977bc60137825300c65be307d327cd09b4`.
+- The repaired `pack-components` job ran despite the expected skipped branch
+  release gate and uploaded `XIDER-Components`: 204,996,876 bytes,
+  SHA-256 `20b257aae9b00c13464f86ffbf17d55709dd15541a6df8970ec6d1424a240222`.
+  The workflow's archive checks passed for Agent, Guard Keeper, macOS Layers,
+  X-STAB server, and source packages. The preview did not publish a GitHub
+  Release or signed protected build inventory. It is not an Apple-signed or
+  notarized macOS release; physical installation/update/rollback remains open.
