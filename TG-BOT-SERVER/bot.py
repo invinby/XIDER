@@ -27590,14 +27590,15 @@ async def on_prank_page(cq: CallbackQuery):
         await cq.answer(_lex("device_required"), show_alert=True)
         return
     page = int(cq.data.split(":", 1)[1])
-    page_names = {
-        1: "Экраны & Визуал",
-        2: "Звуки & Голос",
-        3: "Мышь & Клавиатура",
-        4: "Фейки & Системный хаос",
-        5: "Мемы & Ультра-Троллинг",
+    page_name_keys = {
+        1: "prank_page_visual_name",
+        2: "prank_page_sound_name",
+        3: "prank_page_input_name",
+        4: "prank_page_chaos_name",
+        5: "prank_page_memes_name",
     }
-    p_name = page_names.get(page, f"Стр. {page}")
+    page_name_key = page_name_keys.get(page)
+    p_name = _lex(page_name_key) if page_name_key else f"Стр. {page}"
     await _replace_callback_message(cq,
         _lex_html(
             "prank_page_intro",

@@ -12028,6 +12028,65 @@ def test_pranks_menu_toggle_states(monkeypatch):
     assert any("[ВКЛ] Инверсия мыши" in t for t in texts_p3_on)
 
 
+@pytest.mark.parametrize("page,style,expected", [
+    (1, "xtech", "Визуальный модуль"),
+    (1, "xperson", "Визуальные приколы"),
+    (1, "xpikmi", "Красивенький экранчик ♡"),
+    (1, "xtarped", "Экранные эффекты"),
+    (1, "xcore", "Демо визуальных эффектов"),
+    (1, "xadam", "Экранный режим"),
+    (2, "xtech", "Звуковой модуль"),
+    (2, "xperson", "Звуковые приколы"),
+    (2, "xpikmi", "Звуковые вкусняшки ♡"),
+    (2, "xtarped", "Звук и голос"),
+    (2, "xcore", "Демо аудиоэффектов"),
+    (2, "xadam", "Аудиоканал"),
+    (3, "xtech", "Контроль ввода"),
+    (3, "xperson", "Мышь и клавиатура"),
+    (3, "xpikmi", "Мышечка и клавиатурка ♡"),
+    (3, "xtarped", "Управление вводом"),
+    (3, "xcore", "Демо устройств ввода"),
+    (3, "xadam", "Тактический ввод"),
+    (4, "xtech", "Системные имитации"),
+    (4, "xperson", "Фальшивые предупреждения"),
+    (4, "xpikmi", "Страшилки понарошку ♡"),
+    (4, "xtarped", "Имитации и хаос"),
+    (4, "xcore", "Симуляции системы"),
+    (4, "xadam", "Контролируемый хаос"),
+    (5, "xtech", "Медиаблок"),
+    (5, "xperson", "Мемы и экранные розыгрыши"),
+    (5, "xpikmi", "Котики и мемчики ♡"),
+    (5, "xtarped", "Мемы и анимации"),
+    (5, "xcore", "Визуальные розыгрыши"),
+    (5, "xadam", "Мемы без компромиссов")
+])
+def test_prank_page_heading_uses_selected_xlex_voice(monkeypatch, page, style, expected):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(bot.bot_settings, "get", lambda key, default=None: style if key == "ui_style" else default)
+    monkeypatch.setattr(bot, "SESSION", {"target": "pc"})
+    monkeypatch.setattr(bot, "devices", FakeDevices({"pc": {"name": "PC", "os": "Windows"}}))
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "get_effective_grants", lambda _user_id: {"callbacks": set()})
+    monkeypatch.setattr(bot, "target_label", lambda _target: "PC")
+    captured = {}
+
+    async def replace_card(_callback, text, **_kwargs):
+        captured["text"] = text
+
+    class FakeCallback:
+        from_user = SimpleNamespace(id=bot.ADMIN_ID)
+
+        async def answer(self, *_args, **_kwargs):
+            pass
+
+    FakeCallback.data = f"prankpage:{page}"
+    monkeypatch.setattr(bot, "_replace_callback_message", replace_card)
+    asyncio.run(bot.on_prank_page(FakeCallback()))
+
+    assert expected in captured["text"]
+
+
 def test_prank_visual_page_uses_all_six_xlex_voices_without_changing_actions(monkeypatch):
     target = "pc_prank_test"
     monkeypatch.setitem(bot.SESSION, f"desktop_hidden_{target}", False)
