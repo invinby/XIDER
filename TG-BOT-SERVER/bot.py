@@ -27703,12 +27703,16 @@ def _prank_card_text(item: dict) -> str:
     reason = str(item.get("unavailable_reason") or "")
     if reason:
         state = "не запускать · недоступно"
-        restore = "не гарантировано"
+        restore = "эффект не запускался; восстановление не применимо"
         warning = f"⚠️ Не запускается: {reason}"
     else:
         state = f"{item.get('support_state', 'unknown')} · физический запуск не подтверждён"
-        restore = "не обещано; зависит от подтверждённого ответа агента"
+        restore = "агент пробует вернуть сохранённые обои; остальные исходные настройки не угадываются, подтверждение может отсутствовать"
         warning = "Запуск — отдельной кнопкой; отсутствие ответа не будет считаться успехом."
+    warning = (
+        "Остановка: «Остановить всё» отменяет активные сцены XIDER и пробует вернуть сохранённые обои; "
+        "короткие эффекты могут завершиться только по таймеру.\n" + warning
+    )
     platforms = ", ".join(str(value) for value in item.get("platforms", []) if value in {"windows", "macos"}) or "не указаны"
     return _lex_html(
         "prank_card_details",
