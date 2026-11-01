@@ -7826,42 +7826,65 @@ def guardian_menu(user_id: int | None = None):
     return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
-def pranks_menu(page: int = 1, target: str | None = None, user_id: int | None = None):
+def pranks_menu(page: int = 0, target: str | None = None, user_id: int | None = None):
     target = target or SESSION.get("target") or ""
     user_id = int(user_id if user_id is not None else CURRENT_TG_USER.get())
     mouse_swapped = bool(SESSION.get(f"mouse_swapped_{target}", False))
     desktop_hidden = bool(SESSION.get(f"desktop_hidden_{target}", False))
     kb = InlineKeyboardBuilder()
-    prank_parents = {1: "prank.visual", 2: "prank.sound", 3: "prank.input", 4: "prank.chaos"}
-    parent = prank_parents.get(page, "prank.memes")
+    prank_parents = {
+        1: "prank.visual", 2: "prank.sound", 3: "prank.input",
+        4: "prank.chaos", 5: "prank.memes",
+    }
+    parent = prank_parents.get(page, "prank.visual")
     target_info = devices.get(target) or {}
     os_name = str(target_info.get("os") or "").lower()
     platform = "macos" if "mac" in os_name or "darwin" in os_name else "windows" if "win" in os_name else None
-    navigation = feature_catalog.visible_navigation_pages(
-        feature_catalog.load_registry(), parent=parent, role=get_user_role(user_id),
-        grants=set(access_store.get_effective_grants(user_id)["callbacks"]), platform=platform,
+    registry = feature_catalog.load_registry()
+    grants = set(access_store.get_effective_grants(user_id)["callbacks"])
+    categories = feature_catalog.visible_navigation_pages(
+        registry, parent="prank.tabs", role=get_user_role(user_id),
+        grants=grants, platform=platform,
     )
-    for item in navigation:
-        callback = str(item["callback"])
-        label_id = str(item["label_id"])
-        style = str(item["style"])
-        if callback == "prank:hidedesktop" and desktop_hidden:
-            label_id, style = "prank_icons_hidden_button", "danger"
-        elif callback == "prank:swapmouse" and mouse_swapped:
-            label_id, style = "prank_mouse_swapped_button", "danger"
-        _action_button(kb, text=_lex(label_id), callback=callback, style=style, user_id=user_id)
 
-    # Page tabs also come from the registry; only the current-state label is dynamic.
-    for item in feature_catalog.visible_navigation_pages(
-        feature_catalog.load_registry(), parent="prank.tabs", role=get_user_role(user_id),
-        grants=set(access_store.get_effective_grants(user_id)["callbacks"]), platform=platform,
-    ):
-        callback = str(item["callback"])
-        selected = callback == f"prankpage:{page}"
-        label_id = str(item["label_id"]) + ("_selected" if selected else "")
+    if page == 0:
+        for item in categories:
+            callback = str(item["callback"])
+            if callback == "prankpage:0":
+                continue
+            _action_button(
+                kb, text=_lex(str(item["label_id"])), callback=callback,
+                style=str(item["style"]), user_id=user_id,
+            )
+        stop_item = next(
+            item for item in feature_catalog.visible_navigation_pages(
+                registry, parent="prank.visual", role=get_user_role(user_id),
+                grants=grants, platform=platform,
+            ) if item["callback"] == "prank:stop_all"
+        )
         _action_button(
-            kb, text=_lex(label_id), callback=callback,
-            style=str(item["style"]), user_id=user_id,
+            kb, text=_lex(str(stop_item["label_id"])), callback="prank:stop_all",
+            style="danger", user_id=user_id,
+        )
+    else:
+        navigation = feature_catalog.visible_navigation_pages(
+            registry, parent=parent, role=get_user_role(user_id),
+            grants=grants, platform=platform,
+        )
+        for item in navigation:
+            callback = str(item["callback"])
+            label_id = str(item["label_id"])
+            style = str(item["style"])
+            if callback == "prank:hidedesktop" and desktop_hidden:
+                label_id, style = "prank_icons_hidden_button", "danger"
+            elif callback == "prank:swapmouse" and mouse_swapped:
+                label_id, style = "prank_mouse_swapped_button", "danger"
+            _action_button(kb, text=_lex(label_id), callback=callback, style=style, user_id=user_id)
+
+        hub_item = next(item for item in categories if item["callback"] == "prankpage:0")
+        _action_button(
+            kb, text=_lex(str(hub_item["label_id"])), callback="prankpage:0",
+            style=str(hub_item["style"]), user_id=user_id,
         )
 
     _action_button(
@@ -7870,7 +7893,10 @@ def pranks_menu(page: int = 1, target: str | None = None, user_id: int | None = 
     kb.button(text=_nav("back_device"), callback_data="back:device", style="danger")
     kb.button(text=_nav("home"), callback_data="menu:main", style="primary")
 
-    kb.adjust(1, 2, 2, 2, 2, 2, 5, 1, 2)
+    if page == 0:
+        kb.adjust(2, 2, 1, 1, 2, 2)
+    else:
+        kb.adjust(1, 2)
     return _filter_device_keyboard(kb.as_markup(), user_id)
 
 
@@ -23863,7 +23889,7 @@ async def on_cat_pranks(cq: CallbackQuery):
         await cq.answer(_lex("device_required"), show_alert=True)
         return
     await _replace_callback_message(cq,
-        _lex_html("category_pranks", device=target_label(target)),
+        _lex_html("prank_hub_intro", device=target_label(target)),
         reply_markup=pranks_menu(user_id=cq.from_user.id if cq.from_user else None),
     )
     await cq.answer()
@@ -27597,14 +27623,14 @@ async def on_prank_page(cq: CallbackQuery):
         4: "prank_page_chaos_name",
         5: "prank_page_memes_name",
     }
-    page_name_key = page_name_keys.get(page)
-    p_name = _lex(page_name_key) if page_name_key else f"Стр. {page}"
-    await _replace_callback_message(cq,
-        _lex_html(
-            "prank_page_intro",
-            page=p_name,
-            device=target_label(target),
-        ),
+    if page == 0:
+        text = _lex_html("prank_hub_intro", device=target_label(target))
+    else:
+        page_name_key = page_name_keys.get(page)
+        p_name = _lex(page_name_key) if page_name_key else f"Стр. {page}"
+        text = _lex_html("prank_page_intro", page=p_name, device=target_label(target))
+    await _replace_callback_message(
+        cq, text,
         reply_markup=pranks_menu(page, user_id=cq.from_user.id if cq.from_user else None),
     )
     await cq.answer()

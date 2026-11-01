@@ -11049,6 +11049,25 @@
       "presentation": "nav"
     },
     {
+      "page_id": "prank.tabs.hub",
+      "parent": "prank.tabs",
+      "label_id": "prank_tab_hub",
+      "callback": "prankpage:0",
+      "roles": [
+        "owner",
+        "user"
+      ],
+      "grants": [],
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "permissions": [],
+      "support_state": "implemented",
+      "style": "primary",
+      "presentation": "nav"
+    },
+    {
       "page_id": "prank.tabs.visual",
       "parent": "prank.tabs",
       "label_id": "prank_tab_visual",
