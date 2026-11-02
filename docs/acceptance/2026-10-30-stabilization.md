@@ -284,6 +284,11 @@ The X-MAP snapshot contains 404 platform/action rows. Every row has expected-res
   53 seconds old. macOS 27.0.1 reported `4.2.1`, `online=false`, no session
   binding, and a heartbeat about 5 hours 28 minutes old. Guardian/Safari/Siri
   versions were unknown on both devices.
+- The local Windows host `DESKTOP-Q46JPA2` has a successful install report for
+  Agent/Guardian `4.3.15`; both `XIDER Agent` and `XIDER Guardian` scheduled
+  tasks were `Running`, with both executables present in the process table.
+  This confirms the currently connected Windows endpoint is physically
+  running the older build, not the v4.3.22 release.
 - This proves current service state and accepted-heartbeat freshness only. It
   does not prove v4.3.22 is installed, any physical feature works, or a
   Telegram → MQTT → device command/result round-trip. Physical Windows update
