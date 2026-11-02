@@ -293,3 +293,35 @@ The X-MAP snapshot contains 404 platform/action rows. Every row has expected-res
   does not prove v4.3.22 is installed, any physical feature works, or a
   Telegram → MQTT → device command/result round-trip. Physical Windows update
   and Mac reconnect/update acceptance remain open.
+
+## Refreshed runtime snapshot · 2026-11-02 03:38 UTC
+
+- The public GitHub release is now `v4.3.22` (prerelease), with Windows
+  artifacts and signed release manifests. Release workflow `41374030594`,
+  Pages deployment `41377881289`, and current `main` CI `41381514866` all
+  completed successfully. Hosted checks do not establish endpoint install.
+- A fresh read-only SSH check at `03:38:15 UTC` found both
+  `xider-bot.service` and `xider-dock-mqtt.service` active/running with
+  `NRestarts=0`.
+- A sanitized read of the live registry at the same time showed Windows 11
+  Agent `4.3.15`, `online=true`, heartbeat age 18.7 seconds. Its Guardian
+  record reports version `1.0-windows` with a 20.4-second-old record, but the
+  component state is `unknown`; Safari/Siri have no Windows records. macOS
+  27.0.1 Agent `4.2.1` is offline and its last heartbeat is about 5 hours 59
+  minutes old; Guardian/Safari/Siri remain unknown.
+- On the connected Windows host, both XIDER scheduled tasks are `Running` and
+  invoke packaged executables directly. The process table contains a parent
+  and child process for each component. Current SHA-256 values are Agent
+  `18dbb3a42e4d820bfe8eaf338446108bcc815df6fce940d8f1add73427a8109c` and
+  Guard Keeper `e0f8e0b20217ce6d25248ea772cfcf13a78a60fb2364d3dce21b0a234da99fce`.
+  The local install report still records `4.3.15`; PE version metadata is
+  absent, so the hashes are not being presented as a match to the v4.3.22
+  signed assets.
+- The earlier terminal-flash capture still points to an Antigravity-owned
+  PowerShell/ADB command. The current XIDER task actions are compiled EXEs,
+  not `python.exe`, `cmd.exe`, or PowerShell. This narrows the captured cause;
+  it does not identify every future flash without a fresh process capture.
+- Windows v4.3.22 update, rollback on-device, command/result round-trip, and
+  physical Mac reconnect/update remain open. The Mac's offline state prevents
+  current device verification; the published Mac runtime remains unsigned
+  and unnotarized as recorded above.
