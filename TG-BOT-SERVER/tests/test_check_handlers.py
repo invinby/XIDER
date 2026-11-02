@@ -165,7 +165,8 @@ def test_granted_user_gets_summary_then_revoke_hides_it(check_ui, monkeypatch, t
 def test_record_uses_inventory_platform_and_agent_version(check_ui, monkeypatch, os_name, platform):
     store, cq, edits = check_ui
     bot._save_action_check("device-a", "cmd:sys_uptime", "abc123", "succeeded",
-                           {"os": os_name, "version": "4.1.2"}, 123)
+                           {"os": os_name, "version": "4.1.2", "online": True,
+                            "last_seen": bot.time.time()}, 123)
     row = store.get_last_check("device-a", "cmd:sys_uptime")
     assert row.platform == platform
     assert row.agent_version == "4.1.2"

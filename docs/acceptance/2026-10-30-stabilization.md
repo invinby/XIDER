@@ -14,17 +14,17 @@ This matrix separates repository evidence from physical-device and hosted-servic
 | Agent Files inventory | Pass at source/unit level; integrity remains unverified without a trusted per-file manifest | Windows/macOS inventory tests and Telegram owner callbacks included in full suite | Inspect actual installed component list/signature on each owner device |
 | Windows build-cache cleanup | Policy and mocked cleanup tests pass; v4.3.19 Windows release package built successfully on GitHub Actions | `tools/test_build_nuitka_windows.py`; release workflow `41341904538`; both Windows executables are present in signed release assets | Local Windows cache cleanup and physical install still need owner-device confirmation |
 | Feature registry | Pass | 510 unique features across 17 areas; registry tests and validator pass | None for the generated local registry |
-| Signed release workflow | `v4.3.19` is a GitHub prerelease: Windows compiled preview + macOS source preview | [Release v4.3.19](https://github.com/invinby/XIDER/releases/tag/v4.3.19); release workflow `41341904538`; Pages workflow `41345558775`; Ed25519 manifests signed and verified in the hosted workflow. GitHub's latest non-prerelease endpoint currently returns `v4.2.1` | Physical Windows/Mac installation and command-result checks remain owner-device work; macOS native packages remain `not_built` |
+| Signed release workflow | `v4.3.21` is the latest GitHub prerelease: Windows compiled preview + macOS source preview | [Release v4.3.21](https://github.com/invinby/XIDER/releases/tag/v4.3.21); release workflow `41363443612`; Pages workflow `41362716950`; Ed25519 manifests signed and verified in the hosted workflow. GitHub's latest non-prerelease endpoint remains `v4.2.1` | Physical Windows/Mac installation and command-result checks remain owner-device work; macOS native packages remain `not_built` |
 
 ## Version and copy snapshot
 
 | Surface | Version/state on 2026-11-02 | Meaning |
 |---|---|---|
-| Latest published prerelease | 4.3.19 | Windows compiled preview + macOS source preview; no native Mac runtime package |
+| Latest published prerelease | 4.3.21 | Windows compiled preview + macOS source preview; no native Mac runtime package |
 | Latest non-prerelease from GitHub Releases API | 4.2.1 | GitHub classifies v4.3.19 as prerelease; do not report it as stable |
-| GitHub `v4.3.19` | Windows compiled preview + macOS source preview | Windows Agent and Guard Keeper are PyObfus-transformed then Nuitka-compiled; native macOS Agent, Guard Keeper, Safari, and Siri are `not_built` in its protected manifest |
-| Windows Pages installer default | `v4.3.19` | Live `win.txt` returns HTTP 200 and selects signed v4.3.19 release assets |
-| macOS Pages installer | `v4.3.19` source preview | Live `/mac` returns HTTP 200 and selects signed v4.3.19 installer scripts; runtime is not Apple-signed or notarized |
+| GitHub `v4.3.21` | Windows compiled preview + macOS source preview | Windows Agent and Guard Keeper are PyObfus-transformed then Nuitka-compiled; native macOS Agent, Guard Keeper, Safari, and Siri are `not_built` in its protected manifest |
+| Windows Pages installer default | `v4.3.21` | Live `win.txt` returns HTTP 200 and selects signed v4.3.21 release assets |
+| macOS Pages installer | `v4.3.21` source preview | Live `/mac` returns HTTP 200 and selects signed v4.3.21 installer scripts; runtime is not Apple-signed or notarized |
 
 The Telegram version picker can select an explicitly published version; the launchers validate the tag and verify the matching signed installer before execution. The release includes a signed server source bundle, but this workflow did not deploy the VPS. Release and Pages state were checked against GitHub and the live site after publication.
 
@@ -221,3 +221,16 @@ The X-MAP snapshot contains 404 platform/action rows. Every row has expected-res
 - This is strong attribution for the captured window only. If another flash
   occurs after Antigravity's adb/VNC action is closed, a fresh parent-process
   capture is still needed before attributing that event.
+
+## CI regression follow-up · 2026-11-02
+
+- Commit `e5865a959ff9fa090d01c301860bab0ef6b5148e` was pushed to `main` and
+  triggered CI run `41368331139`. Unix installer/documentation checks passed;
+  Python 3.14 found two old UI/check fixtures that still expected cached Agent
+  versions without a fresh heartbeat, plus a Windows-runner assumption in the
+  POSIX macOS wallpaper-path fixture. This run is **failed**, not a release
+  gate pass.
+- Corrected those fixtures and changed wallpaper validation to require the
+  absolute POSIX path form used by macOS. Fresh focused Python 3.12 checks pass:
+  bot regressions 4 passed and macOS wallpaper regression 1 passed. Full main
+  CI must pass on the follow-up commit before a new signed preview is prepared.

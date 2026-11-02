@@ -5708,7 +5708,7 @@ end tell'''
             if backup.exists():
                 paths = json.loads(backup.read_text(encoding="utf-8"))
                 if (not isinstance(paths, list) or not paths
-                        or any(not isinstance(path, str) or not os.path.isabs(path) for path in paths)):
+                        or any(not isinstance(path, str) or not path.startswith("/") for path in paths)):
                     raise RuntimeError("резервная копия обоев повреждена; исходные значения сохранены")
             else:
                 paths = [p.strip() for p in result.stdout.strip().split(",") if p.strip()]
@@ -5730,7 +5730,7 @@ end tell'''
         try:
             paths = json.loads(backup.read_text(encoding="utf-8"))
             if (not isinstance(paths, list) or not paths
-                    or any(not isinstance(path, str) or not os.path.isabs(path) for path in paths)):
+                    or any(not isinstance(path, str) or not path.startswith("/") for path in paths)):
                 raise RuntimeError("резервная копия обоев пуста")
             for path in paths:
                 script = f'tell application "System Events" to tell every desktop to set picture to POSIX file {json.dumps(path)}'
