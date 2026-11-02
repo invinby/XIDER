@@ -253,3 +253,12 @@ The X-MAP snapshot contains 404 platform/action rows. Every row has expected-res
   update display, partial Stop All details, unknown-platform prank disabling,
   and original macOS wallpaper backup restoration. Its release note keeps
   Apple codesign/notarization limitations explicit.
+- Commit `420d575b7571d560f72463b7a6609b4bbe415a05` published the updated
+  Pages source snapshot; workflow `41370317059` passed and all four live
+  endpoints returned HTTP 200. English/Russian landing pages show source
+  `4.3.22`; `win.txt` still correctly selects the latest published `v4.3.21`.
+- Candidate CI run `41370317091` failed all three Python matrices on the same
+  Windows PE metadata assertion: the text versions had moved to `4.3.22.0`,
+  but the fixed numeric `filevers`/`prodvers` tuples were still `4.3.21.0`.
+  Both numeric tuples are now corrected to `(4, 3, 22, 0)`; no v4.3.22 tag
+  exists until the follow-up exact-source CI passes.

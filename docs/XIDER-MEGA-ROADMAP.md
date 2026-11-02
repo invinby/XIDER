@@ -2735,6 +2735,8 @@ Go и Rust по упаковке, сопровождению, диагности
 | Windows terminal flash | Captured PowerShell activity belongs to Antigravity/ADB; the saved XIDER task snapshot shows no shell child | Capture a new parent chain if a flash recurs outside that Antigravity action |
 | CI | `417aeb3cc5ec181f4c34c62609b911a6a6e71f22`, run `41369298611`, passed Python 3.11/3.12/3.14 and Unix installer/docs checks | Release-tag CI, artifact and signature verification, Pages status, live VPS/broker, physical install/update/rollback |
 | Candidate metadata | Source, bilingual site source labels, PE version, and workflow defaults are synchronized at `4.3.22`; changelog and bilingual release note added | No `v4.3.22` tag or release exists until the candidate's exact source commit passes CI |
+
+Candidate commit `420d575b7571d560f72463b7a6609b4bbe415a05` passed the Pages source validation and published RU/EN source labels at 4.3.22; the launchers continue selecting v4.3.21. Its main CI caught the missed PE fixed-file version tuples (numeric `filevers`/`prodvers` were still 4.3.21.0). Both tuples have now been corrected locally; the failed tag has not been created or published.
 Отдельный подписанный server-only bundle опубликован как
 [server-deploy-20261102](https://github.com/invinby/XIDER/releases/tag/server-deploy-20261102)
 и применён транзакционным updater-ом. Windows-устройство осталось на 4.3.15
