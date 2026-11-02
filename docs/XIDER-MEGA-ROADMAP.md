@@ -2737,6 +2737,26 @@ Go и Rust по упаковке, сопровождению, диагности
 | Release metadata | Source, bilingual site labels, PE numeric/string version, workflow defaults, changelog and bilingual release note synchronized at `4.3.22` | No source-level version mismatch found; validate installed device versions after owner update |
 
 The initial candidate `420d575b7571d560f72463b7a6609b4bbe415a05` failed the main CI because PE fixed-file version tuples were still `4.3.21.0`. Commit `0f23d4a` corrected both tuples; exact-tag CI then passed, and `v4.3.22` was published with its signed inventory. This history is retained as evidence of the caught mismatch, not as current release state.
+
+### Windows per-user installer correction · 2026-11-02
+
+- Установщик XIDER работает внутри `%LOCALAPPDATA%`, регистрирует задачи для
+  текущего пользователя с `RunLevel Limited` и не меняет системные каталоги или
+  HKLM. Поэтому обязательный UAC для этой установки был лишним блокером.
+- В ветке `fix/windows-user-scope-bootstrap` убран запуск установщика через
+  `RunAs`; подписанный пакет по-прежнему проверяется до запуска, bootstrap больше
+  не требует elevated token. Если `ssh-keygen.exe` отсутствует, короткий
+  launcher останавливается с конкретным требованием вместо попытки включить
+  Windows Optional Feature через UAC.
+- Подтверждено focused-тестом подписанного launcher-а на Windows PowerShell 5.1
+  и pwsh, включая отказ при tampering; `test_bootstrap_agent_preflight.ps1`
+  проходит и показывает, что не-elevated установка проходит прежний gate и
+  доходит до подготовки окружения. Это ещё не полная установка на чистом
+  физическом ПК: тестовая фикстура далее завершилась ошибкой создания venv.
+- Изменение пока локально в feature branch и не входит в опубликованный
+  `v4.3.22`. После интеграции нужен новый signed Windows release, Pages deploy и
+  реальная установка на новом профиле без UAC. macOS-пакеты и физическая
+  проверка Mac этим изменением не затронуты.
 Отдельный подписанный server-only bundle опубликован как
 [server-deploy-20261102](https://github.com/invinby/XIDER/releases/tag/server-deploy-20261102)
 и применён транзакционным updater-ом. Windows-устройство осталось на 4.3.15
