@@ -234,3 +234,22 @@ The X-MAP snapshot contains 404 platform/action rows. Every row has expected-res
   absolute POSIX path form used by macOS. Fresh focused Python 3.12 checks pass:
   bot regressions 4 passed and macOS wallpaper regression 1 passed. Full main
   CI must pass on the follow-up commit before a new signed preview is prepared.
+
+## Follow-up CI and v4.3.22 source candidate · 2026-11-02
+
+- Commit `417aeb3cc5ec181f4c34c62609b911a6a6e71f22` passed main CI run
+  `41369298611` on Python 3.11, 3.12, and 3.14, including Unix installer/docs
+  validation. Python 3.12 recorded: Telegram 1,814 passed / 4 skipped;
+  Windows 556 passed; macOS 671 passed / 1 skipped; operations 30 passed;
+  release/build tools 209 passed / 6 skipped / 2 subtests; deployment
+  archive/signature checks 27 passed / 27 skipped; Windows install/bootstrap/
+  rollback fixtures passed. This is hosted CI evidence, not physical-device
+  acceptance.
+- `main` now carries synchronized source metadata `4.3.22` and a bilingual
+  release note. This is only a source candidate: no `v4.3.22` tag or release
+  exists yet. The published preview remains v4.3.21 until exact-source
+  release CI, signed inventories, hosted assets, and Pages checks complete.
+- The source candidate contains the fresh-heartbeat version gate and truthful
+  update display, partial Stop All details, unknown-platform prank disabling,
+  and original macOS wallpaper backup restoration. Its release note keeps
+  Apple codesign/notarization limitations explicit.

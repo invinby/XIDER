@@ -2725,6 +2725,16 @@ Go и Rust по упаковке, сопровождению, диагности
 | Статус конечных устройств | Source/CI evidence отдельно от фактической работы | Нужны физические install/update/rollback, проверка свежести MQTT online/status и результат каждой выбранной функции на Windows и Mac |
 
 Последний опубликованный preview — [XIDER v4.3.21](https://github.com/invinby/XIDER/releases/tag/v4.3.21) (`prerelease=true`); это не stable release и не подтверждение физической приёмки. Live Pages `/`, `/ru.html`, `/win.txt` и `/mac` отдают HTTP 200; RU/EN страницы и обе install-команды показывают v4.3.21. Owner-preview workflow `41363558411` завершился успешно и собрал Windows, macOS и общий component artifact; macOS артефакт остаётся неподписанным и ненотарифицированным, а отдельный подписанный inventory preview workflow не создавал.
+
+### Fresh-state source candidate · 2026-11-02
+
+| Area | Current source evidence | Gate still open |
+|---|---|---|
+| Fresh Agent status | `fresh_agent_version()` requires a valid semantic version and a heartbeat less than 150 seconds old; cards, filters, diagnostics, version menus, and update checks no longer treat an offline cached value as current | Verify a physical device's MQTT heartbeat and Telegram UI; exact release candidate not yet published |
+| Prank result fidelity | Stop All keeps partial-stop details; unknown OS disables platform-specific cards; macOS meme wallpaper preserves its first original backup for repeated runs | Confirm effect/restoration on a physical Mac and Windows device |
+| Windows terminal flash | Captured PowerShell activity belongs to Antigravity/ADB; the saved XIDER task snapshot shows no shell child | Capture a new parent chain if a flash recurs outside that Antigravity action |
+| CI | `417aeb3cc5ec181f4c34c62609b911a6a6e71f22`, run `41369298611`, passed Python 3.11/3.12/3.14 and Unix installer/docs checks | Release-tag CI, artifact and signature verification, Pages status, live VPS/broker, physical install/update/rollback |
+| Candidate metadata | Source, bilingual site source labels, PE version, and workflow defaults are synchronized at `4.3.22`; changelog and bilingual release note added | No `v4.3.22` tag or release exists until the candidate's exact source commit passes CI |
 Отдельный подписанный server-only bundle опубликован как
 [server-deploy-20261102](https://github.com/invinby/XIDER/releases/tag/server-deploy-20261102)
 и применён транзакционным updater-ом. Windows-устройство осталось на 4.3.15
