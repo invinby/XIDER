@@ -1,20 +1,20 @@
 # XIDER release history
 
-## X4.3.22-FRESH-STATE-RESTORE+20261102 — release candidate
+## X4.3.22-FRESH-STATE-RESTORE+20261102 — Windows release + macOS source preview
 
 ### English
 
 - Agent version cards, filters, and update checks use only a valid version from a fresh heartbeat; stale or offline values display as unknown and cannot authorize an update.
 - Stop All preserves the agent's partial-stop details. Platform-specific prank actions are disabled when the target OS is unknown.
 - macOS meme wallpaper saves the original wallpaper once, so repeated wallpaper pranks still restore the real original.
-- Release candidate only: publish after the exact-source CI/release gates pass. Native macOS runtime signing and notarization remain unavailable; the signed inventory must report those packages honestly.
+- Published as a GitHub prerelease from commit `0f23d4a2a96977534469e1ca2c5973bfd6559119` after exact-tag CI, Windows build, and signed-inventory verification passed. Native macOS runtime signing and notarization remain unavailable; the signed inventory reports those packages as `not_built`.
 
 ### Русский
 
 - Карточки, фильтры и обновление показывают версию агента только по свежему heartbeat; устаревшая или офлайн-версия становится неизвестной и не разрешает обновление.
 - «Остановить всё» сохраняет подробности частичного результата агента. Пранки, зависящие от платформы, отключены, если ОС устройства неизвестна.
 - Пранк с обоями на macOS сохраняет оригинал один раз: повторные запуски больше не затирают резервную копию.
-- Пока это кандидат: публикация только после CI/release-проверок точного исходного коммита. Подпись Apple и нотарификация macOS runtime недоступны; signed inventory должен честно отметить эти пакеты.
+- Опубликован как GitHub prerelease из коммита `0f23d4a2a96977534469e1ca2c5973bfd6559119` после прохождения CI точного тега, Windows-сборки и проверки подписанного inventory. Подписи Apple и нотарификации macOS runtime нет; signed inventory честно отмечает эти пакеты как `not_built`.
 
 ## X4.3.21-VERIFIED-OBFUSCATION+20261102 — synchronized release metadata
 

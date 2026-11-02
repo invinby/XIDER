@@ -2705,38 +2705,38 @@ Go и Rust по упаковке, сопровождению, диагности
   local host, and no physical Mac acceptance was performed. Those device and
   Telegram gates remain open. No new GitHub Release was created; the public
   `v4.2.1` artifact still lacks the signed macOS app needed for the planned
-  Core Location acceptance.
+  Core Location acceptance. This paragraph is a historical snapshot from the
+  prior review; the current release state is recorded immediately below.
 
-## Текущее состояние релиза и пранк-хаба · 2026-11-02
+## Текущее состояние релиза и пранк-хаба · проверено после публикации v4.3.22 · 2026-11-02
 
 Это сверка по опубликованному GitHub Release, workflow evidence и текущему
 `main`, а не процентная оценка и не физическая приёмка.
 
 | Область | Текущий статус | Доказательство / что осталось |
 |---|---|---|
-| Windows Agent + Guard Keeper | v4.3.21 опубликован как GitHub prerelease: PyObfus 0.11.1 и Nuitka 4.3.1; protected manifest описывает 50 преобразованных файлов и 2,875 имён | Release workflow `41363443612` успешен; обе подписи Ed25519 манифестов проверены, а 14 asset sizes/SHA-256 сверены с GitHub Release API. Authenticode для EXE не заявлен. Нужна физическая установка/обновление/rollback |
-| macOS Agent, Guard Keeper, Safari, Siri | Отдельный hosted unsigned preview собрал Agent + Guard Keeper + общий Layers runtime для Safari/Siri; PyObfus 0.11.1, Nuitka 4.3.1 | Run `41363558411`, commit `382a46150cb179569dbbf9a02672b116f333e5ff`, artifact `XGENT-MCS-macOS`: 113,464,729 bytes, SHA-256 `5cf07174e6f4490d1589b661b984a5012a656899a5269caab9af260956a98407`. Это unsigned/unnotarized preview, не distributable macOS release и не физическая приёмка; в v4.3.21 manifest native Mac packages остаются `not_built` |
-| Windows Agent + Guard Keeper preview | Owner-preview собран в workflow `41363558411`; PyObfus 0.11.1 и Nuitka 4.3.1 | Artifact `XGENT-WDS-Windows`: 153,385,748 bytes, SHA-256 `decc3ee7f37087b09b18275c5cd6fab0c48862ca156d737f0584be479135c45b`. Это preview без отдельного подписанного build inventory; не физическая приёмка |
-| Общий пакет компонентов | Owner-preview ZIP упакован после успешных Windows/macOS builds | Artifact `XIDER-Components`: 205,000,195 bytes, GitHub artifact digest `sha256:e0dab742799a18febbb112d00cc3685eb83ee32669984cf62b43cb4f4933d6bd`; workflow ZIP checks passed. Release publication и signed preview inventory были пропущены намеренно; v4.3.21 остаётся официальным signed prerelease |
-| Защита сборки | Protected release manifest и общий release manifest подписаны Ed25519 и локально проверены; все 14 asset size/SHA-256 совпали с GitHub Release API | v4.3.21 source ref закреплён за commit `382a46150cb179569dbbf9a02672b116f333e5ff`; Windows obfuscation/compilation описаны в manifest. Native macOS packages — `not_built`; Mac signing/notarization не заявлены |
-| VPS-бот | Обновлён подписанным `server-deploy-20261102` с коммита `d690fd6`; сервис после транзакции `active/enabled`, `NRestarts=0`, новый PID; `.env` сохранён | Бэкап перед изменением: `/var/backups/xider/xider-20261101T225820Z-566173.tar.gz`; локальный verifier и root-owned verifier VPS приняли manifest. Проверен process-level health, не Telegram→MQTT round-trip |
+| Windows Agent + Guard Keeper | v4.3.22 опубликован как GitHub prerelease: PyObfus 0.11.1 + Nuitka 4.3.1; 50 файлов и 2,875 имён преобразованы | Run `41374030576`; обе подписанные ZIP скачаны, outer SHA-256 и хеш/размер каждого участника совпали с подписанным inventory. Authenticode для EXE не заявлен. Нужна физическая установка/обновление/rollback |
+| macOS Agent, Guard Keeper, Safari, Siri | В `v4.3.22` native runtime пакеты честно отмечены `not_built`, обфускация — `not_applied`; опубликован подписанный source-preview installer | Runtime не Apple-signed/notarized и не является нативным distributable app. Физическая приёмка Mac не пройдена; нужен доступный Mac и, для распространяемого нативного пакета, Apple Developer ID signing/notarization |
+| Защита сборки и component report | Release + protected-build manifests проверены pinned Ed25519 key `521c56c0c89f0ddd`; компонентный отчёт разделяет PyObfus и Nuitka | Windows Agent/Guard Keeper: report в архиве, 50 files / 2,875 names; macOS four rows `not_built`. Локально проверены asset hashes, ZIP integrity и отсутствие Python source в compiled Windows ZIPs |
+| Установочные команды | Live Pages после deploy `41377881289`: `/`, `/ru.html`, `/win.txt`, `/mac` — HTTP 200; оба launcher показывают v4.3.22 | Detached OpenSSH signatures Windows/macOS installer assets локально проверены. macOS installer — source preview; ни одна hosted проверка не заменяет физическую установку |
+| VPS-бот и MQTT | Бот `xider-bot.service` и `xider-dock-mqtt.service` сейчас active; серверный каталог содержит два устройства, один свежий Windows heartbeat | Live snapshot подтвердил критерий свежести для Windows и offline/stale для Mac. Сценарий команды через Telegram → MQTT → физический эффект не выполнялся; Mac 4.2.1 и Windows 4.3.15 ещё не проверены на v4.3.22 |
 | Отчёт компонентов в Telegram | Версионная карточка читает только проверенный protected manifest; подпись/хеш-связь при ошибке дают unknown/error, не догадку по номеру версии | `_version_protection_summary()` и `release_catalog.protected_components()`; UI-кейсы в `TG-BOT-SERVER/tests/test_bot_ui.py` и `test_release_catalog.py`; live-карточка бота требует визуальной приёмки |
 | Пранк-хаб | Единый каталог реализован: пять тематических фильтров внутри одного hub, поиск, избранное, карточки, закреплённое сверху «Остановить всё»; нестабильные действия отключены или помечены причиной | Код и UI-кейсы в `TG-BOT-SERVER/bot.py` и `TG-BOT-SERVER/tests/test_bot_ui.py`; требуется live-просмотр Telegram и подтверждение реальных эффектов на обеих ОС |
 | Статус конечных устройств | Source/CI evidence отдельно от фактической работы | Нужны физические install/update/rollback, проверка свежести MQTT online/status и результат каждой выбранной функции на Windows и Mac |
 
-Последний опубликованный preview — [XIDER v4.3.21](https://github.com/invinby/XIDER/releases/tag/v4.3.21) (`prerelease=true`); это не stable release и не подтверждение физической приёмки. Live Pages `/`, `/ru.html`, `/win.txt` и `/mac` отдают HTTP 200; RU/EN страницы и обе install-команды показывают v4.3.21. Owner-preview workflow `41363558411` завершился успешно и собрал Windows, macOS и общий component artifact; macOS артефакт остаётся неподписанным и ненотарифицированным, а отдельный подписанный inventory preview workflow не создавал.
+Последний опубликованный preview — [XIDER v4.3.22](https://github.com/invinby/XIDER/releases/tag/v4.3.22) (`prerelease=true`), не stable и не физическая приёмка. Release workflow `41374030576` и Pages `41377881289` успешны. Live Pages/launchers показывают v4.3.22. Windows пакеты и подписанные inventory проверены локально; macOS runtime отсутствует (`not_built`) и не Apple-signed/notarized.
 
 ### Fresh-state source candidate · 2026-11-02
 
 | Area | Current source evidence | Gate still open |
 |---|---|---|
-| Fresh Agent status | `fresh_agent_version()` requires a valid semantic version and a heartbeat less than 150 seconds old; cards, filters, diagnostics, version menus, and update checks no longer treat an offline cached value as current | Verify a physical device's MQTT heartbeat and Telegram UI; exact release candidate not yet published |
+| Fresh Agent status | `fresh_agent_version()` requires valid semantic version plus heartbeat younger than 150 seconds; live VPS snapshot showed Windows v4.3.15 fresh and Mac v4.2.1 offline/stale | The Windows agent has not yet been updated to v4.3.22; perform a real Telegram command/result check on each physical device |
 | Prank result fidelity | Stop All keeps partial-stop details; unknown OS disables platform-specific cards; macOS meme wallpaper preserves its first original backup for repeated runs | Confirm effect/restoration on a physical Mac and Windows device |
 | Windows terminal flash | Captured PowerShell activity belongs to Antigravity/ADB; the saved XIDER task snapshot shows no shell child | Capture a new parent chain if a flash recurs outside that Antigravity action |
-| CI | `417aeb3cc5ec181f4c34c62609b911a6a6e71f22`, run `41369298611`, passed Python 3.11/3.12/3.14 and Unix installer/docs checks | Release-tag CI, artifact and signature verification, Pages status, live VPS/broker, physical install/update/rollback |
-| Candidate metadata | Source, bilingual site source labels, PE version, and workflow defaults are synchronized at `4.3.22`; changelog and bilingual release note added | No `v4.3.22` tag or release exists until the candidate's exact source commit passes CI |
+| CI and publication | Exact tag commit `0f23d4a2a96977534469e1ca2c5973bfd6559119`; release run `41374030576` and Pages run `41377881289` passed | Physical update/rollback and correlated Telegram → MQTT → device results remain open |
+| Release metadata | Source, bilingual site labels, PE numeric/string version, workflow defaults, changelog and bilingual release note synchronized at `4.3.22` | No source-level version mismatch found; validate installed device versions after owner update |
 
-Candidate commit `420d575b7571d560f72463b7a6609b4bbe415a05` passed the Pages source validation and published RU/EN source labels at 4.3.22; the launchers continue selecting v4.3.21. Its main CI caught the missed PE fixed-file version tuples (numeric `filevers`/`prodvers` were still 4.3.21.0). Both tuples have now been corrected locally; the failed tag has not been created or published.
+The initial candidate `420d575b7571d560f72463b7a6609b4bbe415a05` failed the main CI because PE fixed-file version tuples were still `4.3.21.0`. Commit `0f23d4a` corrected both tuples; exact-tag CI then passed, and `v4.3.22` was published with its signed inventory. This history is retained as evidence of the caught mismatch, not as current release state.
 Отдельный подписанный server-only bundle опубликован как
 [server-deploy-20261102](https://github.com/invinby/XIDER/releases/tag/server-deploy-20261102)
 и применён транзакционным updater-ом. Windows-устройство осталось на 4.3.15

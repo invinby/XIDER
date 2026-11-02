@@ -12,21 +12,31 @@ This matrix separates repository evidence from physical-device and hosted-servic
 | Windows source/installer fixtures | Pass | Hosted Python 3.12 suite: 556 passed; PowerShell 5.1 bootstrap, setup-selection, and transaction fixtures passed | Fresh install, permissions, recovery, and terminal-window behavior on a physical Windows device |
 | macOS source/installer fixtures | Pass | Hosted Python 3.12 suite: 670 passed, 1 skipped; shell/integration fixtures available on Windows were run | Fresh install, update/rollback, permissions, camera, screenshot, GPS, and recovery on a physical Mac |
 | Agent Files inventory | Pass at source/unit level; integrity remains unverified without a trusted per-file manifest | Windows/macOS inventory tests and Telegram owner callbacks included in full suite | Inspect actual installed component list/signature on each owner device |
-| Windows build-cache cleanup | Policy and mocked cleanup tests pass; v4.3.19 Windows release package built successfully on GitHub Actions | `tools/test_build_nuitka_windows.py`; release workflow `41341904538`; both Windows executables are present in signed release assets | Local Windows cache cleanup and physical install still need owner-device confirmation |
+| Windows build-cache cleanup | Policy and mocked cleanup tests pass; v4.3.22 Windows release package built successfully on GitHub Actions | `tools/test_build_nuitka_windows.py`; release workflow `41374030576`; both Windows executables are present in signed release assets | Local Windows cache cleanup and physical install still need owner-device confirmation |
 | Feature registry | Pass | 510 unique features across 17 areas; registry tests and validator pass | None for the generated local registry |
-| Signed release workflow | `v4.3.21` is the latest GitHub prerelease: Windows compiled preview + macOS source preview | [Release v4.3.21](https://github.com/invinby/XIDER/releases/tag/v4.3.21); release workflow `41363443612`; Pages workflow `41362716950`; Ed25519 manifests signed and verified in the hosted workflow. GitHub's latest non-prerelease endpoint remains `v4.2.1` | Physical Windows/Mac installation and command-result checks remain owner-device work; macOS native packages remain `not_built` |
+| Signed release workflow | `v4.3.22` is the latest GitHub prerelease: compiled Windows Agent/Guard Keeper + macOS source preview | [Release v4.3.22](https://github.com/invinby/XIDER/releases/tag/v4.3.22); release workflow `41374030576`; Pages workflow `41377881289`; both Ed25519 manifests and both detached installer signatures verified; Windows ZIP hashes and every member hash match the signed inventory | Physical Windows install/update/rollback and Mac source-preview acceptance remain open; native Mac packages remain `not_built` |
 
 ## Version and copy snapshot
 
 | Surface | Version/state on 2026-11-02 | Meaning |
 |---|---|---|
-| Latest published prerelease | 4.3.21 | Windows compiled preview + macOS source preview; no native Mac runtime package |
-| Latest non-prerelease from GitHub Releases API | 4.2.1 | GitHub classifies v4.3.19 as prerelease; do not report it as stable |
-| GitHub `v4.3.21` | Windows compiled preview + macOS source preview | Windows Agent and Guard Keeper are PyObfus-transformed then Nuitka-compiled; native macOS Agent, Guard Keeper, Safari, and Siri are `not_built` in its protected manifest |
-| Windows Pages installer default | `v4.3.21` | Live `win.txt` returns HTTP 200 and selects signed v4.3.21 release assets |
-| macOS Pages installer | `v4.3.21` source preview | Live `/mac` returns HTTP 200 and selects signed v4.3.21 installer scripts; runtime is not Apple-signed or notarized |
+| Latest published prerelease | 4.3.22 | Windows Agent + Guard Keeper compiled; macOS signed source preview; no native Mac runtime package |
+| Latest non-prerelease from GitHub Releases API | 4.2.1 | GitHub classifies v4.3.22 as prerelease; do not report it as stable |
+| GitHub `v4.3.22` | Compiled Windows + macOS source preview | Windows Agent/Guard Keeper: PyObfus 0.11.1 (50 files, 2,875 names) and Nuitka 4.3.1. macOS Agent, Guard Keeper, Safari, and Siri: `not_built`; runtime is not Apple-signed or notarized |
+| Windows Pages installer default | `v4.3.22` | Live `win.txt` returns HTTP 200 and selects signed v4.3.22 installer/release assets |
+| macOS Pages installer | `v4.3.22` source preview | Live `/mac` returns HTTP 200 and selects the signed source-preview installer; runtime is not Apple-signed or notarized |
 
 The Telegram version picker can select an explicitly published version; the launchers validate the tag and verify the matching signed installer before execution. The release includes a signed server source bundle, but this workflow did not deploy the VPS. Release and Pages state were checked against GitHub and the live site after publication.
+
+## Hosted release evidence — v4.3.22 (2026-11-02)
+
+- Tag `v4.3.22` points to exact source commit `0f23d4a2a96977534469e1ca2c5973bfd6559119`. Release workflow `41374030576` passed exact-tag CI on Python 3.11, 3.12, and 3.14, Unix installer/docs validation, Windows Agent/Guard Keeper compilation, and signed inventory publication. The release is a prerelease, not a stable release.
+- Pages workflow `41377881289` succeeded for the same commit. Live `/`, `/ru.html`, `/win.txt`, and `/mac` returned HTTP 200; RU/EN pages and both short installers reference v4.3.22.
+- Downloaded `XGENT-WDS-Windows.zip` (76,681,733 bytes; SHA-256 `9f0d5e2785e1a3f1272756a090b4fee5e865068e042b2c1065843f0fce200f94`) and `Guard-Keeper-Windows.zip` (11,530,582 bytes; SHA-256 `7385e9bb6e6c5580a6532f3d0fff96b2411923fad3f314e50ca2dbc629de21ec`). Both match GitHub's asset digests and signed inventory; every ZIP member's size/hash matched, archives passed integrity checks, and compiled ZIPs contain no `.py`, `.pyc`, `.pyo`, `.pyi`, or `.pyw` files.
+- Independently verified `release-manifest.json` and `protected-build-manifest.json` with pinned Ed25519 key `521c56c0c89f0ddd`. Windows Agent and Guard Keeper are each reported as PyObfus 0.11.1 obfuscated (50 source files, 2,875 names) and Nuitka 4.3.1 compiled. Compilation is not counted as obfuscation. The Windows EXEs do not claim Authenticode signing.
+- Independently verified the detached OpenSSH signatures on `XIDER-install-windows.ps1` and `XIDER-install-macos.sh`. The release contains a Windows compiled package and macOS source-preview installer. Native macOS Agent, Guard Keeper, Safari, and Siri are `not_built` / `not_applied`; the macOS runtime is not Apple-signed or notarized.
+- The project Prank Hub is represented in source as one catalog with five filters, search, favorites, action cards, and Stop All pinned first. Physical effects/restoration and live Telegram visual acceptance still require owner-device checks.
+- CI, signed artifact, and live Pages checks do not prove physical install/update/rollback or every Telegram → MQTT → device command result. Current device acceptance remains separate from hosted evidence.
 
 ## Hosted release evidence — 2026-11-01
 
