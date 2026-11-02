@@ -164,3 +164,40 @@ The X-MAP snapshot contains 404 platform/action rows. Every row has expected-res
   X-STAB server, and source packages. The preview did not publish a GitHub
   Release or signed protected build inventory. It is not an Apple-signed or
   notarized macOS release; physical installation/update/rollback remains open.
+
+## Signed Windows preview release and macOS owner build · 2026-11-02
+
+- Release [v4.3.21](https://github.com/invinby/XIDER/releases/tag/v4.3.21) is
+  published as a GitHub prerelease from exact source commit
+  `382a46150cb179569dbbf9a02672b116f333e5ff`. The earlier v4.3.20 tag was
+  not moved; its release gate failed on stale Windows PE and bilingual Pages
+  version metadata, so v4.3.21 superseded it.
+- Release workflow `41363443612` completed successfully, including the
+  Python 3.11/3.12/3.14 CI matrix, Unix installer fixtures, Windows build and
+  publication. The signed release manifest and protected build manifest both
+  verified with the pinned Ed25519 key; all 14 release asset sizes and
+  SHA-256 hashes matched GitHub's release asset metadata.
+- The Windows Agent and Guard Keeper were PyObfus 0.11.1 transformed and
+  Nuitka 4.3.1 compiled. The protected manifest reports 50 source files and
+  2,875 transformed names. It does not claim Windows Authenticode signing.
+- Windows and macOS Pages installer endpoints returned HTTP 200 and select
+  v4.3.21. RU/EN pages show the same source version. These are hosted
+  publication checks, not proof of installation on an endpoint.
+- Owner preview workflow `41363558411` built macOS apps for Agent,
+  Guard Keeper, and shared Layers runtime used by Safari/Siri. Artifact
+  `XGENT-MCS-macOS` is 113,464,729 bytes with SHA-256
+  `5cf07174e6f4490d1589b661b984a5012a656899a5269caab9af260956a98407`.
+  It is explicitly unsigned and unnotarized. The published v4.3.21 protected
+  manifest therefore continues to report native macOS packages as
+  `not_built`; the preview is not a distributable release.
+- Owner-preview workflow `41363558411` later completed both platform builds
+  and uploaded `XIDER-Components` (205,000,195 bytes; GitHub artifact digest
+  `sha256:e0dab742799a18febbb112d00cc3685eb83ee32669984cf62b43cb4f4933d6bd`).
+  Its Windows artifact is 153,385,748 bytes, SHA-256
+  `decc3ee7f37087b09b18275c5cd6fab0c48862ca156d737f0584be479135c45b`.
+  The macOS artifact and hash are recorded above. Preview publication and a
+  signed preview inventory were skipped by design. The signed v4.3.21 release
+  remains the official prerelease and contains its own Windows compiled assets.
+- Physical Windows/Mac installation, update, rollback, permission flows,
+  actual feature effects, and Telegram→MQTT→device result round trips remain
+  unverified. No CI or hosted build result is counted as physical acceptance.
