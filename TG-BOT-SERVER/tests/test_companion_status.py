@@ -112,6 +112,19 @@ def test_unsupported_os_is_explicit(name):
     assert result["state"] == "unsupported" and result["version"] is None
 
 
+@pytest.mark.parametrize("info", [
+    {"version": "4.3.21", "online": True, "last_seen": 990},
+    {"version": "4.3.21", "online": True, "last_seen": 850},
+    {"version": "4.3.21", "online": False, "last_seen": 990},
+    {"version": "unknown", "online": True, "last_seen": 990},
+    {"version": "4.3.21", "online": True, "last_seen": 1001},
+])
+def test_agent_version_requires_a_valid_fresh_online_heartbeat(info):
+    import companion_status
+    expected = "4.3.21" if info.get("last_seen") == 990 and info.get("online") and info.get("version") == "4.3.21" else None
+    assert companion_status.fresh_agent_version(info, now=1000) == expected
+
+
 @pytest.fixture
 def ui(monkeypatch):
     import bot
@@ -145,6 +158,26 @@ def test_version_page_separates_agent_and_companions(ui, os_name, keeper_version
         assert expected in row and "88.77.66" not in row
     callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
     assert callbacks == ["versions:list:agent:0", "versions:list:keeper:0", "back:device"]
+
+
+def test_stale_agent_version_is_unknown_in_cards_filters_and_version_menu(ui):
+    bot, records, cards, cq = ui
+    records.update(os="Windows 11", version="4.3.15", online=False, last_seen=990)
+
+    assert bot._version_context("agent")[2] == "?"
+    assert bot.filter_visible_devices_by_component_version(
+        "agent 4.3.15", {"fixture": records}, now=1000,
+    ) == {}
+    card = bot.device_card("fixture")
+    assert "Агент:</b> v?" in card
+    assert "4.3.15" not in card
+    assert "version_warning" not in card
+
+    asyncio.run(bot.on_versions_device(cq))
+    text, markup = cards[-1]
+    assert "Агент: ?" in text and "4.3.15" not in text
+    agent_button = markup.inline_keyboard[0][0].text
+    assert "?" in agent_button and "4.3.15" not in agent_button
 
 
 @pytest.mark.parametrize("guardian,seen", [({}, 990), ({"version": "1.0", "version_source": "guardian"}, 100), ({"version": "1.0", "version_source": "guardian", "owner_removed": True}, 990), ({"version": "1.0", "version_source": "guardian", "offline": True}, 990)])

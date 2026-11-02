@@ -14,6 +14,7 @@ from release_catalog import component_for
 
 
 FRESHNESS_SECONDS = 150
+_AGENT_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+\Z")
 NAMES = {"keeper": "Guard Keeper", "safari": "Safari", "siri": "Siri"}
 REASONS = {
     "missing_inventory": "нет отдельного отчёта компонента",
@@ -24,6 +25,23 @@ REASONS = {
     "not_implemented": "XIDER-компонент не реализован; нет телеметрии и подписанного пакета",
     "unsupported_os": "ОС не поддерживается",
 }
+
+
+def fresh_agent_version(info: object, *, now: float) -> str | None:
+    """Return an Agent version only when its own heartbeat still proves it.
+
+    Device-store records are cached across disconnects, so ``version`` alone
+    is never evidence that the currently installed Agent is reachable.
+    """
+    if not isinstance(info, dict) or info.get("online") is False:
+        return None
+    stamp = info.get("last_seen")
+    version = info.get("version")
+    if (type(stamp) not in (int, float) or not math.isfinite(stamp)
+            or not math.isfinite(now) or stamp <= 0 or not 0 <= now - stamp < FRESHNESS_SECONDS
+            or not isinstance(version, str) or not _AGENT_VERSION.fullmatch(version.strip())):
+        return None
+    return version.strip()
 
 
 def clean_layer_records(value: object, *, now: float) -> dict:

@@ -5695,7 +5695,7 @@ end tell'''
             ok = False
         self._publish_response("output", {"type": "prank_open_cd", "device_id": DEVICE_ID, "ok": ok, "text": text})
 
-    def _do_prank_change_wallpaper(self, payload: dict) -> None:
+    def _set_prank_wallpaper_with_backup(self) -> tuple[bool, str]:
         backup = CONFIG_DIR / "wallpaper_backup.json"
         try:
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -5705,21 +5705,32 @@ end tell'''
             )
             if result.returncode != 0:
                 raise RuntimeError(result.stderr.strip() or "не удалось прочитать текущие обои")
-            paths = [p.strip() for p in result.stdout.strip().split(",") if p.strip()]
-            if not paths:
-                raise RuntimeError("macOS не вернула текущие обои")
-            backup.write_text(json.dumps(paths, ensure_ascii=False), encoding="utf-8")
+            if backup.exists():
+                paths = json.loads(backup.read_text(encoding="utf-8"))
+                if (not isinstance(paths, list) or not paths
+                        or any(not isinstance(path, str) or not os.path.isabs(path) for path in paths)):
+                    raise RuntimeError("резервная копия обоев повреждена; исходные значения сохранены")
+            else:
+                paths = [p.strip() for p in result.stdout.strip().split(",") if p.strip()]
+                if not paths:
+                    raise RuntimeError("macOS не вернула текущие обои")
+                backup.write_text(json.dumps(paths, ensure_ascii=False), encoding="utf-8")
             if self._do_wallpaper_set({"random_meme": True}) is not True:
                 raise RuntimeError("команда установки обоев завершилась ошибкой")
-            self._publish_response("output", {"type": "prank_change_wallpaper", "device_id": DEVICE_ID, "ok": True, "text": "🖼️ Обои заменены; исходные сохранены для восстановления."})
+            return True, "🖼️ Обои заменены; исходные сохранены для восстановления."
         except Exception as exc:
-            self._publish_response("output", {"type": "prank_change_wallpaper", "device_id": DEVICE_ID, "ok": False, "text": f"⚠️ Обои не изменены: {exc}"})
+            return False, f"⚠️ Обои не изменены: {exc}"
+
+    def _do_prank_change_wallpaper(self, payload: dict) -> None:
+        ok, text = self._set_prank_wallpaper_with_backup()
+        self._publish_response("output", {"type": "prank_change_wallpaper", "device_id": DEVICE_ID, "ok": ok, "text": text})
 
     def _restore_saved_prank_wallpaper(self) -> tuple[bool, str]:
         backup = CONFIG_DIR / "wallpaper_backup.json"
         try:
             paths = json.loads(backup.read_text(encoding="utf-8"))
-            if not isinstance(paths, list) or not paths:
+            if (not isinstance(paths, list) or not paths
+                    or any(not isinstance(path, str) or not os.path.isabs(path) for path in paths)):
                 raise RuntimeError("резервная копия обоев пуста")
             for path in paths:
                 script = f'tell application "System Events" to tell every desktop to set picture to POSIX file {json.dumps(path)}'
@@ -5803,8 +5814,8 @@ end tell'''
         self._publish_response("output", {"type": "prank_shake_window", "device_id": DEVICE_ID, "ok": True, "text": "🫨 Активное окно трясётся на Mac!"})
 
     def _do_prank_meme_wallpaper(self, payload: dict) -> None:
-        payload["random_meme"] = True
-        self._do_wallpaper_set(payload)
+        ok, text = self._set_prank_wallpaper_with_backup()
+        self._publish_response("output", {"type": "prank_meme_wallpaper", "device_id": DEVICE_ID, "ok": ok, "text": text})
 
     def _do_prank_caps_disco(self, payload: dict) -> None:
         def _disco():

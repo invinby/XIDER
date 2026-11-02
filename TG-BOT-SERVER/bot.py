@@ -1901,7 +1901,8 @@ def device_card(device_id: str) -> str:
     else:
         status_str = "Оффлайн"
     os_str = html.escape(info.get("os", "Неизвестно"))
-    ver = html.escape(info.get("version", "1.0"))
+    agent_version = companion_status.fresh_agent_version(info, now=time.time())
+    ver = html.escape(agent_version or "?")
     last_seen = info.get("last_seen")
     if last_seen and is_online:
         diff = max(0, int(time.time() - float(last_seen)))
@@ -1927,7 +1928,7 @@ def device_card(device_id: str) -> str:
     component = release_catalog.component_for(os_str)
     latest = release_catalog.newest_with_package(release_catalog.catalog.cached(), component or "")
     old_version_note = ""
-    if release_catalog.is_older(ver, latest):
+    if agent_version and release_catalog.is_older(agent_version, latest):
         old_version_note = "\n⚠️ " + _lex(
             "version_warning", current=ver, latest=html.escape(latest.tag.removeprefix("v"))
         ) + "\n"
@@ -2896,7 +2897,7 @@ def filter_visible_devices_by_component_version(
     for device_id, info in visible_devices.items():
         reported = None
         if component == "agent":
-            reported = info.get("version")
+            reported = companion_status.fresh_agent_version(info, now=current)
         elif component == "keeper":
             reported = companion_status.device_companions(info, now=current)[0].get("version")
         else:
@@ -6507,7 +6508,7 @@ def device_menu(device_id: str, user_id: int | None = None, *, include_tools: bo
     info = devices.get(device_id) or {}
     os_name = str(info.get("os") or "").lower()
     platform = "macos" if "mac" in os_name or "darwin" in os_name else "windows" if "win" in os_name else None
-    agent_ver = str(info.get("version") or "?")
+    agent_ver = companion_status.fresh_agent_version(info, now=time.time()) or "?"
     keeper_ver = companion_status.device_companions(info, now=time.time())[0]["version"] or "?"
     navigation = feature_catalog.visible_navigation_pages(
         feature_catalog.load_registry(), parent="device", role=get_user_role(user_id),
@@ -7887,8 +7888,12 @@ def _prank_catalog_items(target: str, user_id: int) -> list[dict]:
             entry = dict(item)
             entry["filter_page"] = page
             entry["item_id"] = _prank_item_id(callback)
-            entry["available"] = callback not in _PRANK_DISABLED
-            entry["unavailable_reason"] = _PRANK_DISABLED.get(callback, "")
+            reasons = [reason for reason in (
+                _PRANK_DISABLED.get(callback),
+                "ОС устройства не определена; запуск отключён." if platform is None else None,
+            ) if reason]
+            entry["available"] = not reasons
+            entry["unavailable_reason"] = " ".join(reasons)
             items.append(entry)
 
     # Surface the one explicitly unverified prank as a disabled catalog card.
@@ -7906,6 +7911,8 @@ def _prank_catalog_items(target: str, user_id: int) -> list[dict]:
         entry["item_id"] = _prank_item_id("prank:matrix")
         entry["available"] = False
         entry["unavailable_reason"] = _PRANK_DISABLED["prank:matrix"]
+        if platform is None:
+            entry["unavailable_reason"] += " ОС устройства не определена; запуск отключён."
         if not any(existing.get("callback") == "prank:matrix" for existing in items):
             items.append(entry)
     return items
@@ -11283,8 +11290,7 @@ def _diagnostic_snapshot_inputs():
         # Local device names/hostnames are not exported; references remain correlatable.
         reference = "device_" + hashlib.sha256(device_id.encode("utf-8")).hexdigest()[:16]
         device_refs[device_id] = reference
-        version = info.get("version")
-        versions[reference] = version if isinstance(version, str) and check_store._VERSION.fullmatch(version) else "unknown"
+        versions[reference] = companion_status.fresh_agent_version(info, now=time.time()) or "unknown"
         checked_at = _diagnostic_timestamp(info.get("last_seen"))
         online = info.get("online")
         state = "online" if online is True else "offline" if online is False else "unknown"
@@ -27285,7 +27291,7 @@ def _save_action_check(target: str, callback: str, command_id: str, outcome: str
                        info: dict, latency_ms: int | None) -> check_store.CheckRecord | None:
     component = release_catalog.component_for(str(info.get("os") or ""))
     platform = {"windows_agent": "windows", "mac_agent": "macos"}.get(component, "unknown")
-    version = str(info.get("version") or "unknown")
+    version = companion_status.fresh_agent_version(info, now=time.time()) or "unknown"
     if not check_store._VERSION.fullmatch(version):
         version = "unknown"
     try:
@@ -27345,6 +27351,15 @@ def _simple_action_result_text(result: dict) -> str:
     if isinstance(error_detail, str) and error_detail.strip():
         return with_source(f"{prefix}\n{error_detail.strip()}"[:3500])
     return with_source(prefix)
+
+
+def _prank_stop_all_result_text(result: dict) -> str:
+    """Keep the device's useful partial-stop detail without implying full success."""
+    if result.get("state") == "partial":
+        detail = result.get("text")
+        prefix = _lex("action_result_failed")
+        return prefix + ("\n" + detail.strip()[:3200] if isinstance(detail, str) and detail.strip() else "")
+    return _simple_action_result_text(result)
 
 
 async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, label: str, timeout: float = 12.0, **publish_kwargs):
@@ -27442,6 +27457,8 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
     elif result is None:
         text = (_lex("mqtt_publish_unknown") if sent is None
                 else _lex("device_timeout", seconds=str(int(timeout))))
+    elif action == "prank_stop_all":
+        text = _prank_stop_all_result_text(result)
     elif action.startswith("prank_") and action != "prank_stop_all":
         state = result.get("state")
         if state == "launch_accepted" and result.get("effect_confirmed") is False:
@@ -27611,7 +27628,11 @@ async def on_cmd_check_update(cq: CallbackQuery):
     info = devices.get(target) or {}
     target_os = str(info.get("os") or "").lower()
     if "mac" in target_os or "darwin" in target_os or "windows" in target_os:
-        current = str(info.get("version") or "не определена")
+        current = companion_status.fresh_agent_version(info, now=time.time())
+        if current is None:
+            await cq.answer()
+            await _replace_callback_message(cq, _lex("versions_install_offline"), reply_markup=back_to_device_kb())
+            return
         install_os = "macos" if ("mac" in target_os or "darwin" in target_os) else "windows"
         if not release_catalog.supports_release_manifest_update(current):
             await cq.answer()
@@ -28039,7 +28060,8 @@ def _version_context(kind: str) -> tuple[str, str, str] | None:
     if kind == "keeper":
         current = companion_status.device_companions(info, now=time.time())[0]["version"] or "?"
         return "Guard Keeper", component, current
-    return "X-EDGE-W" if component == "windows_agent" else "X-EDGE-M", component, str(info.get("version") or "?")
+    current = companion_status.fresh_agent_version(info, now=time.time()) or "?"
+    return "X-EDGE-W" if component == "windows_agent" else "X-EDGE-M", component, current
 
 
 def _version_root_menu(server: bool = False):
@@ -28050,7 +28072,7 @@ def _version_root_menu(server: bool = False):
     else:
         target = SESSION.get("target") or ""
         info = devices.get(target) or {}
-        agent = str(info.get("version") or "?")
+        agent = companion_status.fresh_agent_version(info, now=time.time()) or "?"
         keeper = companion_status.device_companions(info, now=time.time())[0]["version"] or "?"
         kb.button(text=_limit_button_label(_lex("versions_agent_button", version=agent)), callback_data="versions:list:agent:0", style="primary")
         kb.button(text=_limit_button_label(_lex("versions_keeper_button", version=keeper)), callback_data="versions:list:keeper:0", style="primary")
@@ -28080,6 +28102,8 @@ def _version_install_block_reason(kind: str, release, component: str, info: dict
         return "versions_missing_device"
     if release_catalog.component_for(str(info.get("os") or "")) != component:
         return "versions_install_component_unsupported"
+    if companion_status.fresh_agent_version(info, now=time.time()) is None:
+        return "versions_install_offline"
     if info.get("update_mode") == "frozen":
         frozen_asset = {
             "windows_agent": "XGENT-WDS.exe",
@@ -28190,7 +28214,7 @@ async def on_versions_device(cq: CallbackQuery):
         cq,
         f"<b>{_lex_html('versions_device_title', device=target_label(target))}</b>\n"
         f"{_lex('versions_device_intro')}\n\n"
-        f"Агент: {html.escape(str(info.get('version') or '?'))}\n"
+        f"Агент: {html.escape(companion_status.fresh_agent_version(info, now=time.time()) or '?')}\n"
         + "\n".join(html.escape(_companion_row(row)) for row in companion_status.device_companions(info, release_catalog.catalog.cached(), now=time.time()))
         + "\n\nОстановка через Guard Keeper останавливает рабочий агент; Guardian остаётся доступен. "
         "Удаление автозапуска и локальных данных — отдельная подтверждаемая операция владельца. "

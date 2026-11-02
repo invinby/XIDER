@@ -122,7 +122,7 @@ The X-MAP snapshot contains 404 platform/action rows. Every row has expected-res
 | 4. Hide typed inputs | Owner setting defaults off and only removes the owner's recognized successfully published command input; errors and unrelated messages remain | Owner checks preference in Telegram |
 | 5. Truthful device outcomes | Correlation, typed state, source, unsupported/unknown/failure, and launch/request-only wording are implemented across common paths and targeted tests | Physical effects/results on both OSes |
 | 6. Windows/macOS feature status | Generated X-MAP covers all worker and Guardian commands on both platforms and labels source-only, limited, dependency-gated, and known reported issue states | Device trial for rows marked unverified |
-| 7. Windows terminal flash | Guardian fallback selects a packaged executable or `pythonw.exe`; the current installed v4.3.15 tasks directly invoke the one-file EXEs. Read-only process snapshots showed no console child under XIDER at capture time. | The saved `WindowsTerminal.exe` snapshot had `svchost.exe` as parent; the captured PowerShell command belonged to Antigravity and ran adb/VNC. These records do not attribute the reported flashes to XIDER, so the original symptom still needs a capture while it is happening |
+| 7. Windows terminal flash | Read-only process and Task Scheduler evidence does not show a console child under XIDER. One saved PowerShell capture is a child of Antigravity's `agy.exe` and runs adb/VNC work. | This attributes that captured event to Antigravity, not XIDER; it does not prove every reported flash has the same source |
 | 8. Install/update/version selection | Both Pages launchers verify selected release artifacts; fixtures cover platform selection, retention, and rollback paths; release defaults are labeled accurately | Physical install, update, and rollback on Windows and Mac |
 | 9. Storage/temp files | XIDER-owned media temp cleanup is bounded on both platforms; Windows build cleanup targets only recognized successful-build intermediates. Existing build cache was preserved. | Successful Windows package build and installed-device storage measurement |
 | 10. Versions and RU/EN copy | Source, previews, stable package defaults, generated registry and local copy tests are synchronized and documented | Hosted Pages/release view after an owner-approved publish |
@@ -201,3 +201,23 @@ The X-MAP snapshot contains 404 platform/action rows. Every row has expected-res
 - Physical Windows/Mac installation, update, rollback, permission flows,
   actual feature effects, and Telegram→MQTT→device result round trips remain
   unverified. No CI or hosted build result is counted as physical acceptance.
+
+## Windows console-flash attribution · 2026-11-02
+
+- `console-blink-capture-20261101-021829.jsonl` records a `powershell.exe`
+  whose parent is `agy.exe` from Antigravity IDE. Its command invokes the
+  user's `adb.exe`, writes a VNC launcher script, pushes it to Android, and
+  starts a VNC server. The saved process record identifies this captured
+  console activity as Antigravity work, not an XIDER child process.
+- Across the saved console snapshots there are repeated records of
+  `powershell.exe` under `agy.exe`; these are capture records, not a count of
+  distinct launches. No captured PowerShell/cmd child has an XIDER Agent or
+  Guard Keeper parent. Current XIDER Scheduled Tasks run the packaged Agent
+  and Guard Keeper executables directly.
+- The local `install-report.json` records the earlier Windows install as
+  Agent/Guard Keeper `4.3.15`, with bot acknowledgement `not_verified`. It
+  predates the v4.3.21 release and is not proof of installation or MQTT
+  freshness for v4.3.21.
+- This is strong attribution for the captured window only. If another flash
+  occurs after Antigravity's adb/VNC action is closed, a fresh parent-process
+  capture is still needed before attributing that event.

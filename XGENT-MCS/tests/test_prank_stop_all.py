@@ -32,6 +32,38 @@ def test_stop_all_cancels_registered_owned_scene_and_reports_partial(monkeypatch
     assert "afplay" not in result["text"]
 
 
+def test_meme_wallpaper_saves_original_for_stop_all_restore(monkeypatch, tmp_path):
+    client = _client()
+    monkeypatch.setattr(mcs, "CONFIG_DIR", tmp_path)
+    observations = iter(("/Users/owner/Original.jpg", "/Users/owner/FirstMeme.jpg", ""))
+    monkeypatch.setattr(
+        mcs.subprocess, "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0, stdout=next(observations), stderr="",
+        ),
+    )
+    set_calls = []
+    monkeypatch.setattr(client, "_do_wallpaper_set", lambda payload: set_calls.append(payload) or True)
+
+    client._do_prank_meme_wallpaper({})
+
+    backup = tmp_path / "wallpaper_backup.json"
+    assert backup.exists()
+    assert backup.read_text(encoding="utf-8") == '["/Users/owner/Original.jpg"]'
+    assert set_calls == [{"random_meme": True}]
+    assert client.responses[-1][1]["type"] == "prank_meme_wallpaper"
+    assert client.responses[-1][1]["ok"] is True
+
+    client._do_prank_meme_wallpaper({})
+    assert backup.read_text(encoding="utf-8") == '["/Users/owner/Original.jpg"]'
+    assert set_calls == [{"random_meme": True}, {"random_meme": True}]
+
+    restored, detail = client._restore_saved_prank_wallpaper()
+    assert restored is True
+    assert "восстановлены" in detail
+    assert not backup.exists()
+
+
 def test_fake_update_registers_only_its_child_for_cancellation(monkeypatch):
     client = _client()
     child = Mock()

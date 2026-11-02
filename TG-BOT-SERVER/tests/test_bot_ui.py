@@ -105,6 +105,19 @@ def test_prank_stop_all_ack_does_not_claim_effects_are_already_stopped(monkeypat
     assert answers == []  # simple_command owns progress and final result on the same card.
 
 
+def test_prank_stop_all_keeps_agent_partial_result_details():
+    result = {
+        "ok": False,
+        "state": "partial",
+        "text": "🛑 Запрос отмены отправлен для сценок: 2. ✅ Исходные обои восстановлены. Результат частичный.",
+    }
+    rendered = bot._prank_stop_all_result_text(result)
+    assert bot._lex("action_result_failed") in rendered
+    assert "сценок: 2" in rendered
+    assert "Исходные обои восстановлены" in rendered
+    assert "Результат частичный" in rendered
+
+
 @pytest.mark.parametrize("action", ("prank_rickroll_terminal", "prank_rickroll", "prank_matrix"))
 def test_disabled_prank_actions_are_rejected_before_publish(monkeypatch, action):
     answers = []
@@ -4328,11 +4341,11 @@ def test_device_card_all_shows_online_total(monkeypatch):
 
 def test_device_card_online_device_fields(monkeypatch):
     _setup(monkeypatch, {"mac1": {"name": "My Mac", "os": "macOS 14",
-                                  "version": "1.2", "last_seen": time.time()}})
+                                  "version": "1.2.0", "online": True, "last_seen": time.time()}})
     card = bot.device_card("mac1")
     assert "My Mac" in card
     assert "macOS 14" in card
-    assert "v1.2" in card
+    assert "v1.2.0" in card
     assert "В сети" in card
     assert "ID: mac1" in card
 
@@ -5466,23 +5479,24 @@ def test_device_catalog_heartbeat_filter_edits_one_card_with_only_matching_devic
 def test_device_catalog_component_version_filter_uses_exact_reported_component_version():
     now = 20000
     visible = {
-        "agent-match": {"version": "3.3.8", "os": "Windows"},
+        "agent-match": {"version": "3.3.8", "os": "Windows", "online": True, "last_seen": now - 10},
         "keeper-match": {
-            "version": "3.3.8", "os": "Windows",
+            "version": "3.3.8", "os": "Windows", "online": True, "last_seen": now - 10,
             "guardian": {"installed": True, "version": "1.2.0", "version_source": "guardian"},
             "guardian_last_seen": now - 10,
         },
         "legacy-worker-version": {
-            "version": "3.3.8", "os": "Windows",
+            "version": "3.3.8", "os": "Windows", "online": True, "last_seen": now - 10,
             "guardian": {"installed": True, "version": "1.2.0", "version_source": "worker"},
             "guardian_last_seen": now - 10,
         },
         "stale-keeper": {
-            "version": "3.3.8", "os": "Windows",
+            "version": "3.3.8", "os": "Windows", "online": True, "last_seen": now - 10,
             "guardian": {"installed": True, "version": "1.2.0", "version_source": "guardian"},
             "guardian_last_seen": now - 1000,
         },
-        "safari-match": {"version": "3.3.8", "safari": {"version": "0.8.0", "version_source": "safari"}},
+        "safari-match": {"version": "3.3.8", "os": "macOS", "online": True, "last_seen": now - 10, "safari": {"version": "0.8.0", "version_source": "safari"}},
+        "stale-agent": {"version": "3.3.8", "os": "Windows", "online": False, "last_seen": now - 1000},
     }
 
     assert list(bot.filter_visible_devices_by_component_version("agent 3.3.8", visible, now=now)) == ["agent-match", "keeper-match", "legacy-worker-version", "stale-keeper", "safari-match"]
@@ -9786,7 +9800,7 @@ def test_check_update_blocks_old_mac_without_sending_update_or_shell(monkeypatch
     from types import SimpleNamespace
 
     monkeypatch.setitem(bot.SESSION, "target", "mac1")
-    _setup(monkeypatch, {"mac1": {"name": "Mac", "os": "macOS 27", "version": "4.0.0"}})
+    _setup(monkeypatch, {"mac1": {"name": "Mac", "os": "macOS 27", "version": "4.0.0", "online": True, "last_seen": time.time()}})
     sent = []
     shown = []
 
@@ -9815,7 +9829,7 @@ def test_check_update_blocks_old_mac_without_sending_update_or_shell(monkeypatch
 def test_check_update_allows_mac_release_protocol_version(monkeypatch):
     monkeypatch.setitem(bot.SESSION, "target", "mac1")
     _setup(monkeypatch, {"mac1": {
-        "name": "Mac", "os": "macOS 27", "version": "4.0.1", "update_mode": "source",
+        "name": "Mac", "os": "macOS 27", "version": "4.0.1", "update_mode": "source", "online": True, "last_seen": time.time(),
     }})
     sent = []
 
@@ -9834,7 +9848,7 @@ def test_check_update_blocks_old_windows_before_sending_update(monkeypatch):
     from types import SimpleNamespace
 
     monkeypatch.setitem(bot.SESSION, "target", "win1")
-    _setup(monkeypatch, {"win1": {"name": "PC", "os": "Windows 11", "version": "4.0.0"}})
+    _setup(monkeypatch, {"win1": {"name": "PC", "os": "Windows 11", "version": "4.0.0", "online": True, "last_seen": time.time()}})
     sent = []
     shown = []
 
@@ -9864,7 +9878,7 @@ def test_check_update_blocks_old_windows_before_sending_update(monkeypatch):
 def test_check_update_allows_current_windows_source_agent(monkeypatch):
     monkeypatch.setitem(bot.SESSION, "target", "win1")
     _setup(monkeypatch, {"win1": {
-        "name": "PC", "os": "Windows 11", "version": "4.0.1", "update_mode": "source",
+        "name": "PC", "os": "Windows 11", "version": "4.0.1", "update_mode": "source", "online": True, "last_seen": time.time(),
     }})
     sent = []
 
@@ -9879,6 +9893,33 @@ def test_check_update_allows_current_windows_source_agent(monkeypatch):
     assert sent[0][0][1:4] == ("agent_update", "🔄", "Обновить агента")
     assert sent[0][1]["update"] is True
     assert sent[0][1]["timeout"] == 110.0
+
+
+def test_check_update_requires_fresh_agent_heartbeat(monkeypatch):
+    monkeypatch.setitem(bot.SESSION, "target", "win1")
+    _setup(monkeypatch, {"win1": {
+        "name": "PC", "os": "Windows 11", "version": "4.3.15",
+        "online": False, "last_seen": time.time() - 600, "update_mode": "source",
+    }})
+    sent, shown = [], []
+
+    async def no_update(*args, **kwargs):
+        sent.append((args, kwargs))
+
+    async def replace(_cq, text, reply_markup=None, **_kwargs):
+        shown.append((text, reply_markup))
+
+    class Callback:
+        async def answer(self, *args, **kwargs):
+            pass
+
+    monkeypatch.setattr(bot, "simple_command", no_update)
+    monkeypatch.setattr(bot, "_replace_callback_message", replace)
+
+    asyncio.run(bot.on_cmd_check_update(Callback()))
+
+    assert not sent
+    assert shown and shown[0][0] == bot._lex("versions_install_offline")
 
 
 @pytest.mark.parametrize(
@@ -10179,7 +10220,7 @@ def test_selected_release_confirmation_expires_and_stale_cancel_is_rejected(monk
 def test_check_update_blocks_frozen_packages_without_sending_command(monkeypatch, os_name):
     monkeypatch.setitem(bot.SESSION, "target", "device1")
     _setup(monkeypatch, {"device1": {
-        "name": "Device", "os": os_name, "version": "4.0.1", "update_mode": "frozen",
+        "name": "Device", "os": os_name, "version": "4.0.1", "update_mode": "frozen", "online": True, "last_seen": time.time(),
     }})
     sent = []
     shown = []
@@ -12074,6 +12115,19 @@ def test_pranks_hub_pins_stop_all_before_catalog_filters(monkeypatch):
     markup = bot.pranks_menu(target="pc", user_id=bot.ADMIN_ID)
 
     assert markup.inline_keyboard[0][0].callback_data == "prank:stop_all"
+
+
+def test_unknown_platform_prank_cards_are_disabled_with_a_reason(monkeypatch):
+    _setup(monkeypatch, {"unknown": {"name": "Device", "os": "Linux unknown"}})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "get_effective_grants", lambda _user_id: {"callbacks": [], "devices": []})
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
+
+    items = bot._prank_catalog_items("unknown", bot.ADMIN_ID)
+
+    assert items
+    assert all(not item["available"] for item in items)
+    assert all("ОС устройства не определена" in item["unavailable_reason"] for item in items)
 
 
 def test_prank_category_has_one_hub_return_instead_of_five_category_tabs(monkeypatch):
