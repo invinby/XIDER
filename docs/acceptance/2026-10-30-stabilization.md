@@ -274,3 +274,17 @@ The X-MAP snapshot contains 404 platform/action rows. Every row has expected-res
   but the fixed numeric `filevers`/`prodvers` tuples were still `4.3.21.0`.
   Both numeric tuples are now corrected to `(4, 3, 22, 0)`; no v4.3.22 tag
   exists until the follow-up exact-source CI passes.
+
+## Current VPS and device snapshot · 2026-11-02 03:06 UTC
+
+- Read-only SSH confirmed both `xider-bot.service` and `xider-dock-mqtt.service`
+  active with `NRestarts=0` on `ip-172-31-15-94`.
+- The sanitized device registry had two records. Windows 11 reported Agent
+  `4.3.15`, `online=true`, session-bound, with its accepted heartbeat about
+  53 seconds old. macOS 27.0.1 reported `4.2.1`, `online=false`, no session
+  binding, and a heartbeat about 5 hours 28 minutes old. Guardian/Safari/Siri
+  versions were unknown on both devices.
+- This proves current service state and accepted-heartbeat freshness only. It
+  does not prove v4.3.22 is installed, any physical feature works, or a
+  Telegram → MQTT → device command/result round-trip. Physical Windows update
+  and Mac reconnect/update acceptance remain open.
