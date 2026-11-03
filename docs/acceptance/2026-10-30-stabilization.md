@@ -325,3 +325,33 @@ The X-MAP snapshot contains 404 platform/action rows. Every row has expected-res
   physical Mac reconnect/update remain open. The Mac's offline state prevents
   current device verification; the published Mac runtime remains unsigned
   and unnotarized as recorded above.
+
+## Signed VPS deployment and fresh device snapshot · 2026-11-03 21:34 UTC
+
+- The exact `origin/main` commit `2540c72078e87661f0ce92d54c0a5341547d0c6c`
+  was packaged from tag `server-deploy-20261104-01`. GitHub Actions run
+  `41722257150` completed successfully and published artifact
+  `XIDER-server-deploy-bundle` (`13273570987`). Its signed manifest identifies
+  source archive SHA-256
+  `9c9e31e645b8ae6141d196a99241dd626ff1d74182e179530b3e9c0c60afe395`, using
+  Ed25519 key ID `521c56c0c89f0ddd`; the workflow verifies the signature before
+  upload, and the VPS updater verifies it again before applying the archive.
+- Post-deploy SSH inspection found `TG-BOT-SERVER/version.py` at `4.3.23`,
+  build code `X4.3.23-USER-SCOPE+20261104`, and a new backup
+  `/var/backups/xider/xider-20261103T213226Z-1322198.tar.gz` (10,099,420 bytes).
+  `xider-bot.service` was active with zero restarts and a new start time of
+  `2026-11-03 21:32:35 UTC`; `xider-dock-mqtt.service` was also active with zero
+  restarts. This proves the deployed source/version and service state, not an
+  end-to-end Telegram → MQTT → device command round-trip.
+- A sanitized live registry read shortly after deployment found Windows 11
+  Agent `4.3.15` online with a 62-second-old heartbeat. Its Guard Keeper record
+  said `1.0-windows`, but had no explicit state or installed field; therefore
+  Guardian health remains unknown. macOS 27.0.1 Agent `4.2.1` was offline with
+  a heartbeat about 47 hours 56 minutes old. No Safari or Siri records were
+  present. These device versions do not match v4.3.23 and do not prove physical
+  installation of the new release.
+- Remaining device acceptance: update Windows and validate a command/result
+  round-trip plus rollback; reconnect Mac and validate its supported source
+  preview/install/update path. Native macOS Agent/Guardian/Safari/Siri packages,
+  Apple signing, and notarization remain unavailable in v4.3.23; do not describe
+  this as a native signed macOS release.
