@@ -1,5 +1,19 @@
 # XIDER release history
 
+## X4.3.23-USER-SCOPE+20261104 — Windows release + macOS source preview
+
+### English
+
+- Run the signed Windows installer and per-user bootstrap without forcing UAC. Installation remains under the current user's profile and scheduled tasks remain `Limited`.
+- Keep signature verification before installer execution. If Windows OpenSSH `ssh-keygen.exe` is unavailable, stop with a clear prerequisite instead of trying to install a system capability with elevation.
+- This candidate does not change native macOS package status: Agent, Guard Keeper, Safari, and Siri remain `not_built`, and the macOS installer remains a signed source preview without Apple signing or notarization.
+
+### Русский
+
+- Подписанный установщик Windows и пользовательский bootstrap запускаются без принудительного UAC. Файлы остаются в профиле пользователя, задачи сохраняют `RunLevel Limited`.
+- Проверка подписи выполняется до запуска установщика. Если в Windows нет OpenSSH `ssh-keygen.exe`, установщик завершится с понятным требованием вместо попытки включить системную возможность с повышением прав.
+- Статус нативных пакетов macOS не изменён: Agent, Guard Keeper, Safari и Siri остаются `not_built`; macOS installer — подписанный source preview без подписи Apple и нотарификации.
+
 ## X4.3.22-FRESH-STATE-RESTORE+20261102 — Windows release + macOS source preview
 
 ### English

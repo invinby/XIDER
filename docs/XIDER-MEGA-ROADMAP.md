@@ -2757,6 +2757,19 @@ The initial candidate `420d575b7571d560f72463b7a6609b4bbe415a05` failed the main
   `v4.3.22`. После интеграции нужен новый signed Windows release, Pages deploy и
   реальная установка на новом профиле без UAC. macOS-пакеты и физическая
   проверка Mac этим изменением не затронуты.
+
+### Release candidate · v4.3.23 · 2026-11-04
+
+- Версии Windows/macOS source, Telegram bot, PE version metadata, Pages source
+  labels, RU/EN changelog и release note синхронизированы на `4.3.23`.
+- Ветка ещё должна пройти полный CI. Затем exact-tag release workflow должен
+  собрать Windows Agent + Guard Keeper, подписанные installer/manifests и
+  macOS source-preview installer. До этого статус — candidate, не опубликованный
+  релиз и не доказанная установка.
+- Native macOS Agent/Guardian/Safari/Siri всё ещё `not_built`; для нативного
+  распространяемого Mac runtime остаются нужны сборка на macOS, Apple signing и
+  notarization. На физических устройствах отдельно требуются update/rollback и
+  свежий MQTT round-trip.
 Отдельный подписанный server-only bundle опубликован как
 [server-deploy-20261102](https://github.com/invinby/XIDER/releases/tag/server-deploy-20261102)
 и применён транзакционным updater-ом. Windows-устройство осталось на 4.3.15
