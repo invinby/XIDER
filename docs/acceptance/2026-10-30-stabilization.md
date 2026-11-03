@@ -355,3 +355,27 @@ The X-MAP snapshot contains 404 platform/action rows. Every row has expected-res
   preview/install/update path. Native macOS Agent/Guardian/Safari/Siri packages,
   Apple signing, and notarization remain unavailable in v4.3.23; do not describe
   this as a native signed macOS release.
+
+## Physical Windows v4.3.23 installer attempt · 2026-11-03 21:42 UTC
+
+- The published `site/win.txt` command verified both the installer and
+  bootstrap SSH signatures, found the existing local configuration, and
+  verified the signed release manifest before inspecting the Windows ZIP.
+- Installation then stopped before activation because
+  `Assert-XiderWindowsBundleArchive` rejected the explicitly signed
+  `xider-obfuscation-report.json` member. The Windows package builder includes
+  this report, but the bootstrap allowlist still named only three files.
+- The install report recorded `partial`; no staged package was activated.
+  Post-failure hashes remained the prior binaries:
+  Agent `18dbb3a42e4d820bfe8eaf338446108bcc815df6fce940d8f1add73427a8109c`,
+  Guard Keeper `e0f8e0b20217ce6d25248ea772cfcf13a78a60fb2364d3dce21b0a234da99fce`.
+  These match the prior v4.3.15 snapshot. This was a pre-activation rejection,
+  not a successful update or a rollback test.
+- Fix commit `2684acae7f070800d5fbb69c567e8f8757bc0bd5` adds the report to the
+  explicit allowlist and a PowerShell 5 fixture that also confirms an extra
+  `.ps1` member is still rejected. PR CI run `41724645913` passed Unix
+  validation and the Python 3.11, 3.12, and 3.14 matrices, including Windows
+  PowerShell 5 bootstrap and transaction checks.
+- `v4.3.24` is being prepared with the fix; it is not yet a published release
+  or a physical install result. Repeat the signed installation and verify the
+  installed hashes, process health, and fresh MQTT heartbeat after publication.
