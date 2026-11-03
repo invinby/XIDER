@@ -254,7 +254,7 @@ function Assert-XiderWindowsBundleArchive {
     param([Parameter(Mandatory)][string]$ArchivePath)
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $expected = @('.env.example', 'XGENT-WDS.exe', 'XIDER-Guard-Keeper.exe')
+    $expected = @('.env.example', 'XGENT-WDS.exe', 'XIDER-Guard-Keeper.exe', 'xider-obfuscation-report.json')
     $archive = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
     try {
         $seen = @{}

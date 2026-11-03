@@ -32,6 +32,29 @@ function New-TraversalZip($path, $entryName) {
     }
 }
 
+function New-WindowsBundleZip($path, [string[]]$ExtraEntries = @()) {
+    Add-Type -AssemblyName System.IO.Compression
+    $stream = [IO.File]::Open($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    $zip = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create)
+    try {
+        foreach ($name in (@('.env.example', 'XGENT-WDS.exe', 'XIDER-Guard-Keeper.exe', 'xider-obfuscation-report.json') + $ExtraEntries)) {
+            $entry = $zip.CreateEntry($name, [IO.Compression.CompressionLevel]::NoCompression)
+            $entryStream = $entry.Open()
+            try {
+                if ($name -in @('XGENT-WDS.exe', 'XIDER-Guard-Keeper.exe')) {
+                    $bytes = New-Object byte[] (1024 * 1024)
+                } else {
+                    $bytes = [Text.Encoding]::UTF8.GetBytes('{}')
+                }
+                $entryStream.Write($bytes, 0, $bytes.Length)
+            } finally { $entryStream.Dispose() }
+        }
+    } finally {
+        $zip.Dispose()
+        $stream.Dispose()
+    }
+}
+
 function Invoke-WebRequest {
     param([string]$Uri, [string]$OutFile, [switch]$UseBasicParsing, [int]$TimeoutSec)
     Copy-Item -LiteralPath $global:XiderBootstrapDownloadSource -Destination $OutFile -Force
@@ -172,6 +195,26 @@ try {
     if (-not $stageCleanupFunction) { throw 'Staging cleanup status helper is missing.' }
     Invoke-Expression $stageCleanupFunction.Extent.Text
     New-Item -ItemType Directory -Path $fixture -Force | Out-Null
+
+    $bundleArchiveFunction = $bootstrapAst.Find({ param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Assert-XiderWindowsBundleArchive'
+    }, $true)
+    if (-not $bundleArchiveFunction) { throw 'Signed Windows bundle archive validator is missing.' }
+    Invoke-Expression $bundleArchiveFunction.Extent.Text
+    $compiledPackage = Join-Path $fixture 'signed-windows-package.zip'
+    New-WindowsBundleZip $compiledPackage
+    Assert-XiderWindowsBundleArchive -ArchivePath $compiledPackage
+
+    $unexpectedBundleArchive = Join-Path $fixture 'unexpected-windows-package.zip'
+    New-WindowsBundleZip $unexpectedBundleArchive @('unexpected.ps1')
+    $unexpectedBundleRejected = $false
+    try { Assert-XiderWindowsBundleArchive -ArchivePath $unexpectedBundleArchive }
+    catch { $unexpectedBundleRejected = $_.Exception.Message -match 'unexpected\.ps1' }
+    if (-not $unexpectedBundleRejected) {
+        throw 'The Windows package validator accepted an unlisted member.'
+    }
+
     $restrictedSecret = Join-Path $fixture 'restricted-env.fixture'
     $preservedSibling = Join-Path $fixture 'preserved-marker.fixture'
     [IO.File]::WriteAllText($restrictedSecret, 'synthetic secret fixture', $utf8)
