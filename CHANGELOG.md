@@ -1,5 +1,19 @@
 # XIDER release history
 
+## X4.3.24-WINDOWS-PACKAGE-FIX+20261104 — Windows release + macOS source preview
+
+### English
+
+- Accept the signed obfuscation report as an explicit member of the signed Windows package; continue to reject unlisted files and paths.
+- This fixes the v4.3.23 installer failure before activation. The previous installation is retained until the package passes validation.
+- macOS remains a signed source preview: native Agent, Guard Keeper, Safari, and Siri are not built, Apple signing/notarization is unavailable, and no native component status is implied.
+
+### Русский
+
+- Разрешён подписанный отчёт обфускации как явный файл подписанного Windows-пакета; посторонние файлы и пути по-прежнему отклоняются.
+- Исправлен отказ установщика v4.3.23 до активации пакета. Старая установка сохраняется, пока пакет не пройдёт проверку.
+- macOS остаётся подписанным source preview: нативные Agent, Guard Keeper, Safari и Siri не собраны; подписи и нотарификации Apple нет, готовность нативных компонентов не заявляется.
+
 ## X4.3.23-USER-SCOPE+20261104 — Windows release + macOS source preview
 
 ### English
