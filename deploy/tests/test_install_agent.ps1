@@ -28,15 +28,19 @@ function New-ScheduledTaskSettingsSet {
         StartWhenAvailable = $StartWhenAvailable.IsPresent
     }
 }
-function New-ScheduledTaskPrincipal { param($UserId, $LogonType, $RunLevel) return 'fixture-principal' }
+function New-ScheduledTaskPrincipal { param($UserId, $LogonType, $RunLevel) return [pscustomobject]@{ UserId = $UserId; LogonType = $LogonType; RunLevel = $RunLevel } }
 function Register-ScheduledTask {
     param($TaskName, $Action, $Trigger, $Settings, $Principal, $Description, [switch]$Force)
+    if ($global:XiderDenyExistingTaskWrites -and $global:XiderTestActions.ContainsKey($TaskName)) {
+        throw "Fixture denied rewriting existing task $TaskName."
+    }
     $global:XiderRegisterCount++
     $global:XiderTestActions[$TaskName] = [pscustomobject]@{
         Execute = $Action.Execute
         Argument = $Action.Argument
         WorkingDirectory = $Action.WorkingDirectory
         Settings = $Settings
+        Principal = $Principal
     }
 }
 function Start-ScheduledTask { param($TaskName) $global:XiderStartCount++ }
@@ -44,6 +48,19 @@ function Get-ScheduledTask {
     param($TaskName, $ErrorAction)
     if ($TaskName -eq 'XGENT') {
         return [pscustomobject]@{ TaskName = 'XGENT'; State = 'Running' }
+    }
+    if ($global:XiderTestActions.ContainsKey($TaskName)) {
+        $registered = $global:XiderTestActions[$TaskName]
+        return [pscustomobject]@{
+            TaskName = $TaskName
+            State = 'Ready'
+            Actions = @([pscustomobject]@{
+                Execute = $registered.Execute
+                Arguments = $registered.Argument
+                WorkingDirectory = $registered.WorkingDirectory
+            })
+            Principal = $registered.Principal
+        }
     }
     return $null
 }
@@ -88,6 +105,7 @@ try {
     $global:XiderLegacyTaskRemoved = 0
     $global:XiderRemovedLegacyValues = @()
     $global:XiderTestActions = @{}
+    $global:XiderDenyExistingTaskWrites = $false
     & $installer -AgentDir $fixture -TaskName 'XIDER Fixture' -PreflightOnly
     if ($global:XiderTestActions.Count -ne 0 -or $global:XiderAclCallCount -ne 0 -or
         $global:XiderRegisterCount -ne 0 -or $global:XiderStartCount -ne 0) {
@@ -137,9 +155,19 @@ try {
     if ($global:XiderTestActions['XIDER Fixture'].Execute -ne (Join-Path $fixture 'XGENT-WDS.exe')) {
         throw 'Direct install no longer preserves executable-first behavior.'
     }
-    if ($global:XiderRegisterCount -ne 5 -or $global:XiderStartCount -ne 5) {
+    if ($global:XiderRegisterCount -ne 4 -or $global:XiderStartCount -ne 5) {
         throw 'Repeat installation did not register and start both tasks.'
     }
+
+    $global:XiderDenyExistingTaskWrites = $true
+    $registerBeforeMatchingInstall = $global:XiderRegisterCount
+    $startBeforeMatchingInstall = $global:XiderStartCount
+    & $installer -AgentDir $fixture -TaskName 'XIDER Fixture'
+    if ($global:XiderRegisterCount -ne $registerBeforeMatchingInstall -or
+        $global:XiderStartCount -ne ($startBeforeMatchingInstall + 2)) {
+        throw 'A matching Agent/Guardian task was rewritten instead of being preserved and started.'
+    }
+    $global:XiderDenyExistingTaskWrites = $false
 
     foreach ($installerCase in @(
         @{ Name = 'agent ACL'; Script = $installer; Task = 'XIDER ACL Agent Fixture'; FailCalls = @(1, 2) },
@@ -185,9 +213,12 @@ try {
 
     Remove-Item -LiteralPath (Join-Path $venv 'pythonw.exe') -Force
     $missingPythonRejected = $false
+    $registerBeforeMissingPython = $global:XiderRegisterCount
+    $startBeforeMissingPython = $global:XiderStartCount
     try { & $installer -AgentDir $fixture -TaskName 'XIDER Fixture' -PreferPython }
     catch { $missingPythonRejected = $true }
-    if (-not $missingPythonRejected -or $global:XiderRegisterCount -ne 5 -or $global:XiderStartCount -ne 5) {
+    if (-not $missingPythonRejected -or $global:XiderRegisterCount -ne $registerBeforeMissingPython -or
+        $global:XiderStartCount -ne $startBeforeMissingPython) {
         throw 'PreferPython did not reject a missing Python runtime before task registration.'
     }
     Write-Host 'Windows agent preflight and executable selection fixtures passed.'
@@ -198,7 +229,7 @@ finally {
         Remove-Item -LiteralPath $fixture -Recurse -Force
     }
     Remove-Item Function:\icacls,Function:\New-ScheduledTaskAction,Function:\New-ScheduledTaskTrigger,Function:\New-ScheduledTaskSettingsSet,Function:\New-ScheduledTaskPrincipal,Function:\Register-ScheduledTask,Function:\Start-ScheduledTask,Function:\Get-ScheduledTask,Function:\Stop-ScheduledTask,Function:\Unregister-ScheduledTask,Function:\Get-ItemProperty,Function:\Remove-ItemProperty -ErrorAction SilentlyContinue
-    Remove-Variable XiderTestActions,XiderAclCallCount,XiderRegisterCount,XiderStartCount,XiderLegacyTaskStopped,XiderLegacyTaskRemoved,XiderRemovedLegacyValues -Scope Global -ErrorAction SilentlyContinue
+    Remove-Variable XiderTestActions,XiderDenyExistingTaskWrites,XiderAclCallCount,XiderRegisterCount,XiderStartCount,XiderLegacyTaskStopped,XiderLegacyTaskRemoved,XiderRemovedLegacyValues -Scope Global -ErrorAction SilentlyContinue
     # The fixture intentionally mocks failed native icacls calls; do not leak
     # their LASTEXITCODE into GitHub's `pwsh -command` test runner.
     $global:LASTEXITCODE = 0

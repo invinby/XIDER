@@ -4,12 +4,12 @@ $tokens = $null
 $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($bootstrap, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw "Bootstrap parse failed: $($parseErrors[0].Message)" }
-$functionAst = $ast.Find({ param($node)
+$functionAsts = @($ast.FindAll({ param($node)
     $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-    $node.Name -eq 'Remove-XiderOldPreviousCheckouts'
-}, $true)
-if (-not $functionAst) { throw 'Checkout retention helper is missing.' }
-Invoke-Expression $functionAst.Extent.Text
+    $node.Name -in @('Remove-XiderOldPreviousCheckouts', 'Remove-XiderOldFailedCheckouts')
+}, $true))
+if ($functionAsts.Count -ne 2) { throw 'Checkout retention helpers are missing.' }
+foreach ($functionAst in $functionAsts) { Invoke-Expression $functionAst.Extent.Text }
 
 $root = Join-Path $env:TEMP ('xider-retention-' + [guid]::NewGuid().ToString('N'))
 $utf8 = New-Object System.Text.UTF8Encoding($false)
@@ -29,8 +29,16 @@ try {
     $unrecognized = Join-Path $root 'git-ver.previous.owner-data'
     New-Item -ItemType Directory -Path $unrecognized -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $unrecognized 'keep.txt'), 'owner data', $utf8)
+    $failedNames = @(
+        'git-ver.failed.20261001000000.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        'git-ver.failed.20261002000000.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    )
+    foreach ($name in $failedNames) {
+        New-Item -ItemType Directory -Path (Join-Path $root $name) -Force | Out-Null
+    }
 
     Remove-XiderOldPreviousCheckouts -InstallRoot $root -CurrentBackup (Join-Path $root $names[3]) -Keep 2
+    Remove-XiderOldFailedCheckouts -InstallRoot $root -Keep 1
 
     $managed = @(Get-ChildItem -LiteralPath $root -Directory -Force |
         Where-Object { $_.Name -match '^git-ver\.previous\.\d{14}\.[0-9a-fA-F]{32}$' } |
@@ -40,6 +48,11 @@ try {
     }
     if (-not (Test-Path -LiteralPath (Join-Path $unrecognized 'keep.txt'))) {
         throw 'An unrecognized sibling directory was modified.'
+    }
+    $failedRemaining = @(Get-ChildItem -LiteralPath $root -Directory -Force |
+        Where-Object { $_.Name -match '^git-ver\.failed\.' })
+    if ($failedRemaining.Count -ne 1 -or $failedRemaining[0].Name -ne $failedNames[1]) {
+        throw 'Failed-checkout retention did not keep exactly the newest managed diagnostic copy.'
     }
     Write-Host 'Windows checkout retention helper passed.'
 }

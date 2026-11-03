@@ -34,6 +34,9 @@ def test_release_installers_reuse_the_exact_commit_pinned_bootstrap_verifiers():
     assert "Start-Transcript -Path $LogPath" in windows_installer
     assert "Stop-Transcript" in windows_installer
     assert "XIDER installer error:" in windows_installer
+    pages = build_pages_launchers()
+    assert "Select-Object -Skip 9" in pages["win.txt"]
+    assert "install-\\d{8}-\\d{6}\\.log" in pages["win.txt"]
     assert "/deploy/bootstrap-agent.ps1" in installers[INSTALLERS["windows"]]
     assert "/deploy/bootstrap.ps1" not in installers[INSTALLERS["windows"]]
     assert f"XIDER_RELEASE_TAG='{TAG}'" in installers[INSTALLERS["macos"]]

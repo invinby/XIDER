@@ -13196,6 +13196,60 @@ def test_device_status_notices_confirm_transitions_without_heartbeat_starvation(
     asyncio.run(_run())
 
 
+def test_registered_device_version_change_notifies_owner_after_fresh_heartbeat(monkeypatch):
+    class MemoryDevices:
+        def __init__(self):
+            self.items = {
+                "windows-1": {
+                    "name": "Windows", "os": "Windows 11", "version": "4.3.15",
+                    "online": True, "last_seen": time.time(), "approved": True,
+                },
+            }
+
+        def all(self):
+            return dict(self.items)
+
+        def get(self, device_id):
+            return self.items.get(device_id)
+
+        def upsert(self, device_id, info, **_kwargs):
+            self.items[device_id] = {**self.items.get(device_id, {}), **info}
+
+    async def _run():
+        notices = []
+        store = MemoryDevices()
+        monkeypatch.setattr(bot, "devices", store)
+        monkeypatch.setattr(bot, "LOOP", asyncio.get_running_loop())
+        monkeypatch.setattr(bot, "_VERSION_NOTICE_DELAY_SEC", 0.01)
+        monkeypatch.setattr(bot, "ENCRYPT_PAYLOAD", False)
+        monkeypatch.setattr(
+            bot, "verify_message_detailed",
+            lambda envelope, **_kwargs: (envelope["payload"], "ok"),
+        )
+        monkeypatch.setattr(bot, "audit", lambda *args, **kwargs: None)
+        monkeypatch.setattr(bot, "_schedule_admin_notice", lambda text, **kwargs: notices.append(text))
+        monkeypatch.setattr(bot.bot_settings, "is_blocked", lambda _device_id: False)
+        monkeypatch.setattr(bot.bot_settings, "quiet_active", lambda: False)
+        monkeypatch.setattr(bot.bot_settings, "get", lambda _key, default=None: default)
+        monkeypatch.setattr(bot, "status_collector", type("Collector", (), {"submit": lambda *args: None})())
+        monkeypatch.setattr(bot, "multi_status", type("Collector", (), {"submit": lambda *args: None})())
+
+        timestamp = int(time.time())
+        payload = {
+            "ts": timestamp, "type": "status", "status": "online",
+            "name": "Windows", "os": "Windows 11", "version": "4.3.24",
+            "mqtt_session_id": "a" * 32,
+        }
+        topic = f"{bot.MQTT_PREFIX}/windows-1/status"
+        bot.on_mqtt_message(topic, {"payload": payload})
+        bot.on_mqtt_message(topic, {"payload": payload})
+        await asyncio.sleep(0.04)
+        assert len(notices) == 1
+        assert "4.3.15" in notices[0] and "4.3.24" in notices[0]
+
+    asyncio.run(_run())
+
+
 def test_registered_v421_mac_accepts_fresh_legacy_status_without_session(monkeypatch):
     class MemoryDevices:
         def __init__(self):

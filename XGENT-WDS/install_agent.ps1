@@ -130,7 +130,44 @@ $settings = New-ScheduledTaskSettingsSet `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'XIDER device agent (MQTT/TLS)' -Force | Out-Null
+$existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+$taskAlreadyMatches = $false
+if ($existingTask -and $existingTask.State -ne 'Disabled' -and $existingTask.Actions.Count -eq 1 -and $existingTask.Principal) {
+    try {
+    $expectedTaskPath = [IO.Path]::GetFullPath([string]$action.Execute)
+    $existingTaskPath = [IO.Path]::GetFullPath([string]$existingTask.Actions[0].Execute)
+    $expectedWorkingDirectory = [IO.Path]::GetFullPath([string]$AgentDir)
+    $existingWorkingDirectory = [IO.Path]::GetFullPath([string]$existingTask.Actions[0].WorkingDirectory)
+    $expectedArguments = ([string]$action.Argument).Trim()
+    $existingArguments = ([string]$existingTask.Actions[0].Arguments).Trim()
+    $taskUserId = ([string]$existingTask.Principal.UserId).Trim()
+    $currentUserId = "$env:USERDOMAIN\$env:USERNAME"
+    $sameTaskUser = $false
+    if ($taskUserId) {
+        try {
+            $taskSid = ([Security.Principal.NTAccount]::new($taskUserId)).Translate([Security.Principal.SecurityIdentifier]).Value
+            $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+            $sameTaskUser = $taskSid -eq $currentSid
+        } catch {
+            $sameTaskUser = $taskUserId -ieq $currentUserId -or $taskUserId -ieq $env:USERNAME
+        }
+    }
+    $samePrincipal = $sameTaskUser -and
+        ([string]$existingTask.Principal.LogonType -in @('Interactive', 'InteractiveToken')) -and
+        ([string]$existingTask.Principal.RunLevel -in @('Limited', 'LUA'))
+    $taskAlreadyMatches = $samePrincipal -and
+        $existingTaskPath.Equals($expectedTaskPath, [StringComparison]::OrdinalIgnoreCase) -and
+        $existingWorkingDirectory.Equals($expectedWorkingDirectory, [StringComparison]::OrdinalIgnoreCase) -and
+        $existingArguments -ceq $expectedArguments
+    } catch {
+        $taskAlreadyMatches = $false
+    }
+}
+if ($taskAlreadyMatches) {
+    Write-Host "[OK] $TaskName already points to this user and the current XIDER files; keeping its existing task definition."
+} else {
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'XIDER device agent (MQTT/TLS)' -Force | Out-Null
+}
 Start-ScheduledTask -TaskName $TaskName
 
 Write-Host "[OK] $TaskName installed and started in the background."

@@ -142,6 +142,7 @@ def build_pages_launchers() -> dict[str, str]:
         "  $v=New-Object Diagnostics.Process; $v.StartInfo=$psi; [void]$v.Start(); $v.WaitForExit()\n"
         "  if($v.ExitCode -ne 0){throw 'XIDER installer signature verification failed'}\n"
         "  $logRoot=Join-Path $env:LOCALAPPDATA 'XIDER\\logs'; New-Item -ItemType Directory -Path $logRoot -Force|Out-Null\n"
+        "  Get-ChildItem -LiteralPath $logRoot -File -Filter 'install-*.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending | Select-Object -Skip 9 | ForEach-Object { if($_.Name -match '^install-\\d{8}-\\d{6}\\.log$' -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint)){Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue} }\n"
         "  $log=Join-Path $logRoot ('install-'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'.log')\n"
         "  $args=@('-NoProfile','-ExecutionPolicy','Bypass','-File',$p,'-LogPath',$log)\n"
         "  & powershell.exe @args\n"

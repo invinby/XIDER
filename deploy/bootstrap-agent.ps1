@@ -250,6 +250,38 @@ function Remove-XiderOldPreviousCheckouts {
     }
 }
 
+function Remove-XiderOldFailedCheckouts {
+    param(
+        [Parameter(Mandatory)][string]$InstallRoot,
+        [int]$Keep = 1
+    )
+
+    if ($Keep -lt 0) { return }
+    try {
+        $root = [IO.Path]::GetFullPath($InstallRoot)
+        $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop
+        if (-not $rootItem.PSIsContainer -or
+            ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return }
+        $managed = @(Get-ChildItem -LiteralPath $root -Directory -Force -ErrorAction Stop |
+            Where-Object { $_.Name -match '^git-ver\.failed\.\d{14}\.[0-9a-fA-F]{32}$' } |
+            Sort-Object -Property Name -Descending)
+        foreach ($item in @($managed | Select-Object -Skip $Keep)) {
+            $path = [IO.Path]::GetFullPath($item.FullName)
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+                -not [string]::Equals([IO.Path]::GetDirectoryName($path), $root, [StringComparison]::OrdinalIgnoreCase)) { continue }
+            try {
+                $nestedLinks = @(Get-ChildItem -LiteralPath $path -Force -Recurse -ErrorAction Stop |
+                    Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint })
+                if ($nestedLinks.Count) { continue }
+                Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
+            }
+            catch { Write-Warning "Не удалось удалить старую неудачную сборку XIDER: $path" }
+        }
+    } catch {
+        Write-Warning "Не удалось ограничить старые неудачные сборки XIDER: $($_.Exception.Message)"
+    }
+}
+
 function Assert-XiderWindowsBundleArchive {
     param([Parameter(Mandatory)][string]$ArchivePath)
 
@@ -1417,6 +1449,7 @@ try {
     Write-Host ("[OK] Guardian v{0}; PID={1}; MQTT=connected" -f $healthStates.guardian.version, $healthStates.guardian.pid)
     Write-XiderInstallReport -Outcome succeeded -RequestedVersion $expectedAgentVersion -HealthStates $healthStates -Required
     Remove-XiderOldPreviousCheckouts -InstallRoot $resolvedRoot -CurrentBackup $backup -Keep 2
+    Remove-XiderOldFailedCheckouts -InstallRoot $resolvedRoot -Keep 1
     if (Test-Path -LiteralPath $backup) { Write-Host "[BACKUP] Предыдущая версия сохранена: $backup" }
 }
 catch {
@@ -1454,7 +1487,16 @@ catch {
         foreach ($taskName in @('XIDER Agent', 'XIDER Guardian')) {
             try {
                 if ($oldTasks.ContainsKey($taskName)) {
-                    Register-ScheduledTask -TaskName $taskName -Xml $oldTasks[$taskName].Xml -Force | Out-Null
+                    $currentTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+                    if (-not $currentTask) {
+                        Register-ScheduledTask -TaskName $taskName -Xml $oldTasks[$taskName].Xml -Force | Out-Null
+                    } else {
+                        $currentXml = Export-ScheduledTask -TaskName $taskName
+                        $normalizeXml = { param($Xml) ([string]$Xml).Trim() -replace "`r`n?", "`n" }
+                        if ((& $normalizeXml $currentXml) -cne (& $normalizeXml $oldTasks[$taskName].Xml)) {
+                            Register-ScheduledTask -TaskName $taskName -Xml $oldTasks[$taskName].Xml -Force | Out-Null
+                        }
+                    }
                 } elseif (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
                     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
                 }

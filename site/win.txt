@@ -11,7 +11,7 @@ try {
   $ssh=$sshCommand.Source
   $tag=$env:XIDER_INSTALL_TAG
   if($tag -and $tag -notmatch '^v\d{1,6}\.\d{1,6}\.\d{1,6}$'){throw 'XIDER release tag is invalid.'}
-  $installerBase='https://github.com/invinby/XIDER/releases/download/v4.3.24'
+  $installerBase='https://github.com/invinby/XIDER/releases/download/v4.3.25'
   if($tag){$installerBase="https://github.com/invinby/XIDER/releases/download/$tag"}
   Write-Host 'XIDER: downloading the selected signed installer...'
   iwr -UseBasicParsing -TimeoutSec 90 -Uri "$installerBase/XIDER-install-windows.ps1" -OutFile $p
@@ -27,6 +27,7 @@ try {
   $v=New-Object Diagnostics.Process; $v.StartInfo=$psi; [void]$v.Start(); $v.WaitForExit()
   if($v.ExitCode -ne 0){throw 'XIDER installer signature verification failed'}
   $logRoot=Join-Path $env:LOCALAPPDATA 'XIDER\logs'; New-Item -ItemType Directory -Path $logRoot -Force|Out-Null
+  Get-ChildItem -LiteralPath $logRoot -File -Filter 'install-*.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending | Select-Object -Skip 9 | ForEach-Object { if($_.Name -match '^install-\d{8}-\d{6}\.log$' -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint)){Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue} }
   $log=Join-Path $logRoot ('install-'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'.log')
   $args=@('-NoProfile','-ExecutionPolicy','Bypass','-File',$p,'-LogPath',$log)
   & powershell.exe @args

@@ -236,8 +236,8 @@ try {
     if (Test-Path -LiteralPath $failedEnv) {
         throw "Failed checkout retained its copied secret: $failedEnv"
     }
-    if ($global:XiderMockRestored.Count -ne 2 -or $global:XiderMockRestarted.Count -ne 2) {
-        throw 'Previous Scheduled Tasks or their running state were not restored.'
+    if ($global:XiderMockRestored.Count -ne 0 -or $global:XiderMockRestarted.Count -ne 2) {
+        throw 'Unchanged Scheduled Tasks were unnecessarily rewritten or their running state was not restored.'
     }
 
     foreach ($healthStatus in @('missing', 'stale')) {

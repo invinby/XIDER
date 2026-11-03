@@ -9891,6 +9891,7 @@ _STATUS_NOTICE_STATE: dict[str, bool] = {}
 _STATUS_NOTICE_PENDING: dict[str, object] = {}
 _STATUS_NOTICE_LOCK = threading.Lock()
 _STATUS_NOTICE_DELAY_SEC = 8
+_VERSION_NOTICE_DELAY_SEC = 2
 _START_NOTIFY_LAST: dict[int, float] = {}
 _LIFECYCLE_NOTICE_LAST: dict[tuple[str, str, str], float] = {}
 _LIFECYCLE_NOTICE_LOCK = threading.Lock()
@@ -10063,6 +10064,39 @@ def _queue_device_status_notice(
         _STATUS_NOTICE_PENDING[device_id] = future
     if previous_future is not None:
         previous_future.cancel()
+
+
+def _queue_device_version_notice(
+    device_id: str,
+    name: str,
+    previous_version: str,
+    current_version: str,
+) -> None:
+    """Notify the owner after a registered device holds a new Agent version."""
+    loop = LOOP
+    if loop is None or loop.is_closed():
+        return
+
+    async def _send_if_stable() -> None:
+        await asyncio.sleep(_VERSION_NOTICE_DELAY_SEC)
+        current = devices.get(device_id) or {}
+        if (not current.get("online")
+                or str(current.get("version") or "").removeprefix("v") != current_version
+                or bot_settings.is_blocked(device_id)
+                or bot_settings.quiet_active()):
+            return
+        text = (
+            f"📦 <b>{html.escape(name)}</b>: агент подтвердил новую версию — "
+            f"<code>{html.escape(previous_version)}</code> → "
+            f"<code>{html.escape(current_version)}</code>."
+        )
+        _schedule_admin_notice(text)
+        audit(
+            "agent_version_changed", device_id=device_id,
+            previous_version=previous_version, version=current_version,
+        )
+
+    asyncio.run_coroutine_threadsafe(_send_if_stable(), loop)
 
 
 def _maybe_battery_alert(device_id: str, payload: dict) -> None:
@@ -10386,6 +10420,15 @@ def on_mqtt_message(topic: str, data: dict) -> None:
         is_new = device_id not in devices.all()
         if is_new:
             info["approved"] = not bool(bot_settings.get("require_device_approval", True))
+        previous_version = str(old.get("version") or "").removeprefix("v").strip()
+        current_version = str(info.get("version") or "").removeprefix("v").strip()
+        if (online and not is_new and old.get("approved", True)
+                and previous_version not in {"", "?"}
+                and current_version not in {"", "?"}
+                and previous_version != current_version):
+            _queue_device_version_notice(
+                device_id, info["name"], previous_version, current_version,
+            )
         devices.upsert(
             device_id, info,
             registration_event="heartbeat" if is_new else "re_registration" if online and not was_online else "heartbeat",
