@@ -56,9 +56,11 @@ function global:ssh.exe {
     )
 }
 
-function Invoke-XiderElevationGuardRegression {
+function Invoke-XiderUserScopeBootstrapRegression {
     param([string]$Bootstrap, [string]$InstallRoot, [string]$SourceArchive)
 
+    $previousLocalAppData = $env:LOCALAPPDATA
+    $env:LOCALAPPDATA = Join-Path (Split-Path -Parent $InstallRoot) 'localappdata-test'
     $global:XiderElevationTestInstallerCalls = 0
     function Get-ScheduledTask {
         param($TaskName, $ErrorAction)
@@ -76,12 +78,15 @@ function Invoke-XiderElevationGuardRegression {
     } catch {
         $failure = $_.Exception.Message
         $failureType = $_.Exception.GetType().FullName
+    } finally {
+        $env:LOCALAPPDATA = $previousLocalAppData
     }
-    if ($failureType -ne 'System.UnauthorizedAccessException') {
-        throw 'A non-elevated full install did not fail with the actionable elevation error.'
+    if ($failureType -eq 'System.UnauthorizedAccessException' -or
+        $failure -match 'Administrator|UAC') {
+        throw 'A per-user install still refuses to run without elevation.'
     }
-    if ((Test-Path -LiteralPath $InstallRoot) -or $global:XiderElevationTestInstallerCalls -ne 0) {
-        throw 'A non-elevated full install changed the target or invoked the installer before refusing.'
+    if (-not (Test-Path -LiteralPath $InstallRoot)) {
+        throw "A non-elevated install never entered its user-scope setup path: $failure"
     }
 }
 
@@ -150,18 +155,9 @@ try {
         $bootstrapSource -notmatch "\$version = '3\.14\.10'") {
         throw 'Unsupported local Python must be skipped in favor of the pinned Python 3.14.10 runtime.'
     }
-    $elevationFunction = $bootstrapAst.Find({ param($node)
-        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
-            $node.Name -eq 'Assert-XiderBootstrapElevation'
-    }, $true)
-    if (-not $elevationFunction) { throw 'Bootstrap elevation guard is missing.' }
-    Invoke-Expression $elevationFunction.Extent.Text
-    $nonAdminDenied = $false
-    try { Assert-XiderBootstrapElevation -IsElevated:$false }
-    catch { $nonAdminDenied = $_.Exception -is [UnauthorizedAccessException] }
-    if (-not $nonAdminDenied) { throw 'The elevation guard did not reject a non-admin install.' }
-    Assert-XiderBootstrapElevation -IsElevated:$false -PreflightOnly
-    Assert-XiderBootstrapElevation -IsElevated:$true
+    if ($bootstrapSource -match 'Assert-XiderBootstrapElevation|RunLevel\s+Highest|Verb\s+RunAs') {
+        throw 'Per-user bootstrap contains an elevation-only execution path.'
+    }
 
     $secretCleanupFunction = $bootstrapAst.Find({ param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
@@ -242,7 +238,7 @@ try {
 
     $currentPrincipal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
     if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        Invoke-XiderElevationGuardRegression -Bootstrap $bootstrap `
+        Invoke-XiderUserScopeBootstrapRegression -Bootstrap $bootstrap `
             -InstallRoot (Join-Path $fixture 'elevation-install') -SourceArchive $archive
     }
 

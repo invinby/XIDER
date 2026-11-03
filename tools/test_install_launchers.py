@@ -75,21 +75,21 @@ def test_pages_launchers_authenticate_latest_installer_before_running_it():
         assert "XIDER-INSTALLER-SHA256" in script
         assert INSTALLER_NAMESPACE in script
     assert pages["mac"].index("ssh-keygen -Y verify") < pages["mac"].index('bash "$p"')
-    assert pages["win.ps1"].index("$v.ExitCode -ne 0") < pages["win.ps1"].index("$installer=Start-Process")
+    assert pages["win.ps1"].index("$v.ExitCode -ne 0") < pages["win.ps1"].index("$installerExitCode=")
     assert "releases/latest/download" in pages["win.ps1"]
     assert "releases/latest/download" not in pages["mac"]
-    assert "-Verb RunAs" in pages["win.ps1"]
-    assert "-Wait -PassThru" in pages["win.ps1"]
+    assert "-Verb RunAs" not in pages["win.ps1"]
+    assert "Start-Process" not in pages["win.ps1"]
+    assert "& powershell.exe @args" in pages["win.ps1"]
     assert "XIDER Windows installer failed" in pages["win.ps1"]
     assert "XIDER install log:" in pages["win.ps1"]
     assert "'-LogPath'" in pages["win.ps1"]
-    assert "requesting administrator approval (UAC)" in pages["win.ps1"]
-    assert "OpenSSH.Client~~~~0.0.1.0" in pages["win.ps1"]
-    assert "OpenSSH Client is still unavailable" in pages["win.ps1"]
+    assert "requesting administrator approval (UAC)" not in pages["win.ps1"]
+    assert "OpenSSH Client (ssh-keygen.exe) is required" in pages["win.ps1"]
     assert "Read-Host" not in pages["win.ps1"]
-    assert "Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru" in pages["win.ps1"]
+    assert "Add-WindowsCapability" not in pages["win.ps1"]
     assert "System32\\OpenSSH\\ssh-keygen.exe" in pages["win.ps1"]
-    assert pages["win.ps1"].index("Add-WindowsCapability") < pages["win.ps1"].index("releases/latest/download")
+    assert pages["win.ps1"].index("OpenSSH Client (ssh-keygen.exe) is required") < pages["win.ps1"].index("releases/latest/download")
     assert "XIDER launcher failed:" in pages["win.ps1"]
     assert "Set-ExecutionPolicy" not in pages["win.ps1"]
 
@@ -242,15 +242,6 @@ def test_short_windows_launcher_accepts_signed_installer_and_rejects_tampering(t
         pattern = rf'iwr -UseBasicParsing -TimeoutSec 90 -Uri "\$installerBase/{re.escape(INSTALLERS["windows"] + suffix)}" -OutFile {re.escape(variable)}'
         script, count = re.subn(pattern, lambda _match: f"Copy-Item -LiteralPath '{source}' -Destination {variable}", script, count=1)
         assert count == 1
-    # Keep this isolated signature-verification fixture noninteractive. The
-    # production launcher uses RunAs; the test executes only the signed fixture.
-    script, count = re.subn(
-        r"\s*\$installer=Start-Process -FilePath 'powershell\.exe' -Verb RunAs -Wait -PassThru -ArgumentList \$args",
-        "\n  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ($args[4].Trim('\"')); $installer=[pscustomobject]@{ExitCode=$LASTEXITCODE}",
-        script,
-        count=1,
-    )
-    assert count == 1
     path = tmp_path / "short.ps1"
     path.write_text(script, encoding="utf-8", newline="\n")
     command = [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Restricted", "-Command", f"Get-Content -LiteralPath '{path}' -Raw | Invoke-Expression"]

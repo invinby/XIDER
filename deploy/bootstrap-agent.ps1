@@ -28,19 +28,6 @@ if ($ReleaseTag -and -not $Ref) {
     throw 'Для подписанной сборки XIDER_RELEASE_TAG нужен полный XIDER_REF.'
 }
 
-function Assert-XiderBootstrapElevation {
-    param(
-        [Parameter(Mandatory)][bool]$IsElevated,
-        [switch]$PreflightOnly
-    )
-
-    if (-not $PreflightOnly -and -not $IsElevated) {
-        throw [UnauthorizedAccessException]::new(
-            'Запусти PowerShell от имени администратора. Активная версия, задачи и .env не изменены.'
-        )
-    }
-}
-
 function Get-XiderExpectedGuardianExecutable {
     param(
         [Parameter(Mandatory)][string]$AgentDirectory,
@@ -290,10 +277,6 @@ function Assert-XiderWindowsBundleArchive {
     }
     finally { $archive.Dispose() }
 }
-
-$principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
-$isElevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-Assert-XiderBootstrapElevation -IsElevated:$isElevated -PreflightOnly:$PreflightOnly
 
 $repoUrl = if ($Ref) {
     "https://github.com/invinby/XIDER/archive/$Ref.zip"
