@@ -23,8 +23,25 @@ try {
     )
     foreach ($name in $names) {
         $dir = Join-Path $root $name
-        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        $agentDir = Join-Path $dir 'XGENT-WDS'
+        New-Item -ItemType Directory -Path $agentDir -Force | Out-Null
         [IO.File]::WriteAllText((Join-Path $dir 'rollback-marker.txt'), $name, $utf8)
+        $envPath = Join-Path $agentDir '.env'
+        [IO.File]::WriteAllText($envPath, 'fixture-only', $utf8)
+        if ($name -ne $names[0]) {
+            # Model old backups where the secret has an explicit read-only ACL
+            # while its managed parent directory remains owner-controlled.
+            $envAcl = Get-Acl -LiteralPath $envPath
+            $envAcl.SetAccessRuleProtection($true, $false)
+            $reader = [Security.Principal.WindowsIdentity]::GetCurrent().User
+            $readOnly = [Security.AccessControl.FileSystemAccessRule]::new(
+                $reader,
+                [Security.AccessControl.FileSystemRights]::Read,
+                [Security.AccessControl.AccessControlType]::Allow
+            )
+            $envAcl.SetAccessRule($readOnly)
+            Set-Acl -LiteralPath $envPath -AclObject $envAcl
+        }
     }
     $unrecognized = Join-Path $root 'git-ver.previous.owner-data'
     New-Item -ItemType Directory -Path $unrecognized -Force | Out-Null
@@ -81,6 +98,12 @@ finally {
     if ((Test-Path -LiteralPath $root) -and
         [IO.Path]::GetFullPath($root).StartsWith([IO.Path]::GetFullPath($env:TEMP), [StringComparison]::OrdinalIgnoreCase) -and
         (Split-Path $root -Leaf) -like 'xider-retention-*') {
+        Get-ChildItem -LiteralPath $root -Filter '.env' -File -Force -Recurse -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                $acl = Get-Acl -LiteralPath $_.FullName
+                $acl.SetAccessRuleProtection($false, $true)
+                Set-Acl -LiteralPath $_.FullName -AclObject $acl
+            }
         Remove-Item -LiteralPath $root -Recurse -Force
     }
 }
