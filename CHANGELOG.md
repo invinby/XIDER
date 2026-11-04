@@ -8,6 +8,7 @@
 - Retain one verified rollback copy and one recent failed-install diagnostic copy; prune older installer-owned failures without touching unrelated directories or symlink-bearing trees.
 - Keep bot, Windows Agent, macOS Agent, Guard Keeper, Windows PE metadata, and RU/EN source labels synchronized at `4.3.30`.
 - Notify the owner of an approved device's version change only after a fresh heartbeat confirms the updated Agent.
+- Keep role selection separate from per-device and per-action grants; show the saved result and refreshed access simulation after each confirmed change.
 
 ### Русский
 
@@ -15,6 +16,7 @@
 - Хранить одну проверенную копию для отката и одну последнюю неудачную сборку; удалять старые каталоги установщика, не трогая посторонние папки и деревья с символическими ссылками.
 - Синхронно обновить версии бота, Windows Agent, macOS Agent, Guard Keeper, метаданные Windows EXE и RU/EN страниц до `4.3.30`.
 - Сообщать владельцу об обновлении подтверждённого устройства только после свежего heartbeat с новой версией Agent.
+- Не смешивать роль с отдельными разрешениями на устройства и действия; после подтверждения показывать итог и обновлённую симуляцию доступа.
 
 ## X4.3.29-WINDOWS-ROLLBACK-CLEANUP+20261104 — synchronized update cleanup
 
