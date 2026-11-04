@@ -3856,12 +3856,12 @@ COPY.update({
         "xadam": "<b>Статус устройств</b>\nОнлайн: <b>{online}/{total}</b>\nРежим: наблюдение. Управление не выдано.",
     },
     "admin_user_profile": {
-        "xtech": "<b>{name}</b>\nTelegram ID: <code>{user_id}</code>\nРоль: <b>{role}</b>\nУстройств выдано: {devices}; кнопок выдано: {buttons}.",
-        "xperson": "<b>{name}</b>\nTelegram ID: <code>{user_id}</code>\nРоль: <b>{role}</b>\nДоступ: {devices} устройств и {buttons} отдельных кнопок. Всё по списку, без магии.",
-        "xpikmi": "🎀 <b>{name}</b>\nID в Telegram: <code>{user_id}</code>\nРоль: <b>{role}</b>\nОткрыто устройств: {devices}, кнопочек: {buttons} 🩷",
-        "xtarped": "<b>{name}</b>\nID: <code>{user_id}</code> · роль: <b>{role}</b>\nВыдано: {devices} устройств и {buttons} кнопок. Никаких прав из воздуха.",
-        "xcore": "<b>{name}</b>\nTelegram ID: <code>{user_id}</code>\nРоль: <b>{role}</b>\nУстройства: {devices} · кнопки: {buttons}.",
-        "xadam": "<b>{name}</b>\nID: <code>{user_id}</code>\nРоль: <b>{role}</b>\nПолномочия: {devices} устройств, {buttons} команд.",
+        "xtech": "<b>{name}</b>\nTelegram ID: <code>{user_id}</code>\nРоль: <b>{role}</b>\nГранты отдельно: {devices} устройств; {buttons} действий. Для управления нужны роль «Пользователь» и совпадающие grants.",
+        "xperson": "<b>{name}</b>\nTelegram ID: <code>{user_id}</code>\nРоль: <b>{role}</b>\nОтдельно выдано: {devices} устройств и {buttons} действий. Действие откроется только при роли «Пользователь» и совпадении обоих grants.",
+        "xpikmi": "🎀 <b>{name}</b>\nID в Telegram: <code>{user_id}</code>\nРоль: <b>{role}</b>\nОтдельные грантики: {devices} устройств и {buttons} кнопочек. Для управления нужны роль «Пользователь» и оба подходящих разрешения 🩷",
+        "xtarped": "<b>{name}</b>\nID: <code>{user_id}</code> · роль: <b>{role}</b>\nОтдельно выдано: {devices} устройств и {buttons} действий. Доступ появится только при роли «Пользователь» и совпавших grants.",
+        "xcore": "<b>{name}</b>\nTelegram ID: <code>{user_id}</code>\nРоль: <b>{role}</b>\nГранты отдельно: устройств {devices}, действий {buttons}. Требуются роль «Пользователь» и совпадение грантов.",
+        "xadam": "<b>{name}</b>\nID: <code>{user_id}</code>\nРоль: <b>{role}</b>\nОтдельные разрешения: устройств {devices}, действий {buttons}. Для действия нужны роль «Пользователь» и оба разрешения.",
     },
     "admin_device_access_intro": {
         "xtech": "<b>Доступ к устройствам</b>\nЗелёная кнопка означает, что устройство уже выдано пользователю.",

@@ -2086,7 +2086,15 @@ def test_temporary_block_confirmation_returns_to_updated_user_card(monkeypatch, 
     assert "Симуляция доступности" in rendered[-1][0]
 
 
-def test_rejected_role_write_is_reported_and_card_shows_current_state(monkeypatch, tmp_path):
+@pytest.mark.parametrize(("handler", "data", "mutation", "rejected"), [
+    ("on_admin_role", "admin:role:200:user", "set_role", False),
+    ("on_admin_block", "admin:block:200", "set_blocked", False),
+    ("on_admin_device_toggle", "admin:device:200:a", "toggle_device", None),
+    ("on_admin_permission_toggle", "admin:perm:200:cmd_status", "toggle_callback", None),
+])
+def test_rejected_admin_access_write_is_reported_and_card_shows_current_state(
+    monkeypatch, tmp_path, handler, data, mutation, rejected,
+):
     Callback, rendered = _admin_fixture(monkeypatch, tmp_path)
     monkeypatch.setattr(
         bot, "get_user_role",
@@ -2098,10 +2106,10 @@ def test_rejected_role_write_is_reported_and_card_shows_current_state(monkeypatc
         async def answer(self, *args, **kwargs):
             answers.append((args, kwargs))
 
-    monkeypatch.setattr(bot.access_store, "set_role", lambda *_args: False)
+    monkeypatch.setattr(bot.access_store, mutation, lambda *_args: rejected)
 
     async def scenario():
-        await bot.on_admin_role(RecordingCallback("admin:role:200:user"))
+        await getattr(bot, handler)(RecordingCallback(data))
         confirm = next(
             value for value in _callback_data(rendered[-1][1])
             if value.startswith("admin:confirm:")
@@ -2113,6 +2121,7 @@ def test_rejected_role_write_is_reported_and_card_shows_current_state(monkeypatc
     assert "изменение доступа не сохранено" in answers[-1][0][0].lower()
     assert "Симуляция доступности" in rendered[-1][0]
     assert bot.access_store.get_role(200, 100) == bot.Role.GUEST
+    assert bot.access_store.get_effective_grants(200) == {"callbacks": [], "devices": []}
 
 
 def test_admin_unblock_requires_confirmation_and_restores_exact_prior_access(monkeypatch, tmp_path):
