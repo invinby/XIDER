@@ -12,7 +12,7 @@ on:
         description: Existing XIDER semantic-version tag to build.
         required: true
         type: string
-        default: v4.3.28
+        default: v4.3.29
       publish_preview:
         description: Publish the signed component inventory and project-signed installer assets as a prerelease. macOS will remain unsigned and unnotarized without Apple credentials.
         required: true

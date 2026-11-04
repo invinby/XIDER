@@ -1,5 +1,21 @@
 # XIDER release history
 
+## X4.3.29-WINDOWS-ROLLBACK-CLEANUP+20261104 — synchronized update cleanup
+
+### English
+
+- Keep Windows Agent and Guard Keeper updates in the standard per-user XIDER data folder; remove stale rollback copies with protected legacy `.env` ACLs without weakening those ACLs.
+- Retain the newly working version as the sole rollback copy, and leave unrelated files untouched.
+- Keep Agent, macOS Agent, bot, Windows executable metadata, and both site snapshots on the same ordered release version.
+- The bot continues to announce an approved device's version change only after a fresh heartbeat confirms the new Agent version.
+
+### Русский
+
+- Обновлять Windows Agent и Guard Keeper в стандартной пользовательской папке XIDER; удалять устаревшие резервные копии с защищённым ACL у старого `.env`, не ослабляя эти права.
+- Оставлять единственную рабочую версию для отката и не трогать посторонние файлы.
+- Синхронно вести Agent, Agent для macOS, бот, метаданные Windows EXE и обе версии сайта по порядковому номеру релиза.
+- Бот по-прежнему сообщает о смене версии только для подтверждённого устройства и после свежего heartbeat новой версии Agent.
+
 ## X4.3.28-APP-DATA-PRANK-HUB+20261104 — synchronized install and component release
 
 ### English

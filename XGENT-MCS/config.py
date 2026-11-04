@@ -259,7 +259,7 @@ def write_runtime_health(component: str, connected: bool, *, state: str = "runni
     return destination
 
 # Версия клиента и строка платформы для статусов.
-VERSION = "4.3.28"
+VERSION = "4.3.29"
 PLATFORM = f"macOS {platform.mac_ver()[0]}"
 
 

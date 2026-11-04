@@ -243,6 +243,18 @@ function Remove-XiderOldPreviousCheckouts {
                 $nestedLinks = @(Get-ChildItem -LiteralPath $path -Force -Recurse -ErrorAction Stop |
                     Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint })
                 if ($nestedLinks.Count) { continue }
+                # Older installs may have protected .env with a file ACL that
+                # grants the interactive user read-only access. Delete that
+                # credential copy through the managed backup directory before
+                # recursively removing the obsolete checkout. Keep the whole
+                # backup if the file cannot be removed; never weaken its ACL.
+                $backupEnv = Join-Path $path 'XGENT-WDS\.env'
+                if (Test-Path -LiteralPath $backupEnv -PathType Leaf) {
+                    [IO.File]::Delete($backupEnv)
+                    if (Test-Path -LiteralPath $backupEnv -PathType Leaf) {
+                        throw 'The previous checkout credential file could not be removed.'
+                    }
+                }
                 Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
             }
             catch { Write-Warning "Не удалось удалить устаревшую резервную копию XIDER: $path ($($_.Exception.Message))" }
