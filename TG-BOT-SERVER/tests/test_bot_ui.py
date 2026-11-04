@@ -10187,7 +10187,7 @@ def test_version_detail_protection_summary_uses_component_report_and_does_not_ca
     summary = bot._version_protection_summary(release, "mac_agent")
     assert "Nuitka" in summary
     assert "obfuscation not applied" in summary
-    assert "not Apple-signed" in summary
+    assert "No native macOS package" in summary
     assert "bound to the signed release inventory" in summary
     assert "Safari" in summary and "Siri" in summary
 
@@ -10226,6 +10226,30 @@ def test_version_report_identifies_shared_runtime_and_release_only_evidence(monk
     rows[1]["entrypoint"] = None
     rows[0]["entrypoint"] = None
     assert "Safari and Siri share one executable" not in bot._version_protection_summary(release, "mac_agent")
+
+
+@pytest.mark.parametrize(("component", "signing", "expected"), [
+    ("mac_agent", "source_preview_no_native_package", "No native macOS package"),
+    ("mac_agent", "unsigned_preview", "not Apple-signed or notarized"),
+    ("mac_agent", "apple_signed_notarized", "Apple code signing and notarization reported"),
+    ("windows_agent", "not_claimed", "Windows Authenticode signing is not claimed"),
+    ("windows_agent", "authenticode_signed", "Windows Authenticode signing reported"),
+])
+def test_version_report_shows_platform_signing_state(monkeypatch, component, signing, expected):
+    import release_catalog
+
+    platform = "macos" if component == "mac_agent" else "windows"
+    release = release_catalog.Release(
+        "v4.3.29", (4, 3, 29), "release", "", "", frozenset({"protected-build-manifest.json"}),
+        protected_manifest={"platform_signing": {platform: signing}},
+    )
+    monkeypatch.setattr(bot, "_ui_phrase", lambda en, ru, short=None: en)
+    monkeypatch.setattr(release_catalog.Release, "protected_components", lambda *_: [{
+        "id": "macos_agent" if platform == "macos" else "windows_agent",
+        "build_mode": "not_built" if signing == "source_preview_no_native_package" else "nuitka_compiled",
+        "obfuscation": {"state": "not_applied"},
+    }])
+    assert expected in bot._version_protection_summary(release, component)
 
 
 def test_selected_release_install_fails_closed_without_pinned_trust(monkeypatch):
