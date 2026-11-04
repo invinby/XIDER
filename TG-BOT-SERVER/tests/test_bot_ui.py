@@ -12195,11 +12195,33 @@ def test_prank_action_card_requires_explicit_launch_and_pins_stop(monkeypatch):
     callbacks = _callback_data(captured["markup"])
     assert callbacks[0] == "prank:stop_all"
     assert "prank:screamer" in callbacks
-    assert "Скример" in captured["text"]
+    assert "Рикролл + звуковые сигналы" in captured["text"]
     assert "физический запуск не подтверждён" in captured["text"]
-    assert "короткие эффекты могут завершиться только по таймеру" in captured["text"]
-    assert "возвращается только состояние, сохранённое конкретным эффектом" in captured["text"]
-    assert "другие исходные настройки не угадываются" in captured["text"]
+    assert "5 сигналов по 0,4 с" in captured["text"]
+    assert "громкость останется 100%" in captured["text"]
+    assert "закрой вкладку браузера вручную" in captured["text"]
+
+
+@pytest.mark.parametrize("style", bot.xlex.STYLES)
+def test_prank_card_describes_the_actual_screamer_effect_and_lifecycle(monkeypatch, style):
+    _setup(monkeypatch, {"pc": {"name": "PC", "os": "Windows"}})
+    monkeypatch.setattr(
+        bot.bot_settings, "get",
+        lambda key, default=None: style if key == "ui_style" else default,
+    )
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
+
+    item = next(row for row in bot._prank_catalog_items("pc", bot.ADMIN_ID)
+                if row["callback"] == "prank:screamer")
+    text = bot._prank_card_text(item)
+
+    assert "youtube" in text.casefold()
+    assert "100%" in text
+    assert "5 сигналов по 0,4 с" in text.casefold()
+    assert "15 сигналов" in text.casefold()
+    assert "вкладку браузера вручную" in text.casefold()
+    assert "громкость вручную" in text.casefold()
 
 
 def test_prank_search_results_filter_by_label_and_do_not_launch(monkeypatch):
@@ -12312,7 +12334,7 @@ def test_prank_favorite_toggle_updates_card_and_stays_scoped(monkeypatch):
     asyncio.run(bot.on_prank_favorite_toggle(callback))
 
     assert favorite_values == {f"prank:{item_id}"}
-    assert "Скример" in captured["text"]
+    assert "Рикролл + звуковые сигналы" in captured["text"]
     assert "prankpage:fav:" + item_id in _callback_data(captured["markup"])
     assert any("из избранного" in button.text for row in captured["markup"].inline_keyboard for button in row)
     assert callback.answers == ["Добавил в избранное ⭐"]
@@ -12521,7 +12543,7 @@ def test_prank_visual_page_uses_all_six_xlex_voices_without_changing_actions(mon
     baseline = callbacks_by_style[bot.xlex.STYLES[0]]
     assert all(callbacks == baseline for callbacks in callbacks_by_style.values())
     assert len({tuple(labels) for labels in labels_by_style.values()}) >= 5
-    assert any("🎬 Скример (full)" in label for label in labels_by_style["xtech"])
+    assert any("🎵 Рикролл + звуковые сигналы" in label for label in labels_by_style["xtech"])
     assert any("Скрыть иконки" in label for label in labels_by_style["xtech"])
     assert len(hidden_labels_by_style["xtech"]) == 0
 

@@ -7848,6 +7848,22 @@ _PRANK_DISABLED = {
     "cmd:prank_alert_loop": "Название обещает удаление сети, а обработчик показывает только фальшивый диалог.",
     "cmd:prank_rickroll_terminal": "Запускает видимое окно терминала; действие отключено, чтобы не создавать неожиданные окна.",
 }
+_PRANK_CARD_FACTS = {
+    "prank:screamer": {
+        "effect": (
+            "Устанавливает громкость на 100% и снимает mute, открывает ролик YouTube. "
+            "Windows подаёт 5 сигналов по 0,4 с; macOS вызывает beep 3 пять раз (до 15 сигналов)."
+        ),
+        "stop": (
+            "«Остановить всё» не отменяет уже открытый браузер и не прерывает запущенную последовательность сигналов; "
+            "сигналы заканчиваются сами."
+        ),
+        "restore": (
+            "не выполняется: громкость останется 100% и звук будет включён; верни прежнюю громкость вручную "
+            "и закрой вкладку браузера вручную"
+        ),
+    },
+}
 
 _PRANK_ACTION_CALLBACKS = {
     "prank_rickroll": "prank:rickroll50",
@@ -27790,17 +27806,22 @@ def _prank_card_text(item: dict) -> str:
     callback = str(item.get("callback") or "")
     category_key = _PRANK_FILTERS.get(int(item.get("filter_page") or 0), ("", "prank_tab_visual"))[1]
     reason = str(item.get("unavailable_reason") or "")
+    card_facts = _PRANK_CARD_FACTS.get(callback, {})
     if reason:
         state = "не запускать · недоступно"
         restore = "эффект не запускался; восстановление не применимо"
         warning = f"⚠️ Не запускается: {reason}"
     else:
         state = f"{item.get('support_state', 'unknown')} · физический запуск не подтверждён"
-        restore = "возвращается только состояние, сохранённое конкретным эффектом; другие исходные настройки не угадываются, подтверждение может отсутствовать"
+        restore = card_facts.get(
+            "restore",
+            "в карточке не подтверждено; исходное состояние нельзя считать восстановленным",
+        )
         warning = "Запуск — отдельной кнопкой; отсутствие ответа не будет считаться успехом."
-    warning = (
-        "Остановка: «Остановить всё» отменяет активные сцены XIDER и пробует вернуть сохранённые обои; "
-        "короткие эффекты могут завершиться только по таймеру.\n" + warning
+    effect_detail = card_facts.get("effect", "Точное поведение этой команды ещё не описано в карточке.")
+    stop_detail = card_facts.get(
+        "stop",
+        "«Остановить всё» отправляет команду остановки активных сцен XIDER; завершение эффекта не подтверждается этой карточкой.",
     )
     platforms = ", ".join(str(value) for value in item.get("platforms", []) if value in {"windows", "macos"}) or "не указаны"
     return _lex_html(
@@ -27809,6 +27830,8 @@ def _prank_card_text(item: dict) -> str:
         category=_lex(category_key),
         platforms=platforms,
         state=state,
+        effect_detail=effect_detail,
+        stop_detail=stop_detail,
         restore=restore,
         warning=warning,
     )
