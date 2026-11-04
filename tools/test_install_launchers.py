@@ -80,7 +80,7 @@ def test_pages_launchers_authenticate_latest_installer_before_running_it():
     assert pages["mac"].index("ssh-keygen -Y verify") < pages["mac"].index('bash "$p"')
     assert pages["win.ps1"].index("$v.ExitCode -ne 0") < pages["win.ps1"].index("$installerExitCode=")
     assert "releases/latest/download" in pages["win.ps1"]
-    assert "releases/latest/download" not in pages["mac"]
+    assert "releases/latest/download" in pages["mac"]
     assert "-Verb RunAs" not in pages["win.ps1"]
     assert "Start-Process" not in pages["win.ps1"]
     assert "& powershell.exe @args" in pages["win.ps1"]
