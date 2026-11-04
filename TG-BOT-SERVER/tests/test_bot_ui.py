@@ -118,6 +118,41 @@ def test_prank_stop_all_keeps_agent_partial_result_details():
     assert "Результат частичный" in rendered
 
 
+@pytest.mark.parametrize("state", (None, "success", "completed"))
+def test_prank_stop_all_does_not_trust_unconfirmed_success_text(state):
+    result = {"ok": True, "text": "Все эффекты остановлены"}
+    if state is not None:
+        result["state"] = state
+    rendered = bot._prank_stop_all_result_text(result)
+    assert bot._lex("action_result_unconfirmed") in rendered
+    assert "Все эффекты остановлены" not in rendered
+
+
+def test_prank_stop_all_keeps_explicitly_confirmed_result():
+    result = {"ok": True, "state": "confirmed", "effect_confirmed": True, "text": "Остановка подтверждена"}
+    assert "Остановка подтверждена" in bot._prank_stop_all_result_text(result)
+
+
+@pytest.mark.parametrize(("result", "expected"), [
+    ({"ok": False, "state": "confirmed", "effect_confirmed": True}, "action_result_failed"),
+    ({"ok": True, "state": "failed"}, "action_result_failed"),
+    ({"ok": True, "state": "partial"}, "action_result_failed"),
+    ({"ok": True, "state": "unsupported"}, "action_result_unsupported"),
+    ({"ok": True, "state": "unknown"}, "action_result_unknown"),
+])
+def test_prank_result_does_not_echo_success_on_failed_or_unknown_outcome(result, expected):
+    result["text"] = "Эффект успешно запущен"
+    rendered = bot._prank_action_result_text("prank_fake_update", result)
+    assert bot._lex(expected) in rendered
+    assert result["text"] not in rendered
+
+
+def test_prank_result_keeps_explicit_success_and_unconfirmed_matrix_copy():
+    result = {"ok": True, "state": "confirmed", "effect_confirmed": True, "text": "Подтверждено"}
+    assert bot._prank_action_result_text("prank_fake_update", result) == "Подтверждено"
+    assert bot._prank_action_result_text("prank_matrix", {"ok": True}) == bot._lex("prank_matrix_unconfirmed")
+
+
 @pytest.mark.parametrize("action", ("prank_rickroll_terminal", "prank_rickroll", "prank_matrix"))
 def test_disabled_prank_actions_are_rejected_before_publish(monkeypatch, action):
     answers = []
