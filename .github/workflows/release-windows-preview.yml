@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Existing XIDER source tag to package (must match agent VERSION).
         required: true
-        default: v4.3.29
+        default: v4.3.30
 
 permissions:
   contents: read
