@@ -70,6 +70,15 @@ source key; the secret value was not printed. Do not paste it into a terminal
 command, commit it, or send it in chat. The tagged workflow rejects a missing
 secret or a secret whose public key is not pinned in the tagged source.
 
+Every pushed semantic version tag publishes a prerelease. Stable publication
+requires a separate owner `workflow_dispatch` against that exact `v*` tag with
+`publish_stable=true`, `publish_preview=false`, and
+`XIDER_MACOS_RELEASE_READY=true`. Dispatching against the tag keeps the run
+inside the protected environment's `v*` ref rule; dispatching from `main` does
+not satisfy that rule. The macOS build then enters `xider-macos-signing` and
+fails closed unless Apple signing and notarization credentials pass the
+release-credential verifier.
+
 The key has been generated and pinned locally. The protected GitHub environment
 secret is configured, but it cannot be read back and is not a recoverable
 backup. An owner-held encrypted offline backup remains an operational task;
