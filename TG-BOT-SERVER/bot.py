@@ -9976,6 +9976,8 @@ _STATUS_NOTICE_PENDING: dict[str, object] = {}
 _STATUS_NOTICE_LOCK = threading.Lock()
 _STATUS_NOTICE_DELAY_SEC = 8
 _VERSION_NOTICE_DELAY_SEC = 2
+_VERSION_NOTICE_RETRY_DELAY_SEC = 5
+_VERSION_NOTICE_DELIVERY_ATTEMPTS = 3
 _START_NOTIFY_LAST: dict[int, float] = {}
 _LIFECYCLE_NOTICE_LAST: dict[tuple[str, str, str], float] = {}
 _LIFECYCLE_NOTICE_LOCK = threading.Lock()
@@ -10006,10 +10008,11 @@ def _notification_recipients() -> list[int]:
     return ids
 
 
-async def _notify_admins(text: str, reply_markup=None) -> bool:
+async def _notify_admins(text: str, reply_markup=None, *, owner_only: bool = False) -> bool:
     """Deliver notifications and report whether the protected owner received it."""
     owner_delivered = False
-    for user_id in _notification_recipients():
+    recipients = [int(ADMIN_ID)] if owner_only else _notification_recipients()
+    for user_id in recipients:
         try:
             await bot.send_message(user_id, text, reply_markup=reply_markup)
             if user_id == int(ADMIN_ID):
@@ -10166,18 +10169,35 @@ def _queue_device_version_notice(
         current = devices.get(device_id) or {}
         if (not current.get("online")
                 or str(current.get("version") or "").removeprefix("v") != current_version
-                or bot_settings.is_blocked(device_id)
-                or bot_settings.quiet_active()):
+                or bot_settings.is_blocked(device_id)):
             return
         text = (
             f"📦 <b>{html.escape(name)}</b>: агент подтвердил новую версию — "
             f"<code>{html.escape(previous_version)}</code> → "
             f"<code>{html.escape(current_version)}</code>."
         )
-        _schedule_admin_notice(text)
+        owner_delivered = False
+        for attempt in range(_VERSION_NOTICE_DELIVERY_ATTEMPTS):
+            try:
+                # First try all configured recipients. If Telegram rejected or
+                # missed the owner's delivery, retries target only the owner so
+                # other admins do not receive duplicates.
+                owner_delivered = await _notify_admins(text, owner_only=attempt > 0)
+            except Exception:
+                log.exception("Ошибка доставки уведомления о версии устройства %s", device_id)
+            if owner_delivered:
+                break
+            if attempt + 1 < _VERSION_NOTICE_DELIVERY_ATTEMPTS:
+                await asyncio.sleep(_VERSION_NOTICE_RETRY_DELAY_SEC * (2 ** attempt))
+        if not owner_delivered:
+            log.error(
+                "Не доставлено владельцу уведомление о версии устройства %s (%s -> %s)",
+                device_id, previous_version, current_version,
+            )
         audit(
             "agent_version_changed", device_id=device_id,
             previous_version=previous_version, version=current_version,
+            owner_notification_delivered=owner_delivered,
         )
 
     asyncio.run_coroutine_threadsafe(_send_if_stable(), loop)

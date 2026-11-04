@@ -13317,15 +13317,22 @@ def test_registered_device_version_change_notifies_owner_after_fresh_heartbeat(m
         monkeypatch.setattr(bot, "devices", store)
         monkeypatch.setattr(bot, "LOOP", asyncio.get_running_loop())
         monkeypatch.setattr(bot, "_VERSION_NOTICE_DELAY_SEC", 0.01)
+        monkeypatch.setattr(bot, "_VERSION_NOTICE_RETRY_DELAY_SEC", 0)
         monkeypatch.setattr(bot, "ENCRYPT_PAYLOAD", False)
         monkeypatch.setattr(
             bot, "verify_message_detailed",
             lambda envelope, **_kwargs: (envelope["payload"], "ok"),
         )
         monkeypatch.setattr(bot, "audit", lambda *args, **kwargs: None)
-        monkeypatch.setattr(bot, "_schedule_admin_notice", lambda text, **kwargs: notices.append(text))
+        async def notify_admins(text, **kwargs):
+            notices.append((text, kwargs))
+            return True
+
+        monkeypatch.setattr(bot, "_notify_admins", notify_admins)
         monkeypatch.setattr(bot.bot_settings, "is_blocked", lambda _device_id: False)
-        monkeypatch.setattr(bot.bot_settings, "quiet_active", lambda: False)
+        # An owner explicitly requested every release transition; this notice
+        # is not suppressed by the quiet-hours preference.
+        monkeypatch.setattr(bot.bot_settings, "quiet_active", lambda: True)
         monkeypatch.setattr(bot.bot_settings, "get", lambda _key, default=None: default)
         monkeypatch.setattr(bot, "status_collector", type("Collector", (), {"submit": lambda *args: None})())
         monkeypatch.setattr(bot, "multi_status", type("Collector", (), {"submit": lambda *args: None})())
@@ -13341,7 +13348,36 @@ def test_registered_device_version_change_notifies_owner_after_fresh_heartbeat(m
         bot.on_mqtt_message(topic, {"payload": payload})
         await asyncio.sleep(0.04)
         assert len(notices) == 1
-        assert "4.3.15" in notices[0] and "4.3.24" in notices[0]
+        assert "4.3.15" in notices[0][0] and "4.3.24" in notices[0][0]
+        assert notices[0][1] == {"owner_only": False}
+
+    asyncio.run(_run())
+
+
+def test_device_version_notice_retries_owner_delivery_without_resending_to_other_admins(monkeypatch):
+    async def _run():
+        attempts = []
+        monkeypatch.setattr(bot, "LOOP", asyncio.get_running_loop())
+        monkeypatch.setattr(bot, "_VERSION_NOTICE_DELAY_SEC", 0)
+        monkeypatch.setattr(bot, "_VERSION_NOTICE_RETRY_DELAY_SEC", 0)
+        monkeypatch.setattr(bot, "_VERSION_NOTICE_DELIVERY_ATTEMPTS", 3)
+        monkeypatch.setattr(bot, "ENCRYPT_PAYLOAD", False)
+        monkeypatch.setattr(bot.bot_settings, "is_blocked", lambda _device_id: False)
+        monkeypatch.setattr(bot.bot_settings, "quiet_active", lambda: True)
+        monkeypatch.setattr(bot, "audit", lambda *args, **kwargs: None)
+
+        async def notify_admins(text, **kwargs):
+            attempts.append(kwargs.get("owner_only", False))
+            return len(attempts) == 2
+
+        monkeypatch.setattr(bot, "_notify_admins", notify_admins)
+        monkeypatch.setattr(bot, "devices", type("Store", (), {"get": lambda _self, _device_id: {
+            "online": True, "version": "4.3.24",
+        }})())
+
+        bot._queue_device_version_notice("windows-1", "Windows", "4.3.23", "4.3.24")
+        await asyncio.sleep(0.03)
+        assert attempts == [False, True]
 
     asyncio.run(_run())
 
