@@ -28738,14 +28738,41 @@ def _version_protection_summary(release: release_catalog.Release, component: str
         "Это данные релиза: они не подтверждают, что установлено на устройстве.",
         "Это сведения о релизе, а не проверка файлов на устройстве.",
     ))
+    signing_report = (release.protected_manifest or {}).get("platform_signing")
+    signing_report = signing_report if isinstance(signing_report, dict) else {}
     if component in {"mac_agent", "mac_keeper"}:
-        signing_report = (release.protected_manifest or {}).get("platform_signing")
-        signing = signing_report.get("macos") if isinstance(signing_report, dict) else None
-        if signing in {"unsigned_preview", "source_preview_no_native_package"}:
+        signing = signing_report.get("macos")
+        if signing == "source_preview_no_native_package":
+            lines.append(_ui_phrase(
+                "No native macOS package is listed in this release report.",
+                "В отчёте этого релиза нет нативного пакета macOS.",
+                "В этом релизе нет нативного пакета macOS.",
+            ))
+        elif signing == "unsigned_preview":
             lines.append(_ui_phrase(
                 "macOS app is not Apple-signed or notarized.",
                 "Приложение macOS не подписано Apple и не notarized.",
                 "macOS-приложение не подписано Apple и не прошло notarization.",
+            ))
+        elif signing == "apple_signed_notarized":
+            lines.append(_ui_phrase(
+                "Apple code signing and notarization reported for this release.",
+                "В отчёте релиза указаны подпись разработчика Apple и нотарификация.",
+                "В отчёте релиза указаны подпись Apple и нотарификация.",
+            ))
+    elif component in {"windows_agent", "windows_keeper"}:
+        signing = signing_report.get("windows")
+        if signing == "not_claimed":
+            lines.append(_ui_phrase(
+                "Windows Authenticode signing is not claimed in this release report.",
+                "Подпись Windows Authenticode в отчёте релиза не заявлена.",
+                "Подпись Authenticode в отчёте релиза не заявлена.",
+            ))
+        elif signing == "authenticode_signed":
+            lines.append(_ui_phrase(
+                "Windows Authenticode signing reported for this release.",
+                "В отчёте релиза указана подпись Windows Authenticode.",
+                "В отчёте релиза указана подпись Authenticode.",
             ))
     return html.escape("\n".join(lines))
 
