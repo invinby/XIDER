@@ -37,14 +37,14 @@ try {
         New-Item -ItemType Directory -Path (Join-Path $root $name) -Force | Out-Null
     }
 
-    Remove-XiderOldPreviousCheckouts -InstallRoot $root -CurrentBackup (Join-Path $root $names[3]) -Keep 2
+    Remove-XiderOldPreviousCheckouts -InstallRoot $root -CurrentBackup (Join-Path $root $names[3]) -Keep 1
     Remove-XiderOldFailedCheckouts -InstallRoot $root -Keep 1
 
     $managed = @(Get-ChildItem -LiteralPath $root -Directory -Force |
         Where-Object { $_.Name -match '^git-ver\.previous\.\d{14}\.[0-9a-fA-F]{32}$' } |
         Sort-Object -Property Name -Descending)
-    if ($managed.Count -ne 2 -or $managed[0].Name -ne $names[3] -or $managed[1].Name -ne $names[2]) {
-        throw "Expected the two newest managed rollback checkouts, found: $($managed.Name -join ', ')"
+    if ($managed.Count -ne 1 -or $managed[0].Name -ne $names[3]) {
+        throw "Expected only the current managed rollback checkout, found: $($managed.Name -join ', ')"
     }
     if (-not (Test-Path -LiteralPath (Join-Path $unrecognized 'keep.txt'))) {
         throw 'An unrecognized sibling directory was modified.'

@@ -242,7 +242,7 @@ function Remove-XiderOldPreviousCheckouts {
                 if ($nestedLinks.Count) { continue }
                 Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
             }
-            catch { Write-Warning "Не удалось удалить устаревшую резервную копию XIDER: $path" }
+            catch { Write-Warning "Не удалось удалить устаревшую резервную копию XIDER: $path ($($_.Exception.Message))" }
         }
     } catch {
         # Retention is best-effort; a cleanup failure must not turn a healthy install into a rollback.
@@ -275,7 +275,7 @@ function Remove-XiderOldFailedCheckouts {
                 if ($nestedLinks.Count) { continue }
                 Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
             }
-            catch { Write-Warning "Не удалось удалить старую неудачную сборку XIDER: $path" }
+            catch { Write-Warning "Не удалось удалить старую неудачную сборку XIDER: $path ($($_.Exception.Message))" }
         }
     } catch {
         Write-Warning "Не удалось ограничить старые неудачные сборки XIDER: $($_.Exception.Message)"
@@ -1448,7 +1448,7 @@ try {
     Write-Host ("[OK] Agent v{0}; PID={1}; MQTT=connected" -f $healthStates.agent.version, $healthStates.agent.pid)
     Write-Host ("[OK] Guardian v{0}; PID={1}; MQTT=connected" -f $healthStates.guardian.version, $healthStates.guardian.pid)
     Write-XiderInstallReport -Outcome succeeded -RequestedVersion $expectedAgentVersion -HealthStates $healthStates -Required
-    Remove-XiderOldPreviousCheckouts -InstallRoot $resolvedRoot -CurrentBackup $backup -Keep 2
+    Remove-XiderOldPreviousCheckouts -InstallRoot $resolvedRoot -CurrentBackup $backup -Keep 1
     Remove-XiderOldFailedCheckouts -InstallRoot $resolvedRoot -Keep 1
     if (Test-Path -LiteralPath $backup) { Write-Host "[BACKUP] Предыдущая версия сохранена: $backup" }
 }

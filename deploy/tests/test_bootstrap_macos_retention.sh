@@ -22,7 +22,7 @@ printf '%s\n' owner-data > "$FIXTURE/git-ver.previous.owner-data/keep"
 prune_previous_checkouts "$FIXTURE" "$FIXTURE/${names[3]}"
 
 [[ -d "$FIXTURE/${names[3]}" ]]
-[[ -d "$FIXTURE/${names[2]}" ]]
+[[ ! -e "$FIXTURE/${names[2]}" ]]
 [[ ! -e "$FIXTURE/${names[0]}" && ! -e "$FIXTURE/${names[1]}" ]]
 [[ -f "$FIXTURE/git-ver.previous.owner-data/keep" ]]
 printf '%s\n' 'macOS checkout retention helper passed.'
