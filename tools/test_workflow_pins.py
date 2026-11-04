@@ -147,6 +147,29 @@ def test_manual_tag_build_creates_signed_inventory_without_publishing_release():
     assert "inputs.publish_preview == true" in release
 
 
+def test_stable_release_requires_explicit_owner_dispatch_and_signed_macos_gate():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    dispatch = text.split("  workflow_dispatch:", 1)[1].split("permissions:", 1)[0]
+    source = text.split("  source-state:", 1)[1].split("  release-ci:", 1)[0]
+    macos = text.split("  build-macos:", 1)[1].split("  pack-components:", 1)[0]
+    inventory = text.split("  protected-build-inventory:", 1)[1].split("  create-release:", 1)[0]
+    release = text.split("  create-release:", 1)[1]
+
+    assert re.search(r"(?m)^\s*publish_stable:\s*$", dispatch)
+    assert re.search(r"(?m)^\s*default:\s*false\s*$", dispatch)
+    assert "DISPATCH_PREVIEW" in source and "DISPATCH_STABLE" in source
+    assert "mutually exclusive" in source.lower()
+    assert '"$GITHUB_REF" != "refs/tags/$tag"' in source
+    assert "XIDER_MACOS_RELEASE_READY" in source
+    assert "inputs.publish_stable == true" in macos
+    assert "inputs.publish_stable != true" in inventory
+    assert "inputs.publish_stable == true" in release
+    assert "github.actor == github.repository_owner" in release
+    assert "vars.XIDER_MACOS_RELEASE_READY == 'true'" in release
+    assert "prerelease: ${{ inputs.publish_stable != true }}" in release
+    assert "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.XIDER_MACOS_RELEASE_READY == 'true'" not in macos
+
+
 def test_manual_signed_build_inventory_is_owner_only_and_never_publishes_release():
     text = WORKFLOW.read_text(encoding="utf-8")
     source_state = text.split("  source-state:", 1)[1].split("  release-ci:", 1)[0]
