@@ -73,6 +73,19 @@ Agent и Guardian должны подтвердить MQTT-подключени�
 установку. Этот путь проверяется локальным фикстурным ZIP в PowerShell 5 и 7;
 проверка не равна установке на реальном ноутбуке.
 
+По умолчанию Windows ставится в `%LOCALAPPDATA%\XIDER`, macOS — в
+`~/Library/Application Support/XIDER`. После подтверждённого запуска новой
+версии установщик переносит распознанные старые копии Windows из
+`Desktop\XIDER\git-ver` или `Desktop\XIDER\XGENT-WDS`, а macOS — из `~/XIDER`
+в rollback-папки стандартного каталога приложения. Старые версии остаются для
+отката; посторонние файлы в исходных папках не трогаются. Атрибут скрытия не
+ставится.
+
+Для зарегистрированного устройства бот пишет переход `старая версия → новая`
+только после свежего online-heartbeat с новой версией; сам запрос на скачивание
+не считается завершённым обновлением. Agent и Guard Keeper используют номер
+релиза, Safari и Siri отдельно показывают версию общего `XIDER-Layers`.
+
 Для обновления уже установленного бота из checkout:
 
 ```powershell
@@ -155,7 +168,10 @@ the old Scheduled Tasks, switch the checkout, register the new tasks, and
 verify both are running from the new Python paths. Failure restores the old
 checkout and task definitions/running state where possible; a failed new
 checkout is retained without its copied `.env`. The previous checkout is kept
-as a recoverable backup after success. This verifies local process state, not
+as the single recoverable rollback backup after success; older managed backups
+are pruned, and cleanup failures include the operating-system reason. Windows
+installs live under `%LOCALAPPDATA%\XIDER` so the agent does not scatter files
+through Desktop, Downloads, or the visible home-folder root. This verifies local process state, not
 Telegram/MQTT round-trip or Windows hardware functions.
 
 For an agent-only validation without changing the installed files or Scheduled
@@ -201,8 +217,9 @@ The macOS bootstrap uses the same owner-approved X-DOCK enrollment flow as
 Windows when a local sidecar `.env` is absent. It defaults to the deployed
 `https://16.16.200.207` endpoint (`XIDER_DOCK_URL` overrides it); approve the
 new device in Telegram before the installer receives its per-device settings.
-The device key is generated locally, and the bot token is never copied. The
-generated local file is mode `0600`. Set `XIDER_ENV_ROOT` to use an existing
+The install stays under `~/Library/Application Support/XIDER` and retains one
+rollback checkout; the device key is generated locally, and the bot token is
+never copied. The generated local file is mode `0600`. Set `XIDER_ENV_ROOT` to use an existing
 local `.env`. This does not deploy the VPS bot; that remains the
 Windows/server deployment flow. The bootstrap also registers the visible
 macOS `XIDER Guardian` LaunchAgent.

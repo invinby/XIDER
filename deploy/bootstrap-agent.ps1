@@ -227,10 +227,13 @@ function Remove-XiderOldPreviousCheckouts {
             Where-Object { $_.Name -match '^git-ver\.previous\.\d{14}\.[0-9a-fA-F]{32}$' } |
             Sort-Object -Property Name -Descending)
         $keepPaths = @{}
-        foreach ($item in @($managed | Select-Object -First $Keep)) {
+        if (Test-Path -LiteralPath $current -PathType Container) { $keepPaths[$current] = $true }
+        $remaining = [Math]::Max(0, $Keep - $keepPaths.Count)
+        foreach ($item in @($managed | Where-Object {
+            -not [string]::Equals([IO.Path]::GetFullPath($_.FullName), $current, [StringComparison]::OrdinalIgnoreCase)
+        } | Select-Object -First $remaining)) {
             $keepPaths[[IO.Path]::GetFullPath($item.FullName)] = $true
         }
-        $keepPaths[$current] = $true
         foreach ($item in $managed) {
             $path = [IO.Path]::GetFullPath($item.FullName)
             if ($keepPaths.ContainsKey($path) -or
@@ -242,11 +245,70 @@ function Remove-XiderOldPreviousCheckouts {
                 if ($nestedLinks.Count) { continue }
                 Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
             }
-            catch { Write-Warning "Не удалось удалить устаревшую резервную копию XIDER: $path" }
+            catch { Write-Warning "Не удалось удалить устаревшую резервную копию XIDER: $path ($($_.Exception.Message))" }
         }
     } catch {
         # Retention is best-effort; a cleanup failure must not turn a healthy install into a rollback.
         Write-Warning "Не удалось ограничить старые резервные копии XIDER: $($_.Exception.Message)"
+    }
+}
+
+function Move-XiderLegacyDesktopCheckoutToRollback {
+    param([Parameter(Mandatory)][string]$InstallRoot)
+
+    $desktopRoot = Join-Path $env:USERPROFILE 'Desktop'
+    $legacyRoot = Join-Path $desktopRoot 'XIDER'
+    $legacySources = @(
+        [pscustomobject]@{ Path = (Join-Path $legacyRoot 'git-ver'); AgentDirectory = (Join-Path (Join-Path $legacyRoot 'git-ver') 'XGENT-WDS'); Layout = 'checkout' },
+        [pscustomobject]@{ Path = (Join-Path $legacyRoot 'XGENT-WDS'); AgentDirectory = (Join-Path $legacyRoot 'XGENT-WDS'); Layout = 'component' }
+    )
+    if (-not ($legacySources | Where-Object { Test-Path -LiteralPath $_.Path -PathType Container })) { return $null }
+    try {
+        $desktop = Get-Item -LiteralPath $desktopRoot -Force -ErrorAction Stop
+        $legacy = Get-Item -LiteralPath $legacyRoot -Force -ErrorAction Stop
+        $root = [IO.Path]::GetFullPath($InstallRoot)
+        if (($desktop.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+            ($legacy.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+            -not [string]::Equals([IO.Path]::GetPathRoot($root), [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($legacyRoot)), [StringComparison]::OrdinalIgnoreCase)) {
+            return $null
+        }
+        if (-not (Test-Path -LiteralPath $root -PathType Container)) { return $null }
+
+        $lastDestination = $null
+        foreach ($legacySource in $legacySources) {
+            $sourcePath = [IO.Path]::GetFullPath($legacySource.Path)
+            if (-not (Test-Path -LiteralPath $sourcePath -PathType Container)) { continue }
+            $source = Get-Item -LiteralPath $sourcePath -Force -ErrorAction Stop
+            if (($source.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+                -not [string]::Equals([IO.Path]::GetDirectoryName($sourcePath), [IO.Path]::GetFullPath($legacyRoot), [StringComparison]::OrdinalIgnoreCase) -or
+                -not (Test-Path -LiteralPath $legacySource.AgentDirectory -PathType Container) -or
+                -not ((Test-Path -LiteralPath (Join-Path $legacySource.AgentDirectory 'xgent_wds.py') -PathType Leaf) -or
+                    (Test-Path -LiteralPath (Join-Path $legacySource.AgentDirectory 'XGENT-WDS.exe') -PathType Leaf))) {
+                continue
+            }
+            $nestedLinks = @(Get-ChildItem -LiteralPath $sourcePath -Force -Recurse -ErrorAction Stop |
+                Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint })
+            if ($nestedLinks.Count) { continue }
+
+            $destination = Join-Path $root ('git-ver.previous.' + (Get-Date -Format 'yyyyMMddHHmmss') + '.' + [guid]::NewGuid().ToString('N'))
+            if (Test-Path -LiteralPath $destination) { continue }
+            if ($legacySource.Layout -eq 'checkout') {
+                Move-Item -LiteralPath $sourcePath -Destination $destination -ErrorAction Stop
+            } else {
+                New-Item -ItemType Directory -Path $destination -Force | Out-Null
+                Move-Item -LiteralPath $sourcePath -Destination $destination -ErrorAction Stop
+            }
+            $lastDestination = $destination
+            Write-Host "[BACKUP] Старая копия с рабочего стола перенесена для отката: $destination"
+        }
+        if (@(Get-ChildItem -LiteralPath $legacyRoot -Force -ErrorAction Stop).Count -eq 0) {
+            Remove-Item -LiteralPath $legacyRoot -Force -ErrorAction Stop
+        }
+        return $lastDestination
+    }
+    catch {
+        Write-Warning "Не удалось перенести старую копию XIDER с рабочего стола; она оставлена на месте: $($_.Exception.Message)"
+        return $null
     }
 }
 
@@ -275,10 +337,43 @@ function Remove-XiderOldFailedCheckouts {
                 if ($nestedLinks.Count) { continue }
                 Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
             }
-            catch { Write-Warning "Не удалось удалить старую неудачную сборку XIDER: $path" }
+            catch { Write-Warning "Не удалось удалить старую неудачную сборку XIDER: $path ($($_.Exception.Message))" }
         }
     } catch {
         Write-Warning "Не удалось ограничить старые неудачные сборки XIDER: $($_.Exception.Message)"
+    }
+}
+
+function Remove-XiderOldStageCheckouts {
+    param(
+        [Parameter(Mandatory)][string]$InstallRoot,
+        [int]$MaxAgeHours = 24
+    )
+
+    if ($MaxAgeHours -lt 1) { return }
+    try {
+        $root = [IO.Path]::GetFullPath($InstallRoot)
+        $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop
+        if (-not $rootItem.PSIsContainer -or
+            ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return }
+        $cutoffUtc = [DateTime]::UtcNow.AddHours(-$MaxAgeHours)
+        $managed = @(Get-ChildItem -LiteralPath $root -Directory -Force -ErrorAction Stop |
+            Where-Object { $_.Name -match '^git-ver\.stage\.[0-9a-fA-F]{32}$' })
+        foreach ($item in $managed) {
+            $path = [IO.Path]::GetFullPath($item.FullName)
+            if ($item.LastWriteTimeUtc -ge $cutoffUtc -or
+                ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+                -not [string]::Equals([IO.Path]::GetDirectoryName($path), $root, [StringComparison]::OrdinalIgnoreCase)) { continue }
+            try {
+                $nestedLinks = @(Get-ChildItem -LiteralPath $path -Force -Recurse -ErrorAction Stop |
+                    Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint })
+                if ($nestedLinks.Count) { continue }
+                Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
+            }
+            catch { Write-Warning "Не удалось удалить устаревший staging-каталог XIDER: $path ($($_.Exception.Message))" }
+        }
+    } catch {
+        Write-Warning "Не удалось очистить старые staging-каталоги XIDER: $($_.Exception.Message)"
     }
 }
 
@@ -1448,8 +1543,10 @@ try {
     Write-Host ("[OK] Agent v{0}; PID={1}; MQTT=connected" -f $healthStates.agent.version, $healthStates.agent.pid)
     Write-Host ("[OK] Guardian v{0}; PID={1}; MQTT=connected" -f $healthStates.guardian.version, $healthStates.guardian.pid)
     Write-XiderInstallReport -Outcome succeeded -RequestedVersion $expectedAgentVersion -HealthStates $healthStates -Required
-    Remove-XiderOldPreviousCheckouts -InstallRoot $resolvedRoot -CurrentBackup $backup -Keep 2
+    Move-XiderLegacyDesktopCheckoutToRollback -InstallRoot $resolvedRoot | Out-Null
+    Remove-XiderOldPreviousCheckouts -InstallRoot $resolvedRoot -CurrentBackup $backup -Keep 1
     Remove-XiderOldFailedCheckouts -InstallRoot $resolvedRoot -Keep 1
+    Remove-XiderOldStageCheckouts -InstallRoot $resolvedRoot -MaxAgeHours 24
     if (Test-Path -LiteralPath $backup) { Write-Host "[BACKUP] Предыдущая версия сохранена: $backup" }
 }
 catch {
