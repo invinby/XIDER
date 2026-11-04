@@ -1,5 +1,15 @@
 # XIDER release history
 
+## Unreleased
+
+### English
+
+- After a healthy update, move recognized legacy Windows Desktop and macOS home-folder installs into the standard per-user XIDER data directory as rollback copies. Leave unrelated files untouched.
+
+### Русский
+
+- После успешного обновления переносить распознанные старые установки Windows с рабочего стола и macOS из домашней папки в стандартный каталог данных как резервные копии для отката. Посторонние файлы не трогать.
+
 ## X4.3.27-MAC-APP-SUPPORT+20261104 — synchronized agent update paths
 
 ### English
