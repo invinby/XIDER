@@ -12202,6 +12202,69 @@ def test_prank_action_card_requires_explicit_launch_and_pins_stop(monkeypatch):
     assert "закрой вкладку браузера вручную" in captured["text"]
 
 
+def test_prank_without_audited_effect_facts_is_disabled(monkeypatch):
+    target = "pc"
+    _setup(monkeypatch, {target: {"name": "PC", "os": "Windows"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": target})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
+
+    item = next(row for row in bot._prank_catalog_items(target, bot.ADMIN_ID)
+                if row["callback"] == "cmd:prank_hacker_typer")
+
+    assert item["available"] is False
+    assert "эффект" in item["unavailable_reason"].lower()
+    assert "восстанов" in item["unavailable_reason"].lower()
+
+
+@pytest.mark.parametrize(
+    ("callback", "evidence"),
+    [
+        ("prank:siren", "100%"),
+        ("prank:rickroll50", "50"),
+        ("prank:matrix", "бесконеч"),
+        ("cmd:prank_bsod", "полноэкран"),
+        ("prank:hidedesktop", "Finder"),
+    ],
+)
+def test_nonreversible_prank_cards_explain_effect_and_stay_disabled(monkeypatch, callback, evidence):
+    target = "pc"
+    _setup(monkeypatch, {target: {"name": "PC", "os": "Windows"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": target})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
+
+    item = next(row for row in bot._prank_catalog_items(target, bot.ADMIN_ID)
+                if row["callback"] == callback)
+    card = bot._prank_card_text(item)
+
+    assert item["available"] is False
+    assert evidence.casefold() in card.casefold()
+    assert "вручную" in card.casefold() or "не выполняется" in card.casefold()
+
+
+@pytest.mark.parametrize(
+    ("os_name", "duration"),
+    [("Windows 11", "22 секунды"), ("macOS 27", "30 секунд")],
+)
+def test_fake_update_card_documents_bounded_demo_and_stop_path(monkeypatch, os_name, duration):
+    target = "pc"
+    _setup(monkeypatch, {target: {"name": "PC", "os": os_name}})
+    monkeypatch.setattr(bot, "SESSION", {"target": target})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
+
+    item = next(row for row in bot._prank_catalog_items(target, bot.ADMIN_ID)
+                if row["callback"] == "cmd:prank_fake_update")
+    card = bot._prank_card_text(item)
+
+    assert item["available"] is True
+    assert duration in card
+    assert "Остановить всё" in card
+    assert "системные файлы не изменяются" in card
+    assert "Esc" in card
+
+
 @pytest.mark.parametrize("style", bot.xlex.STYLES)
 def test_prank_card_describes_the_actual_screamer_effect_and_lifecycle(monkeypatch, style):
     _setup(monkeypatch, {"pc": {"name": "PC", "os": "Windows"}})
