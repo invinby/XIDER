@@ -44,15 +44,25 @@ try {
     }
     [IO.Directory]::SetLastWriteTimeUtc($oldStage, [DateTime]::UtcNow.AddHours(-48))
 
-    Remove-XiderOldPreviousCheckouts -InstallRoot $root -CurrentBackup (Join-Path $root $names[3]) -Keep 1
+    Remove-XiderOldPreviousCheckouts -InstallRoot $root -CurrentBackup (Join-Path $root $names[0]) -Keep 1
     Remove-XiderOldFailedCheckouts -InstallRoot $root -Keep 1
     Remove-XiderOldStageCheckouts -InstallRoot $root -MaxAgeHours 24
 
     $managed = @(Get-ChildItem -LiteralPath $root -Directory -Force |
         Where-Object { $_.Name -match '^git-ver\.previous\.\d{14}\.[0-9a-fA-F]{32}$' } |
         Sort-Object -Property Name -Descending)
-    if ($managed.Count -ne 1 -or $managed[0].Name -ne $names[3]) {
+    if ($managed.Count -ne 1 -or $managed[0].Name -ne $names[0]) {
         throw "Expected only the current managed rollback checkout, found: $($managed.Name -join ', ')"
+    }
+    $newestOnlyRoot = Join-Path $root 'newest-only-fixture'
+    New-Item -ItemType Directory -Path $newestOnlyRoot -Force | Out-Null
+    foreach ($name in @($names[1], $names[2])) {
+        New-Item -ItemType Directory -Path (Join-Path $newestOnlyRoot $name) -Force | Out-Null
+    }
+    Remove-XiderOldPreviousCheckouts -InstallRoot $newestOnlyRoot -CurrentBackup (Join-Path $newestOnlyRoot 'missing-current') -Keep 1
+    $newestOnly = @(Get-ChildItem -LiteralPath $newestOnlyRoot -Directory -Force)
+    if ($newestOnly.Count -ne 1 -or $newestOnly[0].Name -ne $names[2]) {
+        throw 'Retention without a current backup did not keep only the newest managed checkout.'
     }
     if (-not (Test-Path -LiteralPath (Join-Path $unrecognized 'keep.txt'))) {
         throw 'An unrecognized sibling directory was modified.'

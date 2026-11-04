@@ -741,7 +741,7 @@ start_runtime_services() {
 
 # XIDER_RETENTION_HELPERS_BEGIN
 prune_previous_checkouts() {
-  local root="$1" current_backup="$2" candidate name index=0
+  local root="$1" current_backup="$2" candidate name keep_path="" index=0
   local -a backups=()
   [[ -d "$root" && ! -L "$root" ]] || return 0
   for candidate in "$root"/git-ver.previous.*; do
@@ -754,15 +754,100 @@ prune_previous_checkouts() {
   ((${#backups[@]} > 1)) || return 0
   mapfile -t backups < <(printf '%s\n' "${backups[@]}" | sort -r)
   for candidate in "${backups[@]}"; do
-    if [[ "$candidate" == "$current_backup" || $index -lt 1 ]]; then
-      ((index+=1))
-      continue
+    if [[ "$candidate" == "$current_backup" ]]; then
+      keep_path="$candidate"
+      break
     fi
+  done
+  [[ -n "$keep_path" ]] || keep_path="${backups[0]}"
+  for candidate in "${backups[@]}"; do
+    [[ "$candidate" == "$keep_path" ]] && continue
     [[ -d "$candidate" && ! -L "$candidate" && "$(dirname "$candidate")" == "$root" ]] || continue
     rm -rf -- "$candidate" || echo "Не удалось удалить старую резервную копию XIDER: $candidate" >&2
   done
 }
 # XIDER_RETENTION_HELPERS_END
+# XIDER_LEGACY_MIGRATION_HELPERS_BEGIN
+preserve_legacy_visible_install() {
+  local install_root="$1" legacy_root="$2" candidate name destination stamp suffix moved=0
+  [[ -d "$install_root" && ! -L "$install_root" ]] || return 0
+  [[ -d "$legacy_root" && ! -L "$legacy_root" ]] || return 0
+  [[ "$install_root" != "$legacy_root" ]] || return 0
+
+  for candidate in "$legacy_root"/git-ver "$legacy_root"/git-ver.previous.* "$legacy_root"/git-ver.failed.*; do
+    [[ -d "$candidate" && ! -L "$candidate" && "$(dirname "$candidate")" == "$legacy_root" ]] || continue
+    name="${candidate##*/}"
+    if [[ "$name" == git-ver ]]; then
+      name="git-ver.previous.$(date +%Y%m%d%H%M%S).$$"
+      suffix=0
+      while [[ -e "$install_root/$name" || -L "$install_root/$name" ]]; do
+        ((suffix+=1))
+        name="git-ver.previous.$(date +%Y%m%d%H%M%S).$(( $$ + suffix ))"
+      done
+    elif [[ "$name" =~ ^git-ver\.previous\.[0-9]{14}\.[0-9]+$ ]]; then
+      :
+    elif [[ "$name" =~ ^git-ver\.failed\.[0-9]{14}\.[0-9]+$ ]]; then
+      :
+    else
+      continue
+    fi
+    [[ -d "$candidate/XGENT-MCS" ]] || continue
+    [[ -z "$(find -P "$candidate" -type l -print -quit 2>/dev/null)" ]] || continue
+    destination="$install_root/$name"
+    if [[ -e "$destination" || -L "$destination" ]]; then
+      stamp="$(date +%Y%m%d%H%M%S)"
+      suffix=0
+      while [[ -e "$destination" || -L "$destination" ]]; do
+        ((suffix+=1))
+        if [[ "$name" == git-ver.failed.* ]]; then
+          destination="$install_root/git-ver.failed.$stamp.$(( $$ + suffix ))"
+        else
+          destination="$install_root/git-ver.previous.$stamp.$(( $$ + suffix ))"
+        fi
+      done
+    fi
+    if mv -- "$candidate" "$destination"; then
+      ((moved+=1))
+    else
+      echo "Не удалось перенести старую папку XIDER; оставлена на месте: $candidate" >&2
+    fi
+  done
+
+  candidate="$legacy_root/XGENT-MCS"
+  if [[ -d "$candidate" && ! -L "$candidate" && "$(dirname "$candidate")" == "$legacy_root" &&
+        ( -f "$candidate/xgent_mcs.py" || -d "$candidate/XIDER.app" ) &&
+        -z "$(find -P "$candidate" -type l -print -quit 2>/dev/null)" ]]; then
+    stamp="$(date +%Y%m%d%H%M%S)"
+    suffix=0
+    destination="$install_root/git-ver.previous.$stamp.$$"
+    while [[ -e "$destination" || -L "$destination" ]]; do
+      ((suffix+=1))
+      destination="$install_root/git-ver.previous.$stamp.$(( $$ + suffix ))"
+    done
+    if mkdir -p "$destination" && mv -- "$candidate" "$destination/XGENT-MCS"; then
+      ((moved+=1))
+    else
+      rmdir "$destination" 2>/dev/null || true
+      echo "Не удалось перенести старый компонент XIDER; он оставлен на месте: $candidate" >&2
+    fi
+  fi
+
+  if [[ -d "$legacy_root/runtimes" && ! -L "$legacy_root/runtimes" &&
+        ! -e "$install_root/runtimes" && ! -L "$install_root/runtimes" &&
+        -z "$(find -P "$legacy_root/runtimes" -type l -print -quit 2>/dev/null)" ]]; then
+    if mv -- "$legacy_root/runtimes" "$install_root/runtimes"; then
+      ((moved+=1))
+    else
+      echo "Не удалось перенести старые runtime XIDER; они оставлены на месте." >&2
+    fi
+  fi
+
+  rmdir "$legacy_root" 2>/dev/null || true
+  if ((moved > 0)); then
+    echo "Старые версии XIDER перенесены в обычную папку данных пользователя для отката: $install_root"
+  fi
+}
+# XIDER_LEGACY_MIGRATION_HELPERS_END
 runtime_services_status() {
   local directory="$1"
   local agent_binary="$directory/XIDER.app/Contents/MacOS/XGENT-MCS"
@@ -979,6 +1064,7 @@ PY
 fi
 
 echo "Установка завершена: $TARGET"
+preserve_legacy_visible_install "$INSTALL_ROOT" "$LEGACY_INSTALL_ROOT" "$backup"
 prune_previous_checkouts "$INSTALL_ROOT" "$backup"
 [[ ! -e "$backup" ]] || echo "Предыдущая установка сохранена: $backup"
 echo "Проверка: Agent и Guard Keeper — выше; Safari/Siri — отдельные [OK]/[SKIP] строки выше."
