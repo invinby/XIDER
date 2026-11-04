@@ -767,6 +767,29 @@ prune_previous_checkouts() {
   done
 }
 # XIDER_RETENTION_HELPERS_END
+# XIDER_FAILED_RETENTION_HELPERS_BEGIN
+prune_failed_checkouts() {
+  local root="$1" keep="${2:-1}" candidate name
+  local -a failures=()
+  [[ "$keep" =~ ^[0-9]+$ ]] || return 0
+  [[ -d "$root" && ! -L "$root" ]] || return 0
+  for candidate in "$root"/git-ver.failed.*; do
+    [[ -d "$candidate" && ! -L "$candidate" ]] || continue
+    [[ "$(dirname "$candidate")" == "$root" ]] || continue
+    name="${candidate##*/}"
+    [[ "$name" =~ ^git-ver\.failed\.[0-9]{14}(\.[0-9]+)?$ ]] || continue
+    failures+=("$candidate")
+  done
+  ((${#failures[@]} > keep)) || return 0
+  mapfile -t failures < <(printf '%s\n' "${failures[@]}" | sort -r)
+  for candidate in "${failures[@]:keep}"; do
+    [[ -d "$candidate" && ! -L "$candidate" && "$(dirname "$candidate")" == "$root" ]] || continue
+    # Never recursively remove a failed checkout containing symlinks.
+    [[ -z "$(find -P "$candidate" -type l -print -quit 2>/dev/null)" ]] || continue
+    rm -rf -- "$candidate" || echo "Не удалось удалить старую неудачную сборку XIDER: $candidate" >&2
+  done
+}
+# XIDER_FAILED_RETENTION_HELPERS_END
 # XIDER_LEGACY_MIGRATION_HELPERS_BEGIN
 preserve_legacy_visible_install() {
   local install_root="$1" legacy_root="$2" candidate name destination stamp suffix moved=0
@@ -1066,6 +1089,7 @@ fi
 echo "Установка завершена: $TARGET"
 preserve_legacy_visible_install "$INSTALL_ROOT" "$LEGACY_INSTALL_ROOT" "$backup"
 prune_previous_checkouts "$INSTALL_ROOT" "$backup"
+prune_failed_checkouts "$INSTALL_ROOT" 1
 [[ ! -e "$backup" ]] || echo "Предыдущая установка сохранена: $backup"
 echo "Проверка: Agent и Guard Keeper — выше; Safari/Siri — отдельные [OK]/[SKIP] строки выше."
 echo "Запуск компонентов подтверждён. MQTT и системные разрешения проверь в карточке устройства в боте."
