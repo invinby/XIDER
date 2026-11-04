@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-INSTALL_ROOT="${XIDER_INSTALL_ROOT:-$HOME/XIDER}"
-ENV_ROOT="${XIDER_ENV_ROOT:-$HOME/XIDER}"
+LEGACY_INSTALL_ROOT="$HOME/XIDER"
+INSTALL_ROOT="${XIDER_INSTALL_ROOT:-$HOME/Library/Application Support/XIDER}"
+ENV_ROOT="${XIDER_ENV_ROOT:-$LEGACY_INSTALL_ROOT}"
 BRANCH="${XIDER_BRANCH:-main}"
 REF="${XIDER_REF:-}"
 SERVER_HOST="${XIDER_SERVER_HOST:-16.16.200.207}"
@@ -800,6 +801,112 @@ stop_loaded_job() {
     fi
   fi
 }
+rebase_legacy_symlinks() {
+  "$PYTHON_BIN" - "$1" "$2" "$3" <<'PY'
+from pathlib import Path
+import os
+import sys
+
+tree, legacy_root, new_root = map(Path, sys.argv[1:])
+changed = []
+try:
+    for parent, directories, files in os.walk(tree, followlinks=False):
+        for name in [*directories, *files]:
+            link = Path(parent) / name
+            if not link.is_symlink():
+                continue
+            raw = os.readlink(link)
+            if not os.path.isabs(raw):
+                continue
+            try:
+                relative = Path(os.path.normpath(raw)).relative_to(legacy_root)
+            except ValueError:
+                continue
+            temporary = link.with_name(f".{link.name}.xider-rebase")
+            if temporary.exists() or temporary.is_symlink():
+                raise OSError(f"temporary symlink path already exists: {temporary}")
+            temporary.symlink_to(new_root / relative)
+            os.replace(temporary, link)
+            changed.append((link, raw))
+except Exception:
+    for link, raw in reversed(changed):
+        temporary = link.with_name(f".{link.name}.xider-restore")
+        try:
+            temporary.symlink_to(raw)
+            os.replace(temporary, link)
+        except OSError:
+            pass
+    raise
+PY
+}
+migrate_legacy_install_root() {
+  [[ -z "${XIDER_INSTALL_ROOT:-}" ]] || return 0
+  [[ "$INSTALL_ROOT" != "$LEGACY_INSTALL_ROOT" ]] || return 0
+  [[ -d "$LEGACY_INSTALL_ROOT/git-ver/XGENT-MCS" ]] || return 0
+  [[ ! -e "$TARGET" && ! -L "$TARGET" ]] || return 0
+  local candidate destination runtime_candidate runtime_name
+  local -a legacy_checkouts=() moved_checkouts=() moved_runtimes=()
+  for candidate in "$LEGACY_INSTALL_ROOT"/git-ver "$LEGACY_INSTALL_ROOT"/git-ver.previous.* "$LEGACY_INSTALL_ROOT"/git-ver.failed.*; do
+    [[ -d "$candidate" && ! -L "$candidate" ]] || continue
+    destination="$INSTALL_ROOT/${candidate##*/}"
+    if [[ -e "$destination" || -L "$destination" ]]; then
+      echo "В новой папке уже есть $destination; старую установку не переносил." >&2
+      return 1
+    fi
+    legacy_checkouts+=("$candidate")
+  done
+
+  if [[ -d "$LEGACY_INSTALL_ROOT/runtimes" && ! -L "$LEGACY_INSTALL_ROOT/runtimes" ]]; then
+    if [[ -L "$INSTALL_ROOT/runtimes" ]]; then
+      echo "Новая папка runtime является symlink; старую установку не переносил." >&2
+      return 1
+    fi
+    mkdir -p "$INSTALL_ROOT/runtimes"
+    for runtime_candidate in "$LEGACY_INSTALL_ROOT"/runtimes/*; do
+      [[ -e "$runtime_candidate" || -L "$runtime_candidate" ]] || continue
+      runtime_name="${runtime_candidate##*/}"
+      if [[ -e "$INSTALL_ROOT/runtimes/$runtime_name" || -L "$INSTALL_ROOT/runtimes/$runtime_name" ]]; then
+        echo "Совпали папки runtime: $runtime_name; старую установку не переносил." >&2
+        for candidate in "${moved_runtimes[@]}"; do mv "$candidate" "$LEGACY_INSTALL_ROOT/runtimes/" || true; done
+        return 1
+      fi
+      if ! mv "$runtime_candidate" "$INSTALL_ROOT/runtimes/"; then
+        for candidate in "${moved_runtimes[@]}"; do mv "$candidate" "$LEGACY_INSTALL_ROOT/runtimes/" || true; done
+        echo "Не удалось перенести старый runtime; прежняя установка сохранена." >&2
+        return 1
+      fi
+      moved_runtimes+=("$INSTALL_ROOT/runtimes/$runtime_name")
+    done
+  fi
+
+  for candidate in "${legacy_checkouts[@]}"; do
+    destination="$INSTALL_ROOT/${candidate##*/}"
+    if ! rebase_legacy_symlinks "$candidate" "$LEGACY_INSTALL_ROOT" "$INSTALL_ROOT"; then
+      for candidate in "${moved_checkouts[@]}"; do
+        rebase_legacy_symlinks "$candidate" "$INSTALL_ROOT" "$LEGACY_INSTALL_ROOT" || true
+        mv "$candidate" "$LEGACY_INSTALL_ROOT/" || true
+      done
+      for candidate in "${moved_runtimes[@]}"; do mv "$candidate" "$LEGACY_INSTALL_ROOT/runtimes/" || true; done
+      echo "Не удалось перенести старую папку агента; прежняя установка сохранена." >&2
+      return 1
+    fi
+    if ! mv "$candidate" "$destination"; then
+      rebase_legacy_symlinks "$candidate" "$INSTALL_ROOT" "$LEGACY_INSTALL_ROOT" || true
+      for candidate in "${moved_checkouts[@]}"; do
+        rebase_legacy_symlinks "$candidate" "$INSTALL_ROOT" "$LEGACY_INSTALL_ROOT" || true
+        mv "$candidate" "$LEGACY_INSTALL_ROOT/" || true
+      done
+      for candidate in "${moved_runtimes[@]}"; do mv "$candidate" "$LEGACY_INSTALL_ROOT/runtimes/" || true; done
+      echo "Не удалось перенести старую папку агента; прежняя установка сохранена." >&2
+      return 1
+    fi
+    moved_checkouts+=("$destination")
+  done
+
+  rmdir "$LEGACY_INSTALL_ROOT" 2>/dev/null || true
+  echo "Старая установка перенесена в обычную папку данных пользователя: $TARGET"
+  [[ ! -d "$LEGACY_INSTALL_ROOT" ]] || echo "В $LEGACY_INSTALL_ROOT оставлены посторонние файлы; их не трогал." >&2
+}
 # Stop from the outermost recovery layer inward. Booting out a job preserves
 # the owner's enabled/disabled preference; `--stop` would overwrite it.
 if ! stop_loaded_job com.xider.siri || ! stop_loaded_job com.xider.safari ||
@@ -807,6 +914,16 @@ if ! stop_loaded_job com.xider.siri || ! stop_loaded_job com.xider.safari ||
   if [[ -d "$TARGET/XGENT-MCS/XIDER.app" || -f "$TARGET/XGENT-MCS/start_guardian.sh" ]]; then
     start_runtime_services "$TARGET/XGENT-MCS" || true
     start_enabled_layers "$TARGET/XGENT-MCS" || true
+  elif [[ -d "$LEGACY_INSTALL_ROOT/git-ver/XGENT-MCS" ]]; then
+    start_runtime_services "$LEGACY_INSTALL_ROOT/git-ver/XGENT-MCS" || true
+    start_enabled_layers "$LEGACY_INSTALL_ROOT/git-ver/XGENT-MCS" || true
+  fi
+  exit 5
+fi
+if ! migrate_legacy_install_root; then
+  if [[ -d "$LEGACY_INSTALL_ROOT/git-ver/XGENT-MCS" ]]; then
+    start_runtime_services "$LEGACY_INSTALL_ROOT/git-ver/XGENT-MCS" || true
+    start_enabled_layers "$LEGACY_INSTALL_ROOT/git-ver/XGENT-MCS" || true
   fi
   exit 5
 fi

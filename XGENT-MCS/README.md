@@ -51,7 +51,7 @@ it runs and still relies on the initial HTTPS/GitHub download.
 ### Manual status
 
 ```bash
-cd "$HOME/XIDER/git-ver/XGENT-MCS"
+cd "$HOME/Library/Application Support/XIDER/git-ver/XGENT-MCS"
 bash ./start_agent.sh --status
 bash ./start_guardian.sh --status
 bash ./start_safari.sh --status

@@ -1,5 +1,19 @@
 # XIDER release history
 
+## X4.3.27-MAC-APP-SUPPORT+20261104 — synchronized agent update paths
+
+### English
+
+- macOS installs and in-place updates use `~/Library/Application Support/XIDER` instead of a visible `~/XIDER` folder.
+- The installer migrates the active checkout, rollback copies, and runtime directories from the old location, rebases runtime links, preserves `.env` and `~/.xgent`, and removes the old folder only when it is empty.
+- Agent, Guardian, bot, Windows PE metadata, and both site snapshots advance together to 4.3.27. Existing approved devices receive the bot's version-change notice after reporting the updated version.
+
+### Русский
+
+- Установка и обновление macOS используют `~/Library/Application Support/XIDER` вместо заметной папки `~/XIDER`.
+- Установщик переносит текущую установку, резервные копии и runtime из старой папки, обновляет ссылки runtime, сохраняет `.env` и `~/.xgent`, а старую папку убирает только когда она пустая.
+- Agent, Guard Keeper, бот, метаданные Windows EXE и обе версии сайта синхронно переходят на 4.3.27. Для уже подтверждённых устройств бот показывает уведомление после того, как устройство сообщит новую версию.
+
 ## X4.3.24-WINDOWS-PACKAGE-FIX+20261104 — Windows release + macOS source preview
 
 ### English
