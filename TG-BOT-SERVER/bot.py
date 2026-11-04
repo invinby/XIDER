@@ -7839,6 +7839,7 @@ _PRANK_DISABLED = {
     "prank:matrix": "Эффект ещё не прошёл проверку на устройстве.",
     "prank:rickroll50": "Открывает слишком много вкладок за один запуск.",
     "prank:siren": "macOS поднимает системную громкость до 100%; эффект не отменяется через «Остановить всё», а исходная громкость автоматически не возвращается.",
+    "prank:screamer": "Агент лишь принимает запуск фоновой звуковой задачи; Stop All не завершает её и не восстанавливает громкость. Действие выключено до подтверждённой остановки и возврата состояния.",
     "cmd:prank_bsod": "Полноэкранная сцена Windows удерживает курсор; «Остановить всё» её не закрывает. Запуск оставлен выключенным.",
     "prank:swapmouse": "Обработчик не подтвердил успешное переключение мыши.",
     "prank:hidedesktop": "Изменение Finder может пережить остановку эффекта; восстановление не подтверждено.",
@@ -7898,8 +7899,9 @@ _PRANK_CARD_FACTS = {
     },
     "prank:screamer": {
         "effect": (
-            "Устанавливает громкость на 100% и снимает mute, открывает ролик YouTube. "
-            "Windows подаёт 5 сигналов по 0,4 с; macOS вызывает beep 3 пять раз (до 15 сигналов)."
+            "Windows устанавливает громкость на 100%, снимает mute, открывает YouTube и запускает 5 сигналов по 0,4 с. "
+            "macOS устанавливает выходную громкость на 100%, открывает YouTube и вызывает beep 3 пять раз; "
+            "явного снятия mute нет."
         ),
         "stop": (
             "«Остановить всё» не отменяет уже открытый браузер и не прерывает запущенную последовательность сигналов; "
@@ -7913,16 +7915,31 @@ _PRANK_CARD_FACTS = {
 }
 
 _PRANK_ACTION_CALLBACKS = {
+    "prank_screamer": "prank:screamer",
     "prank_rickroll": "prank:rickroll50",
     "prank_matrix": "prank:matrix",
+    "prank_siren": "prank:siren",
     "prank_swap_mouse": "prank:swapmouse",
     "prank_hide_desktop": "prank:hidedesktop",
+    "prank_bsod": "cmd:prank_bsod",
+    "prank_fake_update": "cmd:prank_fake_update",
+    "msgbox_spam": "fun:spam",
+    "prank_shout_tts": "prank:shout",
 }
 
 
 def _prank_disabled_reason_for_action(action: str) -> str:
+    if action == "prank_stop_all":
+        return ""
+    if not (action.startswith("prank_") or action in _PROMPTED_TEXT_ACTIONS):
+        return ""
     callback = _PRANK_ACTION_CALLBACKS.get(action, f"cmd:{action}")
-    return _PRANK_DISABLED.get(callback, "")
+    reason = _PRANK_DISABLED.get(callback)
+    if reason:
+        return reason
+    if callback not in _PRANK_CARD_FACTS:
+        return "Для действия нет проверенной карточки с эффектом, остановкой и восстановлением; запуск отключён."
+    return ""
 
 
 def _prank_platform(target: str) -> str | None:
@@ -26638,6 +26655,12 @@ async def _run_text_prank_input(
             message, _lex("send_failed"), reply_markup=back_to_device_kb()
         )
         return
+    disabled_reason = _prank_disabled_reason_for_action(action)
+    if disabled_reason:
+        await _replace_user_card(
+            message, f"⚠️ Недоступно: {disabled_reason}", reply_markup=back_to_device_kb()
+        )
+        return
     if not target:
         await _replace_user_card(
             message, _lex("target_required"), reply_markup=back_to_device_kb()
@@ -26703,6 +26726,10 @@ async def _run_text_prank_input(
 
 @router.callback_query(AdminFilter(), F.data.in_({"fun:spam", "cmd:spam"}))
 async def on_fun_spam(cq: CallbackQuery, state: FSMContext):
+    disabled_reason = _prank_disabled_reason_for_action("msgbox_spam")
+    if disabled_reason:
+        await cq.answer(f"Недоступно: {disabled_reason}", show_alert=True)
+        return
     target = SESSION.get("target")
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
@@ -27001,6 +27028,10 @@ async def on_prank_siren(cq: CallbackQuery):
 
 @router.callback_query(AdminFilter(), F.data == "prank:shout")
 async def on_prank_shout(cq: CallbackQuery, state: FSMContext):
+    disabled_reason = _prank_disabled_reason_for_action("prank_shout_tts")
+    if disabled_reason:
+        await cq.answer(f"Недоступно: {disabled_reason}", show_alert=True)
+        return
     target = SESSION.get("target")
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
