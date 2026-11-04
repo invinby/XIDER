@@ -403,3 +403,26 @@ The X-MAP snapshot contains 404 platform/action rows. Every row has expected-res
 - This is a signed server deployment prerelease, not a stable agent release.
   Physical Windows/macOS update, rollback, component health, MQTT freshness,
   and Telegram-to-device round-trip acceptance remain separate release gates.
+
+## Published v4.3.29 inventory and local Windows evidence · 2026-11-04
+
+- Downloaded the published `release-manifest.json` and
+  `protected-build-manifest.json` and verified both Ed25519 signatures using
+  the pinned publisher key ID `521c56c0c89f0ddd`. The protected report identifies
+  source commit `a124c92a03956bb7c84f3c6be504802524786f00`.
+- Downloaded all four Windows and macOS Agent/Guard Keeper archives and matched
+  each archive's size and SHA-256 and every non-directory ZIP member's size and
+  SHA-256 against the signed protected inventory. No `.py`, `.pyc`, `.pyo`,
+  `.pem`, `.p12`, `.pfx`, `.key`, or `.env` file names occurred in these four
+  archives. This filename check cannot prove that executables contain no secret.
+- The signed report has six component rows. Safari and Siri point to the same
+  macOS `XIDER-Layers` executable; the report does not establish two independent
+  binaries. The macOS runtime remains an unsigned and unnotarized preview.
+- On the inspected Windows host, installed `XGENT-WDS.exe` and
+  `XIDER-Guard-Keeper.exe` SHA-256 values matched their respective v4.3.29
+  signed entry-point hashes. The existing install report identifies both as
+  installed at 4.3.29 and explicitly says bot acknowledgements were not
+  verified. The saved process IDs are historical, not current health evidence.
+- This evidence establishes artifact identity and local file identity. It does
+  not establish fresh MQTT status, a Telegram command/result round-trip, or a
+  physical install, update and rollback on both platforms.
