@@ -2011,6 +2011,119 @@ def test_admin_mutations_require_confirm_and_reject_cancel_expiry_replay(monkeyp
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(("handler", "data"), [
+    ("on_admin_role", "admin:role:200:user"),
+    ("on_admin_block", "admin:block:200"),
+    ("on_admin_device_toggle", "admin:device:200:a"),
+    ("on_admin_permission_toggle", "admin:perm:200:cmd_status"),
+    ("on_admin_device_temporary_grant", "admin:devicetemp:200:a"),
+    ("on_admin_permission_temporary_grant", "admin:permtemp:200:cmd_status"),
+])
+def test_confirmed_role_and_grant_changes_return_to_live_user_card(monkeypatch, tmp_path, handler, data):
+    Callback, rendered = _admin_fixture(monkeypatch, tmp_path)
+    if "temporary_grant" in handler:
+        assert bot.access_store.set_role(100, 200, bot.Role.USER, 100)
+    monkeypatch.setattr(
+        bot, "get_user_role",
+        lambda user_id: bot.Role.OWNER if int(user_id) == 100 else bot.access_store.get_role(user_id, 100),
+    )
+
+    async def scenario():
+        await getattr(bot, handler)(Callback(data))
+        confirm = next(
+            value for value in _callback_data(rendered[-1][1])
+            if value.startswith("admin:confirm:")
+        )
+        await bot.on_admin_confirm(Callback(confirm))
+
+    asyncio.run(scenario())
+
+    notice, markup = rendered[-1]
+    assert "Симуляция доступности" in notice
+    assert "Последнее посещение" in notice
+    assert "admin:role:200:user" in _callback_data(markup)
+    if handler == "on_admin_role":
+        assert bot.access_store.get_role(200, 100) == bot.Role.USER
+        assert notice.startswith(bot._lex("admin_role_changed", role=bot._role_label(bot.Role.USER)))
+    elif handler == "on_admin_block":
+        assert bot.access_store.get_role(200, 100) == bot.Role.BLOCKED
+        assert "заблокирован" in notice.lower()
+    elif handler in {"on_admin_device_toggle", "on_admin_device_temporary_grant"}:
+        assert bot.access_store.get_effective_grants(200)["devices"] == ["a"]
+        assert "Laptop" in notice and "выдан" in notice.lower()
+        if "temporary_grant" in handler:
+            assert "24 часа" in notice
+    else:
+        assert bot.access_store.get_effective_grants(200)["callbacks"] == ["cmd:status"]
+        assert "выдано" in notice.lower()
+        if "temporary_grant" in handler:
+            assert "24 часа" in notice
+
+
+def test_temporary_block_confirmation_returns_to_updated_user_card(monkeypatch, tmp_path):
+    Callback, rendered = _admin_fixture(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        bot, "get_user_role",
+        lambda user_id: bot.Role.OWNER if int(user_id) == 100 else bot.access_store.get_role(user_id, 100),
+    )
+
+    async def scenario():
+        await bot._admin_stage(
+            Callback("test"), "temporary_block", 200,
+            {"seconds": 3_600, "reason": "owner-approved test"},
+        )
+        confirm = next(
+            value for value in _callback_data(rendered[-1][1])
+            if value.startswith("admin:confirm:")
+        )
+        await bot.on_admin_confirm(Callback(confirm))
+
+    asyncio.run(scenario())
+
+    assert bot.access_store.get_role(200, 100) == bot.Role.BLOCKED
+    assert "временно заблокирован" in rendered[-1][0].lower()
+    assert "UTC" in rendered[-1][0]
+    assert "Симуляция доступности" in rendered[-1][0]
+
+
+@pytest.mark.parametrize(("handler", "data", "mutation", "rejected"), [
+    ("on_admin_role", "admin:role:200:user", "set_role", False),
+    ("on_admin_block", "admin:block:200", "set_blocked", False),
+    ("on_admin_device_toggle", "admin:device:200:a", "toggle_device", None),
+    ("on_admin_permission_toggle", "admin:perm:200:cmd_status", "toggle_callback", None),
+])
+def test_rejected_admin_access_write_is_reported_and_card_shows_current_state(
+    monkeypatch, tmp_path, handler, data, mutation, rejected,
+):
+    Callback, rendered = _admin_fixture(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        bot, "get_user_role",
+        lambda user_id: bot.Role.OWNER if int(user_id) == 100 else bot.access_store.get_role(user_id, 100),
+    )
+    answers = []
+
+    class RecordingCallback(Callback):
+        async def answer(self, *args, **kwargs):
+            answers.append((args, kwargs))
+
+    monkeypatch.setattr(bot.access_store, mutation, lambda *_args: rejected)
+
+    async def scenario():
+        await getattr(bot, handler)(RecordingCallback(data))
+        confirm = next(
+            value for value in _callback_data(rendered[-1][1])
+            if value.startswith("admin:confirm:")
+        )
+        await bot.on_admin_confirm(RecordingCallback(confirm))
+
+    asyncio.run(scenario())
+
+    assert "изменение доступа не сохранено" in answers[-1][0][0].lower()
+    assert "Симуляция доступности" in rendered[-1][0]
+    assert bot.access_store.get_role(200, 100) == bot.Role.GUEST
+    assert bot.access_store.get_effective_grants(200) == {"callbacks": [], "devices": []}
+
+
 def test_admin_unblock_requires_confirmation_and_restores_exact_prior_access(monkeypatch, tmp_path):
     Callback, rendered = _admin_fixture(monkeypatch, tmp_path)
     assert bot.access_store.set_role(100, 200, bot.Role.USER, 100)

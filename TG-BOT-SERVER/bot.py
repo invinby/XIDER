@@ -12191,9 +12191,17 @@ async def on_admin_confirm(cq: CallbackQuery):
         await cq.answer(_lex("owner_immutable"), show_alert=True)
         return
     if action == "role":
-        access_store.set_role(cq.from_user.id, target, value, ADMIN_ID)
+        result = access_store.set_role(cq.from_user.id, target, value, ADMIN_ID)
+        if result is not True:
+            await cq.answer(_lex("admin_access_save_failed"), show_alert=True)
+            await _render_admin_user_card(cq, target)
+            return
     elif action == "block":
-        access_store.set_blocked(cq.from_user.id, target, value, ADMIN_ID)
+        result = access_store.set_blocked(cq.from_user.id, target, value, ADMIN_ID)
+        if result is not True:
+            await cq.answer(_lex("admin_access_save_failed"), show_alert=True)
+            await _render_admin_user_card(cq, target)
+            return
     elif action == "temporary_block":
         result = access_store.set_blocked(
             cq.from_user.id, target, True, ADMIN_ID,
@@ -12207,9 +12215,17 @@ async def on_admin_confirm(cq: CallbackQuery):
         if value not in devices.all():
             await cq.answer(_lex("device_unavailable"), show_alert=True)
             return
-        access_store.toggle_device(cq.from_user.id, target, value, ADMIN_ID)
+        result = access_store.toggle_device(cq.from_user.id, target, value, ADMIN_ID)
+        if result is None:
+            await cq.answer(_lex("admin_access_save_failed"), show_alert=True)
+            await _render_admin_user_card(cq, target)
+            return
     elif action == "permission":
-        access_store.toggle_callback(cq.from_user.id, target, value, ADMIN_ID)
+        result = access_store.toggle_callback(cq.from_user.id, target, value, ADMIN_ID)
+        if result is None:
+            await cq.answer(_lex("admin_access_save_failed"), show_alert=True)
+            await _render_admin_user_card(cq, target)
+            return
     elif action == "temporary_device":
         device_id = str(value.get("item") or "")
         if device_id not in devices.all():
@@ -12349,6 +12365,44 @@ async def on_admin_confirm(cq: CallbackQuery):
         access_store.append_audit("admin_message_sent", actor_id=cq.from_user.id, target_id=target)
     else:
         await cq.answer(_lex("admin_invalid_data"), show_alert=True)
+        return
+    if action in {
+        "role", "block", "device", "permission", "temporary_block",
+        "temporary_device", "temporary_permission",
+    }:
+        if action == "role":
+            notice = _lex("admin_role_changed", role=_role_label(value))
+        elif action == "block":
+            notice = _lex("admin_user_blocked" if value else "admin_user_unblocked")
+        elif action == "temporary_block":
+            until = time.strftime(
+                "%d.%m.%Y %H:%M UTC",
+                time.gmtime(int(time.time()) + int(value["seconds"])),
+            )
+            notice = _lex("admin_temporary_block_changed", until=until)
+        elif action in {"device", "temporary_device"}:
+            device_id = value if action == "device" else str(value["item"])
+            device_name = str((devices.all().get(device_id) or {}).get("name") or device_id)
+            action_label = (
+                "выдан на 24 часа" if action == "temporary_device"
+                else "выдан" if result else "отозван"
+            )
+            notice = _lex(
+                "admin_device_access_changed", device=device_name,
+                action=action_label,
+            )
+        else:
+            callback = value if action == "permission" else str(value["item"])
+            action_label = (
+                "выдано на 24 часа" if action == "temporary_permission"
+                else "выдано" if result else "отозвано"
+            )
+            notice = _lex(
+                "admin_permission_changed", permission=_nav(USER_PERMISSION_CHOICES[callback]),
+                action=action_label,
+            )
+        await _render_admin_user_card(cq, target, notice=notice)
+        await cq.answer()
         return
     await _replace_callback_message(cq, _lex("text_saved"), reply_markup=admin_menu())
     await cq.answer()
@@ -12599,7 +12653,7 @@ def _admin_user_access_simulation(user_id: int) -> str:
     return "\n" + "\n".join(lines)
 
 
-async def _render_admin_user_card(cq: CallbackQuery, user_id: int) -> bool:
+async def _render_admin_user_card(cq: CallbackQuery, user_id: int, *, notice: str | None = None) -> bool:
     if not await _admin_owner(cq):
         return False
     record = access_store.get_user(user_id)
@@ -12611,7 +12665,7 @@ async def _render_admin_user_card(cq: CallbackQuery, user_id: int) -> bool:
     button_count = len(perms.get("callbacks") or [])
     await _replace_callback_message(
         cq,
-        _lex_html(
+        ((html.escape(notice) + "\n\n") if notice else "") + _lex_html(
             "admin_user_profile",
             name=_user_label(record),
             user_id=user_id,
