@@ -379,3 +379,27 @@ The X-MAP snapshot contains 404 platform/action rows. Every row has expected-res
 - `v4.3.24` is being prepared with the fix; it is not yet a published release
   or a physical install result. Repeat the signed installation and verify the
   installed hashes, process health, and fresh MQTT heartbeat after publication.
+
+## Live role and access feedback deployment · 2026-11-04 14:21 UTC
+
+- The role/grant feedback fix from merged `main` commit
+  `c6eb33d4bb1f53e873704084e80462ad45945cc5` was packaged under the server-only
+  tag `server-deploy-20261104-04`; Actions run `41846091508` completed
+  successfully. The signed manifest identifies `XIDER-source.zip` SHA-256
+  `3e9987cdd75be2f410256ae3676dd244f209586e98ae614998b2bb18d14c725c` and uses
+  Ed25519 key ID `521c56c0c89f0ddd`.
+- The VPS updater accepted the signature, created backup
+  `/var/backups/xider/xider-20261104T142105Z-1319096.tar.gz`, and reported a
+  healthy install. The live bot now reports version `4.3.30`, build
+  `X4.3.30-INSTALL-CLEANUP+20261104`; its source hashes for `bot.py`,
+  `access_store.py`, and `xlex.py` match the exact signed source commit.
+  `xider-bot.service` and `xider-dock-mqtt.service` are active with zero
+  restarts, and the five-minute post-deploy error journal was empty.
+- The merge CI run `41838018894` passed Python 3.11, 3.12, and 3.14 plus Unix
+  installer validation. This deployment confirms the server code is live; it
+  does not prove a Telegram user-role/grant click-through on a device. Keep
+  role, device selection, and action grant as separate gates; do not auto-grant
+  the existing users to make buttons appear enabled.
+- This is a signed server deployment prerelease, not a stable agent release.
+  Physical Windows/macOS update, rollback, component health, MQTT freshness,
+  and Telegram-to-device round-trip acceptance remain separate release gates.
