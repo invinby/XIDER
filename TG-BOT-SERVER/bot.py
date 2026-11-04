@@ -27580,6 +27580,16 @@ def _prank_stop_all_result_text(result: dict) -> str:
     return _simple_action_result_text(result)
 
 
+def _prank_action_result_text(action: str, result: dict) -> str:
+    """Do not display optimistic device text when its structured outcome disagrees."""
+    state = result.get("state")
+    if result.get("ok") is False or state in ("failed", "partial", "unsupported", "unknown", "timed_out"):
+        return _simple_action_result_text(result)
+    if state == "confirmed" and result.get("ok") is True and result.get("effect_confirmed") is True:
+        return result.get("text") or _lex("device_command_completed")
+    return _lex("prank_matrix_unconfirmed") if action == "prank_matrix" else _lex("prank_effect_unconfirmed")
+
+
 async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, label: str, timeout: float = 12.0, **publish_kwargs):
     target = SESSION.get("target")
     if target and _target_waits_for_device_approval(target):
@@ -27678,18 +27688,7 @@ async def _simple_command_unlocked(cq: CallbackQuery, action: str, emoji: str, l
     elif action == "prank_stop_all":
         text = _prank_stop_all_result_text(result)
     elif action.startswith("prank_") and action != "prank_stop_all":
-        state = result.get("state")
-        if state == "launch_accepted" and result.get("effect_confirmed") is False:
-            text = (_lex("prank_matrix_unconfirmed") if action == "prank_matrix"
-                    else _lex("prank_effect_unconfirmed"))
-        elif state == "confirmed" and result.get("effect_confirmed") is True:
-            text = result.get("text") or _lex("device_command_completed")
-        elif (isinstance(state, str) and state in {"failed", "unknown", "unsupported"}) or result.get("ok") is False:
-            text = result.get("text") or result.get("error") or _lex("device_no_response")
-        else:
-            # Legacy agent acknowledgements may include optimistic free-form text.
-            # Without structured evidence, do not repeat it as a verified effect.
-            text = _lex("prank_effect_unconfirmed")
+        text = _prank_action_result_text(action, result)
     else:
         text = (format_location_result(result) if action == "geo_location"
                 else _simple_action_result_text(result))
