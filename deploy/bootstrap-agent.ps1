@@ -282,6 +282,39 @@ function Remove-XiderOldFailedCheckouts {
     }
 }
 
+function Remove-XiderOldStageCheckouts {
+    param(
+        [Parameter(Mandatory)][string]$InstallRoot,
+        [int]$MaxAgeHours = 24
+    )
+
+    if ($MaxAgeHours -lt 1) { return }
+    try {
+        $root = [IO.Path]::GetFullPath($InstallRoot)
+        $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop
+        if (-not $rootItem.PSIsContainer -or
+            ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return }
+        $cutoffUtc = [DateTime]::UtcNow.AddHours(-$MaxAgeHours)
+        $managed = @(Get-ChildItem -LiteralPath $root -Directory -Force -ErrorAction Stop |
+            Where-Object { $_.Name -match '^git-ver\.stage\.[0-9a-fA-F]{32}$' })
+        foreach ($item in $managed) {
+            $path = [IO.Path]::GetFullPath($item.FullName)
+            if ($item.LastWriteTimeUtc -ge $cutoffUtc -or
+                ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+                -not [string]::Equals([IO.Path]::GetDirectoryName($path), $root, [StringComparison]::OrdinalIgnoreCase)) { continue }
+            try {
+                $nestedLinks = @(Get-ChildItem -LiteralPath $path -Force -Recurse -ErrorAction Stop |
+                    Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint })
+                if ($nestedLinks.Count) { continue }
+                Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
+            }
+            catch { Write-Warning "Не удалось удалить устаревший staging-каталог XIDER: $path ($($_.Exception.Message))" }
+        }
+    } catch {
+        Write-Warning "Не удалось очистить старые staging-каталоги XIDER: $($_.Exception.Message)"
+    }
+}
+
 function Assert-XiderWindowsBundleArchive {
     param([Parameter(Mandatory)][string]$ArchivePath)
 
@@ -1450,6 +1483,7 @@ try {
     Write-XiderInstallReport -Outcome succeeded -RequestedVersion $expectedAgentVersion -HealthStates $healthStates -Required
     Remove-XiderOldPreviousCheckouts -InstallRoot $resolvedRoot -CurrentBackup $backup -Keep 1
     Remove-XiderOldFailedCheckouts -InstallRoot $resolvedRoot -Keep 1
+    Remove-XiderOldStageCheckouts -InstallRoot $resolvedRoot -MaxAgeHours 24
     if (Test-Path -LiteralPath $backup) { Write-Host "[BACKUP] Предыдущая версия сохранена: $backup" }
 }
 catch {
