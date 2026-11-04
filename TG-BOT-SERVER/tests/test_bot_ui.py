@@ -10201,6 +10201,33 @@ def test_version_detail_without_component_report_shows_unknown_not_assumed(monke
     assert "protection is unknown" in summary
 
 
+def test_version_report_identifies_shared_runtime_and_release_only_evidence(monkeypatch):
+    import release_catalog
+
+    release = release_catalog.Release(
+        "v4.3.29", (4, 3, 29), "release", "", "", frozenset({"protected-build-manifest.json"}),
+        protected_manifest={"platform_signing": {"macos": "unsigned_preview"}},
+    )
+    rows = [
+        {"id": name, "build_mode": "nuitka_compiled", "obfuscation": {"state": "obfuscated"},
+         "package_asset": "mac.zip", "entrypoint": "Layers/app"}
+        for name in ("safari", "siri")
+    ]
+    monkeypatch.setattr(bot, "_ui_phrase", lambda en, ru, short=None: en)
+    monkeypatch.setattr(release_catalog.Release, "protected_components", lambda *_: rows)
+
+    summary = bot._version_protection_summary(release, "mac_agent")
+    assert "Safari and Siri share one executable" in summary
+    assert "does not verify what is installed on the device" in summary
+
+    rows[1]["entrypoint"] = "Other/app"
+    assert "Safari and Siri share one executable" not in bot._version_protection_summary(release, "mac_agent")
+
+    rows[1]["entrypoint"] = None
+    rows[0]["entrypoint"] = None
+    assert "Safari and Siri share one executable" not in bot._version_protection_summary(release, "mac_agent")
+
+
 def test_selected_release_install_fails_closed_without_pinned_trust(monkeypatch):
     import release_catalog
     from types import SimpleNamespace

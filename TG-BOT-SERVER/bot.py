@@ -28720,6 +28720,24 @@ def _version_protection_summary(release: release_catalog.Release, component: str
                 "Хеш запуска привязан к подписанному составу релиза.",
             )
         lines.append(detail)
+    by_id = {row.get("id"): row for row in rows}
+    safari, siri = by_id.get("safari"), by_id.get("siri")
+    if safari and siri:
+        package = safari.get("package_asset")
+        entrypoint = safari.get("entrypoint")
+        if (isinstance(package, str) and package and isinstance(entrypoint, str) and entrypoint
+                and safari.get("build_mode") == siri.get("build_mode") == "nuitka_compiled"
+                and package == siri.get("package_asset") and entrypoint == siri.get("entrypoint")):
+            lines.append(_ui_phrase(
+                "Safari and Siri share one executable in this release.",
+                "Safari и Siri используют один исполняемый файл в этом релизе.",
+                "Safari и Siri используют один файл в этом релизе.",
+            ))
+    lines.append(_ui_phrase(
+        "This is release information; it does not verify what is installed on the device.",
+        "Это данные релиза: они не подтверждают, что установлено на устройстве.",
+        "Это сведения о релизе, а не проверка файлов на устройстве.",
+    ))
     if component in {"mac_agent", "mac_keeper"}:
         signing_report = (release.protected_manifest or {}).get("platform_signing")
         signing = signing_report.get("macos") if isinstance(signing_report, dict) else None
