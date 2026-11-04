@@ -27574,6 +27574,9 @@ def _prank_stop_all_result_text(result: dict) -> str:
         detail = result.get("text")
         prefix = _lex("action_result_failed")
         return prefix + ("\n" + detail.strip()[:3200] if isinstance(detail, str) and detail.strip() else "")
+    if (result.get("ok") is True and result.get("state") in (None, "success", "completed")
+            and result.get("effect_confirmed") is not True):
+        return _lex("action_result_unconfirmed")
     return _simple_action_result_text(result)
 
 

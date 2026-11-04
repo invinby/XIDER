@@ -118,6 +118,21 @@ def test_prank_stop_all_keeps_agent_partial_result_details():
     assert "Результат частичный" in rendered
 
 
+@pytest.mark.parametrize("state", (None, "success", "completed"))
+def test_prank_stop_all_does_not_trust_unconfirmed_success_text(state):
+    result = {"ok": True, "text": "Все эффекты остановлены"}
+    if state is not None:
+        result["state"] = state
+    rendered = bot._prank_stop_all_result_text(result)
+    assert bot._lex("action_result_unconfirmed") in rendered
+    assert "Все эффекты остановлены" not in rendered
+
+
+def test_prank_stop_all_keeps_explicitly_confirmed_result():
+    result = {"ok": True, "state": "confirmed", "effect_confirmed": True, "text": "Остановка подтверждена"}
+    assert "Остановка подтверждена" in bot._prank_stop_all_result_text(result)
+
+
 @pytest.mark.parametrize("action", ("prank_rickroll_terminal", "prank_rickroll", "prank_matrix"))
 def test_disabled_prank_actions_are_rejected_before_publish(monkeypatch, action):
     answers = []
