@@ -310,10 +310,10 @@ try {
     }
     $backups = @(Get-ChildItem -LiteralPath $successRoot -Directory -Filter 'git-ver.previous.*')
     $managedBackups = @($backups | Where-Object { $_.Name -match '^git-ver\.previous\.\d{14}\.[0-9a-fA-F]{32}$' })
-    if ($managedBackups.Count -ne 2 -or
+    if ($managedBackups.Count -ne 1 -or
         -not ($managedBackups | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'XGENT-WDS\old-marker.txt') }) -or
         -not (Test-Path -LiteralPath (Join-Path $unrecognizedBackup 'keep.txt'))) {
-        throw 'Successful install did not retain two managed rollback backups and preserve unrelated data.'
+        throw 'Successful install did not retain one managed rollback backup and preserve unrelated data.'
     }
     Write-Host 'Windows staged install and rollback fixture passed.'
 }

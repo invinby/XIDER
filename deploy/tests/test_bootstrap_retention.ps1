@@ -6,9 +6,9 @@ $ast = [System.Management.Automation.Language.Parser]::ParseFile($bootstrap, [re
 if ($parseErrors.Count) { throw "Bootstrap parse failed: $($parseErrors[0].Message)" }
 $functionAsts = @($ast.FindAll({ param($node)
     $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-    $node.Name -in @('Remove-XiderOldPreviousCheckouts', 'Remove-XiderOldFailedCheckouts')
+    $node.Name -in @('Remove-XiderOldPreviousCheckouts', 'Remove-XiderOldFailedCheckouts', 'Remove-XiderOldStageCheckouts')
 }, $true))
-if ($functionAsts.Count -ne 2) { throw 'Checkout retention helpers are missing.' }
+if ($functionAsts.Count -ne 3) { throw 'Checkout retention helpers are missing.' }
 foreach ($functionAst in $functionAsts) { Invoke-Expression $functionAst.Extent.Text }
 
 $root = Join-Path $env:TEMP ('xider-retention-' + [guid]::NewGuid().ToString('N'))
@@ -36,15 +36,23 @@ try {
     foreach ($name in $failedNames) {
         New-Item -ItemType Directory -Path (Join-Path $root $name) -Force | Out-Null
     }
+    $oldStage = Join-Path $root 'git-ver.stage.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    $freshStage = Join-Path $root 'git-ver.stage.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    $unknownStage = Join-Path $root 'git-ver.stage.owner-data'
+    foreach ($path in @($oldStage, $freshStage, $unknownStage)) {
+        New-Item -ItemType Directory -Path $path -Force | Out-Null
+    }
+    [IO.Directory]::SetLastWriteTimeUtc($oldStage, [DateTime]::UtcNow.AddHours(-48))
 
-    Remove-XiderOldPreviousCheckouts -InstallRoot $root -CurrentBackup (Join-Path $root $names[3]) -Keep 2
+    Remove-XiderOldPreviousCheckouts -InstallRoot $root -CurrentBackup (Join-Path $root $names[3]) -Keep 1
     Remove-XiderOldFailedCheckouts -InstallRoot $root -Keep 1
+    Remove-XiderOldStageCheckouts -InstallRoot $root -MaxAgeHours 24
 
     $managed = @(Get-ChildItem -LiteralPath $root -Directory -Force |
         Where-Object { $_.Name -match '^git-ver\.previous\.\d{14}\.[0-9a-fA-F]{32}$' } |
         Sort-Object -Property Name -Descending)
-    if ($managed.Count -ne 2 -or $managed[0].Name -ne $names[3] -or $managed[1].Name -ne $names[2]) {
-        throw "Expected the two newest managed rollback checkouts, found: $($managed.Name -join ', ')"
+    if ($managed.Count -ne 1 -or $managed[0].Name -ne $names[3]) {
+        throw "Expected only the current managed rollback checkout, found: $($managed.Name -join ', ')"
     }
     if (-not (Test-Path -LiteralPath (Join-Path $unrecognized 'keep.txt'))) {
         throw 'An unrecognized sibling directory was modified.'
@@ -54,6 +62,9 @@ try {
     if ($failedRemaining.Count -ne 1 -or $failedRemaining[0].Name -ne $failedNames[1]) {
         throw 'Failed-checkout retention did not keep exactly the newest managed diagnostic copy.'
     }
+    if (Test-Path -LiteralPath $oldStage) { throw 'An expired generated stage directory was not removed.' }
+    if (-not (Test-Path -LiteralPath $freshStage)) { throw 'A recent stage directory was removed.' }
+    if (-not (Test-Path -LiteralPath $unknownStage)) { throw 'An unrecognized stage directory was modified.' }
     Write-Host 'Windows checkout retention helper passed.'
 }
 finally {

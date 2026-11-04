@@ -751,10 +751,10 @@ prune_previous_checkouts() {
     [[ "$name" =~ ^git-ver\.previous\.[0-9]{14}\.[0-9]+$ ]] || continue
     backups+=("$candidate")
   done
-  ((${#backups[@]} > 2)) || return 0
+  ((${#backups[@]} > 1)) || return 0
   mapfile -t backups < <(printf '%s\n' "${backups[@]}" | sort -r)
   for candidate in "${backups[@]}"; do
-    if [[ "$candidate" == "$current_backup" || $index -lt 2 ]]; then
+    if [[ "$candidate" == "$current_backup" || $index -lt 1 ]]; then
       ((index+=1))
       continue
     fi
