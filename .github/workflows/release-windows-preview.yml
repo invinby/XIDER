@@ -1,14 +1,12 @@
 name: XIDER signed Windows and macOS source-preview installers
 
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
     inputs:
       release_tag:
         description: Existing XIDER source tag to package (must match agent VERSION).
         required: true
-        default: v4.3.27
+        default: v4.3.28
 
 permissions:
   contents: read

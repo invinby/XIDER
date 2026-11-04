@@ -9,10 +9,15 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing XIDER semantic-version tag to build without publishing a release.
+        description: Existing XIDER semantic-version tag to build.
         required: true
         type: string
-        default: v4.3.27
+        default: v4.3.28
+      publish_preview:
+        description: Publish the signed component inventory and project-signed installer assets as a prerelease. macOS will remain unsigned and unnotarized without Apple credentials.
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -73,7 +78,7 @@ jobs:
 
   release-ci:
     name: "Release test gate"
-    if: github.event_name == 'workflow_dispatch' || (startsWith(github.ref, 'refs/tags/v') && vars.XIDER_MACOS_RELEASE_READY == 'true')
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
     needs: [source-state]
     uses: ./.github/workflows/ci.yml
     with:
@@ -87,7 +92,7 @@ jobs:
     if: >-
       always() && needs.source-state.result == 'success' &&
       (((github.event_name == 'workflow_dispatch' ||
-         (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.XIDER_MACOS_RELEASE_READY == 'true')) &&
+         (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))) &&
         needs.release-ci.result == 'success') ||
        (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/xider-local-prep-') &&
         github.actor == github.repository_owner))
@@ -143,7 +148,7 @@ jobs:
     needs: [source-state]
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.XIDER_MACOS_RELEASE_READY == 'true') ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
       (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/xider-local-prep-') &&
        github.actor == github.repository_owner)
     runs-on: macos-latest
@@ -151,9 +156,9 @@ jobs:
       # Keep the owner-triggered unsigned preview independent from Apple
       # signing secrets and approval gates. Tagged distributable builds still
       # use the protected signing environment.
-      name: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && 'xider-macos-signing' || 'xider-macos-preview' }}
+      name: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.XIDER_MACOS_RELEASE_READY == 'true' && 'xider-macos-signing' || 'xider-macos-preview' }}
     env:
-      XIDER_RELEASE_MODE: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+      XIDER_RELEASE_MODE: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.XIDER_MACOS_RELEASE_READY == 'true' }}
       XIDER_MACOS_SIGNING_IDENTITY: ${{ secrets.XIDER_MACOS_SIGNING_IDENTITY }}
       APPLE_CERTIFICATE_B64: ${{ secrets.APPLE_CERTIFICATE_B64 }}
       APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -174,11 +179,11 @@ jobs:
           cache: "pip"
 
       - name: "Block release when signing or notarization credentials are missing"
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.XIDER_MACOS_RELEASE_READY == 'true'
         run: python tools/verify_macos_bundle.py --release-credentials
 
       - name: "Import Apple certificate into temporary keychain"
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.XIDER_MACOS_RELEASE_READY == 'true'
         run: |
           python -c 'import os,base64,pathlib; pathlib.Path(os.environ["RUNNER_TEMP"],"xider-signing.p12").write_bytes(base64.b64decode(os.environ["APPLE_CERTIFICATE_B64"],validate=True))'
           security create-keychain -p "$APPLE_KEYCHAIN_PASSWORD" "$RUNNER_TEMP/xider-signing.keychain-db"
@@ -206,7 +211,7 @@ jobs:
           fi
 
       - name: "Notarize and staple without changing signed app contents"
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.XIDER_MACOS_RELEASE_READY == 'true'
         run: |
           mkdir -p "$RUNNER_TEMP/xider-notary-payload"
           ditto XGENT-MCS/dist/nuitka/XIDER.app "$RUNNER_TEMP/xider-notary-payload/XIDER.app"
@@ -359,7 +364,7 @@ jobs:
 
   protected-build-inventory:
     name: "Sign owner-requested build inventory (no release publication)"
-    if: github.event_name == 'workflow_dispatch' && github.actor == github.repository_owner
+    if: github.event_name == 'workflow_dispatch' && github.actor == github.repository_owner && inputs.publish_preview != true
     needs: [release-ci, source-state, pack-components]
     runs-on: ubuntu-latest
     environment:
@@ -406,7 +411,9 @@ jobs:
   create-release:
     name: "Publish GitHub Release"
     needs: [release-ci, source-state, build-windows, build-macos, pack-components]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' && github.actor == github.repository_owner && inputs.publish_preview == true && vars.XIDER_MACOS_RELEASE_READY != 'true')
     runs-on: ubuntu-latest
     environment:
       name: xider-release-signing
@@ -416,6 +423,8 @@ jobs:
     steps:
       - name: "Checkout repository"
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.source-state.outputs.source_commit }}
 
       - name: "Download Windows Artifact"
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -441,6 +450,8 @@ jobs:
       - name: "Build signed asset inventory"
         env:
           XIDER_RELEASE_PRIVATE_KEY_B64: ${{ secrets.XIDER_RELEASE_PRIVATE_KEY_B64 }}
+          XIDER_MACOS_RELEASE_READY: ${{ vars.XIDER_MACOS_RELEASE_READY }}
+          XIDER_MACOS_SOURCE_PREVIEW: ${{ vars.XIDER_MACOS_RELEASE_READY != 'true' && '1' || '' }}
           # Public endpoint, embedded in signed installer bodies. Never put credentials here.
           XIDER_DOCK_URL: ${{ vars.XIDER_DOCK_URL }}
         run: |
@@ -450,11 +461,14 @@ jobs:
           cp artifacts/components/*.zip artifacts/
           cp deploy/bootstrap-agent.ps1 artifacts/XIDER-bootstrap-windows.ps1
           cp deploy/bootstrap.sh artifacts/XIDER-bootstrap-macos.sh
-          python tools/sign_bootstrap.py "${GITHUB_REF_NAME}" "${GITHUB_SHA}" artifacts
-          python tools/build_bootstrap_commands.py "${GITHUB_SHA}" "${GITHUB_REF_NAME}" artifacts/XIDER-QUICKSTART.txt
-          python tools/build_install_launchers.py "${GITHUB_SHA}" "${GITHUB_REF_NAME}" artifacts --pages-dir artifacts/install-pages
+          python tools/build_protected_build_manifest.py artifacts --source-ref "${{ needs.source-state.outputs.source_ref }}" --source-commit "${{ needs.source-state.outputs.source_commit }}" --require-signature
+          python tools/sign_bootstrap.py "${{ needs.source-state.outputs.source_ref }}" "${{ needs.source-state.outputs.source_commit }}" artifacts
+          preview_args=()
+          if [[ "$XIDER_MACOS_RELEASE_READY" != "true" ]]; then preview_args+=(--macos-source-preview); fi
+          python tools/build_bootstrap_commands.py "${{ needs.source-state.outputs.source_commit }}" "${{ needs.source-state.outputs.source_ref }}" artifacts/XIDER-QUICKSTART.txt "${preview_args[@]}"
+          python tools/build_install_launchers.py "${{ needs.source-state.outputs.source_commit }}" "${{ needs.source-state.outputs.source_ref }}" artifacts --pages-dir artifacts/install-pages "${preview_args[@]}"
           python tools/sign_installers.py artifacts
-          python tools/build_release_manifest.py "${GITHUB_REF_NAME}" artifacts --require-signature
+          python tools/build_release_manifest.py "${{ needs.source-state.outputs.source_ref }}" artifacts --require-signature
 
       - name: "Upload short installer entry points for GitHub Pages"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -484,7 +498,26 @@ jobs:
             artifacts/XIDER-install-macos.sh.sig
             artifacts/XIDER-QUICKSTART.txt
             artifacts/release-manifest.json
+            artifacts/protected-build-manifest.json
+          tag_name: ${{ needs.source-state.outputs.source_ref }}
+          target_commitish: ${{ needs.source-state.outputs.source_commit }}
+          name: XIDER ${{ needs.source-state.outputs.source_ref }}
           draft: false
-          prerelease: false
-          body_path: ${{ github.workspace }}/docs/releases/${{ github.ref_name }}.md
+          prerelease: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.XIDER_MACOS_RELEASE_READY != 'true') }}
+          body_path: ${{ github.workspace }}/docs/releases/${{ needs.source-state.outputs.source_ref }}.md
           generate_release_notes: true
+
+  dispatch-pages:
+    name: "Promote the exact published release to GitHub Pages"
+    needs: [source-state, create-release]
+    if: needs.create-release.result == 'success' && github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: "Dispatch Pages for the exact published release tag"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.source-state.outputs.source_ref }}
+        run: gh workflow run pages.yml --repo "$REPOSITORY" --ref main -f installer_tag="$RELEASE_TAG"

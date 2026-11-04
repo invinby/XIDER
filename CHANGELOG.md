@@ -1,14 +1,22 @@
 # XIDER release history
 
-## Unreleased
+## X4.3.28-APP-DATA-PRANK-HUB+20261104 — synchronized install and component release
 
 ### English
 
-- After a healthy update, move recognized legacy Windows Desktop and macOS home-folder installs into the standard per-user XIDER data directory as rollback copies. Leave unrelated files untouched.
+- Move recognized legacy Windows Desktop and macOS home-folder installs into the standard per-user XIDER data directory only after the new Agent and Guard Keeper pass startup health; retain one rollback copy and leave unrelated files untouched.
+- Notify the owner of an approved, already registered device about an old-to-new Agent version transition only after a fresh heartbeat confirms the new version.
+- Publish the unified prank hub with search, filters, favorites, action cards, a pinned Stop All control, and platform/stop/recovery details backed by the approved action registry.
+- Build Windows and macOS Agent/Guard Keeper/Safari/Siri packages with Nuitka and PyObfus reports. The component inventory distinguishes compilation from obfuscation; macOS runtime signing/notarization remains unavailable without Apple credentials.
+- Attach a signed release manifest and signed protected component inventory to the prerelease; CI and physical-device acceptance remain separate evidence.
 
 ### Русский
 
-- После успешного обновления переносить распознанные старые установки Windows с рабочего стола и macOS из домашней папки в стандартный каталог данных как резервные копии для отката. Посторонние файлы не трогать.
+- Переносить распознанные старые установки Windows с рабочего стола и macOS из домашней папки в стандартный каталог данных только после успешной проверки запуска Agent и Guard Keeper; хранить одну резервную копию для отката и не трогать посторонние файлы.
+- Сообщать владельцу о переходе старого Agent на новую версию только после свежего heartbeat уже подтверждённого устройства с новой версией.
+- Опубликовать единый пранк-хаб с поиском, фильтрами, избранным, карточками действий и закреплённой кнопкой «Остановить всё»; показывать платформы, остановку и восстановление по утверждённому реестру.
+- Собрать пакеты Windows и macOS для Agent/Guard Keeper/Safari/Siri с Nuitka и отчётами PyObfus. Компонентный inventory отдельно показывает компиляцию и обфускацию; подпись и нотарификация runtime macOS недоступны без сертификатов Apple.
+- Прикрепить подписанные release manifest и protected component inventory; CI и физическая проверка устройств учитываются отдельно.
 
 ## X4.3.27-MAC-APP-SUPPORT+20261104 — synchronized agent update paths
 

@@ -61,8 +61,8 @@ def test_tagged_release_builds_and_publishes_signed_source_package():
     assert "unzip -Z1 artifacts/XGENT-WDS-Windows.zip | grep -Fxq xider-obfuscation-report.json" in packaging
     assert "unzip -Z1 artifacts/Guard-Keeper-Windows.zip | grep -Fxq xider-obfuscation-report.json" in packaging
     assert "unzip -Z1 artifacts/macos/XGENT-MCS-macos-bundle.zip | grep -Fxq xider-obfuscation-report.json" in packaging
-    assert "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in release
-    assert 'python tools/build_release_manifest.py "${GITHUB_REF_NAME}" artifacts --require-signature' in release
+    assert "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in release
+    assert 'python tools/build_release_manifest.py "${{ needs.source-state.outputs.source_ref }}" artifacts --require-signature' in release
 
     published_assets = release.split("          files: |", 1)[1].split("          draft:", 1)[0]
     for asset in (
@@ -100,7 +100,7 @@ def test_tagged_release_uses_version_specific_bilingual_release_notes():
     release_notes = ROOT / "docs" / "releases" / "v4.1.7.md"
 
     assert release_notes.is_file()
-    assert "body_path: ${{ github.workspace }}/docs/releases/${{ github.ref_name }}.md" in release
+    assert "body_path: ${{ github.workspace }}/docs/releases/${{ needs.source-state.outputs.source_ref }}.md" in release
     assert "generate_release_notes: true" in release
     assert "## Русский" in release_notes.read_text(encoding="utf-8")
     assert "## English" in release_notes.read_text(encoding="utf-8")
@@ -112,7 +112,7 @@ def test_tagged_release_waits_for_the_full_ci_workflow():
     preview_release = WINDOWS_PREVIEW_WORKFLOW.read_text(encoding="utf-8")
 
     assert "workflow_call:" in ci and "source_ref:" in ci
-    assert 'if: github.event_name == \'workflow_dispatch\' || (startsWith(github.ref, \'refs/tags/v\') && vars.XIDER_MACOS_RELEASE_READY == \'true\')' in native_release
+    assert "if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))" in native_release
     assert "    uses: ./.github/workflows/ci.yml" in native_release
     assert "source_ref: ${{ needs.source-state.outputs.source_commit }}" in native_release
     native_release_job = native_release.split("  create-release:", 1)[1]
@@ -131,7 +131,7 @@ def test_manual_tag_build_creates_signed_inventory_without_publishing_release():
     inventory = text.split("  protected-build-inventory:", 1)[1].split("  create-release:", 1)[0]
     release = text.split("  create-release:", 1)[1]
 
-    assert "if: github.event_name == 'workflow_dispatch'" in inventory
+    assert "if: github.event_name == 'workflow_dispatch' && github.actor == github.repository_owner && inputs.publish_preview != true" in inventory
     source = text.split("  source-state:", 1)[1].split("  release-ci:", 1)[0]
     assert "release_tag:" in text.split("  workflow_dispatch:", 1)[1].split("permissions:", 1)[0]
     assert "ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.sha }}" in source
@@ -143,7 +143,8 @@ def test_manual_tag_build_creates_signed_inventory_without_publishing_release():
     assert "tools/build_protected_build_manifest.py" in inventory
     assert "--require-signature" in inventory
     assert "name: XIDER-Protected-Build-Inventory" in inventory
-    assert "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in release
+    assert "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in release
+    assert "inputs.publish_preview == true" in release
 
 
 def test_manual_signed_build_inventory_is_owner_only_and_never_publishes_release():
@@ -155,7 +156,7 @@ def test_manual_signed_build_inventory_is_owner_only_and_never_publishes_release
     assert "github.actor == github.repository_owner" in source_state
     assert "github.actor == github.repository_owner" in inventory
     assert "needs: [release-ci, source-state, pack-components]" in inventory
-    assert "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in release
+    assert "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in release
 
 
 def test_tagged_release_publishes_commit_pinned_quickstart_for_both_platforms():
@@ -163,17 +164,17 @@ def test_tagged_release_publishes_commit_pinned_quickstart_for_both_platforms():
     release = text.split("  create-release:", 1)[1]
     published_assets = release.split("          files: |", 1)[1].split("          draft:", 1)[0]
 
-    assert 'python tools/sign_bootstrap.py "${GITHUB_REF_NAME}" "${GITHUB_SHA}" artifacts' in release
-    assert 'python tools/build_bootstrap_commands.py "${GITHUB_SHA}" "${GITHUB_REF_NAME}" artifacts/XIDER-QUICKSTART.txt' in release
+    assert 'python tools/sign_bootstrap.py "${{ needs.source-state.outputs.source_ref }}" "${{ needs.source-state.outputs.source_commit }}" artifacts' in release
+    assert 'python tools/build_bootstrap_commands.py "${{ needs.source-state.outputs.source_commit }}" "${{ needs.source-state.outputs.source_ref }}" artifacts/XIDER-QUICKSTART.txt "${preview_args[@]}"' in release
     assert "artifacts/XIDER-QUICKSTART.txt" in published_assets
     assert "cp deploy/bootstrap-agent.ps1 artifacts/XIDER-bootstrap-windows.ps1" in release
     assert "cp deploy/bootstrap.sh artifacts/XIDER-bootstrap-macos.sh" in release
     assert "XIDER-bootstrap-windows.ps1.sig" in release
     assert "XIDER-bootstrap-macos.sh.sig" in release
-    assert 'python tools/build_release_manifest.py "${GITHUB_REF_NAME}" artifacts --require-signature' in release
-    assert release.index('python tools/sign_bootstrap.py "${GITHUB_REF_NAME}" "${GITHUB_SHA}" artifacts') < release.index(
-        'python tools/build_bootstrap_commands.py "${GITHUB_SHA}" "${GITHUB_REF_NAME}" artifacts/XIDER-QUICKSTART.txt'
-    ) < release.index('python tools/build_release_manifest.py "${GITHUB_REF_NAME}" artifacts --require-signature')
+    assert 'python tools/build_release_manifest.py "${{ needs.source-state.outputs.source_ref }}" artifacts --require-signature' in release
+    assert release.index('python tools/sign_bootstrap.py "${{ needs.source-state.outputs.source_ref }}" "${{ needs.source-state.outputs.source_commit }}" artifacts') < release.index(
+        'python tools/build_bootstrap_commands.py "${{ needs.source-state.outputs.source_commit }}" "${{ needs.source-state.outputs.source_ref }}" artifacts/XIDER-QUICKSTART.txt "${preview_args[@]}"'
+    ) < release.index('python tools/build_release_manifest.py "${{ needs.source-state.outputs.source_ref }}" artifacts --require-signature')
 
     builder = (ROOT / "tools" / "build_bootstrap_commands.py").read_text(encoding="utf-8")
     assert 'raw_base = f"https://raw.githubusercontent.com/{REPOSITORY}/{ref}"' in builder
@@ -191,9 +192,9 @@ def test_tagged_release_publishes_commit_pinned_quickstart_for_both_platforms():
 def test_short_installers_are_generated_and_signed_before_the_asset_manifest():
     text = WORKFLOW.read_text(encoding="utf-8")
     release = text.split("  create-release:", 1)[1]
-    generate = 'python tools/build_install_launchers.py "${GITHUB_SHA}" "${GITHUB_REF_NAME}" artifacts --pages-dir artifacts/install-pages'
+    generate = 'python tools/build_install_launchers.py "${{ needs.source-state.outputs.source_commit }}" "${{ needs.source-state.outputs.source_ref }}" artifacts --pages-dir artifacts/install-pages "${preview_args[@]}"'
     signing = "python tools/sign_installers.py artifacts"
-    inventory = 'python tools/build_release_manifest.py "${GITHUB_REF_NAME}" artifacts --require-signature'
+    inventory = 'python tools/build_release_manifest.py "${{ needs.source-state.outputs.source_ref }}" artifacts --require-signature'
     assert release.index(generate) < release.index(signing) < release.index(inventory)
     assert "name: XIDER-install-pages" in release
     assert "include-hidden-files: true" in release
