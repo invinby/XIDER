@@ -7838,6 +7838,9 @@ _PRANK_FILTERS = {
 _PRANK_DISABLED = {
     "prank:matrix": "Эффект ещё не прошёл проверку на устройстве.",
     "prank:rickroll50": "Открывает слишком много вкладок за один запуск.",
+    "prank:siren": "macOS поднимает системную громкость до 100%; эффект не отменяется через «Остановить всё», а исходная громкость автоматически не возвращается.",
+    "prank:screamer": "Агент лишь принимает запуск фоновой звуковой задачи; Stop All не завершает её и не восстанавливает громкость. Действие выключено до подтверждённой остановки и возврата состояния.",
+    "cmd:prank_bsod": "Полноэкранная сцена Windows удерживает курсор; «Остановить всё» её не закрывает. Запуск оставлен выключенным.",
     "prank:swapmouse": "Обработчик не подтвердил успешное переключение мыши.",
     "prank:hidedesktop": "Изменение Finder может пережить остановку эффекта; восстановление не подтверждено.",
     "cmd:prank_invert_screen": "Реальный обработчик не подтвердил выполнение эффекта.",
@@ -7848,18 +7851,95 @@ _PRANK_DISABLED = {
     "cmd:prank_alert_loop": "Название обещает удаление сети, а обработчик показывает только фальшивый диалог.",
     "cmd:prank_rickroll_terminal": "Запускает видимое окно терминала; действие отключено, чтобы не создавать неожиданные окна.",
 }
+_PRANK_CARD_FACTS = {
+    "prank:siren": {
+        "effect": (
+            "Windows до 10 секунд повторяет звуковые сигналы 1200/700 Гц. macOS до 10 секунд повторяет системный "
+            "звук Sosumi и предварительно ставит выходную громкость на 100%."
+        ),
+        "stop": "сигнальная последовательность не зарегистрирована в Stop All и останавливается по таймеру",
+        "restore": "на macOS громкость остаётся 100%; исходное значение нужно вернуть вручную",
+    },
+    "prank:rickroll50": {
+        "effect": "Просит браузер открыть 50 вкладок с роликом YouTube; ответ агента подтверждает только принятые запросы.",
+        "stop": "«Остановить всё» не закрывает открытые вкладки; их нужно закрыть в браузере вручную",
+        "restore": "настройки системы не меняются; вкладки нужно закрыть вручную",
+    },
+    "prank:matrix": {
+        "effect": "Открывает консоль и бесконечно выводит псевдо-цифровой поток; это не полноэкранная системная анимация.",
+        "stop": "процесс консоли не зарегистрирован в Stop All; окно нужно закрыть вручную",
+        "restore": "системные настройки не меняются; достаточно закрыть окно консоли вручную",
+    },
+    "cmd:prank_bsod": {
+        "effect": (
+            "Windows открывает фальшивый полноэкранный экран BSOD, скрывает курсор и удерживает его в центре. "
+            "macOS открывает локальную HTML-сцену Kernel Panic, закрываемую кликом или примерно через 4 секунды."
+        ),
+        "stop": "«Остановить всё» не закрывает это окно; Windows-сцену нужно вручную закрыть Esc или двойным щелчком",
+        "restore": "системные файлы не меняются; окно macOS временное и удаляется очисткой временных файлов",
+    },
+    "prank:hidedesktop": {
+        "effect": (
+            "Windows скрывает значки рабочего стола. macOS меняет постоянную настройку Finder CreateDesktop и перезапускает Finder."
+        ),
+        "stop": "«Остановить всё» не возвращает значки и настройку Finder",
+        "restore": "Windows: повторно показать значки; macOS: вручную вернуть Finder CreateDesktop в прежнее значение",
+    },
+    "cmd:prank_fake_update": {
+        "effect": (
+            "Windows показывает локальную полноэкранную демо-анимацию 22 секунды; macOS — такую же демо-сцену "
+            "до 30 секунд с неопределённым прогрессом. Настоящее обновление или перезагрузка не запускаются; "
+            "системные файлы не изменяются."
+        ),
+        "stop": (
+            "«Остановить всё» отменяет зарегистрированную сцену. На Windows также работают Esc, двойной щелчок "
+            "и закрытие окна; на macOS — Esc, кнопка «Закрыть демо» и таймер."
+        ),
+        "restore": "сценка не меняет системные настройки; после закрытия дополнительного восстановления не требуется",
+    },
+    "prank:screamer": {
+        "effect": (
+            "Windows устанавливает громкость на 100%, снимает mute, открывает YouTube и запускает 5 сигналов по 0,4 с. "
+            "macOS устанавливает выходную громкость на 100%, открывает YouTube и вызывает beep 3 пять раз; "
+            "явного снятия mute нет."
+        ),
+        "stop": (
+            "«Остановить всё» не отменяет уже открытый браузер и не прерывает запущенную последовательность сигналов; "
+            "сигналы заканчиваются сами."
+        ),
+        "restore": (
+            "не выполняется: громкость останется 100% и звук будет включён; верни прежнюю громкость вручную "
+            "и закрой вкладку браузера вручную"
+        ),
+    },
+}
 
 _PRANK_ACTION_CALLBACKS = {
+    "prank_screamer": "prank:screamer",
     "prank_rickroll": "prank:rickroll50",
     "prank_matrix": "prank:matrix",
+    "prank_siren": "prank:siren",
     "prank_swap_mouse": "prank:swapmouse",
     "prank_hide_desktop": "prank:hidedesktop",
+    "prank_bsod": "cmd:prank_bsod",
+    "prank_fake_update": "cmd:prank_fake_update",
+    "msgbox_spam": "fun:spam",
+    "prank_shout_tts": "prank:shout",
 }
 
 
 def _prank_disabled_reason_for_action(action: str) -> str:
+    if action == "prank_stop_all":
+        return ""
+    if not (action.startswith("prank_") or action in _PROMPTED_TEXT_ACTIONS):
+        return ""
     callback = _PRANK_ACTION_CALLBACKS.get(action, f"cmd:{action}")
-    return _PRANK_DISABLED.get(callback, "")
+    reason = _PRANK_DISABLED.get(callback)
+    if reason:
+        return reason
+    if callback not in _PRANK_CARD_FACTS:
+        return "Для действия нет проверенной карточки с эффектом, остановкой и восстановлением; запуск отключён."
+    return ""
 
 
 def _prank_platform(target: str) -> str | None:
@@ -7890,6 +7970,10 @@ def _prank_catalog_items(target: str, user_id: int) -> list[dict]:
             entry["item_id"] = _prank_item_id(callback)
             reasons = [reason for reason in (
                 _PRANK_DISABLED.get(callback),
+                (
+                    "Фактический эффект, остановка и восстановление ещё не описаны; "
+                    "запуск отключён до проверки."
+                ) if callback not in _PRANK_CARD_FACTS else None,
                 "ОС устройства не определена; запуск отключён." if platform is None else None,
             ) if reason]
             entry["available"] = not reasons
@@ -26571,6 +26655,12 @@ async def _run_text_prank_input(
             message, _lex("send_failed"), reply_markup=back_to_device_kb()
         )
         return
+    disabled_reason = _prank_disabled_reason_for_action(action)
+    if disabled_reason:
+        await _replace_user_card(
+            message, f"⚠️ Недоступно: {disabled_reason}", reply_markup=back_to_device_kb()
+        )
+        return
     if not target:
         await _replace_user_card(
             message, _lex("target_required"), reply_markup=back_to_device_kb()
@@ -26636,6 +26726,10 @@ async def _run_text_prank_input(
 
 @router.callback_query(AdminFilter(), F.data.in_({"fun:spam", "cmd:spam"}))
 async def on_fun_spam(cq: CallbackQuery, state: FSMContext):
+    disabled_reason = _prank_disabled_reason_for_action("msgbox_spam")
+    if disabled_reason:
+        await cq.answer(f"Недоступно: {disabled_reason}", show_alert=True)
+        return
     target = SESSION.get("target")
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
@@ -26934,6 +27028,10 @@ async def on_prank_siren(cq: CallbackQuery):
 
 @router.callback_query(AdminFilter(), F.data == "prank:shout")
 async def on_prank_shout(cq: CallbackQuery, state: FSMContext):
+    disabled_reason = _prank_disabled_reason_for_action("prank_shout_tts")
+    if disabled_reason:
+        await cq.answer(f"Недоступно: {disabled_reason}", show_alert=True)
+        return
     target = SESSION.get("target")
     if not target:
         await cq.answer(_lex("target_required"), show_alert=True)
@@ -27790,17 +27888,22 @@ def _prank_card_text(item: dict) -> str:
     callback = str(item.get("callback") or "")
     category_key = _PRANK_FILTERS.get(int(item.get("filter_page") or 0), ("", "prank_tab_visual"))[1]
     reason = str(item.get("unavailable_reason") or "")
+    card_facts = _PRANK_CARD_FACTS.get(callback, {})
     if reason:
         state = "не запускать · недоступно"
-        restore = "эффект не запускался; восстановление не применимо"
+        restore = card_facts.get("restore", "эффект не запускался; восстановление не применимо")
         warning = f"⚠️ Не запускается: {reason}"
     else:
         state = f"{item.get('support_state', 'unknown')} · физический запуск не подтверждён"
-        restore = "возвращается только состояние, сохранённое конкретным эффектом; другие исходные настройки не угадываются, подтверждение может отсутствовать"
+        restore = card_facts.get(
+            "restore",
+            "в карточке не подтверждено; исходное состояние нельзя считать восстановленным",
+        )
         warning = "Запуск — отдельной кнопкой; отсутствие ответа не будет считаться успехом."
-    warning = (
-        "Остановка: «Остановить всё» отменяет активные сцены XIDER и пробует вернуть сохранённые обои; "
-        "короткие эффекты могут завершиться только по таймеру.\n" + warning
+    effect_detail = card_facts.get("effect", "Точное поведение этой команды ещё не описано в карточке.")
+    stop_detail = card_facts.get(
+        "stop",
+        "«Остановить всё» отправляет команду остановки активных сцен XIDER; завершение эффекта не подтверждается этой карточкой.",
     )
     platforms = ", ".join(str(value) for value in item.get("platforms", []) if value in {"windows", "macos"}) or "не указаны"
     return _lex_html(
@@ -27809,6 +27912,8 @@ def _prank_card_text(item: dict) -> str:
         category=_lex(category_key),
         platforms=platforms,
         state=state,
+        effect_detail=effect_detail,
+        stop_detail=stop_detail,
         restore=restore,
         warning=warning,
     )

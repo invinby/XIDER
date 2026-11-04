@@ -2777,3 +2777,16 @@ The initial candidate `420d575b7571d560f72463b7a6609b4bbe415a05` failed the main
 Подробные hosted checks и владельческая приёмка перечислены в
 `docs/acceptance/2026-10-30-stabilization.md`. Не снимать релизные блокеры Mac,
 пока нет подписанного/notarized пакета и проверки на устройстве.
+
+## Актуальная сверка install/build/prank · 2026-11-04
+
+Сверка по GitHub `main`, workflow evidence и локальной проверке Mac preview.
+Это source/artifact evidence, не физическая приёмка.
+
+| Область | Подтверждено сейчас | Осталось |
+|---|---|---|
+| Установка и версии | `main` на `b56779ad1e332dfac803d8a03047c1278dc37e99`. Windows — `%LOCALAPPDATA%\XIDER`, macOS — `~/Library/Application Support/XIDER`; распознанные legacy-каталоги перемещаются после успешной проверки запуска в одну rollback-копию. Посторонние файлы не удаляются. Telegram сообщает `старая версия → новая` только после свежего heartbeat с новой версией. | Изменение уже в `main`, но ещё не в опубликованном релизном пакете. Нужны exact-tag release и install/update/rollback на физических Windows и Mac. |
+| macOS preview | Build run `41770220559`, source `b56779a`; artifact `XGENT-MCS-macOS`, GitHub SHA-256 и локальный SHA-256 совпали: `8c198a111931f0b0ebd1f22e9e1ef0c0bd94a02d8f59e3517fd66e814e7dcb57`. ZIP integrity проверен; внутри Agent bundle и Guard Keeper bundle, без `.py/.pyc/.ps1/.sh`. Вложенные reports: PyObfus 0.11.1 applied к Agent, Guard Keeper, Safari, Siri; Nuitka 4.3.1 компилирует приложения. | Это unsigned preview. Apple Developer signing, notarization и staple шаги пропущены; физический запуск, обновление и rollback на Mac не подтверждены. |
+| Windows preview | Тот же build run `41770220559` на `b56779a`; GitHub job готовит Agent и Guard Keeper через PyObfus + Nuitka. | На момент этой сверки компиляция Windows ещё выполнялась; готового Windows artifact нет. Run не является release: tagged release test gate и publication не проходили. |
+| Пранк-хаб | PR #78 содержит один каталог с фильтрами, поиском, избранным, карточками и закреплённой первой кнопкой «Остановить всё». Непроверенные действия и старые прямые callbacks блокируются; результат команды не объявляется успехом без ответа агента. CI run `41769784771` для head `4b510aa` прошёл. | PR #78 остаётся draft. Нужны live-проверка Telegram и физические эффекты/остановка/восстановление на Windows и Mac; недоказанные действия остаются отключёнными. |
+| Публичный релиз | Последний подтверждённый tag `v4.3.27` относится к старому source commit `cab9942…`; новый install migration и preview build от `b56779a` в него не входят. | Не выдавать `v4.3.27` за пакет с новой миграцией. Следующий релиз требует свежего CI, exact-tag build, signed manifests/inventory и проверки состава каждого архива. |

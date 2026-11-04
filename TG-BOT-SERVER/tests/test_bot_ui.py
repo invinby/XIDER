@@ -141,6 +141,79 @@ def test_disabled_prank_actions_are_rejected_before_publish(monkeypatch, action)
 
 
 @pytest.mark.parametrize(
+    ("action", "callback"),
+    [
+        ("prank_siren", "cmd:prank_siren"),
+        ("prank_slow_mouse", "cmd:prank_slow_mouse"),
+        ("prank_screamer", "prank:screamer"),
+    ],
+)
+def test_legacy_prank_callbacks_without_available_card_are_rejected(monkeypatch, action, callback):
+    answers = []
+    dispatched = []
+
+    class Callback:
+        data = callback
+        from_user = SimpleNamespace(id=101)
+        message = SimpleNamespace(chat=SimpleNamespace(id=10), message_id=20)
+
+        async def answer(self, text=None, **kwargs):
+            answers.append((text, kwargs))
+
+    async def unlocked(*args, **kwargs):
+        dispatched.append((args, kwargs))
+
+    monkeypatch.setattr(bot, "_simple_command_unlocked", unlocked)
+    assert asyncio.run(bot.simple_command(Callback(), action, "🎭", "test")) is None
+    assert not dispatched
+    assert answers and answers[0][1] == {"show_alert": True}
+    assert "Недоступно" in answers[0][0]
+
+
+@pytest.mark.parametrize(
+    ("action", "callback"),
+    [("msgbox_spam", "fun:spam"), ("prank_shout_tts", "prank:shout")],
+)
+def test_prompted_prank_without_audited_card_is_rejected_before_publish(monkeypatch, action, callback):
+    published = []
+    answers = []
+
+    class FakeState:
+        async def get_data(self):
+            return {
+                "target": "captured-device",
+                "authorization_callback": callback,
+                "authorization_target": "captured-device",
+            }
+
+        async def clear(self):
+            pass
+
+    class FakeMessage:
+        text = "test phrase"
+        from_user = SimpleNamespace(id=bot.ADMIN_ID)
+
+    class FakeCollector:
+        async def wait_for(self, *args, **kwargs):
+            return {"type": action, "device_id": "captured-device", "id": "cmd-1", "ok": True}
+
+    async def replace_card(_message, text, **_kwargs):
+        answers.append(text)
+
+    monkeypatch.setattr(bot, "publish_tracked", lambda name, **kwargs: published.append((name, kwargs)) or (True, "cmd-1"))
+    monkeypatch.setattr(bot, "_replace_user_card", replace_card)
+    monkeypatch.setattr(bot, "_pending_device_input_still_allowed", lambda *_args: True)
+    monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    asyncio.run(bot._run_text_prank_input(
+        FakeMessage(), FakeState(), action=action, emoji="🎭", label_key="prank_shout_button", timeout=1,
+    ))
+
+    assert not published
+    assert len(answers) == 1 and "Недоступно" in answers[0]
+
+
+@pytest.mark.parametrize(
     ("handler", "action"),
     ((bot.on_prank_swapmouse, "prank_swap_mouse"), (bot.on_prank_hidedesktop, "prank_hide_desktop")),
 )
@@ -4136,72 +4209,6 @@ def test_simple_command_rejects_non_owner_all_device_target(monkeypatch):
     assert grant_checks == []
     assert published == []
     assert cards == [bot._lex("input_access_revoked")]
-
-
-@pytest.mark.parametrize(
-    ("handler", "action", "emoji", "label_key", "extra"),
-    [
-        (bot.on_fun_spam_input, "msgbox_spam", "💬", "prank_spam_windows_button", {"count": 5}),
-        (bot.on_prank_shout_input, "prank_shout_tts", "📢", "prank_shout_button", {}),
-    ],
-)
-def test_prompted_prank_input_edits_one_card_and_keeps_captured_target(
-    monkeypatch, handler, action, emoji, label_key, extra
-):
-    from types import SimpleNamespace
-
-    edits = []
-    published = []
-
-    class FakeState:
-        async def get_data(self):
-            return {"target": "captured-device"}
-
-        async def clear(self):
-            pass
-
-    class FakeMessage:
-        text = "A test phrase"
-        from_user = SimpleNamespace(id=bot.ADMIN_ID)
-
-    class FakeCollector:
-        async def wait_for(self, *args, **kwargs):
-            return {"ok": True, "id": "cmd-1"}
-
-    async def replace_card(_message, text, reply_markup=None):
-        edits.append(text)
-
-    monkeypatch.setitem(bot.SESSION, "target", "a-different-current-device")
-    monkeypatch.setattr(bot.bot_settings, "get", lambda key, default=None: "xperson" if key == "ui_style" else default)
-    monkeypatch.setattr(bot, "target_label", lambda target: target)
-    monkeypatch.setattr(bot, "publish_tracked", lambda name, **kwargs: published.append((name, kwargs)) or (True, "cmd-1"))
-    monkeypatch.setattr(bot, "fun_text_collector", FakeCollector())
-    monkeypatch.setattr(bot, "_replace_user_card", replace_card)
-    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
-    monkeypatch.setattr(bot, "_device_action_still_allowed", lambda *_args: True)
-
-    asyncio.run(handler(FakeMessage(), FakeState()))
-
-    label = bot.xlex.render(label_key, "xperson")
-    assert edits == [
-        bot._lex_html(
-            "command_waiting",
-            emoji=emoji,
-            label=label,
-            device="captured-device",
-        ),
-        bot._lex_html(
-            "command_result",
-            emoji=emoji,
-            label=label,
-            device="captured-device",
-            text=bot.xlex.render("device_command_completed", "xperson"),
-        ),
-    ]
-    assert published == [(
-        action,
-        {"_target": "captured-device", "text": "A test phrase", **extra},
-    )]
 
 
 def test_xlex_html_helpers_escape_dynamic_device_names():
@@ -12194,12 +12201,101 @@ def test_prank_action_card_requires_explicit_launch_and_pins_stop(monkeypatch):
 
     callbacks = _callback_data(captured["markup"])
     assert callbacks[0] == "prank:stop_all"
-    assert "prank:screamer" in callbacks
-    assert "Скример" in captured["text"]
-    assert "физический запуск не подтверждён" in captured["text"]
-    assert "короткие эффекты могут завершиться только по таймеру" in captured["text"]
-    assert "возвращается только состояние, сохранённое конкретным эффектом" in captured["text"]
-    assert "другие исходные настройки не угадываются" in captured["text"]
+    assert "prank:screamer" not in callbacks
+    assert "действие выключено" in captured["text"].casefold()
+    assert "Рикролл + звуковые сигналы" in captured["text"]
+    assert "физический запуск не подтверждён" not in captured["text"]
+    assert "действие выключено" in captured["text"].casefold()
+    assert "5 сигналов по 0,4 с" in captured["text"]
+    assert "громкость останется 100%" in captured["text"]
+    assert "закрой вкладку браузера вручную" in captured["text"]
+
+
+def test_prank_without_audited_effect_facts_is_disabled(monkeypatch):
+    target = "pc"
+    _setup(monkeypatch, {target: {"name": "PC", "os": "Windows"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": target})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
+
+    item = next(row for row in bot._prank_catalog_items(target, bot.ADMIN_ID)
+                if row["callback"] == "cmd:prank_hacker_typer")
+
+    assert item["available"] is False
+    assert "эффект" in item["unavailable_reason"].lower()
+    assert "восстанов" in item["unavailable_reason"].lower()
+
+
+@pytest.mark.parametrize(
+    ("callback", "evidence"),
+    [
+        ("prank:siren", "100%"),
+        ("prank:rickroll50", "50"),
+        ("prank:matrix", "бесконеч"),
+        ("cmd:prank_bsod", "полноэкран"),
+        ("prank:hidedesktop", "Finder"),
+    ],
+)
+def test_nonreversible_prank_cards_explain_effect_and_stay_disabled(monkeypatch, callback, evidence):
+    target = "pc"
+    _setup(monkeypatch, {target: {"name": "PC", "os": "Windows"}})
+    monkeypatch.setattr(bot, "SESSION", {"target": target})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
+
+    item = next(row for row in bot._prank_catalog_items(target, bot.ADMIN_ID)
+                if row["callback"] == callback)
+    card = bot._prank_card_text(item)
+
+    assert item["available"] is False
+    assert evidence.casefold() in card.casefold()
+    assert "вручную" in card.casefold() or "не выполняется" in card.casefold()
+
+
+@pytest.mark.parametrize(
+    ("os_name", "duration"),
+    [("Windows 11", "22 секунды"), ("macOS 27", "30 секунд")],
+)
+def test_fake_update_card_documents_bounded_demo_and_stop_path(monkeypatch, os_name, duration):
+    target = "pc"
+    _setup(monkeypatch, {target: {"name": "PC", "os": os_name}})
+    monkeypatch.setattr(bot, "SESSION", {"target": target})
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
+
+    item = next(row for row in bot._prank_catalog_items(target, bot.ADMIN_ID)
+                if row["callback"] == "cmd:prank_fake_update")
+    card = bot._prank_card_text(item)
+
+    assert item["available"] is True
+    assert duration in card
+    assert "Остановить всё" in card
+    assert "системные файлы не изменяются" in card
+    assert "Esc" in card
+
+
+@pytest.mark.parametrize("style", bot.xlex.STYLES)
+def test_prank_card_describes_the_actual_screamer_effect_and_lifecycle(monkeypatch, style):
+    _setup(monkeypatch, {"pc": {"name": "PC", "os": "Windows"}})
+    monkeypatch.setattr(
+        bot.bot_settings, "get",
+        lambda key, default=None: style if key == "ui_style" else default,
+    )
+    monkeypatch.setattr(bot, "get_user_role", lambda _user_id: bot.Role.OWNER)
+    monkeypatch.setattr(bot.access_store, "can_use_callback", lambda *_args: True)
+
+    item = next(row for row in bot._prank_catalog_items("pc", bot.ADMIN_ID)
+                if row["callback"] == "prank:screamer")
+    text = bot._prank_card_text(item)
+
+    assert "youtube" in text.casefold()
+    assert "100%" in text
+    assert "5 сигналов по 0,4 с" in text.casefold()
+    assert "macos" in text.casefold() and "явного снятия mute нет" in text.casefold()
+    assert item["available"] is False
+    assert "действие выключено" in text.casefold()
+    assert "вкладку браузера вручную" in text.casefold()
+    assert "громкость вручную" in text.casefold()
 
 
 def test_prank_search_results_filter_by_label_and_do_not_launch(monkeypatch):
@@ -12312,7 +12408,7 @@ def test_prank_favorite_toggle_updates_card_and_stays_scoped(monkeypatch):
     asyncio.run(bot.on_prank_favorite_toggle(callback))
 
     assert favorite_values == {f"prank:{item_id}"}
-    assert "Скример" in captured["text"]
+    assert "Рикролл + звуковые сигналы" in captured["text"]
     assert "prankpage:fav:" + item_id in _callback_data(captured["markup"])
     assert any("из избранного" in button.text for row in captured["markup"].inline_keyboard for button in row)
     assert callback.answers == ["Добавил в избранное ⭐"]
@@ -12521,7 +12617,7 @@ def test_prank_visual_page_uses_all_six_xlex_voices_without_changing_actions(mon
     baseline = callbacks_by_style[bot.xlex.STYLES[0]]
     assert all(callbacks == baseline for callbacks in callbacks_by_style.values())
     assert len({tuple(labels) for labels in labels_by_style.values()}) >= 5
-    assert any("🎬 Скример (full)" in label for label in labels_by_style["xtech"])
+    assert any("🎵 Рикролл + звуковые сигналы" in label for label in labels_by_style["xtech"])
     assert any("Скрыть иконки" in label for label in labels_by_style["xtech"])
     assert len(hidden_labels_by_style["xtech"]) == 0
 
