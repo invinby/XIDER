@@ -26,7 +26,7 @@ INSTALLERS = {
     "macos": "XIDER-install-macos.sh",
 }
 INSTALLER_NAMESPACE = "xider-installer@xider.link"
-DEFAULT_MACOS_INSTALLER_TAG = "v4.3.13"
+DEFAULT_MACOS_INSTALLER_TAG = ""
 
 
 def build_installers(
@@ -84,7 +84,10 @@ def build_pages_launchers() -> dict[str, str]:
         f"https://github.com/{REPOSITORY}/releases/download/{windows_tag}"
         if windows_tag else base
     )
-    macos_base = f"https://github.com/{REPOSITORY}/releases/download/{macos_tag}"
+    macos_base = (
+        f"https://github.com/{REPOSITORY}/releases/download/{macos_tag}"
+        if macos_tag else base
+    )
     macos_source_preview = os.environ.get("XIDER_MACOS_SOURCE_PREVIEW", "").strip().lower() in {"1", "true", "yes"}
     macos_preview_notice = (
         "printf '%s\\n' 'XIDER: selecting the signed macOS source-preview installer (runtime is not Apple-signed or notarized)...'\n"

@@ -450,6 +450,8 @@ jobs:
       - name: "Build signed asset inventory"
         env:
           XIDER_RELEASE_PRIVATE_KEY_B64: ${{ secrets.XIDER_RELEASE_PRIVATE_KEY_B64 }}
+          XIDER_MACOS_RELEASE_READY: ${{ vars.XIDER_MACOS_RELEASE_READY }}
+          XIDER_MACOS_SOURCE_PREVIEW: ${{ vars.XIDER_MACOS_RELEASE_READY != 'true' && '1' || '' }}
           # Public endpoint, embedded in signed installer bodies. Never put credentials here.
           XIDER_DOCK_URL: ${{ vars.XIDER_DOCK_URL }}
         run: |
@@ -461,8 +463,10 @@ jobs:
           cp deploy/bootstrap.sh artifacts/XIDER-bootstrap-macos.sh
           python tools/build_protected_build_manifest.py artifacts --source-ref "${{ needs.source-state.outputs.source_ref }}" --source-commit "${{ needs.source-state.outputs.source_commit }}" --require-signature
           python tools/sign_bootstrap.py "${{ needs.source-state.outputs.source_ref }}" "${{ needs.source-state.outputs.source_commit }}" artifacts
-          python tools/build_bootstrap_commands.py "${{ needs.source-state.outputs.source_commit }}" "${{ needs.source-state.outputs.source_ref }}" artifacts/XIDER-QUICKSTART.txt
-          python tools/build_install_launchers.py "${{ needs.source-state.outputs.source_commit }}" "${{ needs.source-state.outputs.source_ref }}" artifacts --pages-dir artifacts/install-pages
+          preview_args=()
+          if [[ "$XIDER_MACOS_RELEASE_READY" != "true" ]]; then preview_args+=(--macos-source-preview); fi
+          python tools/build_bootstrap_commands.py "${{ needs.source-state.outputs.source_commit }}" "${{ needs.source-state.outputs.source_ref }}" artifacts/XIDER-QUICKSTART.txt "${preview_args[@]}"
+          python tools/build_install_launchers.py "${{ needs.source-state.outputs.source_commit }}" "${{ needs.source-state.outputs.source_ref }}" artifacts --pages-dir artifacts/install-pages "${preview_args[@]}"
           python tools/sign_installers.py artifacts
           python tools/build_release_manifest.py "${{ needs.source-state.outputs.source_ref }}" artifacts --require-signature
 

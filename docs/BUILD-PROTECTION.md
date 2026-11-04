@@ -7,6 +7,7 @@
 3. A pushed version tag runs the CI gate and builds that exact tag. When `XIDER_MACOS_RELEASE_READY` is false, the workflow publishes a signed project prerelease with compiled but unsigned macOS bundles. When it is true, the protected path requires Apple signing/notarization and publishes the stable release.
 4. For a manual workflow run, leave `publish_preview` off to upload only a signed component inventory. Turn it on to publish the selected tag as a prerelease with signed installer assets, a signed release manifest, and a signed per-component build inventory. After publication the workflow dispatches Pages with that same tag.
 5. Preview publication does not require Apple credentials. macOS runtime bundles remain unsigned and unnotarized, so this path is not a distributable macOS release.
+   Until Apple signing/notarization is configured, the published short macOS installer and quickstart use the exact-tag source-preview bootstrap; unsigned compiled app bundles are attached separately for inspection and owner testing.
 6. The private release key is read only inside the protected `xider-release-signing` environment. The workflow checks that its derived key ID is pinned in `XGENT-MCS/release_signature.py`.
 7. The component inventory binds the exact source tag and commit to archive hashes and hashes of every file inside each ZIP. The workflow verifies the Ed25519 signature against the public key pinned by the agents before attaching the report to the release or uploading it as `XIDER-Protected-Build-Inventory`.
 
@@ -29,6 +30,7 @@ PyArmor was evaluated and rejected for this pipeline because of its hosted-runne
 3. Push version-тега запускает CI и собирает именно этот тег. Когда `XIDER_MACOS_RELEASE_READY` выключен, workflow автоматически публикует подписанный проектом prerelease с собранными, но неподписанными приложениями macOS. Когда он включён, защищённая сборка требует подпись и нотарификацию Apple и публикует стабильный релиз.
 4. При ручном запуске оставь `publish_preview` выключенным, чтобы только загрузить подписанный компонентный inventory. Включи его, чтобы опубликовать выбранный тег как prerelease с подписанными установочными файлами, release manifest и inventory каждого компонента. После публикации workflow запустит Pages с тем же тегом.
 5. Для preview сертификаты Apple не нужны. Runtime macOS остаётся неподписанным и ненотарифицированным, поэтому это не готовый к распространению релиз macOS.
+   Пока Apple signing/notarization не настроены, короткий macOS установщик и quickstart используют source-preview bootstrap с точным тегом; неподписанные скомпилированные app-бандлы прикладываются отдельно для просмотра и теста владельцем.
 6. Закрытый ключ релизной подписи читается только внутри защищённого GitHub environment `xider-release-signing`; workflow проверяет, что его key ID закреплён в `XGENT-MCS/release_signature.py`.
 7. Компонентный inventory связывает точный тег и commit с хешами архивов и каждого файла внутри ZIP. Workflow проверяет Ed25519-подпись ключом, закреплённым в агентах, прежде чем прикрепить отчёт к релизу или загрузить его как `XIDER-Protected-Build-Inventory`.
 
