@@ -346,6 +346,113 @@ def test_guardian_detects_only_its_agents_matching_stale_heartbeat(
     assert guardian._agent_health_is_stale(9876) is False
 
 
+def test_guardian_stops_the_whole_nuitka_onefile_agent_family(
+    guardian_module, monkeypatch, tmp_path,
+):
+    module = guardian_module
+
+    class FakeProcess:
+        def __init__(self, pid, image, parent=None):
+            self.pid = pid
+            self.image = image
+            self._parent = parent
+            self._children = []
+            self.terminated = False
+            self.killed = False
+            if parent is not None:
+                parent._children.append(self)
+
+        def exe(self):
+            return self.image
+
+        def parent(self):
+            return self._parent
+
+        def children(self, recursive=False):
+            result = list(self._children)
+            if recursive:
+                for child in tuple(result):
+                    result.extend(child.children(recursive=True))
+            return result
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            return None
+
+        def kill(self):
+            self.killed = True
+
+    agent_exe = tmp_path / "XGENT-WDS.exe"
+    agent_exe.write_bytes(b"packaged agent fixture")
+    monkeypatch.setattr(module, "SCRIPT_DIR", tmp_path)
+    image = str(agent_exe)
+    launcher = FakeProcess(100, image)
+    worker = FakeProcess(101, image, launcher)
+    unrelated = FakeProcess(200, image)
+    guardian = object.__new__(module.Guardian)
+    monkeypatch.setattr(guardian, "agent_process", lambda: worker)
+
+    guardian._terminate_unresponsive_agent(worker)
+
+    assert launcher.terminated is True
+    assert worker.terminated is True
+    assert unrelated.terminated is False
+
+
+def test_guardian_does_not_kill_itself_for_pythonw_agent_fallback(
+    guardian_module, monkeypatch, tmp_path,
+):
+    module = guardian_module
+
+    class FakeProcess:
+        def __init__(self, pid, image, parent=None):
+            self.pid = pid
+            self.image = image
+            self._parent = parent
+            self._children = []
+            self.terminated = False
+            if parent is not None:
+                parent._children.append(self)
+
+        def exe(self):
+            return self.image
+
+        def parent(self):
+            return self._parent
+
+        def children(self, recursive=False):
+            result = list(self._children)
+            if recursive:
+                for child in tuple(result):
+                    result.extend(child.children(recursive=True))
+            return result
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            return None
+
+        def kill(self):
+            self.terminated = True
+
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    monkeypatch.setattr(module, "SCRIPT_DIR", install_dir)
+    pythonw = r"C:\Python\pythonw.exe"
+    guardian_process = FakeProcess(100, pythonw)
+    agent_process = FakeProcess(101, pythonw, guardian_process)
+    guardian = object.__new__(module.Guardian)
+    monkeypatch.setattr(guardian, "agent_process", lambda: agent_process)
+
+    guardian._terminate_unresponsive_agent(agent_process)
+
+    assert agent_process.terminated is True
+    assert guardian_process.terminated is False
+
+
 def test_guardian_status_keeps_task_query_errors_unknown(guardian_module, monkeypatch):
     module = guardian_module
     guardian = object.__new__(module.Guardian)

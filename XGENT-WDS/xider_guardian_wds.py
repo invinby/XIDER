@@ -724,19 +724,65 @@ class Guardian:
             return False
 
     def _terminate_unresponsive_agent(self, proc: psutil.Process) -> None:
-        """Stop only the process currently identified as the XIDER Agent."""
+        """Stop the matching Nuitka onefile process family for an unhealthy Agent."""
         current = self.agent_process()
         if current is None or current.pid != proc.pid:
             return
         try:
-            current.terminate()
-            try:
-                current.wait(timeout=5)
-            except psutil.TimeoutExpired:
-                current.kill()
-                current.wait(timeout=5)
+            image = os.path.normcase(os.path.abspath(current.exe()))
         except psutil.NoSuchProcess:
             return
+        except psutil.AccessDenied as exc:
+            raise RuntimeError("Не удалось безопасно определить исполняемый файл агента.") from exc
+
+        def is_same_image(candidate: psutil.Process) -> bool:
+            try:
+                return os.path.normcase(os.path.abspath(candidate.exe())) == image
+            except psutil.NoSuchProcess:
+                return False
+
+        packaged_exe = SCRIPT_DIR / "XGENT-WDS.exe"
+        expected_image = os.path.normcase(os.path.abspath(str(packaged_exe)))
+        packaged_agent = packaged_exe.is_file() and image == expected_image
+
+        # Nuitka onefile keeps a parent launcher alive while its extracted child
+        # runs. Expand the tree only for this install's packaged Agent. In the
+        # supported pythonw fallback, Guardian and Agent share pythonw.exe, so
+        # only the health-reported Agent PID is safe to terminate.
+        family = [current]
+        if packaged_agent:
+            root = current
+            while True:
+                try:
+                    parent = root.parent()
+                except psutil.NoSuchProcess:
+                    break
+                if parent is None or not is_same_image(parent):
+                    break
+                root = parent
+
+            family = [root]
+            try:
+                family.extend(child for child in root.children(recursive=True) if is_same_image(child))
+            except psutil.NoSuchProcess:
+                pass
+        unique_family = list({member.pid: member for member in family}.values())
+
+        # Terminate leaf processes before their onefile launcher so the parent
+        # cannot keep an unhealthy worker alive or be mistaken for a new agent.
+        for member in reversed(unique_family):
+            try:
+                member.terminate()
+            except psutil.NoSuchProcess:
+                continue
+        for member in reversed(unique_family):
+            try:
+                member.wait(timeout=5)
+            except psutil.TimeoutExpired:
+                member.kill()
+                member.wait(timeout=5)
+            except psutil.NoSuchProcess:
+                continue
 
     def _agent_command(self) -> list[str]:
         exe = SCRIPT_DIR / "XGENT-WDS.exe"
