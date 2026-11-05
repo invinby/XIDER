@@ -13556,6 +13556,7 @@ def test_registered_device_version_change_notifies_owner_after_fresh_heartbeat(m
 def test_device_version_notice_retries_owner_delivery_without_resending_to_other_admins(monkeypatch):
     async def _run():
         attempts = []
+        retry_complete = asyncio.Event()
         monkeypatch.setattr(bot, "LOOP", asyncio.get_running_loop())
         monkeypatch.setattr(bot, "_VERSION_NOTICE_DELAY_SEC", 0)
         monkeypatch.setattr(bot, "_VERSION_NOTICE_RETRY_DELAY_SEC", 0)
@@ -13567,7 +13568,10 @@ def test_device_version_notice_retries_owner_delivery_without_resending_to_other
 
         async def notify_admins(text, **kwargs):
             attempts.append(kwargs.get("owner_only", False))
-            return len(attempts) == 2
+            delivered = len(attempts) == 2
+            if delivered:
+                retry_complete.set()
+            return delivered
 
         monkeypatch.setattr(bot, "_notify_admins", notify_admins)
         monkeypatch.setattr(bot, "devices", type("Store", (), {"get": lambda _self, _device_id: {
@@ -13575,7 +13579,7 @@ def test_device_version_notice_retries_owner_delivery_without_resending_to_other
         }})())
 
         bot._queue_device_version_notice("windows-1", "Windows", "4.3.23", "4.3.24")
-        await asyncio.sleep(0.03)
+        await asyncio.wait_for(retry_complete.wait(), timeout=1)
         assert attempts == [False, True]
 
     asyncio.run(_run())
