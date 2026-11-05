@@ -741,24 +741,31 @@ class Guardian:
             except psutil.NoSuchProcess:
                 return False
 
-        # Nuitka onefile keeps a parent launcher alive while its extracted child
-        # runs. Starting from either PID, collect only that same-image process
-        # tree; never terminate an unrelated process with a similar name.
-        root = current
-        while True:
-            try:
-                parent = root.parent()
-            except psutil.NoSuchProcess:
-                break
-            if parent is None or not is_same_image(parent):
-                break
-            root = parent
+        packaged_exe = SCRIPT_DIR / "XGENT-WDS.exe"
+        expected_image = os.path.normcase(os.path.abspath(str(packaged_exe)))
+        packaged_agent = packaged_exe.is_file() and image == expected_image
 
-        family = [root]
-        try:
-            family.extend(child for child in root.children(recursive=True) if is_same_image(child))
-        except psutil.NoSuchProcess:
-            pass
+        # Nuitka onefile keeps a parent launcher alive while its extracted child
+        # runs. Expand the tree only for this install's packaged Agent. In the
+        # supported pythonw fallback, Guardian and Agent share pythonw.exe, so
+        # only the health-reported Agent PID is safe to terminate.
+        family = [current]
+        if packaged_agent:
+            root = current
+            while True:
+                try:
+                    parent = root.parent()
+                except psutil.NoSuchProcess:
+                    break
+                if parent is None or not is_same_image(parent):
+                    break
+                root = parent
+
+            family = [root]
+            try:
+                family.extend(child for child in root.children(recursive=True) if is_same_image(child))
+            except psutil.NoSuchProcess:
+                pass
         unique_family = list({member.pid: member for member in family}.values())
 
         # Terminate leaf processes before their onefile launcher so the parent
