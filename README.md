@@ -4,11 +4,10 @@
 
 ## Purpose
 
-XIDER is source code for managing owner-authorized Windows and macOS devices
-through Telegram. The bot checks access and routes a command over MQTT; an
-agent on the selected device performs it and returns a result. Repository
-version 4.3.9 identifies source metadata, not proof that a package is published
-or installed.
+XIDER manages owner-authorized Windows and macOS devices through Telegram —
+your personal remote, with the bot checking access and routing commands over
+MQTT. The selected agent does the supported work and reports back. A button
+press is not magic: if the device doesn't answer, XIDER says so.
 
 ## Architecture
 
@@ -107,7 +106,7 @@ the source-backed details and safe handling guidance.
 Run the local component suites with `python tools/run_tests.py`. The fixtures
 use offline test settings and do not connect to Telegram, MQTT, or a VPS. GitHub
 CI checks source and installer fixtures; those checks do not replace live
-service or device acceptance. Live/device acceptance remains unverified.
+service or device acceptance.
 
 ## Limitations
 
@@ -119,10 +118,7 @@ device completed the action.
 
 ## Status
 
-The current source version is 4.3.9. Check [GitHub Releases](https://github.com/invinby/XIDER/releases)
-for published packages and release-specific evidence. Live Windows/macOS,
-Telegram, MQTT, and production VPS acceptance must be recorded separately; it
-is not implied by source tests or this README.
+The latest published package is [`v4.3.30`](https://github.com/invinby/XIDER/releases/tag/v4.3.30), still a prerelease. The owner has installed and checked it on their Windows PC and Mac. That is real hands-on feedback for those machines, not a universal promise for every model or OS version. The Mac package is not Apple-signed or notarized yet, so it remains a preview.
 
 ## License
 
