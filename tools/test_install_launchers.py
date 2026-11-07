@@ -86,7 +86,8 @@ def test_pages_launchers_authenticate_latest_installer_before_running_it():
     assert "releases/latest/download" in pages["mac"]
     assert "-Verb RunAs" in pages["win.ps1"]
     assert "Start-Process" in pages["win.ps1"]
-    assert "& powershell.exe @args" in pages["win.ps1"]
+    assert "$powershellPath=Join-Path $env:WINDIR 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'" in pages["win.ps1"]
+    assert "& $powershellPath @args" in pages["win.ps1"]
     assert "XIDER Windows installer failed" in pages["win.ps1"]
     assert "XIDER install log:" in pages["win.ps1"]
     assert "'-LogPath'" in pages["win.ps1"]
@@ -165,7 +166,7 @@ def test_windows_launcher_uses_dotnet_manifest_fallback_without_openssh(
 ):
     powershell = POWERSHELLS[0]
     monkeypatch.setenv("XIDER_INSTALL_TAG", "v4.1.0")
-    installer = b"param([string]$LogPath)`nWrite-Output 'INSTALLER_FIXTURE'`n"
+    installer = b"param([string]$LogPath)\nWrite-Output 'INSTALLER_FIXTURE'\n"
     installer_digest = hashlib.sha256(installer).hexdigest()
     manifest = {
         "schema": 1,
@@ -229,7 +230,10 @@ Write-Output ('MOCK_UAC=' + $script:mockVerb)
     else:
         assert result.returncode == 0, result.stdout + result.stderr
         assert "OpenSSH is absent" in result.stdout
-        assert "MOCK_UAC=RunAs" in result.stdout
+        if IS_ADMIN:
+            assert "INSTALLER_FIXTURE" in result.stdout
+        else:
+            assert "MOCK_UAC=RunAs" in result.stdout
 
 
 def test_windows_pages_launcher_rejects_an_invalid_release_tag(monkeypatch):
@@ -325,7 +329,7 @@ def test_short_windows_launcher_accepts_signed_installer_and_rejects_tampering(t
     script = build_pages_launchers()["win.ps1"]
     for suffix, variable in (("", "$p"), (".sig", "$s")):
         source = root / f"{INSTALLERS['windows']}{suffix}"
-        pattern = rf'iwr -UseBasicParsing -TimeoutSec 90 -Uri "\$installerBase/{re.escape(INSTALLERS["windows"] + suffix)}" -OutFile {re.escape(variable)}'
+        pattern = rf'Invoke-WebRequest -UseBasicParsing -TimeoutSec 90 -Uri "\$installerBase/{re.escape(INSTALLERS["windows"] + suffix)}" -OutFile {re.escape(variable)}'
         script, count = re.subn(pattern, lambda _match: f"Copy-Item -LiteralPath '{source}' -Destination {variable}", script, count=1)
         assert count == 1
     path = tmp_path / "short.ps1"

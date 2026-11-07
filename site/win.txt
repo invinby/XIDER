@@ -48,7 +48,8 @@ try {
   $principal=[Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()); $isAdmin=$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
   $args=@('-NoProfile','-ExecutionPolicy','Bypass','-File',$p,'-LogPath',$log)
   if(-not $isAdmin){Write-Host 'XIDER: requesting administrator approval (UAC)...'}
-  if($isAdmin){& powershell.exe @args; $installerExitCode=$LASTEXITCODE} else {
+  $powershellPath=Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  if($isAdmin){& $powershellPath @args; $installerExitCode=$LASTEXITCODE} else {
     $argumentLine='-NoProfile -ExecutionPolicy Bypass -File "{0}" -LogPath "{1}"' -f $p.Replace('"','""'),$log.Replace('"','""')
     $installerProcess=Start-Process -FilePath (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList $argumentLine -Verb RunAs -Wait -PassThru; $installerExitCode=$installerProcess.ExitCode
   }
