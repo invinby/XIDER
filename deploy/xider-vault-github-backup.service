@@ -1,0 +1,29 @@
+[Unit]
+Description=Create and upload an encrypted XIDER VPS snapshot to the private GitHub backup
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/xider/x-vault-github-backup.env
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+EnvironmentFile=/etc/xider/x-vault-github-backup.env
+RuntimeDirectory=xider xider-vault-github
+RuntimeDirectoryMode=0700
+ExecStart=/usr/local/libexec/xider/xider-vault-github-backup.sh
+TimeoutStartSec=30min
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ReadWritePaths=/run/xider /run/xider-vault-github
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native

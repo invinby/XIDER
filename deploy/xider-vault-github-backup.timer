@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily encrypted XIDER VPS backup to the private GitHub repository
+
+[Timer]
+OnCalendar=*-*-* 04:17:00 UTC
+Persistent=true
+RandomizedDelaySec=20m
+Unit=xider-vault-github-backup.service
+
+[Install]
+WantedBy=timers.target
