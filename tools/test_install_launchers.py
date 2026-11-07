@@ -1,4 +1,6 @@
 import hashlib
+import ctypes
+import json
 import os
 import re
 import shutil
@@ -21,6 +23,7 @@ COMMIT = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=Tr
 TAG = "v4.1.0"
 SSH_KEYGEN = shutil.which("ssh-keygen.exe") or shutil.which("ssh-keygen")
 POWERSHELLS = tuple(shell for shell in (shutil.which("powershell.exe"), shutil.which("pwsh.exe")) if shell)
+IS_ADMIN = bool(ctypes.windll.shell32.IsUserAnAdmin()) if os.name == "nt" else False
 
 
 def test_release_installers_reuse_the_exact_commit_pinned_bootstrap_verifiers():
@@ -81,18 +84,24 @@ def test_pages_launchers_authenticate_latest_installer_before_running_it():
     assert pages["win.ps1"].index("$v.ExitCode -ne 0") < pages["win.ps1"].index("$installerExitCode=")
     assert "releases/latest/download" in pages["win.ps1"]
     assert "releases/latest/download" in pages["mac"]
-    assert "-Verb RunAs" not in pages["win.ps1"]
-    assert "Start-Process" not in pages["win.ps1"]
+    assert "-Verb RunAs" in pages["win.ps1"]
+    assert "Start-Process" in pages["win.ps1"]
     assert "& powershell.exe @args" in pages["win.ps1"]
     assert "XIDER Windows installer failed" in pages["win.ps1"]
     assert "XIDER install log:" in pages["win.ps1"]
     assert "'-LogPath'" in pages["win.ps1"]
-    assert "requesting administrator approval (UAC)" not in pages["win.ps1"]
-    assert "OpenSSH Client (ssh-keygen.exe) is required" in pages["win.ps1"]
+    assert "requesting administrator approval (UAC)" in pages["win.ps1"]
+    assert "Get-XiderSha256Hex -Path $p" in pages["win.ps1"]
+    assert "[Security.Cryptography.SHA256]::Create()" in pages["win.ps1"]
+    assert "release-manifest.json" in pages["win.ps1"]
+    assert "api.github.com/repos/" in pages["win.ps1"]
+    assert "Installer failed release-manifest or SHA-256 validation" in pages["win.ps1"]
     assert "Read-Host" not in pages["win.ps1"]
     assert "Add-WindowsCapability" not in pages["win.ps1"]
     assert "System32\\OpenSSH\\ssh-keygen.exe" in pages["win.ps1"]
-    assert pages["win.ps1"].index("OpenSSH Client (ssh-keygen.exe) is required") < pages["win.ps1"].index("releases/latest/download")
+    assert "https://github.com/invinby/XIDER/releases/latest/download" in pages["win.ps1"]
+    assert "https://github.com/'+$repo+'/releases/download/'+$tag" in pages["win.ps1"]
+    assert pages["win.ps1"].index("$hash -cne $manifestDigest") < pages["win.ps1"].index("requesting administrator approval (UAC)")
     assert "XIDER launcher failed:" in pages["win.ps1"]
     assert "Set-ExecutionPolicy" not in pages["win.ps1"]
 
@@ -102,7 +111,7 @@ def test_pages_launchers_allow_a_validated_selected_release_tag():
 
     assert "$tag=$env:XIDER_INSTALL_TAG" in pages["win.ps1"]
     assert "^v\\d{1,6}\\.\\d{1,6}\\.\\d{1,6}$" in pages["win.ps1"]
-    assert "https://github.com/invinby/XIDER/releases/download/$tag" in pages["win.ps1"]
+    assert "https://github.com/'+$repo+'/releases/download/'+$tag" in pages["win.ps1"]
     assert 'tag="${XIDER_INSTALL_TAG:-}"' in pages["mac"]
     assert "v[0-9]{1,6}\\.[0-9]{1,6}\\.[0-9]{1,6}" in pages["mac"]
     assert 'base="https://github.com/invinby/XIDER/releases/download/${tag}"' in pages["mac"]
@@ -147,6 +156,80 @@ def test_macos_pages_launcher_rejects_an_invalid_release_tag(monkeypatch):
 
     with pytest.raises(ValueError, match="XIDER_MACOS_INSTALLER_TAG"):
         build_pages_launchers()
+
+
+@pytest.mark.skipif(not POWERSHELLS, reason="PowerShell is unavailable")
+@pytest.mark.parametrize("tamper_installer", [False, True])
+def test_windows_launcher_uses_dotnet_manifest_fallback_without_openssh(
+    tmp_path, monkeypatch, tamper_installer
+):
+    powershell = POWERSHELLS[0]
+    monkeypatch.setenv("XIDER_INSTALL_TAG", "v4.1.0")
+    installer = b"param([string]$LogPath)`nWrite-Output 'INSTALLER_FIXTURE'`n"
+    installer_digest = hashlib.sha256(installer).hexdigest()
+    manifest = {
+        "schema": 1,
+        "release": "v4.1.0",
+        "assets": [{
+            "name": "XIDER-install-windows.ps1",
+            "component": "installer",
+            "platform": "windows",
+            "size": len(installer),
+            "sha256": installer_digest,
+        }],
+        "signature": {"algorithm": "ed25519", "key_id": "fixture", "value": "AA=="},
+    }
+    manifest_bytes = json.dumps(manifest, separators=(",", ":")).encode()
+    release = {
+        "draft": False,
+        "tag_name": "v4.1.0",
+        "assets": [
+            {"name": "release-manifest.json", "size": len(manifest_bytes), "digest": "sha256:" + hashlib.sha256(manifest_bytes).hexdigest()},
+            {"name": "XIDER-install-windows.ps1", "size": len(installer), "digest": "sha256:" + installer_digest},
+        ],
+    }
+    installer_path = tmp_path / "installer.ps1"
+    manifest_path = tmp_path / "manifest.json"
+    release_path = tmp_path / "release.json"
+    installer_path.write_bytes(installer + (b"# changed\n" if tamper_installer else b""))
+    manifest_path.write_bytes(manifest_bytes)
+    release_path.write_text(json.dumps(release), encoding="utf-8")
+
+    script_path = tmp_path / "launcher.ps1"
+    script_path.write_text(build_pages_launchers()["win.ps1"], encoding="utf-8")
+    harness = tmp_path / "run.ps1"
+    harness.write_text(
+        f"""
+$script:mockRelease = Microsoft.PowerShell.Management\\Get-Content -LiteralPath '{release_path}' -Raw | ConvertFrom-Json
+Import-Module Microsoft.PowerShell.Utility
+function Test-Path {{ param($LiteralPath,$PathType); if($LiteralPath -like '*OpenSSH*ssh-keygen.exe'){{return $false}}; Microsoft.PowerShell.Management\\Test-Path -LiteralPath $LiteralPath -PathType $PathType }}
+function Invoke-RestMethod {{ param([switch]$UseBasicParsing,$TimeoutSec,$Headers,$Uri); return $script:mockRelease }}
+function Invoke-WebRequest {{ param([switch]$UseBasicParsing,$TimeoutSec,$Uri,$OutFile); if($Uri -like '*/XIDER-install-windows.ps1'){{Copy-Item -LiteralPath '{installer_path}' -Destination $OutFile}} elseif($Uri -like '*/release-manifest.json'){{Copy-Item -LiteralPath '{manifest_path}' -Destination $OutFile}} else {{throw "Unexpected URL: $Uri"}} }}
+function Start-Process {{ param($FilePath,$ArgumentList,$Verb,[switch]$Wait,[switch]$PassThru); $script:mockVerb=$Verb; return [pscustomobject]@{{ExitCode=0}} }}
+Invoke-Expression (Microsoft.PowerShell.Management\\Get-Content -LiteralPath '{script_path}' -Raw)
+Write-Output ('MOCK_UAC=' + $script:mockVerb)
+""",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["XIDER_INSTALL_TAG"] = "v4.1.0"
+    env["PATH"] = ""
+    result = subprocess.run(
+        [powershell, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(harness)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+        env=env,
+    )
+    if tamper_installer:
+        assert result.returncode != 0
+        assert "Installer failed release-manifest or SHA-256 validation" in result.stdout + result.stderr
+        assert "MOCK_UAC=RunAs" not in result.stdout
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "OpenSSH is absent" in result.stdout
+        assert "MOCK_UAC=RunAs" in result.stdout
 
 
 def test_windows_pages_launcher_rejects_an_invalid_release_tag(monkeypatch):
@@ -229,7 +312,7 @@ def test_pages_only_cli_needs_no_commit_or_tag_and_preserves_existing_docs(tmp_p
         assert (docs / name).read_text(encoding="utf-8") == contents
 
 
-@pytest.mark.skipif(not (POWERSHELLS and SSH_KEYGEN), reason="Windows PowerShell/OpenSSH is unavailable")
+@pytest.mark.skipif(not (POWERSHELLS and SSH_KEYGEN and IS_ADMIN), reason="Windows PowerShell/OpenSSH/admin token is unavailable")
 @pytest.mark.parametrize("powershell", POWERSHELLS)
 @pytest.mark.parametrize("release_tag", [None, "v4.2.0"])
 def test_short_windows_launcher_accepts_signed_installer_and_rejects_tampering(tmp_path, monkeypatch, powershell, release_tag):

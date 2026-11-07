@@ -1,4 +1,5 @@
 import subprocess
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -41,6 +42,10 @@ def test_generated_commands_pin_script_and_source_to_the_same_commit(commit_id):
     assert "[Security.Cryptography.SHA256]::Create()" in text
     assert "shasum -a 256" in text
     assert "ssh-keygen -Y verify" in text
+    assert "if($sshCommand)" in text
+    assert "XIDER bootstrap SHA-256 does not match the hash pinned in the validated installer" in text
+    expected_hash = hashlib.sha256(windows_bytes).hexdigest()
+    assert f"$expectedBootstrapHash='{expected_hash}'" in text
     assert f"{RELEASE_TAG}`n{ref}`n\"+$hash" in text
     assert f"{RELEASE_TAG}\\n{ref}\\n%s\\n' \"$h\"" in text
     assert "not a signature on the bootstrap or quickstart" not in text
@@ -61,6 +66,7 @@ def test_quickstart_bootstrap_source_is_pinned_to_the_exact_git_commit():
     assert "< \"message\"" in text
     assert "StandardInput.BaseStream.Write" not in text
     assert "StandardInputEncoding" not in text
+    assert "OpenSSH Client for this install path" in text
 
     # This checkout has mixed line endings in the PowerShell file on Windows;
     # the raw GitHub blob must remain the source of truth for the expected hash.
