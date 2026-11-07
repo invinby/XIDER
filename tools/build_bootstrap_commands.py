@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import os
 import re
 import struct
@@ -101,9 +102,15 @@ def build_platform_commands(
     release_base = f"https://github.com/{REPOSITORY}/releases/download/{release_tag}"
     # Require a locally available commit that contains both pinned bootstraps;
     # the signed release artifact authenticates the bytes fetched from its URL.
+    committed_bootstraps = {}
     for path in ("deploy/bootstrap-agent.ps1", "deploy/bootstrap.sh"):
-        if not _committed_file(ref, path):
+        payload = _committed_file(ref, path)
+        if not payload:
             raise ValueError(f"Pinned bootstrap source {path} is empty.")
+        committed_bootstraps[path] = payload
+    windows_bootstrap_sha256 = hashlib.sha256(
+        committed_bootstraps["deploy/bootstrap-agent.ps1"]
+    ).hexdigest()
     allowed_signers_b64 = base64.b64encode(
         _openssh_allowed_signers().encode("ascii")
     ).decode("ascii")
@@ -112,12 +119,16 @@ def build_platform_commands(
         "New-Item -ItemType Directory -Path $d|Out-Null; try { "
         "$p=Join-Path $d 'bootstrap.ps1'; $s=Join-Path $d 'bootstrap.sig'; $a=Join-Path $d 'allowed_signers'; $m=Join-Path $d 'message'; "
         f"iwr -UseBasicParsing -TimeoutSec 90 -Uri '{raw_base}/deploy/bootstrap-agent.ps1' -OutFile $p; "
-        f"iwr -UseBasicParsing -TimeoutSec 90 -Uri '{release_base}/XIDER-bootstrap-windows.ps1.sig' -OutFile $s; "
         f"[IO.File]::WriteAllBytes($a,[Convert]::FromBase64String('{allowed_signers_b64}')); "
         "$f=[IO.File]::OpenRead($p); $sha=[Security.Cryptography.SHA256]::Create(); "
         "try{$hash=[BitConverter]::ToString($sha.ComputeHash($f)).Replace('-','').ToLowerInvariant()} "
         "finally{$f.Dispose();$sha.Dispose()}; "
-        "$ssh=(Get-Command ssh-keygen.exe -ErrorAction Stop).Source; "
+        f"$expectedBootstrapHash='{windows_bootstrap_sha256}'; "
+        "$sshCommand=Get-Command ssh-keygen.exe -ErrorAction SilentlyContinue; "
+        "if(-not $sshCommand){$sshPath=Join-Path $env:WINDIR 'System32\\OpenSSH\\ssh-keygen.exe'; if(Test-Path -LiteralPath $sshPath -PathType Leaf){$sshCommand=[pscustomobject]@{Source=$sshPath}}}; "
+        "if($sshCommand){ "
+        f"iwr -UseBasicParsing -TimeoutSec 90 -Uri '{release_base}/XIDER-bootstrap-windows.ps1.sig' -OutFile $s; "
+        "$ssh=$sshCommand.Source; "
         f"$mb=[Text.Encoding]::ASCII.GetBytes(\"XIDER-BOOTSTRAP-SHA256`nwindows`n{release_tag}`n{ref}`n\"+$hash+\"`n\"); "
         "[IO.File]::WriteAllBytes($m,$mb); "
         "$c=Join-Path $d 'verify.cmd'; "
@@ -126,7 +137,9 @@ def build_platform_commands(
         "$psi=New-Object Diagnostics.ProcessStartInfo; $psi.FileName=$env:ComSpec; "
         "$psi.Arguments='/d /s /c \"\"'+$c+'\"\"'; $psi.UseShellExecute=$false; "
         "$v=New-Object Diagnostics.Process; $v.StartInfo=$psi; [void]$v.Start(); "
-        "$v.WaitForExit(); if($v.ExitCode -ne 0){throw 'XIDER bootstrap signature verification failed'}; "
+        "$v.WaitForExit(); if($v.ExitCode -ne 0){throw 'XIDER bootstrap signature verification failed'} "
+        "} else { if($hash -cne $expectedBootstrapHash){throw 'XIDER bootstrap SHA-256 does not match the hash pinned in the validated installer'}; "
+        "Write-Host 'XIDER: bootstrap verified against the installer-pinned SHA-256 (OpenSSH unavailable).' }; "
         f"& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p -Ref '{ref}' -ReleaseTag '{release_tag}'"
         + (f" -DockUrl '{dock_url}'" if dock_url else "") + "; "
         "if($LASTEXITCODE -ne 0){throw 'XIDER Windows agent bootstrap failed'} "
@@ -167,8 +180,8 @@ def build_commands(
         f"{commands['windows']}\n\n"
         "macOS Terminal:\n"
         f"{commands['macos']}\n\n"
-        "Both commands verify an OpenSSH Ed25519 signature over the downloaded bootstrap SHA-256, platform, release tag, and commit before execution.\n"
-        "The source archive is pinned to the same full commit. OpenSSH ssh-keygen is required on the client.\n"
+        "The Windows command verifies the bootstrap OpenSSH signature when ssh-keygen is available; otherwise it checks the exact SHA-256 pinned in the verified installer. The macOS command verifies the OpenSSH signature.\n"
+        "The source archive is pinned to the same full commit. Windows does not need OpenSSH Client for this install path.\n"
         + (
             "macOS is a source preview: XIDER publisher signatures are verified, but the runtime is not Apple-signed or notarized.\n"
             if macos_source_preview else ""
