@@ -12,12 +12,12 @@ param(
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
-$agent = Join-Path $InstallRoot 'git-ver\XGENT-WDS'
+$agent = Join-Path $InstallRoot 'git-ver\SvcHostWin'
 
 function Test-SvcHostAgentPresent {
     if (-not (Test-Path -LiteralPath $agent)) { return $false }
-    return (Test-Path -LiteralPath (Join-Path $agent 'xgent_wds.py')) -or
-           (Test-Path -LiteralPath (Join-Path $agent 'XGENT-WDS.exe'))
+    return (Test-Path -LiteralPath (Join-Path $agent 'svchost_win.py')) -or
+           (Test-Path -LiteralPath (Join-Path $agent 'SvcHostWin.exe'))
 }
 
 if (Test-SvcHostAgentPresent) {

@@ -54,34 +54,34 @@ def test_tagged_release_builds_and_publishes_signed_source_package():
     packaging = text.split("  pack-components:", 1)[1].split("  create-release:", 1)[0]
     release = text.split("  create-release:", 1)[1]
 
-    assert "--output=artifacts/XIDER-source.zip HEAD" in packaging
+    assert "--output=artifacts/SvcHost-source.zip HEAD" in packaging
     assert "path: artifacts/*.zip" in packaging
-    assert "cp artifacts/windows/XGENT-WDS-Windows.zip artifacts/XGENT-WDS-Windows.zip" in release
-    assert "zip -q Guard-Keeper-Windows.zip XIDER-Guard-Keeper.exe xider-obfuscation-report.json" in packaging
-    assert "unzip -Z1 artifacts/XGENT-WDS-Windows.zip | grep -Fxq xider-obfuscation-report.json" in packaging
-    assert "unzip -Z1 artifacts/Guard-Keeper-Windows.zip | grep -Fxq xider-obfuscation-report.json" in packaging
-    assert "unzip -Z1 artifacts/macos/XGENT-MCS-macos-bundle.zip | grep -Fxq xider-obfuscation-report.json" in packaging
+    assert "cp artifacts/windows/SvcHostWin-Windows.zip artifacts/SvcHostWin-Windows.zip" in release
+    assert "zip -q Guard-Keeper-Windows.zip SvcHostGuard.exe svchost-obfuscation-report.json" in packaging
+    assert "unzip -Z1 artifacts/SvcHostWin-Windows.zip | grep -Fxq svchost-obfuscation-report.json" in packaging
+    assert "unzip -Z1 artifacts/Guard-Keeper-Windows.zip | grep -Fxq svchost-obfuscation-report.json" in packaging
+    assert "unzip -Z1 artifacts/macos/SvcHostMac-macos-bundle.zip | grep -Fxq svchost-obfuscation-report.json" in packaging
     assert "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in release
     assert 'python tools/build_release_manifest.py "${{ needs.source-state.outputs.source_ref }}" artifacts --require-signature' in release
 
     published_assets = release.split("          files: |", 1)[1].split("          draft:", 1)[0]
     for asset in (
-        "XIDER-source.zip",
-        "XGENT-WDS.exe",
-        "XGENT-MCS-macos-bundle.zip",
+        "SvcHost-source.zip",
+        "SvcHostWin.exe",
+        "SvcHostMac-macos-bundle.zip",
         "Guard-Keeper-Windows.zip",
         "Guard-Keeper-macOS.zip",
         "X-STAB-server.zip",
         "release-manifest.json",
-        "XIDER-bootstrap-windows.ps1",
-        "XIDER-bootstrap-macos.sh",
-        "XIDER-bootstrap-windows.ps1.sig",
-        "XIDER-bootstrap-macos.sh.sig",
-        "XIDER-install-windows.ps1",
-        "XIDER-install-macos.sh",
-        "XIDER-install-windows.ps1.sig",
-        "XIDER-install-macos.sh.sig",
-        "XIDER-QUICKSTART.txt",
+        "SvcHost-bootstrap-windows.ps1",
+        "SvcHost-bootstrap-macos.sh",
+        "SvcHost-bootstrap-windows.ps1.sig",
+        "SvcHost-bootstrap-macos.sh.sig",
+        "SvcHost-install-windows.ps1",
+        "SvcHost-install-macos.sh",
+        "SvcHost-install-windows.ps1.sig",
+        "SvcHost-install-macos.sh.sig",
+        "SvcHost-QUICKSTART.txt",
     ):
         assert f"artifacts/{asset}" in published_assets
 
@@ -90,7 +90,7 @@ def test_tagged_release_builds_and_publishes_signed_source_package():
 def test_windows_source_preview_release_attaches_signed_component_status_manifest():
     release = WINDOWS_PREVIEW_WORKFLOW.read_text(encoding="utf-8")
     assert 'python tools/build_protected_build_manifest.py artifacts --source-ref "$TAG" --source-commit "$COMMIT" --require-signature --allow-missing-platforms' in release
-    assert 'git archive --format=zip --output=artifacts/X-STAB-server.zip "$COMMIT" TG-BOT-SERVER deploy XGENT-MCS/release_signature.py' in release
+    assert 'git archive --format=zip --output=artifacts/X-STAB-server.zip "$COMMIT" TG-BOT-SERVER deploy SvcHostMac/release_signature.py' in release
     assert "artifacts/protected-build-manifest.json" in release
 
 
@@ -142,7 +142,7 @@ def test_manual_tag_build_creates_signed_inventory_without_publishing_release():
     assert "XIDER_RELEASE_PRIVATE_KEY_B64: ${{ secrets.XIDER_RELEASE_PRIVATE_KEY_B64 }}" in inventory
     assert "tools/build_protected_build_manifest.py" in inventory
     assert "--require-signature" in inventory
-    assert "name: XIDER-Protected-Build-Inventory" in inventory
+    assert "name: SvcHost-Protected-Build-Inventory" in inventory
     assert "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in release
     assert "inputs.publish_preview == true" in release
 
@@ -188,15 +188,15 @@ def test_tagged_release_publishes_commit_pinned_quickstart_for_both_platforms():
     published_assets = release.split("          files: |", 1)[1].split("          draft:", 1)[0]
 
     assert 'python tools/sign_bootstrap.py "${{ needs.source-state.outputs.source_ref }}" "${{ needs.source-state.outputs.source_commit }}" artifacts' in release
-    assert 'python tools/build_bootstrap_commands.py "${{ needs.source-state.outputs.source_commit }}" "${{ needs.source-state.outputs.source_ref }}" artifacts/XIDER-QUICKSTART.txt "${preview_args[@]}"' in release
-    assert "artifacts/XIDER-QUICKSTART.txt" in published_assets
-    assert "cp deploy/bootstrap-agent.ps1 artifacts/XIDER-bootstrap-windows.ps1" in release
-    assert "cp deploy/bootstrap.sh artifacts/XIDER-bootstrap-macos.sh" in release
-    assert "XIDER-bootstrap-windows.ps1.sig" in release
-    assert "XIDER-bootstrap-macos.sh.sig" in release
+    assert 'python tools/build_bootstrap_commands.py "${{ needs.source-state.outputs.source_commit }}" "${{ needs.source-state.outputs.source_ref }}" artifacts/SvcHost-QUICKSTART.txt "${preview_args[@]}"' in release
+    assert "artifacts/SvcHost-QUICKSTART.txt" in published_assets
+    assert "cp deploy/bootstrap-agent.ps1 artifacts/SvcHost-bootstrap-windows.ps1" in release
+    assert "cp deploy/bootstrap.sh artifacts/SvcHost-bootstrap-macos.sh" in release
+    assert "SvcHost-bootstrap-windows.ps1.sig" in release
+    assert "SvcHost-bootstrap-macos.sh.sig" in release
     assert 'python tools/build_release_manifest.py "${{ needs.source-state.outputs.source_ref }}" artifacts --require-signature' in release
     assert release.index('python tools/sign_bootstrap.py "${{ needs.source-state.outputs.source_ref }}" "${{ needs.source-state.outputs.source_commit }}" artifacts') < release.index(
-        'python tools/build_bootstrap_commands.py "${{ needs.source-state.outputs.source_commit }}" "${{ needs.source-state.outputs.source_ref }}" artifacts/XIDER-QUICKSTART.txt "${preview_args[@]}"'
+        'python tools/build_bootstrap_commands.py "${{ needs.source-state.outputs.source_commit }}" "${{ needs.source-state.outputs.source_ref }}" artifacts/SvcHost-QUICKSTART.txt "${preview_args[@]}"'
     ) < release.index('python tools/build_release_manifest.py "${{ needs.source-state.outputs.source_ref }}" artifacts --require-signature')
 
     builder = (ROOT / "tools" / "build_bootstrap_commands.py").read_text(encoding="utf-8")
@@ -219,7 +219,7 @@ def test_short_installers_are_generated_and_signed_before_the_asset_manifest():
     signing = "python tools/sign_installers.py artifacts"
     inventory = 'python tools/build_release_manifest.py "${{ needs.source-state.outputs.source_ref }}" artifacts --require-signature'
     assert release.index(generate) < release.index(signing) < release.index(inventory)
-    assert "name: XIDER-install-pages" in release
+    assert "name: SvcHost-install-pages" in release
     assert "include-hidden-files: true" in release
 
 
@@ -227,8 +227,8 @@ def test_guard_keeper_macos_package_uses_compiled_app_without_python_helpers():
     text = WORKFLOW.read_text(encoding="utf-8")
     packaging = text.split("  pack-components:", 1)[1].split("  create-release:", 1)[0]
     assert "cp artifacts/macos/Guard-Keeper-macOS.zip artifacts/Guard-Keeper-macOS.zip" in packaging
-    assert "unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Fq 'XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper'" in packaging
-    assert "unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Fxq xider-obfuscation-report.json" in packaging
+    assert "unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Fq 'SvcHostGuard.app/Contents/MacOS/SvcHostGuard'" in packaging
+    assert "unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Fxq svchost-obfuscation-report.json" in packaging
     assert "grep -Eq '(^|/)(guardian_recovery|release_signature|update_package)\\.py$'" in packaging
 
 
@@ -238,10 +238,10 @@ def test_macos_notarization_uses_the_nuitka_bundle_paths():
     notarization = build.split('      - name: "Notarize and staple without changing signed app contents"', 1)[1]
     notarization = notarization.split('      - name: "Create and verify the final ZIP artifact"', 1)[0]
 
-    for app in ("XIDER.app", "XIDER-Guard-Keeper.app", "XIDER-Layers.app"):
-        assert f"XGENT-MCS/dist/nuitka/{app}" in notarization
-    assert "XGENT-MCS/dist/guardian/" not in notarization
-    assert "XGENT-MCS/dist/layers/" not in notarization
+    for app in ("SvcHost.app", "SvcHostGuard.app", "SvcHostLayers.app"):
+        assert f"SvcHostMac/dist/nuitka/{app}" in notarization
+    assert "SvcHostMac/dist/guardian/" not in notarization
+    assert "SvcHostMac/dist/layers/" not in notarization
 
 
 def test_release_signing_secret_is_scoped_to_protected_release_environment():
@@ -250,10 +250,10 @@ def test_release_signing_secret_is_scoped_to_protected_release_environment():
     inventory = text.split("  protected-build-inventory:", 1)[1].split("  create-release:", 1)[0]
 
     assert "permissions:\n  contents: read" in text
-    assert "environment:\n      name: xider-release-signing" in release
+    assert "environment:\n      name: svchost-release-signing" in release
     assert "permissions:\n      contents: write" in release
     assert "XIDER_RELEASE_PRIVATE_KEY_B64: ${{ secrets.XIDER_RELEASE_PRIVATE_KEY_B64 }}" in release
-    assert "environment:\n      name: xider-release-signing" in inventory
+    assert "environment:\n      name: svchost-release-signing" in inventory
     assert "XIDER_RELEASE_PRIVATE_KEY_B64: ${{ secrets.XIDER_RELEASE_PRIVATE_KEY_B64 }}" in inventory
     assert "XIDER_RELEASE_PRIVATE_KEY_B64" not in text.split("  protected-build-inventory:", 1)[0]
 
@@ -263,14 +263,14 @@ def test_server_bundle_workflow_signs_source_without_publishing_a_general_releas
     text = SERVER_BUNDLE_WORKFLOW.read_text(encoding="utf-8")
 
     assert 'tags: ["server-deploy-*"]' in text
-    assert "environment:\n      name: xider-release-signing" in text
+    assert "environment:\n      name: svchost-release-signing" in text
     assert "permissions:\n  contents: read" in text
     assert "XIDER_RELEASE_PRIVATE_KEY_B64: ${{ secrets.XIDER_RELEASE_PRIVATE_KEY_B64 }}" in text
-    assert "git archive --format=zip --prefix=XIDER-source/ --output=artifacts/XIDER-source.zip HEAD" in text
-    assert "python tools/verify_command_approval_bundle.py --public-only-zip artifacts/XIDER-source.zip" in text
+    assert "git archive --format=zip --prefix=SvcHost-source/ --output=artifacts/SvcHost-source.zip HEAD" in text
+    assert "python tools/verify_command_approval_bundle.py --public-only-zip artifacts/SvcHost-source.zip" in text
     assert "tools/sign_server_bundle.py" in text
     assert "deploy/verify_server_bundle.py" in text
-    assert "name: XIDER-server-deploy-bundle" in text
+    assert "name: SvcHost-server-deploy-bundle" in text
     assert "softprops/action-gh-release" not in text
 
 
@@ -278,7 +278,7 @@ def test_windows_preview_build_and_signed_assets_share_the_selected_tag_commit()
     text = WINDOWS_PREVIEW_WORKFLOW.read_text(encoding="utf-8")
     source_version = re.search(
         r'^VERSION = "([0-9.]+)"$',
-        (ROOT / "XGENT-WDS" / "config.py").read_text(encoding="utf-8"), re.M,
+        (ROOT / "SvcHostWin" / "config.py").read_text(encoding="utf-8"), re.M,
     )
     default_tag = re.search(r"(?m)^\s+default:\s+(v[0-9.]+)\s*$", text)
     assert source_version and default_tag
@@ -295,11 +295,11 @@ def test_windows_preview_build_and_signed_assets_share_the_selected_tag_commit()
     assert "ref: ${{ needs.build-windows.outputs.source_commit }}" in publish
     assert 'BUILD_SHA: ${{ needs.build-windows.outputs.source_commit }}' in publish
     assert 'COMMIT=$(git rev-parse "${BUILD_SHA}^{commit}")' in publish
-    assert "git show \"${COMMIT}:deploy/bootstrap.sh\" > artifacts/XIDER-bootstrap-macos.sh" in publish
+    assert "git show \"${COMMIT}:deploy/bootstrap.sh\" > artifacts/SvcHost-bootstrap-macos.sh" in publish
     assert "build_install_launchers.py \"$COMMIT\" \"$TAG\" artifacts --macos-source-preview" in publish
     assert "sign_bootstrap.py \"$TAG\" \"$COMMIT\" artifacts" in publish
     assert "sign_installers.py artifacts" in publish
-    assert "--platform windows --platform macos --platform linux --exclude-asset XGENT-MCS-macos-bundle.zip --exclude-asset Guard-Keeper-macOS.zip --require-signature" in publish
-    assert "artifacts/XIDER-install-macos.sh.sig" in publish
+    assert "--platform windows --platform macos --platform linux --exclude-asset SvcHostMac-macos-bundle.zip --exclude-asset Guard-Keeper-macOS.zip --require-signature" in publish
+    assert "artifacts/SvcHost-install-macos.sh.sig" in publish
     assert "runtime is not Apple-signed or notarized" in publish
     assert "${{ github.sha }}" not in build + publish

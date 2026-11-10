@@ -2,7 +2,7 @@ name: "Build and deploy XIDER Pages"
 
 on:
   push:
-    branches: ["main", "master", "xider-local-prep-*"]
+    branches: ["main", "master", "svchost-local-prep-*"]
     paths:
       - "site/**"
       - "tools/check_site.py"
@@ -11,9 +11,9 @@ on:
       - "tools/build_pages_entrypoints.py"
       - "tools/build_install_launchers.py"
       - "tools/build_bootstrap_commands.py"
-      - "XGENT-MCS/release_signature.py"
-      - "XGENT-WDS/config.py"
-      - "XGENT-MCS/config.py"
+      - "SvcHostMac/release_signature.py"
+      - "SvcHostWin/config.py"
+      - "SvcHostMac/config.py"
       - ".github/workflows/pages.yml"
       - ".github/workflows/ci.yml"
   pull_request:
@@ -26,9 +26,9 @@ on:
       - "tools/build_pages_entrypoints.py"
       - "tools/build_install_launchers.py"
       - "tools/build_bootstrap_commands.py"
-      - "XGENT-MCS/release_signature.py"
-      - "XGENT-WDS/config.py"
-      - "XGENT-MCS/config.py"
+      - "SvcHostMac/release_signature.py"
+      - "SvcHostWin/config.py"
+      - "SvcHostMac/config.py"
       - ".github/workflows/pages.yml"
       - ".github/workflows/ci.yml"
   workflow_dispatch:

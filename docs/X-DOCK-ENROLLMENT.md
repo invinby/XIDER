@@ -177,7 +177,7 @@ VPS. It creates a separate Mosquitto instance, bootstraps Dynamic Security on
 loopback, removes the demo identity, issues a short-lived IP certificate, and
 configures the TLS listener plus HTTPS enrollment proxy and renewal hook. It
 can produce a signed server-only artifact from a `server-deploy-*` tag through
-the protected `xider-release-signing` GitHub environment; this path does not
+the protected `svchost-release-signing` GitHub environment; this path does not
 publish a general agent release. The VPS updater still verifies that artifact
 before it creates a backup or changes files.
 can coexist with an already active Nginx service: it adds a dedicated IP

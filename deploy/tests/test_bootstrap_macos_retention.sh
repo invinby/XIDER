@@ -3,8 +3,8 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BOOTSTRAP="$ROOT/deploy/bootstrap.sh"
 eval "$(sed -n '/^# XIDER_RETENTION_HELPERS_BEGIN$/,/^# XIDER_RETENTION_HELPERS_END$/p' "$BOOTSTRAP" | sed '1d;$d')"
-FIXTURE="$(mktemp -d "${TMPDIR:-/tmp}/xider-retention-test.XXXXXX")"
-trap '[[ "$FIXTURE" == "${TMPDIR:-/tmp}"/xider-retention-test.* ]] && rm -rf -- "$FIXTURE"' EXIT
+FIXTURE="$(mktemp -d "${TMPDIR:-/tmp}/svchost-retention-test.XXXXXX")"
+trap '[[ "$FIXTURE" == "${TMPDIR:-/tmp}"/svchost-retention-test.* ]] && rm -rf -- "$FIXTURE"' EXIT
 
 names=(
   git-ver.previous.20261001000000.1111
@@ -13,8 +13,8 @@ names=(
   git-ver.previous.20261004000000.4444
 )
 for name in "${names[@]}"; do
-  mkdir -p "$FIXTURE/$name/XGENT-MCS"
-  printf '%s\n' "$name" > "$FIXTURE/$name/XGENT-MCS/rollback-marker"
+  mkdir -p "$FIXTURE/$name/SvcHostMac"
+  printf '%s\n' "$name" > "$FIXTURE/$name/SvcHostMac/rollback-marker"
 done
 mkdir -p "$FIXTURE/git-ver.previous.owner-data"
 printf '%s\n' owner-data > "$FIXTURE/git-ver.previous.owner-data/keep"

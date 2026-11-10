@@ -1461,7 +1461,7 @@ def test_shell_capture_boundary_token_fragment_never_reaches_telegram(monkeypatc
     import importlib.util
     import io
     root = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location("boundary_shell_fixture", root / "XGENT-MCS" / "shell_execution.py")
+    spec = importlib.util.spec_from_file_location("boundary_shell_fixture", root / "SvcHostMac" / "shell_execution.py")
     helper = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(helper)
     raw = ('password="' + 'a' * 8165 + '"\n123456:abcdefghijklmnopqrstuvwxyz').encode()
@@ -1488,7 +1488,7 @@ def test_shell_hyphen_token_beyond_output_cap_never_reaches_telegram(monkeypatch
     safe, truncated = raw, True
     if captured:
         root = Path(__file__).resolve().parents[2]
-        spec = importlib.util.spec_from_file_location("hyphen_shell_fixture", root / "XGENT-MCS" / "shell_execution.py")
+        spec = importlib.util.spec_from_file_location("hyphen_shell_fixture", root / "SvcHostMac" / "shell_execution.py")
         helper = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(helper)
         safe, truncated = helper._read_stream(io.BytesIO(raw.encode()))
@@ -9268,7 +9268,7 @@ def test_agent_files_owner_view_requires_exact_response_and_renders_only_metadat
                 "build_mode": "nuitka_compiled", "obfuscation_state": "not_applied",
                 "install_path": "/Users/test/XIDER", "files": [{
                     "file_id": "agent-version",
-                    "path": "/Users/test/XIDER/xgent_mcs.py", "size_bytes": 321,
+                    "path": "/Users/test/XIDER/svchost_mac.py", "size_bytes": 321,
                     "sha256": "a" * 64, "signature_state": "not_applicable",
                     "integrity_state": "unverified", "evidence": "no_signed_per_file_manifest",
                     "contents": "SHOULD_NOT_APPEAR",
@@ -9296,7 +9296,7 @@ def test_agent_files_owner_view_requires_exact_response_and_renders_only_metadat
     assert published == [("agent_files", {"_target": "mac-1"})]
     assert waited == [("mac-1", "agent_files", 12.0, "request-1")]
     text, kwargs = rendered[-1]
-    assert "xgent_mcs.py" in text
+    assert "svchost_mac.py" in text
     assert "unverified" in text
     assert "Nuitka" in text
     assert "not applied" in text or "не применялась" in text
@@ -9491,7 +9491,7 @@ def test_agent_files_component_shows_no_view_action_without_stable_file_id():
 
 def test_agent_files_component_keeps_long_dotted_stable_id_within_telegram_limit():
     bot._AGENT_FILES_VIEWS.clear()
-    file_id = "agent.source.xider_layers"
+    file_id = "agent.source.svchost_layers"
     report = bot._agent_files_normalize_report({
         "type": "agent_files", "device_id": "device-1", "id": "request-1",
         "schema": "xider.agent-files.v1", "state": "available",
@@ -10080,8 +10080,8 @@ def test_check_update_requires_fresh_agent_heartbeat(monkeypatch):
 @pytest.mark.parametrize(
     ("os_name", "component_asset"),
     [
-        ("macOS 27", "XGENT-MCS-macos-bundle.zip"),
-        ("Windows 11", "XGENT-WDS-Windows.zip"),
+        ("macOS 27", "SvcHostMac-macos-bundle.zip"),
+        ("Windows 11", "SvcHostWin-Windows.zip"),
     ],
 )
 def test_selected_release_install_requires_confirmation_and_dispatches_exact_tag(
@@ -10102,7 +10102,7 @@ def test_selected_release_install_requires_confirmation_and_dispatches_exact_tag
     release = release_catalog.Release(
         tag="v4.2.0", version=(4, 2, 0), name="Chosen release",
         published_at="2026-10-01T00:00:00Z", notes="Safe selected release",
-        asset_names=frozenset({component_asset, "XIDER-source.zip", "release-manifest.json"}),
+        asset_names=frozenset({component_asset, "SvcHost-source.zip", "release-manifest.json"}),
     )
     release = signed_catalog_release(release)
     monkeypatch.setattr(bot.release_catalog.catalog, "list", lambda **kwargs: [release])
@@ -10157,7 +10157,7 @@ def test_canary_version_detail_selects_current_device_first_without_publish(monk
     monkeypatch.setattr(bot, '_DISPLAYED_VERSION_RELEASES', {})
     info = {'name': 'Mac', 'os': 'macOS 27', 'version': '4.1.0', 'update_mode': 'source', 'release_update_ready': True, 'update_manifest_binding_protocol': 1, 'online': True, 'last_seen': time.time()}
     _setup(monkeypatch, {'mac1': info, 'mac2': info, 'offline': {**info, 'online': False}, 'win': {**info, 'os': 'Windows 11'}})
-    release = signed_catalog_release(release_catalog.Release('v4.2.0', (4, 2, 0), 'release', 'date', 'notes', frozenset({'XGENT-MCS-macos-bundle.zip', 'XIDER-source.zip', 'release-manifest.json'})))
+    release = signed_catalog_release(release_catalog.Release('v4.2.0', (4, 2, 0), 'release', 'date', 'notes', frozenset({'SvcHostMac-macos-bundle.zip', 'SvcHost-source.zip', 'release-manifest.json'})))
     monkeypatch.setattr(bot.release_catalog.catalog, 'list', lambda **kwargs: [release])
     monkeypatch.setattr(bot, 'publish', lambda *a, **kw: pytest.fail('selection published'))
     asyncio.run(bot.on_versions_detail(Callback('versions:detail:agent:v4.2.0')))
@@ -10183,7 +10183,7 @@ def test_agent_release_catalog_has_a_direct_install_action(monkeypatch, signed_c
         tag="v4.2.0", version=(4, 2, 0), name="Chosen release",
         published_at="2026-10-07T00:00:00Z", notes="Signed release",
         asset_names=frozenset({
-            "XGENT-MCS-macos-bundle.zip", "XIDER-source.zip", "release-manifest.json",
+            "SvcHostMac-macos-bundle.zip", "SvcHost-source.zip", "release-manifest.json",
         }),
     )
     release = signed_catalog_release(release)
@@ -10299,7 +10299,7 @@ def test_selected_release_install_fails_closed_without_pinned_trust(monkeypatch)
         tag="v4.2.0", version=(4, 2, 0), name="Chosen release",
         published_at="", notes="",
         asset_names=frozenset({
-            "XGENT-MCS-macos-bundle.zip", "XIDER-source.zip", "release-manifest.json",
+            "SvcHostMac-macos-bundle.zip", "SvcHost-source.zip", "release-manifest.json",
         }),
     )
     assert bot._version_install_block_reason(
@@ -10322,7 +10322,7 @@ def test_legacy_agent_version_page_offers_owner_bootstrap_command(monkeypatch):
         tag="v4.2.0", version=(4, 2, 0), name="Current release",
         published_at="2026-10-07T00:00:00Z", notes="Current signed release",
         asset_names=frozenset({
-            "XGENT-MCS-macos-bundle.zip", "XIDER-source.zip", "release-manifest.json",
+            "SvcHostMac-macos-bundle.zip", "SvcHost-source.zip", "release-manifest.json",
         }),
     )
     monkeypatch.setattr(bot.release_catalog.catalog, "list", lambda: [release])
@@ -12138,8 +12138,8 @@ def test_action_contract_records_source_proven_values():
 def test_action_contract_platforms_match_client_dispatch_declarations(monkeypatch):
     declared = {}
     root = Path(bot.__file__).resolve().parent.parent
-    for platform, path in (("Windows", root / "XGENT-WDS/xgent_wds.py"),
-                           ("macOS", root / "XGENT-MCS/xgent_mcs.py")):
+    for platform, path in (("Windows", root / "SvcHostWin/svchost_win.py"),
+                           ("macOS", root / "SvcHostMac/svchost_mac.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         assignment = next(node for node in tree.body if isinstance(node, ast.Assign)
                           and any(isinstance(target, ast.Name) and target.id == "SUPPORTED_COMMANDS"
@@ -16679,7 +16679,7 @@ def test_system_snapshot_export_selects_allowlisted_snapshot_and_keeps_one_card(
     assert _expected_callback_gate(selected_callback) == "OwnerFilter"
     assert len(telegram.sent) == 1 and telegram.sent[0] == 31
     document = telegram.cards[31]["document"]
-    assert document.filename.startswith("xider-system-summary-")
+    assert document.filename.startswith("svchost-system-summary-")
     assert b"MUST_NOT_EXPORT" not in document.data
     assert b"cpu_percent" in document.data and b"captured_at" in document.data
     assert 30 not in telegram.cards
@@ -19630,7 +19630,7 @@ def test_shell_metadata_export_delivers_owner_scoped_filtered_json_without_comma
         100, 100, ["completed", "failed"], "mac-a",
     )
     document, caption, _markup = calls[2]
-    assert document.filename == "xider-shell-audit-20261001-20261018.json"
+    assert document.filename == "svchost-shell-audit-20261001-20261018.json"
     assert "shell" in caption.lower() and "1" in caption
     async def collect_payload():
         chunks = []
@@ -19679,7 +19679,7 @@ def test_admin_audit_export_delivers_only_bounded_normalized_json(monkeypatch):
 
     assert calls[0] == "cleared"
     document, caption, _markup = calls[1]
-    assert document.filename == "xider-audit-20261001-20261018.json"
+    assert document.filename == "svchost-audit-20261001-20261018.json"
     assert "redacted" in caption
     async def collect_payload():
         chunks = []
@@ -20889,7 +20889,7 @@ def test_network_path_report_export_is_owner_bound_and_consumed_once(monkeypatch
     asyncio.run(bot.on_network_path_report_export(cq))
     assert len(sent) == 1
     assert sent[0][0] == bot.bot.send_document
-    assert sent[0][1]["document"].filename.startswith("xider-network-report-")
+    assert sent[0][1]["document"].filename.startswith("svchost-network-report-")
     assert token not in bot._NETWORK_PATH_REPORT_EXPORTS
 
     asyncio.run(bot.on_network_path_report_export(cq))
@@ -21568,7 +21568,7 @@ def test_packet_loss_history_owner_flow_is_single_device_owner_only_and_correlat
 
 
 def test_network_throughput_validator_recomputes_rates_and_rejects_forgery():
-    endpoint = "https://test.example/.well-known/xider-bandwidth"
+    endpoint = "https://test.example/.well-known/svchost-bandwidth"
     result = {
         "type": "network_throughput", "schema": "xider.network-throughput.v1", "feature_id": "D04-F04",
         "device_id": "device-1", "request_id": "speed-1", "endpoint": endpoint,
@@ -21586,7 +21586,7 @@ def test_network_throughput_validator_recomputes_rates_and_rejects_forgery():
 
 
 def test_network_throughput_owner_flow_is_single_device_owner_only_and_correlated(monkeypatch, tmp_path):
-    endpoint = "https://test.example/.well-known/xider-bandwidth"
+    endpoint = "https://test.example/.well-known/svchost-bandwidth"
     telegram = _card_telegram(monkeypatch, tmp_path)
     _setup(monkeypatch, {"device-1": {"name": "Laptop", "os": "Windows 11", "capabilities": {
         "commands": ["network_throughput"],

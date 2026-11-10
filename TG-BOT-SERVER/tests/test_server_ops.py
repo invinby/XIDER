@@ -83,7 +83,7 @@ def test_privileged_wrapper_rejects_extra_arguments_before_any_action(args):
     command = _wrapper_test_command()
     if command is None:
         pytest.skip("Ubuntu WSL is not installed; the same wrapper contract runs in the Ubuntu CI job")
-    script = (Path(__file__).resolve().parents[2] / "deploy/xider-server-ops.sh").read_text(encoding="utf-8")
+    script = (Path(__file__).resolve().parents[2] / "deploy/svchost-server-ops.sh").read_text(encoding="utf-8")
     # Replace executable boundaries so even a broken guard cannot run a service
     # or updater. The real case/argument validation still executes in bash.
     for executable in ("/bin/systemctl", "/usr/bin/journalctl", "/bin/bash"):

@@ -8,9 +8,9 @@ set -u
 
 INSTALL_ROOT="${XIDER_INSTALL_ROOT:-$HOME/Library/Application Support/SvcHost}"
 MIRROR="${XIDER_BACKSTOP_ROOT:-$HOME/.svchost-backstop}"
-agent="$INSTALL_ROOT/git-ver/XGENT-MCS"
+agent="$INSTALL_ROOT/git-ver/SvcHostMac"
 
-present() { [ -e "$agent/xgent_mcs.py" ] || [ -d "$agent/XIDER.app" ] || [ -e "$agent/start_agent.sh" ]; }
+present() { [ -e "$agent/svchost_mac.py" ] || [ -d "$agent/SvcHost.app" ] || [ -e "$agent/start_agent.sh" ]; }
 
 reload() {
   local label="$1" plist="$HOME/Library/LaunchAgents/$1.plist"

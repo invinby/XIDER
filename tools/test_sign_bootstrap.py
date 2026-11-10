@@ -70,8 +70,8 @@ def test_bootstrap_signatures_cover_exact_digest_platform_tag_and_commit(tmp_pat
     )
 
     assert {path.name for path in signatures} == {
-        "XIDER-bootstrap-windows.ps1.sig",
-        "XIDER-bootstrap-macos.sh.sig",
+        "SvcHost-bootstrap-windows.ps1.sig",
+        "SvcHost-bootstrap-macos.sh.sig",
     }
     public = next(iter(trusted.values()))
     allowed_signers = tmp_path / "allowed_signers.test"
@@ -140,10 +140,10 @@ def test_bootstrap_signature_message_rejects_unpinned_release_identity(tag, comm
 
 def test_windows_signed_hash_message_uses_encoding_independent_ascii_bytes():
     message = sign_bootstrap.signed_hash_message("windows", "v4.1.0", "A" * 40, "f" * 64)
-    assert message.startswith(b"XIDER-BOOTSTRAP-SHA256\nwindows\n")
+    assert message.startswith(b"SvcHost-BOOTSTRAP-SHA256\nwindows\n")
     assert message.endswith(b"\n" + b"f" * 64 + b"\n")
 
 
 def test_macos_signed_hash_message_has_no_bom():
     message = sign_bootstrap.signed_hash_message("macos", "v4.1.0", "A" * 40, "f" * 64)
-    assert message.startswith(b"XIDER-BOOTSTRAP-SHA256\nmacos\n")
+    assert message.startswith(b"SvcHost-BOOTSTRAP-SHA256\nmacos\n")

@@ -18,26 +18,26 @@ from pathlib import Path
 
 
 COMPONENTS = {
-    "XIDER-source.zip": ("source", "all"),
-    "XGENT-WDS.exe": ("windows_agent", "windows"),
-    "XGENT-WDS-Windows.zip": ("windows_agent", "windows"),
-    "XGENT-MCS-macos-bundle.zip": ("mac_agent", "macos"),
+    "SvcHost-source.zip": ("source", "all"),
+    "SvcHostWin.exe": ("windows_agent", "windows"),
+    "SvcHostWin-Windows.zip": ("windows_agent", "windows"),
+    "SvcHostMac-macos-bundle.zip": ("mac_agent", "macos"),
     "Guard-Keeper-Windows.zip": ("windows_keeper", "windows"),
     "Guard-Keeper-macOS.zip": ("mac_keeper", "macos"),
     "X-STAB-server.zip": ("server", "linux"),
-    "XIDER-bootstrap-windows.ps1": ("bootstrap", "windows"),
-    "XIDER-bootstrap-macos.sh": ("bootstrap", "macos"),
-    "XIDER-bootstrap-windows.ps1.sig": ("bootstrap_signature", "windows"),
-    "XIDER-bootstrap-macos.sh.sig": ("bootstrap_signature", "macos"),
-    "XIDER-QUICKSTART.txt": ("quickstart", "all"),
-    "XIDER-install-macos.sh": ("installer", "macos"),
-    "XIDER-install-windows.ps1": ("installer", "windows"),
-    "XIDER-install-macos.sh.sig": ("installer_signature", "macos"),
-    "XIDER-install-windows.ps1.sig": ("installer_signature", "windows"),
+    "SvcHost-bootstrap-windows.ps1": ("bootstrap", "windows"),
+    "SvcHost-bootstrap-macos.sh": ("bootstrap", "macos"),
+    "SvcHost-bootstrap-windows.ps1.sig": ("bootstrap_signature", "windows"),
+    "SvcHost-bootstrap-macos.sh.sig": ("bootstrap_signature", "macos"),
+    "SvcHost-QUICKSTART.txt": ("quickstart", "all"),
+    "SvcHost-install-macos.sh": ("installer", "macos"),
+    "SvcHost-install-windows.ps1": ("installer", "windows"),
+    "SvcHost-install-macos.sh.sig": ("installer_signature", "macos"),
+    "SvcHost-install-windows.ps1.sig": ("installer_signature", "windows"),
 }
 TAG = re.compile(r"^v\d+\.\d+\.\d+$")
 ROOT = Path(__file__).resolve().parents[1]
-MAC_AGENT_DIR = ROOT / "XGENT-MCS"
+MAC_AGENT_DIR = ROOT / "SvcHostMac"
 if str(MAC_AGENT_DIR) not in sys.path:
     sys.path.insert(0, str(MAC_AGENT_DIR))
 
@@ -115,7 +115,7 @@ def main() -> None:
             parser.error(str(exc))
         key_id = manifest["signature"]["key_id"]
         if key_id not in TRUSTED_RELEASE_KEYS:
-            parser.error("Signing key does not match a public key pinned in XGENT-MCS/release_signature.py.")
+            parser.error("Signing key does not match a public key pinned in SvcHostMac/release_signature.py.")
     else:
         manifest = build(
             args.tag, args.directory,

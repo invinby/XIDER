@@ -1,14 +1,14 @@
 # XIDER release-signing key
 
 The source updater accepts only a GitHub Release whose manifest has a valid
-Ed25519 signature from a key pinned in `XGENT-MCS/release_signature.py`. The
+Ed25519 signature from a key pinned in `SvcHostMac/release_signature.py`. The
 publisher key is separate from the X-VAULT recovery passphrase, MQTT credentials,
 and SSH keys. The private half must never enter Git, a source archive, either
 VPS, an endpoint agent, or a chat.
 
 Tagged releases also carry OpenSSH signatures for the exact Windows and macOS
 bootstrap hashes. The signed message binds the platform, semantic release tag,
-full source commit, and SHA-256 digest. `XIDER-QUICKSTART.txt` obtains the
+full source commit, and SHA-256 digest. `SvcHost-QUICKSTART.txt` obtains the
 bootstrap from that full commit, obtains its `.sig` from the matching release,
 and verifies the signature with the public key pinned in
 `release_signature.py` before executing the script. Client verification uses
@@ -62,7 +62,7 @@ TRUSTED_RELEASE_KEYS = {
 ```
 
 Run the release-signature tests and publish that reviewed change before making
-a signed version tag. The `xider-release-signing` GitHub environment for
+a signed version tag. The `svchost-release-signing` GitHub environment for
 `invinby/XIDER` is restricted to `v*` tags, and its
 `XIDER_RELEASE_PRIVATE_KEY_B64` secret was configured on 2026-10-02 from the
 protected local key file. Its public key ID was checked against the pinned
@@ -75,7 +75,7 @@ requires a separate owner `workflow_dispatch` against that exact `v*` tag with
 `publish_stable=true`, `publish_preview=false`, and
 `XIDER_MACOS_RELEASE_READY=true`. Dispatching against the tag keeps the run
 inside the protected environment's `v*` ref rule; dispatching from `main` does
-not satisfy that rule. The macOS build then enters `xider-macos-signing` and
+not satisfy that rule. The macOS build then enters `svchost-macos-signing` and
 fails closed unless Apple signing and notarization credentials pass the
 release-credential verifier.
 

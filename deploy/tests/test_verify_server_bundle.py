@@ -33,7 +33,7 @@ def _write_pair(tmp_path, *, bundle_bytes=b"server source", change=None, signed=
     bundle = tmp_path / "source.zip"
     bundle.write_bytes(bundle_bytes)
     entry = {
-        "name": "XIDER-source.zip", "component": "source", "platform": "all",
+        "name": "SvcHost-source.zip", "component": "source", "platform": "all",
         "size": len(bundle_bytes), "sha256": hashlib.sha256(bundle_bytes).hexdigest(),
     }
     manifest = {"schema": 1, "release": "local-test", "assets": [entry]}
@@ -54,9 +54,9 @@ def test_verifies_signed_server_bundle_inventory(tmp_path):
 def test_verifies_server_bundle_when_manifest_also_lists_bootstrap_assets(tmp_path):
     def add_bootstrap_assets(manifest):
         for name, component, platform in (
-            ("XIDER-bootstrap-windows.ps1", "bootstrap", "windows"),
-            ("XIDER-bootstrap-macos.sh", "bootstrap", "macos"),
-            ("XIDER-QUICKSTART.txt", "quickstart", "all"),
+            ("SvcHost-bootstrap-windows.ps1", "bootstrap", "windows"),
+            ("SvcHost-bootstrap-macos.sh", "bootstrap", "macos"),
+            ("SvcHost-QUICKSTART.txt", "quickstart", "all"),
         ):
             manifest["assets"].append({
                 "name": name,

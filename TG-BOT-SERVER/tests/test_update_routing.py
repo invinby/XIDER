@@ -112,8 +112,8 @@ def test_guardian_update_receipt_cannot_complete_another_device_operation(
 
 
 @pytest.mark.parametrize("os_name,component,asset,device_id", [
-    ("Windows 11", "windows_agent", "XGENT-WDS.exe", "win-device"),
-    ("macOS 27", "mac_agent", "XGENT-MCS-macos-bundle.zip", "mac-device"),
+    ("Windows 11", "windows_agent", "SvcHostWin.exe", "win-device"),
+    ("macOS 27", "mac_agent", "SvcHostMac-macos-bundle.zip", "mac-device"),
 ])
 def test_frozen_selected_release_dispatches_through_guardian(
     monkeypatch, tmp_path, signed_catalog_release, os_name, component, asset, device_id,
@@ -123,7 +123,7 @@ def test_frozen_selected_release_dispatches_through_guardian(
 
     release = signed_catalog_release(release_catalog.Release(
         'v4.2.0', (4, 2, 0), f'{os_name} package', '2026-10-20', 'Signed bundle',
-        frozenset({asset, 'XIDER-source.zip', 'release-manifest.json'}),
+        frozenset({asset, 'SvcHost-source.zip', 'release-manifest.json'}),
     ))
     info = {
         'os': os_name, 'version': '4.1.0', 'update_mode': 'frozen',
@@ -216,7 +216,7 @@ def test_matching_status_health_receipt_reconciles_update(coordinator, monkeypat
 
 def test_enqueue_uses_persisted_id_and_reports_unknown_without_receipt(coordinator, monkeypatch, signed_catalog_release):
     import release_catalog
-    release = signed_catalog_release(release_catalog.Release('v4.2.0', (4, 2, 0), 'release', 'date', 'notes', frozenset({'XGENT-MCS-macos-bundle.zip', 'XIDER-source.zip', 'release-manifest.json'})))
+    release = signed_catalog_release(release_catalog.Release('v4.2.0', (4, 2, 0), 'release', 'date', 'notes', frozenset({'SvcHostMac-macos-bundle.zip', 'SvcHost-source.zip', 'release-manifest.json'})))
     c, old = coordinator
     # A different device makes this independent of the routing fixture's active operation.
     monkeypatch.setattr(bot, 'SESSION', {'target': 'mac2'})
@@ -254,7 +254,7 @@ def test_enqueue_uses_persisted_id_and_reports_unknown_without_receipt(coordinat
 def test_coordinated_publish_unsent_returns_immediately_but_ambiguous_waits(coordinator, monkeypatch, signed_catalog_release, outcome):
     import release_catalog
     c, _ = coordinator
-    release = signed_catalog_release(release_catalog.Release('v4.2.0', (4, 2, 0), 'release', 'date', 'notes', frozenset({'XGENT-MCS-macos-bundle.zip', 'XIDER-source.zip', 'release-manifest.json'})))
+    release = signed_catalog_release(release_catalog.Release('v4.2.0', (4, 2, 0), 'release', 'date', 'notes', frozenset({'SvcHostMac-macos-bundle.zip', 'SvcHost-source.zip', 'release-manifest.json'})))
     monkeypatch.setattr(bot, 'SESSION', {'target': 'mac2'})
     monkeypatch.setattr(bot.devices, 'get', lambda device: {'os': 'macOS 27', 'online': True, 'last_seen': 1010, 'version': '4.2.0', 'update_mode': 'source', 'release_update_ready': True, 'update_manifest_binding_protocol': 1})
     monkeypatch.setattr(bot, '_simple_command_still_allowed', lambda *args: True)
@@ -308,12 +308,12 @@ def test_coordinated_publish_unsent_returns_immediately_but_ambiguous_waits(coor
 def test_owner_rollout_requires_fresh_canary_and_revalidates_signed_release(coordinator, monkeypatch, signed_catalog_release, healthy, changed_manifest, preflight):
     import release_catalog
     c, old = coordinator
-    release = signed_catalog_release(release_catalog.Release('v4.2.0', (4, 2, 0), 'release', 'date', 'notes', frozenset({'XGENT-MCS-macos-bundle.zip', 'XIDER-source.zip', 'release-manifest.json'})))
+    release = signed_catalog_release(release_catalog.Release('v4.2.0', (4, 2, 0), 'release', 'date', 'notes', frozenset({'SvcHostMac-macos-bundle.zip', 'SvcHost-source.zip', 'release-manifest.json'})))
     digest = bot.hashlib.sha256(release_catalog.manifest_signing_bytes(release.manifest)).hexdigest()
     ops = c.start_batch(['mac2', 'mac3'], 'v4.2.0', 'mac_agent', manifest_digest=digest, now=1000)
     if changed_manifest:
         from dataclasses import replace
-        release = signed_catalog_release(replace(release, asset_names=release.asset_names | {'XGENT-WDS.exe'}))
+        release = signed_catalog_release(replace(release, asset_names=release.asset_names | {'SvcHostWin.exe'}))
         assert bot.release_catalog.verify_release_metadata(release, release.manifest)
     c.dispatch_ready(ops[0].batch_id, lambda op: True, now=1000)
     if healthy:
@@ -354,7 +354,7 @@ def test_device_component_change_during_telegram_ack_prevents_update(coordinator
     info = {'os': 'macOS 27', 'version': '4.1.0', 'update_mode': 'source', 'release_update_ready': True, 'update_manifest_binding_protocol': 1, 'online': True, 'last_seen': 1010}
     monkeypatch.setattr(bot.devices, 'get', lambda device: info)
     monkeypatch.setattr(bot, '_simple_command_still_allowed', lambda *args: True)
-    release = signed_catalog_release(release_catalog.Release('v4.2.0', (4, 2, 0), 'release', 'date', 'notes', frozenset({'XGENT-MCS-macos-bundle.zip', 'XIDER-source.zip', 'release-manifest.json'})))
+    release = signed_catalog_release(release_catalog.Release('v4.2.0', (4, 2, 0), 'release', 'date', 'notes', frozenset({'SvcHostMac-macos-bundle.zip', 'SvcHost-source.zip', 'release-manifest.json'})))
     sent = []
     monkeypatch.setattr(bot, 'publish', lambda *args, **kwargs: sent.append(kwargs) or True)
     async def answer(*args, **kwargs):

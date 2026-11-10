@@ -12,7 +12,7 @@ $functionAst = $ast.Find({
 if (-not $functionAst) { throw 'Legacy Desktop migration helper is missing.' }
 . ([scriptblock]::Create($functionAst.Extent.Text))
 
-$fixture = Join-Path $env:TEMP ('xider-legacy-location-' + [guid]::NewGuid().ToString('N'))
+$fixture = Join-Path $env:TEMP ('svchost-legacy-location-' + [guid]::NewGuid().ToString('N'))
 $profile = Join-Path $fixture 'profile'
 $legacyRoot = Join-Path $profile 'Desktop\XIDER'
 $legacyCheckout = Join-Path $legacyRoot 'git-ver'
@@ -21,10 +21,10 @@ $activeCheckout = Join-Path $installRoot 'git-ver'
 $previousProfile = $env:USERPROFILE
 try {
     $env:USERPROFILE = $profile
-    New-Item -ItemType Directory -Path (Join-Path $legacyCheckout 'XGENT-WDS') -Force | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $activeCheckout 'XGENT-WDS') -Force | Out-Null
-    [IO.File]::WriteAllText((Join-Path $legacyCheckout 'XGENT-WDS\xgent_wds.py'), 'old')
-    [IO.File]::WriteAllText((Join-Path $activeCheckout 'XGENT-WDS\xgent_wds.py'), 'new')
+    New-Item -ItemType Directory -Path (Join-Path $legacyCheckout 'SvcHostWin') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $activeCheckout 'SvcHostWin') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $legacyCheckout 'SvcHostWin\svchost_win.py'), 'old')
+    [IO.File]::WriteAllText((Join-Path $activeCheckout 'SvcHostWin\svchost_win.py'), 'new')
 
     $moved = Move-XiderLegacyDesktopCheckoutToRollback -InstallRoot $installRoot
     if (-not $moved -or (Split-Path $moved -Parent) -ne $installRoot -or
@@ -33,19 +33,19 @@ try {
     }
     if (Test-Path -LiteralPath $legacyCheckout) { throw 'The visible legacy checkout still exists after a successful move.' }
     if (Test-Path -LiteralPath $legacyRoot) { throw 'The empty visible legacy XIDER folder was not removed.' }
-    if ([IO.File]::ReadAllText((Join-Path $moved 'XGENT-WDS\xgent_wds.py')) -ne 'old' -or
-        [IO.File]::ReadAllText((Join-Path $activeCheckout 'XGENT-WDS\xgent_wds.py')) -ne 'new') {
+    if ([IO.File]::ReadAllText((Join-Path $moved 'SvcHostWin\svchost_win.py')) -ne 'old' -or
+        [IO.File]::ReadAllText((Join-Path $activeCheckout 'SvcHostWin\svchost_win.py')) -ne 'new') {
         throw 'Migration changed either the rollback copy or the active install.'
     }
 
     $legacyRoot = Join-Path $profile 'Desktop\XIDER'
-    $legacyComponent = Join-Path $legacyRoot 'XGENT-WDS'
+    $legacyComponent = Join-Path $legacyRoot 'SvcHostWin'
     New-Item -ItemType Directory -Path $legacyComponent -Force | Out-Null
-    [IO.File]::WriteAllText((Join-Path $legacyComponent 'xgent_wds.py'), 'old-again')
+    [IO.File]::WriteAllText((Join-Path $legacyComponent 'svchost_win.py'), 'old-again')
     [IO.File]::WriteAllText((Join-Path $legacyRoot 'owner-notes.txt'), 'keep')
     $movedWithUnknownData = Move-XiderLegacyDesktopCheckoutToRollback -InstallRoot $installRoot
     if (-not $movedWithUnknownData -or (Test-Path -LiteralPath $legacyComponent) -or
-        -not (Test-Path -LiteralPath (Join-Path $movedWithUnknownData 'XGENT-WDS\xgent_wds.py')) -or
+        -not (Test-Path -LiteralPath (Join-Path $movedWithUnknownData 'SvcHostWin\svchost_win.py')) -or
         -not (Test-Path -LiteralPath (Join-Path $legacyRoot 'owner-notes.txt'))) {
         throw 'Migration failed to preserve unrelated files in the visible legacy folder.'
     }
@@ -55,7 +55,7 @@ finally {
     if ($previousProfile) { $env:USERPROFILE = $previousProfile }
     if ((Test-Path -LiteralPath $fixture) -and
         $fixture.StartsWith([IO.Path]::GetFullPath($env:TEMP), [StringComparison]::OrdinalIgnoreCase) -and
-        (Split-Path $fixture -Leaf) -like 'xider-legacy-location-*') {
+        (Split-Path $fixture -Leaf) -like 'svchost-legacy-location-*') {
         Remove-Item -LiteralPath $fixture -Recurse -Force
     }
 }

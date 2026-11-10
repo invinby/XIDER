@@ -10,7 +10,7 @@ import sys
 
 
 PYOBFUS_VERSION = "0.11.1"
-REPORT_NAME = "xider-obfuscation-report.json"
+REPORT_NAME = "svchost-obfuscation-report.json"
 PYOBFUS_CONFIG = Path(__file__).with_name("pyobfus.yaml")
 
 

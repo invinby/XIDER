@@ -23,11 +23,11 @@ for file in "${files[@]}"; do
   [[ -f "${RUNTIME_DIR}/${file}" ]] && present+=("${file}")
 done
 if ((${#present[@]})); then
-  tar -C "${RUNTIME_DIR}" -czf "${BACKUP_DIR}/xider-runtime-${STAMP}.tar.gz" "${present[@]}"
-  chmod 0600 "${BACKUP_DIR}/xider-runtime-${STAMP}.tar.gz"
+  tar -C "${RUNTIME_DIR}" -czf "${BACKUP_DIR}/svchost-runtime-${STAMP}.tar.gz" "${present[@]}"
+  chmod 0600 "${BACKUP_DIR}/svchost-runtime-${STAMP}.tar.gz"
 fi
 
-systemctl stop xider-bot.service || true
+systemctl stop svchost-bot.service || true
 printf '{}\n' > "${RUNTIME_DIR}/known_devices.json"
 cat > "${RUNTIME_DIR}/bot_settings.json" <<'EOF'
 {
@@ -49,5 +49,5 @@ printf '{"users": {}}\n' > "${RUNTIME_DIR}/access_control.json"
 chown xider:xider "${RUNTIME_DIR}"/{known_devices.json,bot_settings.json,access_control.json,admin_audit.jsonl,audit.log}
 chmod 0600 "${RUNTIME_DIR}"/{known_devices.json,bot_settings.json,access_control.json,admin_audit.jsonl,audit.log}
 
-echo "Runtime state reset. Backup: ${BACKUP_DIR}/xider-runtime-${STAMP}.tar.gz"
+echo "Runtime state reset. Backup: ${BACKUP_DIR}/svchost-runtime-${STAMP}.tar.gz"
 echo "Environment files and credentials were not changed."

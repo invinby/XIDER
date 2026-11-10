@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")"
+
+PLIST="$HOME/Library/LaunchAgents/com.svchost.guardian.plist"
+GUARDIAN_APP_BIN="$PWD/SvcHostGuard.app/Contents/MacOS/SvcHostGuard"
+GUARDIAN_SCRIPT="$PWD/svchost_guardian.py"
+
+mkdir -p "$HOME/Library/LaunchAgents"
+chmod +x "$0"
+
+if [[ "${1:-}" == "--status" || "${1:-}" == "-s" ]]; then
+  if [[ -x "$GUARDIAN_APP_BIN" ]]; then
+    "$GUARDIAN_APP_BIN" --service status
+    exit $?
+  fi
+  if [[ -f "$GUARDIAN_SCRIPT" ]]; then
+    PYTHON="$PWD/venv/bin/python3"
+    [[ -x "$PYTHON" ]] || PYTHON="$(command -v python3 || true)"
+    if [[ -n "$PYTHON" ]]; then
+      "$PYTHON" "$GUARDIAN_SCRIPT" --service status
+      exit $?
+    fi
+  fi
+  LAUNCH_STATE="$(launchctl print "gui/$(id -u)/com.svchost.guardian" 2>/dev/null || true)"
+  if printf '%s\n' "$LAUNCH_STATE" | grep -Eq 'pid = [0-9]+|state = running'; then
+    echo "[OK] SvcHost Guardian работает через LaunchAgent"
+    echo "[LOG] $PWD/guardian.log"
+    exit 0
+  fi
+  echo "[STOPPED] SvcHost Guardian не запущен (или LaunchAgent ещё ожидает процесс)"
+  exit 1
+fi
+
+if [[ "${1:-}" == "--stop" || "${1:-}" == "-x" ]]; then
+  if [[ -x "$GUARDIAN_APP_BIN" ]]; then
+    "$GUARDIAN_APP_BIN" --owner-stop-agent
+  elif [[ -f "$GUARDIAN_SCRIPT" ]]; then
+    PYTHON="$PWD/venv/bin/python3"
+    [[ -x "$PYTHON" ]] || PYTHON="$(command -v python3 || true)"
+    [[ -n "$PYTHON" ]] || { echo "[ERROR] Нужен Python 3, чтобы сохранить команду остановки Guardian." >&2; exit 1; }
+    "$PYTHON" -c 'from config import set_guardian_desired_running; set_guardian_desired_running(False)'
+  else
+    echo "[ERROR] Не найден SvcHostGuard.app или runtime для сохранения намерения владельца." >&2
+    exit 1
+  fi
+  if launchctl print "gui/$(id -u)/com.svchost.guardian" >/dev/null 2>&1; then
+    launchctl bootout "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || {
+      echo "[ERROR] Не удалось выгрузить Guardian; его намерение остановиться сохранено." >&2
+      exit 1
+    }
+  fi
+  rm -f "$PLIST"
+  echo "[STOPPED] SvcHost Guardian остановлен; Safari не будет поднимать его без команды владельца"
+  exit 0
+fi
+
+xml_escape() {
+  printf '%s' "$1" | sed -e 's/\&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+if [[ -x "$GUARDIAN_APP_BIN" ]]; then
+  guardian_argument="<string>$(xml_escape "$GUARDIAN_APP_BIN")</string>"
+elif [[ -f "$GUARDIAN_SCRIPT" ]]; then
+  PYTHON="$PWD/venv/bin/python3"
+  [[ -x "$PYTHON" ]] || PYTHON="$(command -v python3 || true)"
+  [[ -n "$PYTHON" ]] || { echo "[ERROR] Не найден SvcHostGuard.app и python3 для исходного Guardian." >&2; exit 1; }
+  guardian_argument="<string>$(xml_escape "$PYTHON")</string><string>$(xml_escape "$GUARDIAN_SCRIPT")</string>"
+else
+  echo "[ERROR] Не найден SvcHostGuard.app или svchost_guardian.py." >&2
+  exit 1
+fi
+
+cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.svchost.guardian</string>
+  <key>ProgramArguments</key>
+  <array>$guardian_argument</array>
+  <key>WorkingDirectory</key><string>$PWD</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>$PWD/guardian.log</string>
+  <key>StandardErrorPath</key><string>$PWD/guardian.log</string>
+</dict>
+</plist>
+EOF
+
+launchctl bootout "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || true
+launchctl bootstrap "gui/$(id -u)" "$PLIST"
+for attempt in {1..10}; do
+  LAUNCH_STATE="$(launchctl print "gui/$(id -u)/com.svchost.guardian" 2>/dev/null || true)"
+  if printf '%s\n' "$LAUNCH_STATE" | grep -Eq 'pid = [0-9]+|state = running'; then
+    echo "[OK] SvcHost Guardian зарегистрирован и запущен"
+    exit 0
+  fi
+  sleep 1
+done
+echo "[ERROR] SvcHost Guardian зарегистрирован, но процесс не запустился. Проверь guardian.log." >&2
+exit 1

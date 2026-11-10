@@ -82,7 +82,7 @@ def _probe():
             expected_device_id="bundle-probe-device", now=101) == payload, "Valid approval rejected")
     require(signing.verify_approved_command(envelope, command=command + "altered",
             expected_device_id="bundle-probe-device", now=101) is None, "Tampered command accepted")
-    with tempfile.TemporaryDirectory(prefix="xider-bundle-probe-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="svchost-bundle-probe-") as temporary:
         path = Path(temporary) / "replay.json"
         require(replay.CommandReplayLedger(path).reserve("bundle_probe", 220, now=101), "Reservation failed")
         require(not replay.CommandReplayLedger(path).reserve("bundle_probe", 220, now=101), "Replay accepted")
@@ -146,7 +146,7 @@ def _probe_nuitka():
             expected_device_id="bundle-probe-device", now=101) == payload, "Valid approval rejected")
     require(signing.verify_approved_command(envelope, command=command + "altered",
             expected_device_id="bundle-probe-device", now=101) is None, "Tampered command accepted")
-    with tempfile.TemporaryDirectory(prefix="xider-bundle-probe-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="svchost-bundle-probe-") as temporary:
         path = Path(temporary) / "replay.json"
         require(replay.CommandReplayLedger(path).reserve("bundle_probe", 220, now=101), "Reservation failed")
         require(not replay.CommandReplayLedger(path).reserve("bundle_probe", 220, now=101), "Replay accepted")

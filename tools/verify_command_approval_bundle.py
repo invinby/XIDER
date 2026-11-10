@@ -61,7 +61,7 @@ def verify_executable(path):
     missing = REQUIRED - pyz.toc.keys()
     if missing:
         raise ValueError("Missing bundled modules: " + ", ".join(sorted(missing)))
-    with tempfile.TemporaryDirectory(prefix="xider-bundle-report-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="svchost-bundle-report-") as temporary:
         report = Path(temporary) / "probe.json"
         result = subprocess.run([str(Path(path).resolve()), "--command-approval-bundle-smoke", str(report)],
                                 timeout=60, capture_output=True)
@@ -77,7 +77,7 @@ def verify_executable(path):
 
 def verify_nuitka_executable(path):
     """Run the explicit service-free probe embedded in a Nuitka executable."""
-    with tempfile.TemporaryDirectory(prefix="xider-nuitka-report-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="svchost-nuitka-report-") as temporary:
         report = Path(temporary) / "probe.json"
         result = subprocess.run(
             [str(Path(path).resolve()), "--command-approval-bundle-smoke", str(report)],

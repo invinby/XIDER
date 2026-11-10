@@ -30,8 +30,8 @@ HEADER_BYTES = 8
 CHUNK_BYTES = 1024 * 1024
 MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024
 MAX_INCOMING_BYTES = 2 * MAX_ARCHIVE_BYTES
-INCOMING_DIR = "/srv/xider-vault/incoming"
-UPLOAD_LOCK = "/run/xider-vault-upload.lock"
+INCOMING_DIR = "/srv/svchost-vault/incoming"
+UPLOAD_LOCK = "/run/svchost-vault-upload.lock"
 MAX_TRANSFER_SECONDS = 60 * 60
 
 

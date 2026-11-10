@@ -26,8 +26,8 @@ PEM_FIXTURE_COUNTS = {
     "TG-BOT-SERVER/tests/test_bot_ui.py": 1,
     "TG-BOT-SERVER/tests/test_diagnostics.py": 1,
     "TG-BOT-SERVER/tests/test_server_ops.py": 1,
-    "XGENT-MCS/tests/test_shell_approval_gate.py": 2,
-    "XGENT-WDS/tests/test_shell_approval_gate.py": 2,
+    "SvcHostMac/tests/test_shell_approval_gate.py": 2,
+    "SvcHostWin/tests/test_shell_approval_gate.py": 2,
     "tools/test_command_approval_packaging.py": 6,
 }
 

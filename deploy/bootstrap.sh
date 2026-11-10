@@ -51,7 +51,7 @@ resolve_xider_python() {
   command -v pkgutil >/dev/null || { echo 'pkgutil is required to verify the Python installer signature.' >&2; return 1; }
 
   expected_hash='286c7018aa2730f6747ca433dccdc2b31be45f078a9ea0ffa44d5f06368fd2d7'
-  pkg="$(mktemp "${TMPDIR:-/tmp}/xider-python-3.14.10.XXXXXXXX")" || return 1
+  pkg="$(mktemp "${TMPDIR:-/tmp}/svchost-python-3.14.10.XXXXXXXX")" || return 1
   echo 'Python 3.11/3.12/3.14 не найден. Проверяю и ставлю официальный Python 3.14.10...' >&2
   if ! curl --fail --silent --show-error --location --max-time 180 \
       'https://www.python.org/ftp/python/3.14.10/python-3.14.10-macos11.pkg' -o "$pkg"; then
@@ -95,7 +95,7 @@ PYTHON_BIN="$(resolve_xider_python)" || {
 mkdir -p "$INSTALL_ROOT"
 INSTALL_ROOT="$(cd "$INSTALL_ROOT" && pwd -P)"
 TARGET="${INSTALL_ROOT}/git-ver"
-stage="$(mktemp -d "${INSTALL_ROOT}/.xider-install.XXXXXX")"
+stage="$(mktemp -d "${INSTALL_ROOT}/.svchost-install.XXXXXX")"
 
 write_install_report() {
   local outcome="$1" error_message="$2" writer="${downloaded:-}/deploy/install_report.py"
@@ -126,15 +126,15 @@ labels = {
     "siri": "com.svchost.siri",
 }
 install_root = Path(install_root)
-source_config = Path(writer).parents[1] / "XGENT-MCS" / "config.py"
+source_config = Path(writer).parents[1] / "SvcHostMac" / "config.py"
 version_match = re.search(r'^VERSION\s*=\s*["\']([^"\']+)', source_config.read_text(encoding="utf-8"), re.M)
 expected_version = release_tag.removeprefix("v") if release_tag else (version_match.group(1) if version_match else None)
 if not version_match or (release_tag and version_match.group(1) != expected_version):
     raise SystemExit("Requested release version does not match the pinned Agent source.")
-layer_source = Path(writer).parents[1] / "XGENT-MCS" / "xider_layers.py"
+layer_source = Path(writer).parents[1] / "SvcHostMac" / "svchost_layers.py"
 layer_version_match = re.search(r'^VERSION\s*=\s*["\']([^"\']+)', layer_source.read_text(encoding="utf-8"), re.M)
 if not layer_version_match:
-    raise SystemExit("XIDER-Layers source version is unavailable.")
+    raise SystemExit("SvcHostLayers source version is unavailable.")
 expected_versions = {
     "agent": expected_version,
     "guardian": expected_version,
@@ -393,13 +393,13 @@ else
   fi
 fi
 unzip -q "$stage/source.zip" -d "$stage"
-downloaded="$(find "$stage" -mindepth 1 -maxdepth 1 -type d ! -name '.xider-install.*' | head -n1)"
-[[ -n "$downloaded" && -f "$downloaded/XGENT-MCS/start_agent.sh" ]] || {
-  echo "В архиве не найден XGENT-MCS/start_agent.sh" >&2; exit 3;
+downloaded="$(find "$stage" -mindepth 1 -maxdepth 1 -type d ! -name '.svchost-install.*' | head -n1)"
+[[ -n "$downloaded" && -f "$downloaded/SvcHostMac/start_agent.sh" ]] || {
+  echo "В архиве не найден SvcHostMac/start_agent.sh" >&2; exit 3;
 }
 mkdir "$stage/new"
 if [[ -n "$RELEASE_TAG" ]]; then
-  mkdir -p "$stage/new/XGENT-MCS"
+  mkdir -p "$stage/new/SvcHostMac"
 else
   cp -R "$downloaded/." "$stage/new/"
 fi
@@ -407,13 +407,13 @@ fi
 # Берём существующий локальный .env, не трогая ключи и состояние в ~/.svchost.
 preserved_env="$stage/agent.env"
 for candidate in \
-  "${TARGET}/XGENT-MCS/.env" \
-  "${ENV_ROOT}/XGENT-MCS/.env" \
-  "${ENV_ROOT}/git-ver/XGENT-MCS/.env"; do
+  "${TARGET}/SvcHostMac/.env" \
+  "${ENV_ROOT}/SvcHostMac/.env" \
+  "${ENV_ROOT}/git-ver/SvcHostMac/.env"; do
   if [[ -f "$candidate" ]]; then cp "$candidate" "$preserved_env"; break; fi
 done
 
-agent_env="$stage/new/XGENT-MCS/.env"
+agent_env="$stage/new/SvcHostMac/.env"
 if [[ -f "$preserved_env" ]]; then
   cp "$preserved_env" "$agent_env"
   public_env="$stage/public.env"
@@ -571,7 +571,7 @@ awk '!/^XIDER_UPDATE_BRANCH=/' "$agent_env" > "$stage/env.updated"
 mv "$stage/env.updated" "$agent_env"
 chmod 600 "$agent_env"
 
-new_agent="$stage/new/XGENT-MCS"
+new_agent="$stage/new/SvcHostMac"
 
 # The signed release installs only compiled apps and their thin control scripts.
 # This temporary runtime is for verifying release metadata; it is not linked
@@ -607,17 +607,17 @@ fi
 recovery_slot=''
 if [[ -n "$RELEASE_TAG" ]]; then
   echo "Проверяю подписанный macOS-бандл $RELEASE_TAG до остановки текущей версии."
-  signed_bundle="$stage/XGENT-MCS-macos-bundle.zip"
+  signed_bundle="$stage/SvcHostMac-macos-bundle.zip"
   bundle_manifest="$stage/mac-bundle-manifest.json"
   (
     cd "$new_agent"
-    PYTHONPATH="$downloaded/XGENT-MCS" "$runtime/bin/python3" - "$bundle_manifest" "$signed_bundle" "$RELEASE_TAG" <<'PY'
+    PYTHONPATH="$downloaded/SvcHostMac" "$runtime/bin/python3" - "$bundle_manifest" "$signed_bundle" "$RELEASE_TAG" <<'PY'
 from pathlib import Path
 import sys
 from update_package import download_verified_release_asset
 
 manifest, bundle, tag = sys.argv[1:]
-download_verified_release_asset(Path(manifest), Path(bundle), "XGENT-MCS-macos-bundle.zip", release_tag=tag)
+download_verified_release_asset(Path(manifest), Path(bundle), "SvcHostMac-macos-bundle.zip", release_tag=tag)
 PY
   ) || { echo "Подписанный macOS-бандл не прошёл проверку; действующая установка не менялась." >&2; exit 5; }
   "$runtime/bin/python3" - "$signed_bundle" <<'PY'
@@ -625,7 +625,7 @@ from pathlib import PurePosixPath
 from zipfile import ZipFile
 import sys
 
-allowed_apps = {"XIDER.app", "XIDER-Guard-Keeper.app", "XIDER-Layers.app"}
+allowed_apps = {"SvcHost.app", "SvcHostGuard.app", "SvcHostLayers.app"}
 allowed_files = {".env.example"}
 allowed = allowed_apps | allowed_files
 total = 0
@@ -647,7 +647,7 @@ with ZipFile(sys.argv[1]) as archive:
         if total > 2 * 1024 * 1024 * 1024:
             raise SystemExit("Распакованный macOS-бандл превышает лимит 2 ГБ.")
     if not allowed_apps.issubset({PurePosixPath(entry.filename).parts[0] for entry in entries}):
-        raise SystemExit("В подписанном macOS-бандле не хватает обязательного XIDER-компонента.")
+        raise SystemExit("В подписанном macOS-бандле не хватает обязательного SvcHost-компонента.")
 PY
   mkdir -p "$stage/macos-bundle"
   ditto -x -k "$signed_bundle" "$stage/macos-bundle"
@@ -656,16 +656,16 @@ PY
     exit 5
   fi
   cp "$stage/macos-bundle/.env.example" "$new_agent/.env.example"
-  for app in XIDER.app XIDER-Guard-Keeper.app XIDER-Layers.app; do
+  for app in SvcHost.app SvcHostGuard.app SvcHostLayers.app; do
     codesign --verify --deep --strict "$stage/macos-bundle/$app"
     xcrun stapler validate "$stage/macos-bundle/$app"
     mv "$stage/macos-bundle/$app" "$new_agent/$app"
   done
   # The signed release runs the compiled layer supervisor only. Keep the
   # source fallback in development checkouts, never in a release installation.
-  rm -f "$new_agent/xider_layers.py"
-  : > "$new_agent/.xider-signed-release"
-  chmod 600 "$new_agent/.xider-signed-release"
+  rm -f "$new_agent/svchost_layers.py"
+  : > "$new_agent/.svchost-signed-release"
+  chmod 600 "$new_agent/.svchost-signed-release"
   if find "$new_agent" -type f \( -name '*.py' -o -name '*.pyc' -o -name '*.pyo' -o -name '*.ps1' -o -name '*.psm1' -o -name '*.bat' -o -name '*.cmd' -o -name '*.sh' \) -print -quit | grep -q .; then
     echo "Unexpected plaintext source or helper script in signed macOS install; refusing activation." >&2
     exit 5
@@ -713,7 +713,7 @@ PY
 }
 start_enabled_layers() {
   local directory="$1"
-  local layer_binary="$directory/XIDER-Layers.app/Contents/MacOS/XIDER-Layers"
+  local layer_binary="$directory/SvcHostLayers.app/Contents/MacOS/SvcHostLayers"
   if [[ -x "$layer_binary" ]]; then
     if { ! layer_enabled safari || "$layer_binary" --service safari start; } &&
        { ! layer_enabled siri || "$layer_binary" --service siri start; }; then
@@ -727,8 +727,8 @@ start_enabled_layers() {
 }
 start_runtime_services() {
   local directory="$1"
-  local agent_binary="$directory/XIDER.app/Contents/MacOS/XGENT-MCS"
-  local guardian_binary="$directory/XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper"
+  local agent_binary="$directory/SvcHost.app/Contents/MacOS/SvcHostMac"
+  local guardian_binary="$directory/SvcHostGuard.app/Contents/MacOS/SvcHostGuard"
   if [[ -x "$agent_binary" && -x "$guardian_binary" ]]; then
     if "$agent_binary" --service start && "$guardian_binary" --service start; then
       return 0
@@ -814,7 +814,7 @@ preserve_legacy_visible_install() {
     else
       continue
     fi
-    [[ -d "$candidate/XGENT-MCS" ]] || continue
+    [[ -d "$candidate/SvcHostMac" ]] || continue
     [[ -z "$(find -P "$candidate" -type l -print -quit 2>/dev/null)" ]] || continue
     destination="$install_root/$name"
     if [[ -e "$destination" || -L "$destination" ]]; then
@@ -836,9 +836,9 @@ preserve_legacy_visible_install() {
     fi
   done
 
-  candidate="$legacy_root/XGENT-MCS"
+  candidate="$legacy_root/SvcHostMac"
   if [[ -d "$candidate" && ! -L "$candidate" && "$(dirname "$candidate")" == "$legacy_root" &&
-        ( -f "$candidate/xgent_mcs.py" || -d "$candidate/XIDER.app" ) &&
+        ( -f "$candidate/svchost_mac.py" || -d "$candidate/SvcHost.app" ) &&
         -z "$(find -P "$candidate" -type l -print -quit 2>/dev/null)" ]]; then
     stamp="$(date +%Y%m%d%H%M%S)"
     suffix=0
@@ -847,7 +847,7 @@ preserve_legacy_visible_install() {
       ((suffix+=1))
       destination="$install_root/git-ver.previous.$stamp.$(( $$ + suffix ))"
     done
-    if mkdir -p "$destination" && mv -- "$candidate" "$destination/XGENT-MCS"; then
+    if mkdir -p "$destination" && mv -- "$candidate" "$destination/SvcHostMac"; then
       ((moved+=1))
     else
       rmdir "$destination" 2>/dev/null || true
@@ -873,8 +873,8 @@ preserve_legacy_visible_install() {
 # XIDER_LEGACY_MIGRATION_HELPERS_END
 runtime_services_status() {
   local directory="$1"
-  local agent_binary="$directory/XIDER.app/Contents/MacOS/XGENT-MCS"
-  local guardian_binary="$directory/XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper"
+  local agent_binary="$directory/SvcHost.app/Contents/MacOS/SvcHostMac"
+  local guardian_binary="$directory/SvcHostGuard.app/Contents/MacOS/SvcHostGuard"
   if [[ -x "$agent_binary" && -x "$guardian_binary" ]]; then
     if "$agent_binary" --service status && "$guardian_binary" --service status; then
       return 0
@@ -886,7 +886,7 @@ runtime_services_status() {
 }
 runtime_layers_status() {
   local directory="$1"
-  local layer_binary="$directory/XIDER-Layers.app/Contents/MacOS/XIDER-Layers"
+  local layer_binary="$directory/SvcHostLayers.app/Contents/MacOS/SvcHostLayers"
   local role
   for role in safari siri; do
     if ! layer_enabled "$role"; then
@@ -930,7 +930,7 @@ try:
                 relative = Path(os.path.normpath(raw)).relative_to(legacy_root)
             except ValueError:
                 continue
-            temporary = link.with_name(f".{link.name}.xider-rebase")
+            temporary = link.with_name(f".{link.name}.svchost-rebase")
             if temporary.exists() or temporary.is_symlink():
                 raise OSError(f"temporary symlink path already exists: {temporary}")
             temporary.symlink_to(new_root / relative)
@@ -938,7 +938,7 @@ try:
             changed.append((link, raw))
 except Exception:
     for link, raw in reversed(changed):
-        temporary = link.with_name(f".{link.name}.xider-restore")
+        temporary = link.with_name(f".{link.name}.svchost-restore")
         try:
             temporary.symlink_to(raw)
             os.replace(temporary, link)
@@ -950,7 +950,7 @@ PY
 migrate_legacy_install_root() {
   [[ -z "${XIDER_INSTALL_ROOT:-}" ]] || return 0
   [[ "$INSTALL_ROOT" != "$LEGACY_INSTALL_ROOT" ]] || return 0
-  [[ -d "$LEGACY_INSTALL_ROOT/git-ver/XGENT-MCS" ]] || return 0
+  [[ -d "$LEGACY_INSTALL_ROOT/git-ver/SvcHostMac" ]] || return 0
   [[ ! -e "$TARGET" && ! -L "$TARGET" ]] || return 0
   local candidate destination runtime_candidate runtime_name
   local -a legacy_checkouts=() moved_checkouts=() moved_runtimes=()
@@ -1019,37 +1019,37 @@ migrate_legacy_install_root() {
 # the owner's enabled/disabled preference; `--stop` would overwrite it.
 if ! stop_loaded_job com.svchost.siri || ! stop_loaded_job com.svchost.safari ||
    ! stop_loaded_job com.svchost.guardian || ! stop_loaded_job com.svchost.agent; then
-  if [[ -d "$TARGET/XGENT-MCS/XIDER.app" || -f "$TARGET/XGENT-MCS/start_guardian.sh" ]]; then
-    start_runtime_services "$TARGET/XGENT-MCS" || true
-    start_enabled_layers "$TARGET/XGENT-MCS" || true
-  elif [[ -d "$LEGACY_INSTALL_ROOT/git-ver/XGENT-MCS" ]]; then
-    start_runtime_services "$LEGACY_INSTALL_ROOT/git-ver/XGENT-MCS" || true
-    start_enabled_layers "$LEGACY_INSTALL_ROOT/git-ver/XGENT-MCS" || true
+  if [[ -d "$TARGET/SvcHostMac/SvcHost.app" || -f "$TARGET/SvcHostMac/start_guardian.sh" ]]; then
+    start_runtime_services "$TARGET/SvcHostMac" || true
+    start_enabled_layers "$TARGET/SvcHostMac" || true
+  elif [[ -d "$LEGACY_INSTALL_ROOT/git-ver/SvcHostMac" ]]; then
+    start_runtime_services "$LEGACY_INSTALL_ROOT/git-ver/SvcHostMac" || true
+    start_enabled_layers "$LEGACY_INSTALL_ROOT/git-ver/SvcHostMac" || true
   fi
   exit 5
 fi
 if ! migrate_legacy_install_root; then
-  if [[ -d "$LEGACY_INSTALL_ROOT/git-ver/XGENT-MCS" ]]; then
-    start_runtime_services "$LEGACY_INSTALL_ROOT/git-ver/XGENT-MCS" || true
-    start_enabled_layers "$LEGACY_INSTALL_ROOT/git-ver/XGENT-MCS" || true
+  if [[ -d "$LEGACY_INSTALL_ROOT/git-ver/SvcHostMac" ]]; then
+    start_runtime_services "$LEGACY_INSTALL_ROOT/git-ver/SvcHostMac" || true
+    start_enabled_layers "$LEGACY_INSTALL_ROOT/git-ver/SvcHostMac" || true
   fi
   exit 5
 fi
 if [[ -e "$TARGET" ]]; then mv "$TARGET" "$backup"; fi
 if ! mv "$stage/new" "$TARGET"; then
   [[ ! -e "$backup" ]] || mv "$backup" "$TARGET"
-  if [[ -d "$TARGET/XGENT-MCS/XIDER.app" || -f "$TARGET/XGENT-MCS/start_agent.sh" ]]; then
-    start_runtime_services "$TARGET/XGENT-MCS" || true
-    start_enabled_layers "$TARGET/XGENT-MCS" || true
+  if [[ -d "$TARGET/SvcHostMac/SvcHost.app" || -f "$TARGET/SvcHostMac/start_agent.sh" ]]; then
+    start_runtime_services "$TARGET/SvcHostMac" || true
+    start_enabled_layers "$TARGET/SvcHostMac" || true
   fi
   echo "Не удалось активировать новую папку; прежняя установка сохранена." >&2
   exit 5
 fi
 
-if ! (start_runtime_services "$TARGET/XGENT-MCS" &&
-      start_enabled_layers "$TARGET/XGENT-MCS" &&
-      runtime_services_status "$TARGET/XGENT-MCS" &&
-      runtime_layers_status "$TARGET/XGENT-MCS" &&
+if ! (start_runtime_services "$TARGET/SvcHostMac" &&
+      start_enabled_layers "$TARGET/SvcHostMac" &&
+      runtime_services_status "$TARGET/SvcHostMac" &&
+      runtime_layers_status "$TARGET/SvcHostMac" &&
       write_install_report succeeded ""); then
   echo "Запуск не прошёл; возвращаю предыдущую версию." >&2
   if ! stop_loaded_job com.svchost.siri || ! stop_loaded_job com.svchost.safari ||
@@ -1059,7 +1059,7 @@ if ! (start_runtime_services "$TARGET/XGENT-MCS" &&
   fi
   failed="${TARGET}.failed.$(date +%Y%m%d%H%M%S)"
   if mv "$TARGET" "$failed"; then
-    rm -f "$failed/XGENT-MCS/.env" || echo "Предупреждение: не удалось убрать .env из $failed" >&2
+    rm -f "$failed/SvcHostMac/.env" || echo "Предупреждение: не удалось убрать .env из $failed" >&2
   else
     echo "Не удалось изолировать неисправную версию $TARGET; автоматический откат может быть неполным." >&2
   fi
@@ -1068,16 +1068,16 @@ if ! (start_runtime_services "$TARGET/XGENT-MCS" &&
       echo "КРИТИЧНО: не удалось вернуть резервную версию из $backup" >&2
     fi
   fi
-  if [[ -d "$TARGET/XGENT-MCS/XIDER.app" || -x "$TARGET/XGENT-MCS/start_agent.sh" ]]; then
-    start_runtime_services "$TARGET/XGENT-MCS" || true
-    start_enabled_layers "$TARGET/XGENT-MCS" || true
+  if [[ -d "$TARGET/SvcHostMac/SvcHost.app" || -x "$TARGET/SvcHostMac/start_agent.sh" ]]; then
+    start_runtime_services "$TARGET/SvcHostMac" || true
+    start_enabled_layers "$TARGET/SvcHostMac" || true
   fi
   [[ ! -e "$backup" ]] || echo "Предыдущая версия возвращена: $TARGET"
   exit 6
 fi
 
 if [[ -n "$recovery_slot" ]]; then
-  (cd "$TARGET/XGENT-MCS" && "$runtime/bin/python3" - "$recovery_slot" <<'PY'
+  (cd "$TARGET/SvcHostMac" && "$runtime/bin/python3" - "$recovery_slot" <<'PY'
 from pathlib import Path
 import sys
 from guardian_recovery import activate_recovery_package
@@ -1094,12 +1094,12 @@ install_backstop() {
   local plist="$HOME/Library/LaunchAgents/com.svchost.backstop.plist"
   local source="$downloaded/deploy/backstop-agent.sh"
   [ -f "$source" ] || return 0
-  mkdir -p "$mirror/XGENT-MCS" "$HOME/Library/LaunchAgents" 2>/dev/null || true
+  mkdir -p "$mirror/SvcHostMac" "$HOME/Library/LaunchAgents" 2>/dev/null || true
   cp "$source" "$mirror/backstop-agent.sh" 2>/dev/null || true
   if ! cp "$0" "$mirror/bootstrap.sh" 2>/dev/null; then
     cp "$downloaded/deploy/bootstrap.sh" "$mirror/bootstrap.sh" 2>/dev/null || true
   fi
-  cp "$TARGET/XGENT-MCS/.env" "$mirror/XGENT-MCS/.env" 2>/dev/null || true
+  cp "$TARGET/SvcHostMac/.env" "$mirror/SvcHostMac/.env" 2>/dev/null || true
   chmod +x "$mirror/backstop-agent.sh" 2>/dev/null || true
   cat > "$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

@@ -18,28 +18,28 @@ from dataclasses import dataclass, replace
 from typing import Callable
 
 # Server bundles carry this canonical module; never maintain a second verifier.
-sys.path.append(str(Path(__file__).resolve().parents[1] / "XGENT-MCS"))
+sys.path.append(str(Path(__file__).resolve().parents[1] / "SvcHostMac"))
 from release_signature import verify_manifest_signature, manifest_signing_bytes
 
 
 RELEASES_URL = "https://api.github.com/repos/invinby/XIDER/releases"
 _TAG = re.compile(r"^v([0-9]{1,6})\.([0-9]{1,6})\.([0-9]{1,6})$")
 _ASSET_NAMES = {
-    "windows_agent": {"XGENT-WDS.exe", "XGENT-WDS-Windows.zip"},
-    "mac_agent": {"XGENT-MCS-macos-bundle.zip"},
+    "windows_agent": {"SvcHostWin.exe", "SvcHostWin-Windows.zip"},
+    "mac_agent": {"SvcHostMac-macos-bundle.zip"},
     "windows_keeper": {"Guard-Keeper-Windows.zip"},
     "mac_keeper": {"Guard-Keeper-macOS.zip"},
     "server": {"X-STAB-server.zip"},
 }
-_SOURCE_UPDATE_ASSETS = frozenset({"XIDER-source.zip", "release-manifest.json"})
+_SOURCE_UPDATE_ASSETS = frozenset({"SvcHost-source.zip", "release-manifest.json"})
 _PROTECTED_BUILD_MANIFEST = "protected-build-manifest.json"
 _BUILD_COMPONENTS = {
-    "windows_agent": ("windows", "XGENT-WDS-Windows.zip", "XGENT-WDS.exe"),
-    "windows_guard_keeper": ("windows", "Guard-Keeper-Windows.zip", "XIDER-Guard-Keeper.exe"),
-    "macos_agent": ("macos", "XGENT-MCS-macos-bundle.zip", "XIDER.app/Contents/MacOS/XGENT-MCS"),
-    "macos_guard_keeper": ("macos", "Guard-Keeper-macOS.zip", "XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper"),
-    "safari": ("macos", "XGENT-MCS-macos-bundle.zip", "XIDER-Layers.app/Contents/MacOS/XIDER-Layers"),
-    "siri": ("macos", "XGENT-MCS-macos-bundle.zip", "XIDER-Layers.app/Contents/MacOS/XIDER-Layers"),
+    "windows_agent": ("windows", "SvcHostWin-Windows.zip", "SvcHostWin.exe"),
+    "windows_guard_keeper": ("windows", "Guard-Keeper-Windows.zip", "SvcHostGuard.exe"),
+    "macos_agent": ("macos", "SvcHostMac-macos-bundle.zip", "SvcHost.app/Contents/MacOS/SvcHostMac"),
+    "macos_guard_keeper": ("macos", "Guard-Keeper-macOS.zip", "SvcHostGuard.app/Contents/MacOS/SvcHostGuard"),
+    "safari": ("macos", "SvcHostMac-macos-bundle.zip", "SvcHostLayers.app/Contents/MacOS/SvcHostLayers"),
+    "siri": ("macos", "SvcHostMac-macos-bundle.zip", "SvcHostLayers.app/Contents/MacOS/SvcHostLayers"),
 }
 _BUILD_COMPONENT_FOR_RELEASE_COMPONENT = {
     "windows_agent": "windows_agent", "windows_keeper": "windows_guard_keeper",
@@ -79,7 +79,7 @@ class Release:
 
     def signed_source_update_payload(self, component: str) -> bool:
         return self.has_source_update_payload(component) and self.signed_package(component) and any(
-            asset["name"] == "XIDER-source.zip" and asset["component"] == "source"
+            asset["name"] == "SvcHost-source.zip" and asset["component"] == "source"
             for asset in self.manifest["assets"]
         )
 
@@ -138,7 +138,7 @@ def verify_release_metadata(release: Release, manifest: dict) -> bool:
                 return False
             if component in _PLATFORMS and (name not in _ASSET_NAMES[component] or asset.get("platform") != _PLATFORMS[component]):
                 return False
-            if name == "XIDER-source.zip" and (component != "source" or asset.get("platform") != "all"):
+            if name == "SvcHost-source.zip" and (component != "source" or asset.get("platform") != "all"):
                 return False
         return True
     except (ValueError, TypeError, KeyError, AttributeError):
@@ -255,7 +255,7 @@ def version_state(current: str, release: Release, component: str, manifest: dict
 def _download_manifest(release: Release) -> dict:
     request = urllib.request.Request(
         f"https://github.com/invinby/XIDER/releases/download/{release.tag}/release-manifest.json",
-        headers={"User-Agent": "XIDER-X-LEDGER"},
+        headers={"User-Agent": "SvcHost-X-LEDGER"},
     )
     with urllib.request.urlopen(request, timeout=6) as response:
         raw = response.read(1_000_001)
@@ -267,7 +267,7 @@ def _download_manifest(release: Release) -> dict:
 def _download_protected_manifest(release: Release) -> dict:
     request = urllib.request.Request(
         f"https://github.com/invinby/XIDER/releases/download/{release.tag}/{_PROTECTED_BUILD_MANIFEST}",
-        headers={"User-Agent": "XIDER-X-LEDGER"},
+        headers={"User-Agent": "SvcHost-X-LEDGER"},
     )
     with urllib.request.urlopen(request, timeout=6) as response:
         raw = response.read(1_000_001)
@@ -308,7 +308,7 @@ def _download() -> object:
     for page in range(1, 11):
         request = urllib.request.Request(
             f"{RELEASES_URL}?per_page=100&page={page}",
-            headers={"Accept": "application/vnd.github+json", "User-Agent": "XIDER-X-LEDGER"},
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "SvcHost-X-LEDGER"},
         )
         with urllib.request.urlopen(request, timeout=6) as response:
             raw = response.read(2_000_001)

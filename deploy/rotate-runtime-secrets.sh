@@ -37,11 +37,11 @@ tmp.chmod(0o640)
 tmp.replace(path)
 PY
 
-systemctl restart xider-bot.service
+systemctl restart svchost-bot.service
 sleep 3
-if ! systemctl is-active --quiet xider-bot.service; then
+if ! systemctl is-active --quiet svchost-bot.service; then
   install -m 0640 "${backup}" "${ENV_FILE}"
-  systemctl restart xider-bot.service || true
+  systemctl restart svchost-bot.service || true
   echo "Rotation failed; previous env restored from ${backup}." >&2
   exit 5
 fi

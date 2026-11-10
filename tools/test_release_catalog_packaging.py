@@ -14,4 +14,4 @@ def test_server_archive_includes_canonical_release_verifier(tmp_path):
     args = [f"--output={destination}" if arg.startswith("--output=") else arg for arg in args]
     subprocess.run(args, cwd=root, check=True, capture_output=True)
     with zipfile.ZipFile(destination) as archive:
-        assert archive.read("XGENT-MCS/release_signature.py") == (root / "XGENT-MCS/release_signature.py").read_bytes()
+        assert archive.read("SvcHostMac/release_signature.py") == (root / "SvcHostMac/release_signature.py").read_bytes()

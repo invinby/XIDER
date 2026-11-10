@@ -8,7 +8,7 @@ on:
         required: false
         type: string
   push:
-    branches: [ "main", "master", "xider-local-prep-*" ]
+    branches: [ "main", "master", "svchost-local-prep-*" ]
   pull_request:
     branches: [ "main", "master" ]
 
@@ -46,7 +46,7 @@ jobs:
           python tools/validate_mermaid.py README.md README.ru.md
       - name: "Check shell syntax"
         run: |
-          find deploy XGENT-MCS -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+          find deploy SvcHostMac -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
       - name: "Exercise server operations argument gate"
         run: |
           bash deploy/tests/test_server_ops_wrapper.sh
@@ -85,20 +85,20 @@ jobs:
           cache: "pip"
           cache-dependency-path: |
             TG-BOT-SERVER/requirements.txt
-            XGENT-WDS/requirements.txt
-            XGENT-MCS/requirements.txt
+            SvcHostWin/requirements.txt
+            SvcHostMac/requirements.txt
 
       - name: "Install component dependencies"
         run: |
           python -m pip install --upgrade pip
           pip install -r TG-BOT-SERVER/requirements.txt
-          pip install -r XGENT-WDS/requirements.txt
+          pip install -r SvcHostWin/requirements.txt
           pip install pytest pytest-asyncio pyobfus==0.11.1
 
       - name: "Validate PowerShell installer syntax"
         shell: pwsh
         run: |
-          $files = Get-ChildItem -Path deploy,XGENT-WDS -Recurse -Filter *.ps1
+          $files = Get-ChildItem -Path deploy,SvcHostWin -Recurse -Filter *.ps1
           foreach ($file in $files) {
             $tokens = $null
             $errors = $null
@@ -110,12 +110,12 @@ jobs:
         shell: pwsh
         run: |
           $exclude = '(^|[\\/])(\.venv|venv|node_modules|build|dist|__pycache__)([\\/]|$)'
-          python -m compileall -q -x $exclude TG-BOT-SERVER XGENT-WDS XGENT-MCS ops tools deploy
+          python -m compileall -q -x $exclude TG-BOT-SERVER SvcHostWin SvcHostMac ops tools deploy
 
       - name: "Validate Windows PowerShell 5 installer syntax"
         shell: powershell
         run: |
-          $files = Get-ChildItem -Path deploy,XGENT-WDS -Recurse -Filter *.ps1
+          $files = Get-ChildItem -Path deploy,SvcHostWin -Recurse -Filter *.ps1
           foreach ($file in $files) {
             $tokens = $null
             $errors = $null

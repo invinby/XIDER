@@ -10,10 +10,10 @@ class BundleVerifierTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.app = pathlib.Path(self.tmp.name) / "XIDER.app"
+        self.app = pathlib.Path(self.tmp.name) / "SvcHost.app"
         (self.app / "Contents/MacOS").mkdir(parents=True)
-        (self.app / "Contents/MacOS/XGENT-MCS").write_bytes(b"fixture")
-        self.info = {"CFBundleIdentifier": "com.svchost.agent", "CFBundleExecutable": "XGENT-MCS",
+        (self.app / "Contents/MacOS/SvcHostMac").write_bytes(b"fixture")
+        self.info = {"CFBundleIdentifier": "com.svchost.agent", "CFBundleExecutable": "SvcHostMac",
                      "NSLocationUsageDescription": "One explicit request after local permission."}
         self.identity = "Identifier=com.svchost.agent\nAuthority=Apple Development: Test (TEAM)\nTeamIdentifier=TEAM\n"
         self.verify_code = 0

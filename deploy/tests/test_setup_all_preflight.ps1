@@ -1,10 +1,10 @@
 ﻿$ErrorActionPreference = 'Stop'
 $scriptSource = (Resolve-Path (Join-Path $PSScriptRoot '..\setup-all.ps1')).Path
-$fixture = Join-Path $env:TEMP ('xider-setup-preflight-' + [guid]::NewGuid().ToString('N'))
+$fixture = Join-Path $env:TEMP ('svchost-setup-preflight-' + [guid]::NewGuid().ToString('N'))
 $repo = Join-Path $fixture 'repo'
 $deploy = Join-Path $repo 'deploy'
-$agentDir = Join-Path $repo 'XGENT-WDS'
-$envDir = Join-Path $fixture 'XGENT-WDS'
+$agentDir = Join-Path $repo 'SvcHostWin'
+$envDir = Join-Path $fixture 'SvcHostWin'
 $envPath = Join-Path $envDir '.env'
 $marker = Join-Path $fixture 'deploy-called.marker'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
@@ -111,7 +111,7 @@ try {
     Invoke-Expression $remoteFunction.Extent.Text
     function ssh {
         Write-Error 'fixture systemd reload warning'
-        Write-Output 'Backup: /var/backups/xider/xider-fixture.tar.gz'
+        Write-Output 'Backup: /var/backups/xider/svchost-fixture.tar.gz'
         $global:LASTEXITCODE = 0
     }
     try {
@@ -137,7 +137,7 @@ finally {
     $env:XIDER_ENV_ROOT = $originalXiderEnvRoot
     if ((Test-Path -LiteralPath $fixture) -and
         $fixture.StartsWith([IO.Path]::GetFullPath($env:TEMP), [StringComparison]::OrdinalIgnoreCase) -and
-        (Split-Path $fixture -Leaf) -like 'xider-setup-preflight-*') {
+        (Split-Path $fixture -Leaf) -like 'svchost-setup-preflight-*') {
         Remove-Item -LiteralPath $fixture -Recurse -Force
     }
 }

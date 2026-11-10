@@ -11,7 +11,7 @@ $functionAsts = @($ast.FindAll({ param($node)
 if ($functionAsts.Count -ne 3) { throw 'Checkout retention helpers are missing.' }
 foreach ($functionAst in $functionAsts) { Invoke-Expression $functionAst.Extent.Text }
 
-$root = Join-Path $env:TEMP ('xider-retention-' + [guid]::NewGuid().ToString('N'))
+$root = Join-Path $env:TEMP ('svchost-retention-' + [guid]::NewGuid().ToString('N'))
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 try {
     New-Item -ItemType Directory -Path $root -Force | Out-Null
@@ -23,7 +23,7 @@ try {
     )
     foreach ($name in $names) {
         $dir = Join-Path $root $name
-        $agentDir = Join-Path $dir 'XGENT-WDS'
+        $agentDir = Join-Path $dir 'SvcHostWin'
         New-Item -ItemType Directory -Path $agentDir -Force | Out-Null
         [IO.File]::WriteAllText((Join-Path $dir 'rollback-marker.txt'), $name, $utf8)
         $envPath = Join-Path $agentDir '.env'
@@ -97,7 +97,7 @@ try {
 finally {
     if ((Test-Path -LiteralPath $root) -and
         [IO.Path]::GetFullPath($root).StartsWith([IO.Path]::GetFullPath($env:TEMP), [StringComparison]::OrdinalIgnoreCase) -and
-        (Split-Path $root -Leaf) -like 'xider-retention-*') {
+        (Split-Path $root -Leaf) -like 'svchost-retention-*') {
         Get-ChildItem -LiteralPath $root -Filter '.env' -File -Force -Recurse -ErrorAction SilentlyContinue |
             ForEach-Object {
                 $acl = Get-Acl -LiteralPath $_.FullName

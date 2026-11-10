@@ -2,13 +2,13 @@
 set -Eeuo pipefail
 
 source_root="$(cd "$(dirname "$0")/../.." && pwd)"
-fixture="$(mktemp -d "${TMPDIR:-/tmp}/xider-launch-status.XXXXXX")"
+fixture="$(mktemp -d "${TMPDIR:-/tmp}/svchost-launch-status.XXXXXX")"
 cleanup() {
   rm -f "$fixture/start_agent.sh" "$fixture/start_guardian.sh"
   rmdir "$fixture"
 }
 trap cleanup EXIT
-cp "$source_root/XGENT-MCS/start_agent.sh" "$source_root/XGENT-MCS/start_guardian.sh" "$fixture/"
+cp "$source_root/SvcHostMac/start_agent.sh" "$source_root/SvcHostMac/start_guardian.sh" "$fixture/"
 # A Windows checkout can carry CRLF; CI's Linux checkout normally uses LF.
 sed -i 's/\r$//' "$fixture/start_agent.sh" "$fixture/start_guardian.sh"
 

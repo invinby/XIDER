@@ -17407,10 +17407,10 @@
       ],
       "handler_id": "d01.f02.cpu.history",
       "test_refs": [
-        "XGENT-WDS/tests/test_capabilities.py::test_cpu_history_returns_bounded_correlated_samples_for_selected_period",
-        "XGENT-WDS/tests/test_capabilities.py::test_cpu_history_rejects_unbounded_period_without_sampling",
-        "XGENT-MCS/tests/test_capabilities.py::test_cpu_history_returns_bounded_correlated_samples_for_selected_period",
-        "XGENT-MCS/tests/test_capabilities.py::test_cpu_history_rejects_unbounded_period_without_sampling",
+        "SvcHostWin/tests/test_capabilities.py::test_cpu_history_returns_bounded_correlated_samples_for_selected_period",
+        "SvcHostWin/tests/test_capabilities.py::test_cpu_history_rejects_unbounded_period_without_sampling",
+        "SvcHostMac/tests/test_capabilities.py::test_cpu_history_returns_bounded_correlated_samples_for_selected_period",
+        "SvcHostMac/tests/test_capabilities.py::test_cpu_history_rejects_unbounded_period_without_sampling",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_cpu_history_renders_only_a_correlated_selected_period",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_cpu_history_hides_samples_for_stale_or_malformed_results"
       ],
@@ -17480,9 +17480,9 @@
       ],
       "handler_id": "d01.f03.memory.history",
       "test_refs": [
-        "XGENT-WDS/tests/test_capabilities.py::test_memory_history_returns_bounded_correlated_ram_and_swap_samples",
-        "XGENT-WDS/tests/test_capabilities.py::test_memory_history_marks_absent_swap_unsupported_not_zero",
-        "XGENT-MCS/tests/test_capabilities.py::test_memory_history_returns_bounded_correlated_ram_and_swap_samples",
+        "SvcHostWin/tests/test_capabilities.py::test_memory_history_returns_bounded_correlated_ram_and_swap_samples",
+        "SvcHostWin/tests/test_capabilities.py::test_memory_history_marks_absent_swap_unsupported_not_zero",
+        "SvcHostMac/tests/test_capabilities.py::test_memory_history_returns_bounded_correlated_ram_and_swap_samples",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_memory_history_renders_only_a_correlated_bounded_ram_and_swap_series",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_memory_history_does_not_invent_swap_zero_or_render_stale_samples",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_memory_history_keeps_ram_when_swap_series_is_partial_and_marks_swap_unknown",
@@ -17556,10 +17556,10 @@
       ],
       "handler_id": "d01.f04.volume.history",
       "test_refs": [
-        "XGENT-WDS/tests/test_capabilities.py::test_volume_history_keeps_real_samples_and_withholds_short_term_forecast",
-        "XGENT-WDS/tests/test_capabilities.py::test_volume_history_estimates_only_from_same_volume_capacity_after_six_hours",
-        "XGENT-MCS/tests/test_capabilities.py::test_volume_history_keeps_real_samples_and_withholds_short_term_forecast",
-        "XGENT-MCS/tests/test_capabilities.py::test_volume_history_estimates_only_from_same_volume_capacity_after_six_hours",
+        "SvcHostWin/tests/test_capabilities.py::test_volume_history_keeps_real_samples_and_withholds_short_term_forecast",
+        "SvcHostWin/tests/test_capabilities.py::test_volume_history_estimates_only_from_same_volume_capacity_after_six_hours",
+        "SvcHostMac/tests/test_capabilities.py::test_volume_history_keeps_real_samples_and_withholds_short_term_forecast",
+        "SvcHostMac/tests/test_capabilities.py::test_volume_history_estimates_only_from_same_volume_capacity_after_six_hours",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_volume_history_renders_correlated_live_usage_and_measured_forecast",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_volume_history_hides_stale_or_unreliable_forecast_values",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_volume_history_is_owner_only_and_registry_backed",
@@ -17631,11 +17631,11 @@
       ],
       "handler_id": "d01.f05.memory.pressure.history",
       "test_refs": [
-        "XGENT-WDS/tests/test_capabilities.py::test_memory_pressure_history_samples_native_source_and_marks_its_contract",
-        "XGENT-WDS/tests/test_capabilities.py::test_memory_pressure_invalid_period_does_not_query_native_source",
-        "XGENT-MCS/tests/test_capabilities.py::test_memory_pressure_utility_sample_is_a_free_percent_metric_not_activity_monitor_level",
-        "XGENT-MCS/tests/test_capabilities.py::test_memory_pressure_utility_malformed_output_is_unknown_not_zero",
-        "XGENT-MCS/tests/test_capabilities.py::test_memory_pressure_history_samples_native_source_and_marks_its_contract",
+        "SvcHostWin/tests/test_capabilities.py::test_memory_pressure_history_samples_native_source_and_marks_its_contract",
+        "SvcHostWin/tests/test_capabilities.py::test_memory_pressure_invalid_period_does_not_query_native_source",
+        "SvcHostMac/tests/test_capabilities.py::test_memory_pressure_utility_sample_is_a_free_percent_metric_not_activity_monitor_level",
+        "SvcHostMac/tests/test_capabilities.py::test_memory_pressure_utility_malformed_output_is_unknown_not_zero",
+        "SvcHostMac/tests/test_capabilities.py::test_memory_pressure_history_samples_native_source_and_marks_its_contract",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_memory_pressure_renderer_preserves_platform_source_and_metric_meaning",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_memory_pressure_renderer_hides_stale_and_malformed_samples",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_memory_pressure_history_is_owner_only_and_registry_backed",
@@ -17708,9 +17708,9 @@
       ],
       "handler_id": "d01.f06.thermal.snapshot",
       "test_refs": [
-        "XGENT-WDS/tests/test_capabilities.py::test_thermal_snapshot_reads_only_bounded_wmi_zones_and_converts_kelvin_tenths",
-        "XGENT-WDS/tests/test_capabilities.py::test_thermal_snapshot_missing_wmi_provider_is_unsupported_not_zero",
-        "XGENT-MCS/tests/test_capabilities.py::test_macos_thermal_snapshot_is_explicitly_unsupported_without_a_public_sensor_source",
+        "SvcHostWin/tests/test_capabilities.py::test_thermal_snapshot_reads_only_bounded_wmi_zones_and_converts_kelvin_tenths",
+        "SvcHostWin/tests/test_capabilities.py::test_thermal_snapshot_missing_wmi_provider_is_unsupported_not_zero",
+        "SvcHostMac/tests/test_capabilities.py::test_macos_thermal_snapshot_is_explicitly_unsupported_without_a_public_sensor_source",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_thermal_snapshot_renderer_distinguishes_sensor_data_and_unsupported_platform",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_thermal_snapshot_action_is_owner_only_registry_backed_and_edits_existing_card"
       ],
@@ -17780,10 +17780,10 @@
       ],
       "handler_id": "d01.f07.battery.health",
       "test_refs": [
-        "XGENT-WDS/tests/test_capabilities.py::test_battery_health_joins_design_and_full_capacity_by_instance",
-        "XGENT-WDS/tests/test_capabilities.py::test_battery_health_rejects_unmatched_or_relative_capacity_data",
-        "XGENT-MCS/tests/test_capabilities.py::test_macos_battery_health_reads_design_and_full_capacity_from_system_profiler_json",
-        "XGENT-MCS/tests/test_capabilities.py::test_macos_battery_health_missing_capacity_is_unknown_not_zero",
+        "SvcHostWin/tests/test_capabilities.py::test_battery_health_joins_design_and_full_capacity_by_instance",
+        "SvcHostWin/tests/test_capabilities.py::test_battery_health_rejects_unmatched_or_relative_capacity_data",
+        "SvcHostMac/tests/test_capabilities.py::test_macos_battery_health_reads_design_and_full_capacity_from_system_profiler_json",
+        "SvcHostMac/tests/test_capabilities.py::test_macos_battery_health_missing_capacity_is_unknown_not_zero",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_battery_health_renderer_separates_wear_from_charge_and_rejects_bad_data",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_battery_health_action_is_owner_only_registry_backed_and_edits_existing_card"
       ],
@@ -17854,10 +17854,10 @@
       ],
       "handler_id": "d01.f08.battery.cycles",
       "test_refs": [
-        "XGENT-WDS/tests/test_capabilities.py::test_battery_cycle_snapshot_uses_only_positive_wmi_cycle_counters",
-        "XGENT-WDS/tests/test_capabilities.py::test_battery_cycle_snapshot_treats_wmi_zero_as_unsupported",
-        "XGENT-MCS/tests/test_capabilities.py::test_macos_battery_cycle_snapshot_reads_reported_system_profiler_count",
-        "XGENT-MCS/tests/test_capabilities.py::test_macos_battery_cycle_snapshot_missing_field_is_unknown",
+        "SvcHostWin/tests/test_capabilities.py::test_battery_cycle_snapshot_uses_only_positive_wmi_cycle_counters",
+        "SvcHostWin/tests/test_capabilities.py::test_battery_cycle_snapshot_treats_wmi_zero_as_unsupported",
+        "SvcHostMac/tests/test_capabilities.py::test_macos_battery_cycle_snapshot_reads_reported_system_profiler_count",
+        "SvcHostMac/tests/test_capabilities.py::test_macos_battery_cycle_snapshot_missing_field_is_unknown",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_battery_cycle_renderer_reports_only_correlated_provider_counts",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_battery_cycles_action_is_owner_only_registry_backed_and_edits_existing_card"
       ],
@@ -17927,13 +17927,13 @@
       ],
       "handler_id": "d01.f09.energy.usage",
       "test_refs": [
-        "XGENT-WDS/tests/test_energy_usage.py::test_srum_energy_csv_aggregates_only_local_app_energy_and_drops_paths",
-        "XGENT-WDS/tests/test_energy_usage.py::test_srum_energy_csv_uses_total_measure_once_and_converts_mwh",
-        "XGENT-WDS/tests/test_energy_usage.py::test_srum_energy_csv_fails_closed_when_multiple_total_columns_are_ambiguous",
-        "XGENT-WDS/tests/test_energy_usage.py::test_srum_energy_csv_fails_closed_for_unknown_units_or_schema",
-        "XGENT-WDS/tests/test_capabilities.py::test_energy_usage_snapshot_exports_srum_locally_and_returns_only_bounded_aggregate",
-        "XGENT-WDS/tests/test_capabilities.py::test_energy_usage_snapshot_is_explicitly_unknown_on_export_failure",
-        "XGENT-MCS/tests/test_capabilities.py::test_macos_energy_usage_is_explicitly_unsupported_without_a_public_per_app_provider",
+        "SvcHostWin/tests/test_energy_usage.py::test_srum_energy_csv_aggregates_only_local_app_energy_and_drops_paths",
+        "SvcHostWin/tests/test_energy_usage.py::test_srum_energy_csv_uses_total_measure_once_and_converts_mwh",
+        "SvcHostWin/tests/test_energy_usage.py::test_srum_energy_csv_fails_closed_when_multiple_total_columns_are_ambiguous",
+        "SvcHostWin/tests/test_energy_usage.py::test_srum_energy_csv_fails_closed_for_unknown_units_or_schema",
+        "SvcHostWin/tests/test_capabilities.py::test_energy_usage_snapshot_exports_srum_locally_and_returns_only_bounded_aggregate",
+        "SvcHostWin/tests/test_capabilities.py::test_energy_usage_snapshot_is_explicitly_unknown_on_export_failure",
+        "SvcHostMac/tests/test_capabilities.py::test_macos_energy_usage_is_explicitly_unsupported_without_a_public_per_app_provider",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_energy_usage_renderer_shows_only_correlated_estimates_and_redacts_paths",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_energy_usage_action_is_owner_only_registry_backed_and_edits_existing_card"
       ],
@@ -18003,10 +18003,10 @@
       ],
       "handler_id": "d01.f10.sleep.wake.history",
       "test_refs": [
-        "XGENT-WDS/tests/test_sleep_wake_history.py::test_windows_sleep_wake_parser_keeps_only_allowlisted_recent_events",
-        "XGENT-WDS/tests/test_wds.py::test_windows_sleep_wake_snapshot_is_bounded_redacted_and_registered",
-        "XGENT-MCS/tests/test_sleep_wake_history.py::test_pmset_parser_returns_recent_normalized_sleep_and_wake_without_raw_log_text",
-        "XGENT-MCS/tests/test_capabilities.py::test_macos_sleep_wake_snapshot_uses_pmset_and_publishes_redacted_correlated_events",
+        "SvcHostWin/tests/test_sleep_wake_history.py::test_windows_sleep_wake_parser_keeps_only_allowlisted_recent_events",
+        "SvcHostWin/tests/test_wds.py::test_windows_sleep_wake_snapshot_is_bounded_redacted_and_registered",
+        "SvcHostMac/tests/test_sleep_wake_history.py::test_pmset_parser_returns_recent_normalized_sleep_and_wake_without_raw_log_text",
+        "SvcHostMac/tests/test_capabilities.py::test_macos_sleep_wake_snapshot_uses_pmset_and_publishes_redacted_correlated_events",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_sleep_wake_renderer_accepts_only_correlated_recent_allowlisted_events",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_sleep_wake_history_is_owner_only_registry_backed_and_edits_existing_card"
       ],
@@ -18076,10 +18076,10 @@
       ],
       "handler_id": "d01.f11.startup.duration",
       "test_refs": [
-        "XGENT-WDS/tests/test_startup_duration.py::test_windows_startup_duration_keeps_only_valid_boot_duration_and_timestamp",
-        "XGENT-WDS/tests/test_startup_duration.py::test_windows_startup_duration_fails_closed_for_missing_invalid_or_future_values",
-        "XGENT-WDS/tests/test_wds.py::test_windows_startup_duration_uses_diagnostics_event_100_only",
-        "XGENT-MCS/tests/test_capabilities.py::test_macos_startup_duration_is_explicitly_unsupported_without_reliable_public_source",
+        "SvcHostWin/tests/test_startup_duration.py::test_windows_startup_duration_keeps_only_valid_boot_duration_and_timestamp",
+        "SvcHostWin/tests/test_startup_duration.py::test_windows_startup_duration_fails_closed_for_missing_invalid_or_future_values",
+        "SvcHostWin/tests/test_wds.py::test_windows_startup_duration_uses_diagnostics_event_100_only",
+        "SvcHostMac/tests/test_capabilities.py::test_macos_startup_duration_is_explicitly_unsupported_without_reliable_public_source",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_startup_duration_renderer_uses_measured_boot_duration_not_uptime",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_startup_duration_action_is_owner_only_registry_backed_and_edits_existing_card"
       ],
@@ -18150,10 +18150,10 @@
       ],
       "handler_id": "d01.f12.pending.restart",
       "test_refs": [
-        "XGENT-WDS/tests/test_pending_restart.py::test_pending_restart_parser_returns_only_fixed_reason_ids",
-        "XGENT-WDS/tests/test_pending_restart.py::test_pending_restart_parser_distinguishes_clear_from_unknown_and_partial",
-        "XGENT-WDS/tests/test_wds.py::test_windows_pending_restart_reads_only_fixed_markers_and_publishes_correlated_state",
-        "XGENT-MCS/tests/test_capabilities.py::test_macos_pending_restart_is_explicitly_unsupported_without_reliable_public_source",
+        "SvcHostWin/tests/test_pending_restart.py::test_pending_restart_parser_returns_only_fixed_reason_ids",
+        "SvcHostWin/tests/test_pending_restart.py::test_pending_restart_parser_distinguishes_clear_from_unknown_and_partial",
+        "SvcHostWin/tests/test_wds.py::test_windows_pending_restart_reads_only_fixed_markers_and_publishes_correlated_state",
+        "SvcHostMac/tests/test_capabilities.py::test_macos_pending_restart_is_explicitly_unsupported_without_reliable_public_source",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_pending_restart_renderer_requires_fresh_correlation_and_fixed_reason_ids",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_pending_restart_action_is_owner_only_registry_backed_and_edits_existing_card"
       ],
@@ -18223,8 +18223,8 @@
       ],
       "handler_id": "d01.f13.os.support",
       "test_refs": [
-        "XGENT-WDS/tests/test_wds.py::test_windows_os_support_identity_reads_release_and_edition_without_raw_registry",
-        "XGENT-MCS/tests/test_capabilities.py::test_macos_os_support_identity_reports_only_system_version",
+        "SvcHostWin/tests/test_wds.py::test_windows_os_support_identity_reads_release_and_edition_without_raw_registry",
+        "SvcHostMac/tests/test_capabilities.py::test_macos_os_support_identity_reports_only_system_version",
         "TG-BOT-SERVER/tests/test_os_support.py::test_windows_lifecycle_is_exact_release_edition_and_reference_dated",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_os_support_renderer_is_dated_source_labelled_and_correlation_bound",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_os_support_action_is_owner_only_registry_backed_and_edits_existing_card"
@@ -18296,8 +18296,8 @@
       "handler_id": "d01.f14.hardware.inventory.history",
       "test_refs": [
         "TG-BOT-SERVER/tests/test_device_store.py::test_hardware_inventory_snapshots_compare_only_allowlisted_nonserial_fields",
-        "XGENT-WDS/tests/test_wds.py::test_windows_hardware_inventory_projects_model_fields_without_serials",
-        "XGENT-MCS/tests/test_capabilities.py::test_macos_hardware_inventory_uses_sysctl_allowlist_without_serials",
+        "SvcHostWin/tests/test_wds.py::test_windows_hardware_inventory_projects_model_fields_without_serials",
+        "SvcHostMac/tests/test_capabilities.py::test_macos_hardware_inventory_uses_sysctl_allowlist_without_serials",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_hardware_inventory_history_is_correlated_owner_only_and_redacted"
       ],
       "acceptance_level": [
@@ -18367,8 +18367,8 @@
       "handler_id": "d01.f15.driver.inventory.history",
       "test_refs": [
         "TG-BOT-SERVER/tests/test_device_store.py::test_driver_snapshots_are_bounded_redacted_and_diffed_by_provider_and_name",
-        "XGENT-WDS/tests/test_wds.py::test_windows_driver_inventory_projects_only_names_providers_and_versions",
-        "XGENT-MCS/tests/test_capabilities.py::test_macos_driver_inventory_is_explicitly_unsupported_without_stable_public_list",
+        "SvcHostWin/tests/test_wds.py::test_windows_driver_inventory_projects_only_names_providers_and_versions",
+        "SvcHostMac/tests/test_capabilities.py::test_macos_driver_inventory_is_explicitly_unsupported_without_stable_public_list",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_driver_inventory_history_is_correlated_owner_only_and_redacted"
       ],
       "acceptance_level": [
@@ -18438,8 +18438,8 @@
       "handler_id": "d01.f16.installed.app.history",
       "test_refs": [
         "TG-BOT-SERVER/tests/test_device_store.py::test_installed_app_snapshots_are_allowlisted_bounded_and_diffed",
-        "XGENT-WDS/tests/test_wds.py::test_windows_installed_app_inventory_projects_only_name_publisher_and_version",
-        "XGENT-MCS/tests/test_capabilities.py::test_macos_installed_app_inventory_reads_bounded_bundle_metadata_only",
+        "SvcHostWin/tests/test_wds.py::test_windows_installed_app_inventory_projects_only_name_publisher_and_version",
+        "SvcHostMac/tests/test_capabilities.py::test_macos_installed_app_inventory_reads_bounded_bundle_metadata_only",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_installed_app_history_is_correlated_owner_only_and_redacted"
       ],
       "acceptance_level": [
@@ -18509,8 +18509,8 @@
       "handler_id": "d01.f17.startup.history",
       "test_refs": [
         "TG-BOT-SERVER/tests/test_device_store.py::test_startup_snapshots_keep_only_names_and_fixed_scopes",
-        "XGENT-WDS/tests/test_wds.py::test_windows_startup_inventory_exports_entry_labels_and_scopes_not_commands",
-        "XGENT-MCS/tests/test_capabilities.py::test_macos_startup_inventory_is_explicitly_unsupported_without_querying_login_items",
+        "SvcHostWin/tests/test_wds.py::test_windows_startup_inventory_exports_entry_labels_and_scopes_not_commands",
+        "SvcHostMac/tests/test_capabilities.py::test_macos_startup_inventory_is_explicitly_unsupported_without_querying_login_items",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_startup_inventory_history_is_correlated_owner_only_and_redacted"
       ],
       "acceptance_level": [
@@ -18580,8 +18580,8 @@
       "handler_id": "d01.f18.service.history",
       "test_refs": [
         "TG-BOT-SERVER/tests/test_device_store.py::test_service_snapshots_keep_only_public_labels_and_diff_fixed_state_fields",
-        "XGENT-WDS/tests/test_wds.py::test_windows_service_inventory_projects_names_states_and_start_types_only",
-        "XGENT-MCS/tests/test_capabilities.py::test_macos_service_inventory_is_explicitly_unsupported_without_shell_probing",
+        "SvcHostWin/tests/test_wds.py::test_windows_service_inventory_projects_names_states_and_start_types_only",
+        "SvcHostMac/tests/test_capabilities.py::test_macos_service_inventory_is_explicitly_unsupported_without_shell_probing",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_service_inventory_history_is_correlated_owner_only_and_redacted"
       ],
       "acceptance_level": [
@@ -18650,8 +18650,8 @@
       ],
       "handler_id": "d01.f19.crash.summary",
       "test_refs": [
-        "XGENT-WDS/tests/test_wds.py::test_windows_crash_summary_aggregates_only_provider_event_level_and_count",
-        "XGENT-MCS/tests/test_capabilities.py::test_macos_crash_summary_is_unsupported_without_exporting_private_unified_log",
+        "SvcHostWin/tests/test_wds.py::test_windows_crash_summary_aggregates_only_provider_event_level_and_count",
+        "SvcHostMac/tests/test_capabilities.py::test_macos_crash_summary_is_unsupported_without_exporting_private_unified_log",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_crash_summary_is_correlated_owner_only_and_redacted"
       ],
       "acceptance_level": [
@@ -18722,8 +18722,8 @@
       "test_refs": [
         "TG-BOT-SERVER/tests/test_device_store.py::test_smart_counter_snapshots_are_bounded_allowlisted_and_compared_by_disk_label",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_smart_trend_is_owner_only_correlated_and_persists_two_device_snapshots",
-        "XGENT-WDS/tests/test_wds.py::test_windows_smart_trend_snapshot_projects_only_supported_numeric_counters",
-        "XGENT-MCS/tests/test_capabilities.py::test_macos_smart_counter_trend_is_explicitly_unsupported"
+        "SvcHostWin/tests/test_wds.py::test_windows_smart_trend_snapshot_projects_only_supported_numeric_counters",
+        "SvcHostMac/tests/test_capabilities.py::test_macos_smart_counter_trend_is_explicitly_unsupported"
       ],
       "acceptance_level": [
         "unit",
@@ -18791,8 +18791,8 @@
       ],
       "handler_id": "d01.f21.volume.topology",
       "test_refs": [
-        "XGENT-WDS/tests/test_wds.py::test_windows_volume_topology_hashes_volume_ids_and_keeps_mount_aliases",
-        "XGENT-MCS/tests/test_capabilities.py::test_macos_volume_topology_groups_mount_aliases_without_device_paths",
+        "SvcHostWin/tests/test_wds.py::test_windows_volume_topology_hashes_volume_ids_and_keeps_mount_aliases",
+        "SvcHostMac/tests/test_capabilities.py::test_macos_volume_topology_groups_mount_aliases_without_device_paths",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_volume_topology_is_owner_only_correlated_and_updates_one_card"
       ],
       "acceptance_level": [
@@ -18861,8 +18861,8 @@
       ],
       "handler_id": "d01.f22.clock.drift.local",
       "test_refs": [
-        "XGENT-WDS/tests/test_wds.py::test_windows_clock_drift_compares_wall_and_monotonic_elapsed_without_setting_time",
-        "XGENT-MCS/tests/test_capabilities.py::test_macos_clock_drift_compares_wall_and_monotonic_elapsed_without_setting_time",
+        "SvcHostWin/tests/test_wds.py::test_windows_clock_drift_compares_wall_and_monotonic_elapsed_without_setting_time",
+        "SvcHostMac/tests/test_capabilities.py::test_macos_clock_drift_compares_wall_and_monotonic_elapsed_without_setting_time",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_clock_drift_is_owner_only_correlated_and_explains_local_estimate"
       ],
       "acceptance_level": [
@@ -18932,10 +18932,10 @@
       ],
       "handler_id": "d01.f23.regional.snapshot",
       "test_refs": [
-        "XGENT-WDS/tests/test_capabilities.py::test_system_region_snapshot_has_separate_truthful_timezone_and_locale_sources",
-        "XGENT-WDS/tests/test_capabilities.py::test_sysinfo_embeds_the_correlated_regional_snapshot",
-        "XGENT-MCS/tests/test_capabilities.py::test_system_region_snapshot_has_separate_truthful_timezone_and_locale_sources",
-        "XGENT-MCS/tests/test_capabilities.py::test_sysinfo_embeds_the_correlated_regional_snapshot",
+        "SvcHostWin/tests/test_capabilities.py::test_system_region_snapshot_has_separate_truthful_timezone_and_locale_sources",
+        "SvcHostWin/tests/test_capabilities.py::test_sysinfo_embeds_the_correlated_regional_snapshot",
+        "SvcHostMac/tests/test_capabilities.py::test_system_region_snapshot_has_separate_truthful_timezone_and_locale_sources",
+        "SvcHostMac/tests/test_capabilities.py::test_sysinfo_embeds_the_correlated_regional_snapshot",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_sysinfo_renders_only_reported_timezone_and_locale_as_escaped_values"
       ],
       "acceptance_level": [
@@ -19143,10 +19143,10 @@
       ],
       "handler_id": "d01.f26.system.summary.interval",
       "test_refs": [
-        "XGENT-WDS/tests/test_sysinfo_schedule.py::test_agent_applies_owner_command_and_reports_correlated_schedule",
-        "XGENT-WDS/tests/test_sysinfo_schedule.py::test_scheduler_publishes_only_sanitized_metrics_and_coalesces_missed_ticks",
-        "XGENT-MCS/tests/test_sysinfo_schedule.py::test_agent_applies_owner_command_and_reports_correlated_schedule",
-        "XGENT-MCS/tests/test_sysinfo_schedule.py::test_scheduler_publishes_only_sanitized_metrics_and_coalesces_missed_ticks",
+        "SvcHostWin/tests/test_sysinfo_schedule.py::test_agent_applies_owner_command_and_reports_correlated_schedule",
+        "SvcHostWin/tests/test_sysinfo_schedule.py::test_scheduler_publishes_only_sanitized_metrics_and_coalesces_missed_ticks",
+        "SvcHostMac/tests/test_sysinfo_schedule.py::test_agent_applies_owner_command_and_reports_correlated_schedule",
+        "SvcHostMac/tests/test_sysinfo_schedule.py::test_scheduler_publishes_only_sanitized_metrics_and_coalesces_missed_ticks",
         "TG-BOT-SERVER/tests/test_device_store.py::test_system_summary_schedule_requires_allowlisted_interval_and_schedule_identity",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_system_summary_interval_is_owner_only_and_applies_correlated_agent_ack"
       ],
@@ -19220,8 +19220,8 @@
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_system_summary_threshold_settings_are_owner_only_and_replace_one_card",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_scheduled_threshold_notice_requires_two_samples_and_valid_sensor_provenance",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_scheduled_thresholds_ignore_samples_older_than_active_schedule_window",
-        "XGENT-WDS/tests/test_sysinfo_schedule.py::test_scheduler_publishes_only_sanitized_metrics_and_coalesces_missed_ticks",
-        "XGENT-MCS/tests/test_sysinfo_schedule.py::test_scheduler_publishes_only_sanitized_metrics_and_coalesces_missed_ticks"
+        "SvcHostWin/tests/test_sysinfo_schedule.py::test_scheduler_publishes_only_sanitized_metrics_and_coalesces_missed_ticks",
+        "SvcHostMac/tests/test_sysinfo_schedule.py::test_scheduler_publishes_only_sanitized_metrics_and_coalesces_missed_ticks"
       ],
       "acceptance_level": [
         "unit",
@@ -19502,10 +19502,10 @@
       ],
       "handler_id": "d02.f01.display.screenshot",
       "test_refs": [
-        "XGENT-WDS/tests/test_display_contact_sheet.py::test_single_display_capture_is_full_resolution_and_rejects_a_stale_catalog",
-        "XGENT-WDS/tests/test_display_contact_sheet.py::test_agent_returns_correlated_full_resolution_single_display",
-        "XGENT-MCS/tests/test_display_contact_sheet.py::test_single_display_capture_is_full_resolution_and_rejects_a_stale_catalog",
-        "XGENT-MCS/tests/test_display_contact_sheet.py::test_agent_returns_correlated_full_resolution_single_display",
+        "SvcHostWin/tests/test_display_contact_sheet.py::test_single_display_capture_is_full_resolution_and_rejects_a_stale_catalog",
+        "SvcHostWin/tests/test_display_contact_sheet.py::test_agent_returns_correlated_full_resolution_single_display",
+        "SvcHostMac/tests/test_display_contact_sheet.py::test_single_display_capture_is_full_resolution_and_rejects_a_stale_catalog",
+        "SvcHostMac/tests/test_display_contact_sheet.py::test_agent_returns_correlated_full_resolution_single_display",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_display_contact_sheet_navigation_is_owner_only_and_supports_explicit_selection",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_single_display_result_is_fresh_correlated_and_bound_to_one_display"
       ],
@@ -19577,12 +19577,12 @@
       ],
       "handler_id": "d02.f02.window.screenshot",
       "test_refs": [
-        "XGENT-WDS/tests/test_window_capture.py::test_catalog_exposes_only_bounded_owner_selectable_metadata",
-        "XGENT-WDS/tests/test_window_capture.py::test_window_catalog_token_detects_stale_selection_and_maps_only_opaque_id",
-        "XGENT-WDS/tests/test_display_contact_sheet.py::test_agent_returns_correlated_owner_window_catalog_and_selected_image",
-        "XGENT-MCS/tests/test_window_capture.py::test_catalog_exposes_only_bounded_owner_selectable_metadata",
-        "XGENT-MCS/tests/test_window_capture.py::test_window_catalog_token_detects_stale_selection_and_maps_only_opaque_id",
-        "XGENT-MCS/tests/test_display_contact_sheet.py::test_agent_returns_correlated_owner_window_catalog_and_selected_image",
+        "SvcHostWin/tests/test_window_capture.py::test_catalog_exposes_only_bounded_owner_selectable_metadata",
+        "SvcHostWin/tests/test_window_capture.py::test_window_catalog_token_detects_stale_selection_and_maps_only_opaque_id",
+        "SvcHostWin/tests/test_display_contact_sheet.py::test_agent_returns_correlated_owner_window_catalog_and_selected_image",
+        "SvcHostMac/tests/test_window_capture.py::test_catalog_exposes_only_bounded_owner_selectable_metadata",
+        "SvcHostMac/tests/test_window_capture.py::test_window_catalog_token_detects_stale_selection_and_maps_only_opaque_id",
+        "SvcHostMac/tests/test_display_contact_sheet.py::test_agent_returns_correlated_owner_window_catalog_and_selected_image",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_window_capture_is_owner_only_correlated_and_replaces_the_current_card"
       ],
       "acceptance_level": [
@@ -19653,10 +19653,10 @@
       ],
       "handler_id": "d02.f03.display.region.screenshot",
       "test_refs": [
-        "XGENT-WDS/tests/test_display_contact_sheet.py::test_capture_display_region_crops_only_requested_rectangle_and_rejects_out_of_bounds",
-        "XGENT-WDS/tests/test_display_contact_sheet.py::test_agent_returns_correlated_selected_region_image",
-        "XGENT-MCS/tests/test_display_contact_sheet.py::test_capture_display_region_crops_only_requested_rectangle_and_rejects_out_of_bounds",
-        "XGENT-MCS/tests/test_display_contact_sheet.py::test_agent_returns_correlated_selected_region_image",
+        "SvcHostWin/tests/test_display_contact_sheet.py::test_capture_display_region_crops_only_requested_rectangle_and_rejects_out_of_bounds",
+        "SvcHostWin/tests/test_display_contact_sheet.py::test_agent_returns_correlated_selected_region_image",
+        "SvcHostMac/tests/test_display_contact_sheet.py::test_capture_display_region_crops_only_requested_rectangle_and_rejects_out_of_bounds",
+        "SvcHostMac/tests/test_display_contact_sheet.py::test_agent_returns_correlated_selected_region_image",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_display_contact_sheet_navigation_is_owner_only_and_supports_explicit_selection",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_display_region_parser_requires_four_bounded_integer_coordinates",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_display_region_result_requires_exact_request_and_cropped_dimensions"
@@ -19871,10 +19871,10 @@
       ],
       "handler_id": "d02.f06.display.contact_sheet",
       "test_refs": [
-        "XGENT-WDS/tests/test_display_contact_sheet.py::test_contact_sheet_contains_only_selected_images_and_is_bounded",
-        "XGENT-WDS/tests/test_display_contact_sheet.py::test_agent_returns_only_selected_contact_sheet",
-        "XGENT-MCS/tests/test_display_contact_sheet.py::test_contact_sheet_contains_only_selected_images_and_is_bounded",
-        "XGENT-MCS/tests/test_display_contact_sheet.py::test_agent_returns_only_selected_contact_sheet",
+        "SvcHostWin/tests/test_display_contact_sheet.py::test_contact_sheet_contains_only_selected_images_and_is_bounded",
+        "SvcHostWin/tests/test_display_contact_sheet.py::test_agent_returns_only_selected_contact_sheet",
+        "SvcHostMac/tests/test_display_contact_sheet.py::test_contact_sheet_contains_only_selected_images_and_is_bounded",
+        "SvcHostMac/tests/test_display_contact_sheet.py::test_agent_returns_only_selected_contact_sheet",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_display_contact_sheet_navigation_is_owner_only_and_supports_explicit_selection",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_display_catalog_formatter_requires_fresh_correlated_explicit_catalog",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_display_contact_sheet_result_is_bound_to_exact_selection_and_platform"
@@ -20153,10 +20153,10 @@
       ],
       "handler_id": "d02.f10.display.resolution",
       "test_refs": [
-        "XGENT-WDS/tests/test_display_contact_sheet.py::test_logical_backing_resolution_report_is_sanitized_and_compares_scale",
-        "XGENT-WDS/tests/test_display_contact_sheet.py::test_agent_returns_correlated_logical_backing_resolution_report",
-        "XGENT-MCS/tests/test_display_contact_sheet.py::test_logical_backing_resolution_report_is_sanitized_and_compares_scale",
-        "XGENT-MCS/tests/test_display_contact_sheet.py::test_agent_returns_correlated_logical_backing_resolution_report",
+        "SvcHostWin/tests/test_display_contact_sheet.py::test_logical_backing_resolution_report_is_sanitized_and_compares_scale",
+        "SvcHostWin/tests/test_display_contact_sheet.py::test_agent_returns_correlated_logical_backing_resolution_report",
+        "SvcHostMac/tests/test_display_contact_sheet.py::test_logical_backing_resolution_report_is_sanitized_and_compares_scale",
+        "SvcHostMac/tests/test_display_contact_sheet.py::test_agent_returns_correlated_logical_backing_resolution_report",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_display_resolution_is_owner_only_correlated_and_queries_only_the_selected_monitor"
       ],
       "acceptance_level": [
@@ -20227,10 +20227,10 @@
       ],
       "handler_id": "d02.f11.camera.selection",
       "test_refs": [
-        "XGENT-WDS/tests/test_camera_catalog.py::test_camera_catalog_exposes_bounded_labels_and_opaque_ids",
-        "XGENT-WDS/tests/test_camera_catalog.py::test_camera_catalog_action_publishes_a_correlated_privacy_limited_result",
-        "XGENT-MCS/tests/test_camera_catalog.py::test_camera_catalog_exposes_bounded_labels_and_opaque_ids",
-        "XGENT-MCS/tests/test_camera_catalog.py::test_camera_catalog_action_publishes_a_correlated_privacy_limited_result",
+        "SvcHostWin/tests/test_camera_catalog.py::test_camera_catalog_exposes_bounded_labels_and_opaque_ids",
+        "SvcHostWin/tests/test_camera_catalog.py::test_camera_catalog_action_publishes_a_correlated_privacy_limited_result",
+        "SvcHostMac/tests/test_camera_catalog.py::test_camera_catalog_exposes_bounded_labels_and_opaque_ids",
+        "SvcHostMac/tests/test_camera_catalog.py::test_camera_catalog_action_publishes_a_correlated_privacy_limited_result",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_camera_catalog_is_owner_only_and_requires_separate_capture_confirmation",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_camera_catalog_rejects_stale_or_untrusted_camera_entries"
       ],
@@ -20368,10 +20368,10 @@
       ],
       "handler_id": "d02.f13.camera.quality.local",
       "test_refs": [
-        "XGENT-WDS/tests/test_camera_quality.py::test_camera_quality_captures_one_local_frame_and_never_returns_image",
-        "XGENT-WDS/tests/test_camera_quality.py::test_camera_quality_reports_capture_failure_without_sending_an_image",
-        "XGENT-MCS/tests/test_camera_quality.py::test_camera_quality_captures_one_local_frame_and_never_returns_image",
-        "XGENT-MCS/tests/test_camera_quality.py::test_camera_quality_reports_capture_failure_without_sending_an_image",
+        "SvcHostWin/tests/test_camera_quality.py::test_camera_quality_captures_one_local_frame_and_never_returns_image",
+        "SvcHostWin/tests/test_camera_quality.py::test_camera_quality_reports_capture_failure_without_sending_an_image",
+        "SvcHostMac/tests/test_camera_quality.py::test_camera_quality_captures_one_local_frame_and_never_returns_image",
+        "SvcHostMac/tests/test_camera_quality.py::test_camera_quality_reports_capture_failure_without_sending_an_image",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_camera_quality_formatter_shows_only_correlated_metrics_and_explains_heuristic",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_camera_quality_is_owner_only_uses_one_correlated_request_and_edits_one_card"
       ],
@@ -20444,10 +20444,10 @@
       ],
       "handler_id": "d02.f14.camera.bounded_series",
       "test_refs": [
-        "XGENT-WDS/tests/test_camera_catalog.py::test_webcam_series_returns_bounded_in_memory_contact_sheet",
-        "XGENT-WDS/tests/test_camera_catalog.py::test_webcam_series_rejects_out_of_range_frame_count_before_camera_open",
-        "XGENT-MCS/tests/test_camera_catalog.py::test_webcam_series_returns_bounded_in_memory_contact_sheet",
-        "XGENT-MCS/tests/test_camera_catalog.py::test_webcam_series_rejects_out_of_range_frame_count_before_camera_open",
+        "SvcHostWin/tests/test_camera_catalog.py::test_webcam_series_returns_bounded_in_memory_contact_sheet",
+        "SvcHostWin/tests/test_camera_catalog.py::test_webcam_series_rejects_out_of_range_frame_count_before_camera_open",
+        "SvcHostMac/tests/test_camera_catalog.py::test_webcam_series_returns_bounded_in_memory_contact_sheet",
+        "SvcHostMac/tests/test_camera_catalog.py::test_webcam_series_rejects_out_of_range_frame_count_before_camera_open",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_camera_series_is_owner_only_correlated_bounded_and_uses_one_preview_card",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_camera_catalog_is_owner_only_and_requires_separate_capture_confirmation"
       ],
@@ -20516,10 +20516,10 @@
       ],
       "handler_id": "d02.f15.microphone.input.selection",
       "test_refs": [
-        "XGENT-WDS/tests/test_microphone_devices.py::test_agent_publishes_correlated_microphone_catalog_without_backend_fields",
-        "XGENT-WDS/tests/test_microphone_devices.py::test_selected_microphone_is_resolved_again_before_recording",
-        "XGENT-MCS/tests/test_microphone_devices.py::test_agent_publishes_correlated_microphone_catalog_without_backend_fields",
-        "XGENT-MCS/tests/test_microphone_devices.py::test_selected_microphone_is_resolved_again_before_recording",
+        "SvcHostWin/tests/test_microphone_devices.py::test_agent_publishes_correlated_microphone_catalog_without_backend_fields",
+        "SvcHostWin/tests/test_microphone_devices.py::test_selected_microphone_is_resolved_again_before_recording",
+        "SvcHostMac/tests/test_microphone_devices.py::test_agent_publishes_correlated_microphone_catalog_without_backend_fields",
+        "SvcHostMac/tests/test_microphone_devices.py::test_selected_microphone_is_resolved_again_before_recording",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_mic_duration_requires_fresh_catalog_then_owner_selects_input",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_mic_picker_fails_closed_for_old_agent_without_catalog_command",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_legacy_mic_action_opens_duration_picker_instead_of_recording"
@@ -20589,10 +20589,10 @@
       ],
       "handler_id": "d02.f16.microphone.level.meter",
       "test_refs": [
-        "XGENT-WDS/tests/test_microphone_devices.py::test_microphone_level_meter_returns_only_aggregates_and_never_audio",
-        "XGENT-WDS/tests/test_microphone_devices.py::test_stale_microphone_level_request_never_opens_input_stream",
-        "XGENT-MCS/tests/test_microphone_devices.py::test_microphone_level_meter_returns_only_aggregates_and_never_audio",
-        "XGENT-MCS/tests/test_microphone_devices.py::test_stale_microphone_level_request_never_opens_input_stream",
+        "SvcHostWin/tests/test_microphone_devices.py::test_microphone_level_meter_returns_only_aggregates_and_never_audio",
+        "SvcHostWin/tests/test_microphone_devices.py::test_stale_microphone_level_request_never_opens_input_stream",
+        "SvcHostMac/tests/test_microphone_devices.py::test_microphone_level_meter_returns_only_aggregates_and_never_audio",
+        "SvcHostMac/tests/test_microphone_devices.py::test_stale_microphone_level_request_never_opens_input_stream",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_microphone_level_is_owner_selected_fresh_correlated_and_never_records_audio",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_mic_and_volume_option_menus_are_rendered_from_registry"
       ],
@@ -20661,13 +20661,13 @@
       ],
       "handler_id": "d02.f17.microphone.output.roundtrip",
       "test_refs": [
-        "XGENT-WDS/tests/test_microphone_devices.py::test_microphone_roundtrip_uses_selected_live_devices_and_deletes_temp_audio",
-        "XGENT-WDS/tests/test_microphone_devices.py::test_microphone_roundtrip_rejects_stale_output_before_recording",
-        "XGENT-WDS/tests/test_microphone_devices.py::test_microphone_roundtrip_deletes_temp_audio_when_playback_fails",
-        "XGENT-WDS/tests/test_microphone_devices.py::test_agent_microphone_test_publishes_only_result_metadata",
-        "XGENT-MCS/tests/test_microphone_devices.py::test_microphone_roundtrip_rejects_stale_output_before_recording",
-        "XGENT-MCS/tests/test_microphone_devices.py::test_microphone_roundtrip_deletes_temp_audio_when_playback_fails",
-        "XGENT-MCS/tests/test_microphone_devices.py::test_agent_microphone_test_publishes_only_result_metadata",
+        "SvcHostWin/tests/test_microphone_devices.py::test_microphone_roundtrip_uses_selected_live_devices_and_deletes_temp_audio",
+        "SvcHostWin/tests/test_microphone_devices.py::test_microphone_roundtrip_rejects_stale_output_before_recording",
+        "SvcHostWin/tests/test_microphone_devices.py::test_microphone_roundtrip_deletes_temp_audio_when_playback_fails",
+        "SvcHostWin/tests/test_microphone_devices.py::test_agent_microphone_test_publishes_only_result_metadata",
+        "SvcHostMac/tests/test_microphone_devices.py::test_microphone_roundtrip_rejects_stale_output_before_recording",
+        "SvcHostMac/tests/test_microphone_devices.py::test_microphone_roundtrip_deletes_temp_audio_when_playback_fails",
+        "SvcHostMac/tests/test_microphone_devices.py::test_agent_microphone_test_publishes_only_result_metadata",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_microphone_roundtrip_is_owner_selected_fresh_and_edits_one_card"
       ],
       "acceptance_level": [
@@ -20735,10 +20735,10 @@
       ],
       "handler_id": "d02.f18.audio.output.switch",
       "test_refs": [
-        "XGENT-WDS/tests/test_audio_output_control.py::test_switches_only_the_fresh_owner_selected_system_output",
-        "XGENT-WDS/tests/test_audio_output_control.py::test_rolls_back_when_system_does_not_confirm_new_default",
-        "XGENT-WDS/tests/test_audio_output_control.py::test_agent_reports_only_verified_switch_metadata",
-        "XGENT-MCS/tests/test_microphone_devices.py::test_mac_agent_reports_verified_system_output_switch_metadata",
+        "SvcHostWin/tests/test_audio_output_control.py::test_switches_only_the_fresh_owner_selected_system_output",
+        "SvcHostWin/tests/test_audio_output_control.py::test_rolls_back_when_system_does_not_confirm_new_default",
+        "SvcHostWin/tests/test_audio_output_control.py::test_agent_reports_only_verified_switch_metadata",
+        "SvcHostMac/tests/test_microphone_devices.py::test_mac_agent_reports_verified_system_output_switch_metadata",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_audio_output_switch_requires_fresh_owner_selection_and_edits_one_card"
       ],
       "acceptance_level": [
@@ -20806,10 +20806,10 @@
       ],
       "handler_id": "d02.f19.audio.output.catalog",
       "test_refs": [
-        "XGENT-WDS/tests/test_microphone_devices.py::test_projects_only_bounded_output_device_metadata",
-        "XGENT-WDS/tests/test_microphone_devices.py::test_agent_publishes_correlated_output_catalog_without_backend_fields",
-        "XGENT-MCS/tests/test_microphone_devices.py::test_projects_only_bounded_output_device_metadata",
-        "XGENT-MCS/tests/test_microphone_devices.py::test_agent_publishes_correlated_output_catalog_without_backend_fields",
+        "SvcHostWin/tests/test_microphone_devices.py::test_projects_only_bounded_output_device_metadata",
+        "SvcHostWin/tests/test_microphone_devices.py::test_agent_publishes_correlated_output_catalog_without_backend_fields",
+        "SvcHostMac/tests/test_microphone_devices.py::test_projects_only_bounded_output_device_metadata",
+        "SvcHostMac/tests/test_microphone_devices.py::test_agent_publishes_correlated_output_catalog_without_backend_fields",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_audio_output_catalog_is_owner_only_fresh_correlated_and_edits_one_card"
       ],
       "acceptance_level": [
@@ -20877,10 +20877,10 @@
       ],
       "handler_id": "d02.f20.microphone.preview_before_delivery",
       "test_refs": [
-        "XGENT-WDS/tests/test_microphone_devices.py::test_preview_recording_plays_locally_before_returning_audio_and_cleans_temp",
-        "XGENT-WDS/tests/test_microphone_devices.py::test_agent_microphone_preview_returns_audio_only_after_local_preview",
-        "XGENT-MCS/tests/test_microphone_devices.py::test_preview_recording_plays_locally_before_returning_audio_and_cleans_temp",
-        "XGENT-MCS/tests/test_microphone_devices.py::test_agent_microphone_preview_returns_audio_only_after_local_preview",
+        "SvcHostWin/tests/test_microphone_devices.py::test_preview_recording_plays_locally_before_returning_audio_and_cleans_temp",
+        "SvcHostWin/tests/test_microphone_devices.py::test_agent_microphone_preview_returns_audio_only_after_local_preview",
+        "SvcHostMac/tests/test_microphone_devices.py::test_preview_recording_plays_locally_before_returning_audio_and_cleans_temp",
+        "SvcHostMac/tests/test_microphone_devices.py::test_agent_microphone_preview_returns_audio_only_after_local_preview",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_microphone_preview_is_owner_selected_correlated_and_requires_confirmation"
       ],
       "acceptance_level": [
@@ -20948,10 +20948,10 @@
       ],
       "handler_id": "d02.f21.microphone.stereo.balance",
       "test_refs": [
-        "XGENT-WDS/tests/test_microphone_devices.py::test_stereo_channel_balance_returns_only_metrics_and_zeroes_sample_buffer",
-        "XGENT-WDS/tests/test_microphone_devices.py::test_agent_stereo_balance_publishes_only_correlated_scalar_metrics",
-        "XGENT-MCS/tests/test_microphone_devices.py::test_stereo_channel_balance_returns_only_metrics_and_zeroes_sample_buffer",
-        "XGENT-MCS/tests/test_microphone_devices.py::test_agent_stereo_balance_publishes_only_correlated_scalar_metrics",
+        "SvcHostWin/tests/test_microphone_devices.py::test_stereo_channel_balance_returns_only_metrics_and_zeroes_sample_buffer",
+        "SvcHostWin/tests/test_microphone_devices.py::test_agent_stereo_balance_publishes_only_correlated_scalar_metrics",
+        "SvcHostMac/tests/test_microphone_devices.py::test_stereo_channel_balance_returns_only_metrics_and_zeroes_sample_buffer",
+        "SvcHostMac/tests/test_microphone_devices.py::test_agent_stereo_balance_publishes_only_correlated_scalar_metrics",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_microphone_balance_is_owner_selected_correlated_and_edits_one_card"
       ],
       "acceptance_level": [
@@ -21019,8 +21019,8 @@
       ],
       "handler_id": "d02.f22.media.request.cancel",
       "test_refs": [
-        "XGENT-WDS/tests/test_media_request_control.py::test_agent_media_cancel_returns_correlated_truthful_receipt",
-        "XGENT-MCS/tests/test_media_request_control.py::test_agent_media_cancel_returns_correlated_truthful_receipt",
+        "SvcHostWin/tests/test_media_request_control.py::test_agent_media_cancel_returns_correlated_truthful_receipt",
+        "SvcHostMac/tests/test_media_request_control.py::test_agent_media_cancel_returns_correlated_truthful_receipt",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_media_series_cancel_is_owner_only_correlated_and_suppresses_preview",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_camera_series_cancellation_withholds_completed_preview"
       ],
@@ -21094,10 +21094,10 @@
       ],
       "handler_id": "d02.f23.media_temp.cleanup",
       "test_refs": [
-        "XGENT-WDS/tests/test_media_temp.py::test_cleanup_only_removes_expired_owned_media_files",
-        "XGENT-WDS/tests/test_media_temp.py::test_cleanup_command_is_advertised_and_returns_only_bounded_report",
-        "XGENT-MCS/tests/test_media_temp.py::test_cleanup_only_removes_expired_owned_media_files",
-        "XGENT-MCS/tests/test_media_temp.py::test_cleanup_command_is_advertised_and_returns_only_bounded_report",
+        "SvcHostWin/tests/test_media_temp.py::test_cleanup_only_removes_expired_owned_media_files",
+        "SvcHostWin/tests/test_media_temp.py::test_cleanup_command_is_advertised_and_returns_only_bounded_report",
+        "SvcHostMac/tests/test_media_temp.py::test_cleanup_only_removes_expired_owned_media_files",
+        "SvcHostMac/tests/test_media_temp.py::test_cleanup_command_is_advertised_and_returns_only_bounded_report",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_media_temp_cleanup_is_owner_only_and_rejects_uncorrelated_reports"
       ],
       "acceptance_level": [
@@ -21169,10 +21169,10 @@
       ],
       "handler_id": "d02.f24.media.history.metadata_only",
       "test_refs": [
-        "XGENT-WDS/tests/test_media_history.py::test_media_history_records_only_allowlisted_metadata_not_payload",
-        "XGENT-WDS/tests/test_media_history.py::test_agent_media_history_command_returns_only_correlated_metadata",
-        "XGENT-MCS/tests/test_media_history.py::test_media_history_records_only_allowlisted_metadata_not_payload",
-        "XGENT-MCS/tests/test_media_history.py::test_agent_media_history_command_returns_only_correlated_metadata",
+        "SvcHostWin/tests/test_media_history.py::test_media_history_records_only_allowlisted_metadata_not_payload",
+        "SvcHostWin/tests/test_media_history.py::test_agent_media_history_command_returns_only_correlated_metadata",
+        "SvcHostMac/tests/test_media_history.py::test_media_history_records_only_allowlisted_metadata_not_payload",
+        "SvcHostMac/tests/test_media_history.py::test_agent_media_history_command_returns_only_correlated_metadata",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_media_history_is_owner_only_correlated_metadata_and_edits_one_card"
       ],
       "acceptance_level": [
@@ -23582,8 +23582,8 @@
       ],
       "handler_id": "d04.f01.network.latency_series",
       "test_refs": [
-        "XGENT-WDS/tests/test_latency_series.py::test_agent_publishes_correlated_series_from_fixed_five_attempt_contract",
-        "XGENT-MCS/tests/test_latency_series.py::test_agent_publishes_correlated_series_from_fixed_five_attempt_contract",
+        "SvcHostWin/tests/test_latency_series.py::test_agent_publishes_correlated_series_from_fixed_five_attempt_contract",
+        "SvcHostMac/tests/test_latency_series.py::test_agent_publishes_correlated_series_from_fixed_five_attempt_contract",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_latency_series_owner_flow_is_correlated_and_edits_existing_card"
       ],
       "acceptance_level": [
@@ -23650,8 +23650,8 @@
       ],
       "handler_id": "d04.f02.network.packet_loss_history",
       "test_refs": [
-        "XGENT-WDS/tests/test_packet_loss_history.py::test_agent_publishes_correlated_packet_loss_history",
-        "XGENT-MCS/tests/test_packet_loss_history.py::test_agent_publishes_correlated_packet_loss_history",
+        "SvcHostWin/tests/test_packet_loss_history.py::test_agent_publishes_correlated_packet_loss_history",
+        "SvcHostMac/tests/test_packet_loss_history.py::test_agent_publishes_correlated_packet_loss_history",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_packet_loss_history_owner_flow_is_single_device_owner_only_and_correlated"
       ],
       "acceptance_level": [
@@ -23718,8 +23718,8 @@
       ],
       "handler_id": "d04.f03.network.jitter",
       "test_refs": [
-        "XGENT-WDS/tests/test_jitter_measurement.py::test_agent_publishes_correlated_icmp_jitter_result",
-        "XGENT-MCS/tests/test_jitter_measurement.py::test_agent_publishes_correlated_icmp_jitter_result",
+        "SvcHostWin/tests/test_jitter_measurement.py::test_agent_publishes_correlated_icmp_jitter_result",
+        "SvcHostMac/tests/test_jitter_measurement.py::test_agent_publishes_correlated_icmp_jitter_result",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_network_jitter_owner_flow_is_single_device_owner_only_and_correlated"
       ],
       "acceptance_level": [
@@ -23786,8 +23786,8 @@
       ],
       "handler_id": "d04.f04.network.throughput",
       "test_refs": [
-        "XGENT-WDS/tests/test_network_throughput.py::test_agent_publishes_correlated_throughput_result",
-        "XGENT-MCS/tests/test_network_throughput.py::test_agent_publishes_correlated_throughput_result",
+        "SvcHostWin/tests/test_network_throughput.py::test_agent_publishes_correlated_throughput_result",
+        "SvcHostMac/tests/test_network_throughput.py::test_agent_publishes_correlated_throughput_result",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_network_throughput_owner_flow_is_single_device_owner_only_and_correlated"
       ],
       "acceptance_level": [
@@ -23853,8 +23853,8 @@
       ],
       "handler_id": "d04.f05.network.dns_resolution",
       "test_refs": [
-        "XGENT-WDS/tests/test_dns_diagnostics.py::test_agent_publishes_correlated_dns_result_and_does_not_connect_to_addresses",
-        "XGENT-MCS/tests/test_dns_diagnostics.py::test_agent_publishes_correlated_dns_result_and_does_not_connect_to_addresses",
+        "SvcHostWin/tests/test_dns_diagnostics.py::test_agent_publishes_correlated_dns_result_and_does_not_connect_to_addresses",
+        "SvcHostMac/tests/test_dns_diagnostics.py::test_agent_publishes_correlated_dns_result_and_does_not_connect_to_addresses",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_dns_resolution_is_owner_only_correlated_and_edits_one_card"
       ],
       "acceptance_level": [
@@ -23921,8 +23921,8 @@
       ],
       "handler_id": "d04.f06.network.dns_settings",
       "test_refs": [
-        "XGENT-WDS/tests/test_dns_settings.py::test_agent_publishes_correlated_private_dns_snapshot",
-        "XGENT-MCS/tests/test_dns_settings.py::test_agent_publishes_correlated_private_dns_snapshot",
+        "SvcHostWin/tests/test_dns_settings.py::test_agent_publishes_correlated_private_dns_snapshot",
+        "SvcHostMac/tests/test_dns_settings.py::test_agent_publishes_correlated_private_dns_snapshot",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_dns_settings_is_owner_only_correlated_and_edits_one_card"
       ],
       "acceptance_level": [
@@ -23989,8 +23989,8 @@
       ],
       "handler_id": "d04.f07.network.dns_comparison",
       "test_refs": [
-        "XGENT-WDS/tests/test_dns_comparison.py::test_agent_publishes_correlated_dns_comparison",
-        "XGENT-MCS/tests/test_dns_comparison.py::test_agent_publishes_correlated_dns_comparison",
+        "SvcHostWin/tests/test_dns_comparison.py::test_agent_publishes_correlated_dns_comparison",
+        "SvcHostMac/tests/test_dns_comparison.py::test_agent_publishes_correlated_dns_comparison",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_dns_comparison_is_owner_only_correlated_and_edits_one_card"
       ],
       "acceptance_level": [
@@ -24057,8 +24057,8 @@
       ],
       "handler_id": "d04.f08.network.gateway_probe",
       "test_refs": [
-        "XGENT-WDS/tests/test_gateway_probe.py::test_agent_publishes_correlated_gateway_probe_result",
-        "XGENT-MCS/tests/test_gateway_probe.py::test_agent_publishes_correlated_gateway_probe_result",
+        "SvcHostWin/tests/test_gateway_probe.py::test_agent_publishes_correlated_gateway_probe_result",
+        "SvcHostMac/tests/test_gateway_probe.py::test_agent_publishes_correlated_gateway_probe_result",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_gateway_probe_is_owner_only_correlated_and_edits_one_card"
       ],
       "acceptance_level": [
@@ -24124,8 +24124,8 @@
       ],
       "handler_id": "d04.f09.network.route_trace",
       "test_refs": [
-        "XGENT-WDS/tests/test_route_trace.py::test_agent_publishes_correlated_route_trace",
-        "XGENT-MCS/tests/test_route_trace.py::test_agent_publishes_correlated_route_trace",
+        "SvcHostWin/tests/test_route_trace.py::test_agent_publishes_correlated_route_trace",
+        "SvcHostMac/tests/test_route_trace.py::test_agent_publishes_correlated_route_trace",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_route_trace_is_owner_only_correlated_and_edits_one_card"
       ],
       "acceptance_level": [
@@ -24192,8 +24192,8 @@
       ],
       "handler_id": "d04.f10.network.path_mtu",
       "test_refs": [
-        "XGENT-WDS/tests/test_path_mtu.py::test_agent_publishes_correlated_path_mtu_result",
-        "XGENT-MCS/tests/test_path_mtu.py::test_agent_publishes_correlated_path_mtu_result",
+        "SvcHostWin/tests/test_path_mtu.py::test_agent_publishes_correlated_path_mtu_result",
+        "SvcHostMac/tests/test_path_mtu.py::test_agent_publishes_correlated_path_mtu_result",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_path_mtu_is_owner_only_correlated_and_edits_one_card"
       ],
       "acceptance_level": [
@@ -24260,8 +24260,8 @@
       ],
       "handler_id": "d04.f11.network.captive_portal",
       "test_refs": [
-        "XGENT-WDS/tests/test_captive_portal.py::test_agent_publishes_correlated_captive_portal_status",
-        "XGENT-MCS/tests/test_captive_portal.py::test_agent_publishes_correlated_captive_portal_status",
+        "SvcHostWin/tests/test_captive_portal.py::test_agent_publishes_correlated_captive_portal_status",
+        "SvcHostMac/tests/test_captive_portal.py::test_agent_publishes_correlated_captive_portal_status",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_captive_portal_is_owner_only_correlated_and_edits_one_card"
       ],
       "acceptance_level": [
@@ -24328,8 +24328,8 @@
       ],
       "handler_id": "d04.f12.network.ipv6_connectivity",
       "test_refs": [
-        "XGENT-WDS/tests/test_ipv6_connectivity.py::test_agent_publishes_correlated_ipv6_reachability",
-        "XGENT-MCS/tests/test_ipv6_connectivity.py::test_agent_publishes_correlated_ipv6_reachability",
+        "SvcHostWin/tests/test_ipv6_connectivity.py::test_agent_publishes_correlated_ipv6_reachability",
+        "SvcHostMac/tests/test_ipv6_connectivity.py::test_agent_publishes_correlated_ipv6_reachability",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_ipv6_connectivity_is_owner_only_correlated_and_edits_one_card"
       ],
       "acceptance_level": [
@@ -24396,8 +24396,8 @@
       ],
       "handler_id": "d04.f13.network.tls_certificate",
       "test_refs": [
-        "XGENT-WDS/tests/test_tls_certificate.py::test_agent_publishes_correlated_certificate_result",
-        "XGENT-MCS/tests/test_tls_certificate.py::test_agent_publishes_correlated_certificate_result",
+        "SvcHostWin/tests/test_tls_certificate.py::test_agent_publishes_correlated_certificate_result",
+        "SvcHostMac/tests/test_tls_certificate.py::test_agent_publishes_correlated_certificate_result",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_tls_certificate_is_owner_only_correlated_and_replaces_the_current_card"
       ],
       "acceptance_level": [
@@ -24464,8 +24464,8 @@
       ],
       "handler_id": "d04.f14.network.service_probe",
       "test_refs": [
-        "XGENT-WDS/tests/test_service_probe.py::test_agent_publishes_correlated_service_status",
-        "XGENT-MCS/tests/test_service_probe.py::test_agent_publishes_correlated_service_status",
+        "SvcHostWin/tests/test_service_probe.py::test_agent_publishes_correlated_service_status",
+        "SvcHostMac/tests/test_service_probe.py::test_agent_publishes_correlated_service_status",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_service_probe_is_owner_only_and_replaces_the_current_card"
       ],
       "acceptance_level": [
@@ -24532,8 +24532,8 @@
       ],
       "handler_id": "d04.f15.network.wifi_quality_history",
       "test_refs": [
-        "XGENT-WDS/tests/test_wifi_quality.py::test_agent_publishes_correlated_wifi_quality_sample_without_network_identity",
-        "XGENT-MCS/tests/test_wifi_quality.py::test_agent_publishes_correlated_wifi_quality_sample_without_network_identity",
+        "SvcHostWin/tests/test_wifi_quality.py::test_agent_publishes_correlated_wifi_quality_sample_without_network_identity",
+        "SvcHostMac/tests/test_wifi_quality.py::test_agent_publishes_correlated_wifi_quality_sample_without_network_identity",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_wifi_quality_history_is_owner_only_persists_one_sample_and_edits_card"
       ],
       "acceptance_level": [
@@ -24600,8 +24600,8 @@
       ],
       "handler_id": "d04.f16.network.wifi_channel_summary",
       "test_refs": [
-        "XGENT-WDS/tests/test_wifi_quality.py::test_agent_publishes_correlated_wifi_channel_summary",
-        "XGENT-MCS/tests/test_wifi_quality.py::test_agent_publishes_correlated_wifi_channel_summary",
+        "SvcHostWin/tests/test_wifi_quality.py::test_agent_publishes_correlated_wifi_channel_summary",
+        "SvcHostMac/tests/test_wifi_quality.py::test_agent_publishes_correlated_wifi_channel_summary",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_wifi_channel_summary_is_owner_only_correlated_and_replaces_the_current_card"
       ],
       "acceptance_level": [
@@ -24668,8 +24668,8 @@
       ],
       "handler_id": "d04.f17.network.wifi_connection_history",
       "test_refs": [
-        "XGENT-WDS/tests/test_wifi_connection_history.py::test_agent_publishes_correlated_wifi_connection_history_without_event_payloads",
-        "XGENT-MCS/tests/test_wifi_connection_history.py::test_agent_publishes_correlated_wifi_connection_history_without_event_payloads",
+        "SvcHostWin/tests/test_wifi_connection_history.py::test_agent_publishes_correlated_wifi_connection_history_without_event_payloads",
+        "SvcHostMac/tests/test_wifi_connection_history.py::test_agent_publishes_correlated_wifi_connection_history_without_event_payloads",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_wifi_connection_history_is_owner_only_and_edits_the_same_card"
       ],
       "acceptance_level": [
@@ -24736,8 +24736,8 @@
       ],
       "handler_id": "d04.f18.network.interface_traffic",
       "test_refs": [
-        "XGENT-WDS/tests/test_network_traffic.py::test_windows_agent_publishes_correlated_selected_adapter_traffic",
-        "XGENT-MCS/tests/test_network_traffic.py::test_macos_agent_publishes_correlated_selected_adapter_traffic",
+        "SvcHostWin/tests/test_network_traffic.py::test_windows_agent_publishes_correlated_selected_adapter_traffic",
+        "SvcHostMac/tests/test_network_traffic.py::test_macos_agent_publishes_correlated_selected_adapter_traffic",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_network_traffic_is_owner_only_and_edits_the_same_card"
       ],
       "acceptance_level": [
@@ -24804,8 +24804,8 @@
       ],
       "handler_id": "d04.f19.network.traffic_threshold_alert",
       "test_refs": [
-        "XGENT-WDS/tests/test_network_traffic.py::test_windows_agent_acknowledges_owner_selected_threshold_schedule",
-        "XGENT-MCS/tests/test_network_traffic.py::test_macos_agent_acknowledges_owner_selected_threshold_schedule",
+        "SvcHostWin/tests/test_network_traffic.py::test_windows_agent_acknowledges_owner_selected_threshold_schedule",
+        "SvcHostMac/tests/test_network_traffic.py::test_macos_agent_acknowledges_owner_selected_threshold_schedule",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_network_traffic_alert_sample_requires_exact_fresh_selected_interface"
       ],
       "acceptance_level": [
@@ -24872,8 +24872,8 @@
       ],
       "handler_id": "d04.f20.network.interface_status_history",
       "test_refs": [
-        "XGENT-WDS/tests/test_interface_status_history.py::test_history_records_only_verified_state_transitions_and_bounds_rows",
-        "XGENT-MCS/tests/test_interface_status_history.py::test_history_records_only_verified_state_transitions_and_bounds_rows",
+        "SvcHostWin/tests/test_interface_status_history.py::test_history_records_only_verified_state_transitions_and_bounds_rows",
+        "SvcHostMac/tests/test_interface_status_history.py::test_history_records_only_verified_state_transitions_and_bounds_rows",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_interface_status_history_validator_requires_fresh_exact_transition_rows"
       ],
       "acceptance_level": [
@@ -24940,8 +24940,8 @@
       ],
       "handler_id": "d04.f21.network.link_speed",
       "test_refs": [
-        "XGENT-WDS/tests/test_network_link_speed.py::test_agent_publishes_correlated_link_speed_result",
-        "XGENT-MCS/tests/test_network_link_speed.py::test_agent_publishes_correlated_link_speed_result",
+        "SvcHostWin/tests/test_network_link_speed.py::test_agent_publishes_correlated_link_speed_result",
+        "SvcHostMac/tests/test_network_link_speed.py::test_agent_publishes_correlated_link_speed_result",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_network_link_speed_owner_flow_selects_one_interface_and_edits_card"
       ],
       "acceptance_level": [
@@ -25007,8 +25007,8 @@
       ],
       "handler_id": "d04.f22.network.route_lookup",
       "test_refs": [
-        "XGENT-WDS/tests/test_route_lookup.py::test_agent_publishes_correlated_route_lookup",
-        "XGENT-MCS/tests/test_route_lookup.py::test_agent_publishes_correlated_route_lookup",
+        "SvcHostWin/tests/test_route_lookup.py::test_agent_publishes_correlated_route_lookup",
+        "SvcHostMac/tests/test_route_lookup.py::test_agent_publishes_correlated_route_lookup",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_route_lookup_is_owner_only_correlated_and_edits_one_card"
       ],
       "acceptance_level": [
@@ -25074,8 +25074,8 @@
       ],
       "handler_id": "d04.f23.network.proxy_status",
       "test_refs": [
-        "XGENT-WDS/tests/test_proxy_status.py::test_agent_publishes_correlated_redacted_proxy_status",
-        "XGENT-MCS/tests/test_proxy_status.py::test_agent_publishes_correlated_redacted_proxy_status",
+        "SvcHostWin/tests/test_proxy_status.py::test_agent_publishes_correlated_redacted_proxy_status",
+        "SvcHostMac/tests/test_proxy_status.py::test_agent_publishes_correlated_redacted_proxy_status",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_proxy_status_is_owner_only_and_edits_the_current_card"
       ],
       "acceptance_level": [
@@ -25142,8 +25142,8 @@
       ],
       "handler_id": "d04.f24.network.vpn_route_status",
       "test_refs": [
-        "XGENT-WDS/tests/test_vpn_route.py::test_agent_publishes_correlated_vpn_route_summary",
-        "XGENT-MCS/tests/test_vpn_route.py::test_agent_publishes_correlated_vpn_route_summary",
+        "SvcHostWin/tests/test_vpn_route.py::test_agent_publishes_correlated_vpn_route_summary",
+        "SvcHostMac/tests/test_vpn_route.py::test_agent_publishes_correlated_vpn_route_summary",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_vpn_route_status_is_owner_only_and_edits_the_current_card"
       ],
       "acceptance_level": [
@@ -25210,8 +25210,8 @@
       ],
       "handler_id": "d04.f25.network.endpoint_batch",
       "test_refs": [
-        "XGENT-WDS/tests/test_endpoint_batch.py::test_agent_publishes_correlated_bounded_endpoint_set",
-        "XGENT-MCS/tests/test_endpoint_batch.py::test_agent_publishes_correlated_bounded_endpoint_set",
+        "SvcHostWin/tests/test_endpoint_batch.py::test_agent_publishes_correlated_bounded_endpoint_set",
+        "SvcHostMac/tests/test_endpoint_batch.py::test_agent_publishes_correlated_bounded_endpoint_set",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_endpoint_batch_is_owner_only_fixed_and_edits_the_current_card"
       ],
       "acceptance_level": [
@@ -25278,8 +25278,8 @@
       ],
       "handler_id": "d04.f26.network.dnssec_check",
       "test_refs": [
-        "XGENT-WDS/tests/test_dnssec_check.py::test_agent_publishes_correlated_dnssec_assessment",
-        "XGENT-MCS/tests/test_dnssec_check.py::test_agent_publishes_correlated_dnssec_assessment",
+        "SvcHostWin/tests/test_dnssec_check.py::test_agent_publishes_correlated_dnssec_assessment",
+        "SvcHostMac/tests/test_dnssec_check.py::test_agent_publishes_correlated_dnssec_assessment",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_dnssec_check_is_owner_only_and_edits_current_card"
       ],
       "acceptance_level": [
@@ -25552,8 +25552,8 @@
       "test_refs": [
         "TG-BOT-SERVER/tests/test_device_store.py::test_external_ip_watch_is_owner_opt_in_persistent_and_queues_changes",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_external_ip_watch_callbacks_are_owner_only_and_registered",
-        "XGENT-WDS/tests/test_wds.py::test_external_ip_response_is_correlated_and_rejects_non_public_ip",
-        "XGENT-MCS/tests/test_capabilities.py::test_macos_external_ip_response_correlates_public_result_and_hides_provider_error"
+        "SvcHostWin/tests/test_wds.py::test_external_ip_response_is_correlated_and_rejects_non_public_ip",
+        "SvcHostMac/tests/test_capabilities.py::test_macos_external_ip_response_correlates_public_result_and_hides_provider_error"
       ],
       "acceptance_level": [
         "unit",
@@ -26875,9 +26875,9 @@
       ],
       "handler_id": "d05.f20.terminal.cooperative_cancel",
       "test_refs": [
-        "XGENT-MCS/tests/test_shell_cancellation.py::test_cancel_shell_stops_only_matching_active_request_and_reports_confirmation",
-        "XGENT-WDS/tests/test_shell_approval_gate.py::test_shell_cancel_handler_is_registered_and_reports_unknown_without_echoing_command",
-        "XGENT-MCS/tests/test_shell_approval_gate.py::test_shell_cancel_handler_is_registered_and_reports_unknown_without_echoing_command",
+        "SvcHostMac/tests/test_shell_cancellation.py::test_cancel_shell_stops_only_matching_active_request_and_reports_confirmation",
+        "SvcHostWin/tests/test_shell_approval_gate.py::test_shell_cancel_handler_is_registered_and_reports_unknown_without_echoing_command",
+        "SvcHostMac/tests/test_shell_approval_gate.py::test_shell_cancel_handler_is_registered_and_reports_unknown_without_echoing_command",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_shell_running_card_offers_owner_stop_and_reports_only_correlated_confirmation",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_shell_stop_unknown_when_response_is_missing"
       ],
@@ -27502,9 +27502,9 @@
       ],
       "handler_id": "d05.f29.terminal.shell_runner_diagnostic",
       "test_refs": [
-        "XGENT-MCS/tests/test_capabilities.py::test_shell_runner_probe_checks_filesystem_only_and_never_starts_a_process",
-        "XGENT-MCS/tests/test_capabilities.py::test_capabilities_response_includes_status_and_legacy_fields",
-        "XGENT-WDS/tests/test_capabilities.py::test_capabilities_include_passive_shell_runner_diagnostics",
+        "SvcHostMac/tests/test_capabilities.py::test_shell_runner_probe_checks_filesystem_only_and_never_starts_a_process",
+        "SvcHostMac/tests/test_capabilities.py::test_capabilities_response_includes_status_and_legacy_fields",
+        "SvcHostWin/tests/test_capabilities.py::test_capabilities_include_passive_shell_runner_diagnostics",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_shell_runner_diagnostic_never_turns_missing_or_malformed_fields_into_ready",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_shell_runner_diagnostic_is_owner_only_and_uses_fresh_capability_reply"
       ],
@@ -35050,8 +35050,8 @@
       "area": "M01",
       "label_id": "feature.m01.f29.title",
       "title": "Поиск конфликтующих XIDER LaunchAgent registrations",
-      "description": "Найти дубли label/domain и показать только redacted пути XIDER-owned jobs, не повторяя штатный status/path одного job",
-      "outcome": "Найти дубли label/domain и показать только redacted пути XIDER-owned jobs, не повторяя штатный status/path одного job",
+      "description": "Найти дубли label/domain и показать только redacted пути SvcHost-owned jobs, не повторяя штатный status/path одного job",
+      "outcome": "Найти дубли label/domain и показать только redacted пути SvcHost-owned jobs, не повторяя штатный status/path одного job",
       "platforms": [
         "telegram",
         "macos"
@@ -38774,8 +38774,8 @@
       "handler_id": "p01.f25.location.compare",
       "test_refs": [
         "TG-BOT-SERVER/tests/test_location.py::test_comparison_keyboard_and_callback_are_owner_only",
-        "XGENT-WDS/tests/test_location.py::test_owner_compare_opt_in_returns_distinct_system_and_ip_sources_without_persisting",
-        "XGENT-MCS/tests/test_location.py::test_owner_compare_opt_in_returns_distinct_system_and_ip_sources_without_persisting"
+        "SvcHostWin/tests/test_location.py::test_owner_compare_opt_in_returns_distinct_system_and_ip_sources_without_persisting",
+        "SvcHostMac/tests/test_location.py::test_owner_compare_opt_in_returns_distinct_system_and_ip_sources_without_persisting"
       ],
       "acceptance_level": [
         "unit",

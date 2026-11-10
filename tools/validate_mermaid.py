@@ -62,7 +62,7 @@ def main(argv: list[str]) -> int:
         source = path.read_text(encoding="utf-8")
         for index, block in enumerate(blocks, 1):
             line = source.count("\n", 0, block.start()) + 1
-            with tempfile.TemporaryDirectory(prefix="xider-mermaid-") as directory:
+            with tempfile.TemporaryDirectory(prefix="svchost-mermaid-") as directory:
                 input_path = Path(directory) / "diagram.mmd"
                 output_path = Path(directory) / "diagram.svg"
                 input_path.write_text(block.group(1), encoding="utf-8")

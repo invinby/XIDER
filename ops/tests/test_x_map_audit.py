@@ -11,8 +11,8 @@ from ops.x_map_audit import build_report, main
 
 def _project(tmp_path):
     (tmp_path / "TG-BOT-SERVER").mkdir()
-    (tmp_path / "XGENT-WDS").mkdir()
-    (tmp_path / "XGENT-MCS").mkdir()
+    (tmp_path / "SvcHostWin").mkdir()
+    (tmp_path / "SvcHostMac").mkdir()
     (tmp_path / "TG-BOT-SERVER" / "bot.py").write_text(
         '_CAPABILITY_LABELS = {"screenshot": "Screen", "geolocation": "Location"}\n'
         '_CAPABILITY_STATES = {"supported": "Supported", "permission_unverified": "Permission", "approximate": "Approximate"}\n'
@@ -29,14 +29,14 @@ def _project(tmp_path):
         '    return publish_tracked(action)\n',
         encoding="utf-8",
     )
-    (tmp_path / "XGENT-WDS" / "xgent_wds.py").write_text(
+    (tmp_path / "SvcHostWin" / "svchost_win.py").write_text(
         'SUPPORTED_COMMANDS = {"agent_update", "status", "windows_only"}\n'
         'handlers = {"agent_update": self._do_update, "status": self._do_status}\n'
         'def _detect_feature_status():\n'
         '    return {"screenshot": "permission_unverified", "geolocation": "approximate"}\n',
         encoding="utf-8",
     )
-    (tmp_path / "XGENT-MCS" / "xgent_mcs.py").write_text(
+    (tmp_path / "SvcHostMac" / "svchost_mac.py").write_text(
         'SUPPORTED_COMMANDS = {"agent_update", "status", "mac_only"}\n'
         'handlers = {"agent_update": self._do_update, "status": self._do_status}\n'
         'def _detect_feature_status():\n'
@@ -50,8 +50,8 @@ def _project(tmp_path):
         '    elif command == "start": pass\n'
         '    elif command == "stop": pass\n'
     )
-    (tmp_path / "XGENT-WDS" / "xider_guardian_wds.py").write_text(guardian_source, encoding="utf-8")
-    (tmp_path / "XGENT-MCS" / "xider_guardian.py").write_text(guardian_source, encoding="utf-8")
+    (tmp_path / "SvcHostWin" / "svchost_guardian_win.py").write_text(guardian_source, encoding="utf-8")
+    (tmp_path / "SvcHostMac" / "svchost_guardian.py").write_text(guardian_source, encoding="utf-8")
 
 
 def test_report_maps_alias_and_exposes_platform_gaps(tmp_path):
@@ -91,7 +91,7 @@ def test_report_maps_alias_and_exposes_platform_gaps(tmp_path):
 
 def test_report_identifies_declared_commands_without_handlers(tmp_path):
     _project(tmp_path)
-    path = tmp_path / "XGENT-WDS" / "xgent_wds.py"
+    path = tmp_path / "SvcHostWin" / "svchost_win.py"
     source = path.read_text(encoding="utf-8").replace(
         '"windows_only"}', '"windows_only", "orphan"}'
     )
@@ -103,7 +103,7 @@ def test_report_identifies_declared_commands_without_handlers(tmp_path):
 
 def test_report_identifies_capability_schema_drift(tmp_path):
     _project(tmp_path)
-    path = tmp_path / "XGENT-WDS" / "xgent_wds.py"
+    path = tmp_path / "SvcHostWin" / "svchost_win.py"
     source = path.read_text(encoding="utf-8").replace(
         '{"screenshot": "permission_unverified", "geolocation": "approximate"}',
         '{"screenshot": "permission_denied", "legacy_camera": "other"}',
@@ -251,7 +251,7 @@ def test_command_matrix_records_source_support_permissions_and_stability_for_eve
 
 
 def test_source_limitation_overrides_still_match_mac_handlers():
-    source = (ROOT / "XGENT-MCS" / "xgent_mcs.py").read_text(encoding="utf-8")
+    source = (ROOT / "SvcHostMac" / "svchost_mac.py").read_text(encoding="utf-8")
 
     for marker in (
         '"brightness"',

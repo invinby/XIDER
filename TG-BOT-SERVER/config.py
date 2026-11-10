@@ -64,7 +64,7 @@ if not MQTT_USERNAME or not MQTT_PASSWORD:
 ENCRYPT_PAYLOAD = os.getenv("ENCRYPT_PAYLOAD", "false").strip().lower() in ("1", "true", "yes")
 
 # Общий секрет HMAC-SHA256. ДОЛЖЕН совпадать во всех трёх папках проекта:
-# TG-BOT-SERVER, XGENT-MCS, XGENT-WDS.
+# TG-BOT-SERVER, SvcHostMac, SvcHostWin.
 # Fail-closed: без явного значения в .env бот НЕ запустится.
 DEFAULT_SHARED_KEY = "XGENT-2026-shared-secret"
 _env_key = (os.getenv("SHARED_KEY") or os.getenv("\ufeffSHARED_KEY") or "").strip()
@@ -78,7 +78,7 @@ if not _env_key:
 if _env_key == DEFAULT_SHARED_KEY:
     sys.stderr.write(
         "FATAL: SHARED_KEY совпадает с публичным дефолтом. Задайте свой "
-        "секрет в .env (XIDER-001).\n"
+        "секрет в .env (SvcHost-001).\n"
     )
     raise SystemExit(2)
 SHARED_KEY = _env_key

@@ -63,9 +63,9 @@ def test_pages_generates_signed_installers_before_checking_and_uploading_site() 
         '"tools/build_pages_entrypoints.py"',
         '"tools/build_install_launchers.py"',
         '"tools/build_bootstrap_commands.py"',
-        '"XGENT-MCS/release_signature.py"',
-        '"XGENT-WDS/config.py"',
-        '"XGENT-MCS/config.py"',
+        '"SvcHostMac/release_signature.py"',
+        '"SvcHostWin/config.py"',
+        '"SvcHostMac/config.py"',
     ):
         assert source in workflow, f"Pages must rebuild when launcher input changes: {source}"
 
@@ -82,7 +82,7 @@ def test_component_ci_checks_python_syntax_while_excluding_generated_trees() -> 
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
     assert "python -m compileall -q" in workflow
-    for component in ("TG-BOT-SERVER", "XGENT-WDS", "XGENT-MCS", "ops", "tools", "deploy"):
+    for component in ("TG-BOT-SERVER", "SvcHostWin", "SvcHostMac", "ops", "tools", "deploy"):
         assert component in workflow
     for generated in ("venv", "node_modules", "build", "dist"):
         assert generated in workflow

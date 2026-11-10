@@ -346,11 +346,11 @@ COPY = {
         "xadam": "Статус сервера",
     },
     "server_logs_title": {
-        "xtech": "Последние записи журнала xider-bot",
+        "xtech": "Последние записи журнала svchost-bot",
         "xperson": "Логи бота · последние записи",
         "xpikmi": "📜 Последние логики бота",
-        "xtarped": "Последние логи xider-bot",
-        "xcore": "Журнал xider-bot",
+        "xtarped": "Последние логи svchost-bot",
+        "xcore": "Журнал svchost-bot",
         "xadam": "Последние события бота",
     },
     "server_metrics_title": {
@@ -986,10 +986,10 @@ COPY = {
         "xadam": "Для компонента нет проверенного установщика.",
     },
     "versions_install_payload_missing": {
-        "xtech": "В релизе нет полного набора XIDER-source.zip и release-manifest.json. Установка заблокирована.",
+        "xtech": "В релизе нет полного набора SvcHost-source.zip и release-manifest.json. Установка заблокирована.",
         "xperson": "Для установки не хватает source-архива или manifest. Только платформенного пакета недостаточно.",
         "xpikmi": "В выпускочке нет полного архивчика и manifest-файла — устанавливать нечего, кнопки не будет.",
-        "xtarped": "Нужны оба файла: XIDER-source.zip и release-manifest.json. Неполный релиз не устанавливается.",
+        "xtarped": "Нужны оба файла: SvcHost-source.zip и release-manifest.json. Неполный релиз не устанавливается.",
         "xcore": "Нет полного source-пакета и manifest. Установка заблокирована.",
         "xadam": "Релиз неполный: source-архив/manifest отсутствует.",
     },

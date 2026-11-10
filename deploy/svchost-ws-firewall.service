@@ -1,0 +1,11 @@
+[Unit]
+Description=XIDER X-DOCK WebSocket ingress guard
+Before=svchost-dock-mqtt.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/svchost-ws-firewall
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

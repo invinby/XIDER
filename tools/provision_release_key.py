@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE_MODULE_DIR = ROOT / "XGENT-MCS"
+RELEASE_MODULE_DIR = ROOT / "SvcHostMac"
 if str(RELEASE_MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(RELEASE_MODULE_DIR))
 

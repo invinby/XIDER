@@ -2,9 +2,9 @@
 set -Eeuo pipefail
 
 APP_DIR="${XIDER_APP_DIR:-/opt/xider}"
-SERVICE="${XIDER_SERVICE:-xider-bot.service}"
+SERVICE="${XIDER_SERVICE:-svchost-bot.service}"
 BACKUP_DIR="${XIDER_BACKUP_DIR:-/var/backups/xider}"
-INCOMING="${XIDER_UPDATE_BUNDLE:-${APP_DIR}/incoming/xider-source.zip}"
+INCOMING="${XIDER_UPDATE_BUNDLE:-${APP_DIR}/incoming/svchost-source.zip}"
 MANIFEST="${XIDER_UPDATE_MANIFEST:-${APP_DIR}/incoming/release-manifest.json}"
 UNIT_DIR="${XIDER_UNIT_DIR:-/etc/systemd/system}"
 LOCK_FILE="${XIDER_LOCK_FILE:-/run/xider/update.lock}"
@@ -14,7 +14,7 @@ HEALTH_STABLE_CHECKS="${XIDER_HEALTH_STABLE_CHECKS:-3}"
 UNIT_FILE="${UNIT_DIR}/${SERVICE}"
 EXTRACT_HELPER="${XIDER_EXTRACT_HELPER:-${ROOT_HELPER_DIR}/safe_extract.py}"
 VERIFY_HELPER="${XIDER_VERIFY_HELPER:-${ROOT_HELPER_DIR}/verify_server_bundle.py}"
-COMPONENTS=(TG-BOT-SERVER XGENT-WDS XGENT-MCS deploy)
+COMPONENTS=(TG-BOT-SERVER SvcHostWin SvcHostMac deploy)
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 STAGE=""
 RESTORE_STAGE=""
@@ -62,7 +62,7 @@ fi
 stamp() { date -u +%Y%m%dT%H%M%SZ; }
 
 backup_current() {
-  local out="${BACKUP_DIR}/xider-$(stamp)-$$.tar.gz"
+  local out="${BACKUP_DIR}/svchost-$(stamp)-$$.tar.gz"
   local temp="${out}.tmp"
   if ! tar -czf "${temp}" \
     --exclude='./incoming' \
@@ -87,7 +87,7 @@ backup_current() {
 }
 
 latest_backup() {
-  find "${BACKUP_DIR}" -maxdepth 1 -type f -name 'xider-*.tar.gz' -printf '%T@ %p\n' \
+  find "${BACKUP_DIR}" -maxdepth 1 -type f -name 'svchost-*.tar.gz' -printf '%T@ %p\n' \
     | sort -nr | head -n1 | cut -d' ' -f2-
 }
 
@@ -122,7 +122,7 @@ wait_healthy() {
 restore_snapshot() {
   local archive="$1" unit_backup="${1%.tar.gz}.service"
   systemctl stop "${SERVICE}" >/dev/null 2>&1 || true
-  RESTORE_STAGE="$(mktemp -d "${APP_DIR}/.xider-restore.XXXXXX")"
+  RESTORE_STAGE="$(mktemp -d "${APP_DIR}/.svchost-restore.XXXXXX")"
   tar -xzf "${archive}" -C "${RESTORE_STAGE}"
   # Remove source files introduced by the failed release, while preserving
   # runtime configuration and virtual environments intentionally omitted from
@@ -134,7 +134,7 @@ restore_snapshot() {
         relative="${current#"${APP_DIR}/"}"
         [[ -e "${RESTORE_STAGE}/${relative}" ]] && continue
         case "/${relative}/" in
-          */TG-BOT-SERVER/venv/*|*/TG-BOT-SERVER/.venv/*|*/XGENT-WDS/venv/*|*/XGENT-MCS/venv/*) continue ;;
+          */TG-BOT-SERVER/venv/*|*/TG-BOT-SERVER/.venv/*|*/SvcHostWin/venv/*|*/SvcHostMac/venv/*) continue ;;
         esac
         case "$(basename "${relative}")" in
           .env|.env.*|*.key|*.pem|*.p12|*.pfx) continue ;;
@@ -148,10 +148,10 @@ restore_snapshot() {
   RESTORE_STAGE=""
   if [[ -f "${unit_backup}" ]]; then
     install -m 0644 "${unit_backup}" "${UNIT_FILE}"
-  elif [[ -f "${APP_DIR}/deploy/xider-bot.service" ]]; then
-    install -m 0644 "${APP_DIR}/deploy/xider-bot.service" "${UNIT_FILE}"
+  elif [[ -f "${APP_DIR}/deploy/svchost-bot.service" ]]; then
+    install -m 0644 "${APP_DIR}/deploy/svchost-bot.service" "${UNIT_FILE}"
   fi
-  chown -R xider:xider "${APP_DIR}/TG-BOT-SERVER" "${APP_DIR}/XGENT-WDS" "${APP_DIR}/XGENT-MCS" "${APP_DIR}/deploy" 2>/dev/null || true
+  chown -R xider:xider "${APP_DIR}/TG-BOT-SERVER" "${APP_DIR}/SvcHostWin" "${APP_DIR}/SvcHostMac" "${APP_DIR}/deploy" 2>/dev/null || true
   systemctl daemon-reload || true
   systemctl restart "${SERVICE}" || true
 }
@@ -197,7 +197,7 @@ do_update() {
   [[ -f "${APP_DIR}/TG-BOT-SERVER/requirements.txt" ]] || { echo "Current install is incomplete." >&2; return 4; }
 
   # The verifier and trust ring live under /usr/local/libexec, outside the
-  # xider-owned checkout. Verify before backup, extraction, or service changes.
+  # svchost-owned checkout. Verify before backup, extraction, or service changes.
   python3 "${VERIFY_HELPER}" "${MANIFEST}" "${INCOMING}"
 
   BACKUP="$(backup_current)"
@@ -205,15 +205,15 @@ do_update() {
   if [[ -f "${UNIT_FILE}" ]]; then
     cp -a "${UNIT_FILE}" "${unit_backup}"
   fi
-  STAGE="$(mktemp -d "${APP_DIR}/.xider-update.XXXXXX")"
+  STAGE="$(mktemp -d "${APP_DIR}/.svchost-update.XXXXXX")"
   python3 "${EXTRACT_HELPER}" "${INCOMING}" "${STAGE}"
   source_dir="${STAGE}"
-  if [[ -d "${STAGE}/XIDER-source" ]]; then
-    unexpected="$(find "${STAGE}" -mindepth 1 -maxdepth 1 ! -name 'XIDER-source' -print -quit)"
+  if [[ -d "${STAGE}/SvcHost-source" ]]; then
+    unexpected="$(find "${STAGE}" -mindepth 1 -maxdepth 1 ! -name 'SvcHost-source' -print -quit)"
     [[ -z "${unexpected}" ]] || {
-      echo "Release archive has unexpected content beside its XIDER-source root." >&2; return 5;
+      echo "Release archive has unexpected content beside its SvcHost-source root." >&2; return 5;
     }
-    source_dir="${STAGE}/XIDER-source"
+    source_dir="${STAGE}/SvcHost-source"
   fi
   find "${source_dir}" -type f -name '*.sh' -exec sed -i 's/\r$//' {} +
   sed -i 's/\r$//' "${source_dir}/TG-BOT-SERVER/requirements.txt"
@@ -223,7 +223,7 @@ do_update() {
   for component in "${COMPONENTS[@]}"; do
     [[ -d "${source_dir}/${component}" ]] || { echo "Release bundle is missing ${component}." >&2; return 5; }
   done
-  for helper in update-server.sh safe_extract.py xider-server-ops.sh; do
+  for helper in update-server.sh safe_extract.py svchost-server-ops.sh; do
     [[ -f "${source_dir}/deploy/${helper}" ]] || {
       echo "Release bundle is missing the server helper deploy/${helper}." >&2; return 5;
     }
@@ -236,14 +236,14 @@ do_update() {
     echo "Dependency changes are not yet supported by this in-place updater; current install is unchanged." >&2
     return 6
   fi
-  python3 -m compileall -q "${source_dir}/TG-BOT-SERVER" "${source_dir}/XGENT-WDS" "${source_dir}/XGENT-MCS"
+  python3 -m compileall -q "${source_dir}/TG-BOT-SERVER" "${source_dir}/SvcHostWin" "${source_dir}/SvcHostMac"
 
   MUTATING=1
   systemctl stop "${SERVICE}"
   overlay_contents "${source_dir}"
   install -d -o xider -g xider -m 0700 /var/lib/xider /etc/xider/device-keys
-  install -m 0644 "${APP_DIR}/deploy/xider-bot.service" "${UNIT_FILE}"
-  chown -R xider:xider "${APP_DIR}/TG-BOT-SERVER" "${APP_DIR}/XGENT-WDS" "${APP_DIR}/XGENT-MCS" "${APP_DIR}/deploy"
+  install -m 0644 "${APP_DIR}/deploy/svchost-bot.service" "${UNIT_FILE}"
+  chown -R xider:xider "${APP_DIR}/TG-BOT-SERVER" "${APP_DIR}/SvcHostWin" "${APP_DIR}/SvcHostMac" "${APP_DIR}/deploy"
   systemctl daemon-reload
   systemctl restart "${SERVICE}"
   if ! wait_healthy; then
@@ -261,12 +261,12 @@ do_update() {
 promote_root_helpers() {
   local source_dir="$1" helper destination temp
   [[ -d "${ROOT_HELPER_DIR}" ]] || { echo "Missing root helper directory: ${ROOT_HELPER_DIR}" >&2; return 10; }
-  for helper in update-server.sh safe_extract.py xider-server-ops.sh; do
+  for helper in update-server.sh safe_extract.py svchost-server-ops.sh; do
     source_dir="${1}/deploy/${helper}"
     destination="${ROOT_HELPER_DIR}/${helper}"
     temp="${ROOT_HELPER_DIR}/.${helper}.${STAMP}.new"
     case "${helper}" in
-      update-server.sh|xider-server-ops.sh) install -m 0750 "${source_dir}" "${temp}" ;;
+      update-server.sh|svchost-server-ops.sh) install -m 0750 "${source_dir}" "${temp}" ;;
       safe_extract.py) install -m 0640 "${source_dir}" "${temp}" ;;
     esac
     chown root:root "${temp}"
@@ -279,7 +279,7 @@ do_rollback() {
   if [[ -n "${2:-}" ]]; then
     backup_root="$(readlink -f "${BACKUP_DIR}")"
     archive="$(readlink -f "$2" 2>/dev/null || true)"
-    if [[ -z "${archive}" || "${archive}" != "${backup_root}"/xider-*.tar.gz ]]; then
+    if [[ -z "${archive}" || "${archive}" != "${backup_root}"/svchost-*.tar.gz ]]; then
       echo "Refusing rollback archive outside ${backup_root}." >&2
       return 8
     fi

@@ -264,8 +264,8 @@ def copy_candidate(
 def main() -> int:
     if os.geteuid() != 0:
         fail("must run as root")
-    incoming = os.environ.get("XIDER_VAULT_INCOMING", "/srv/xider-vault/incoming")
-    archive_dir = os.environ.get("XIDER_VAULT_ARCHIVE_DIR", "/srv/xider-vault/archives")
+    incoming = os.environ.get("XIDER_VAULT_INCOMING", "/srv/svchost-vault/incoming")
+    archive_dir = os.environ.get("XIDER_VAULT_ARCHIVE_DIR", "/srv/svchost-vault/archives")
     retention_days = env_int("XIDER_VAULT_RETENTION_DAYS", 60, 1, 3650)
     max_archive_bytes = env_int("XIDER_VAULT_MAX_ARCHIVE_BYTES", 1_073_741_824, 1_048_576, 1_099_511_627_776)
     max_total_bytes = env_int("XIDER_VAULT_MAX_TOTAL_BYTES", 10_737_418_240, 1_048_576, 1_099_511_627_776)

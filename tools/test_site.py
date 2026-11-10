@@ -112,7 +112,7 @@ def test_bilingual_landing_has_semantic_language_navigation_and_layout_stability
     ):
         html = (root / filename).read_text(encoding="utf-8")
         assert f'<nav class="language-switch" {label}>' in html
-        assert '<img src="assets/xider-mark.png" alt="" width="726" height="726">' in html
+        assert '<img src="assets/svchost-mark.png" alt="" width="726" height="726">' in html
         assert 'name="theme-color" content="#f5f1ea"' in html
         assert 'name="theme-color" content="#171818"' in html
 

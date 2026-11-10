@@ -27,7 +27,7 @@ Bootstrap никогда не запрашивает SSH-пароль. В тек
 нотарифицированы. Подпись манифеста XIDER подтверждает опубликованный состав,
 но не заменяет подпись Apple и проверку работы на конкретном Mac.
 
-Исторический asset `XGENT-MCS-macos-bundle.zip` в релизе `v4.2.1` содержит
+Исторический asset `SvcHostMac-macos-bundle.zip` в релизе `v4.2.1` содержит
 исходники; одинаковое имя файла в другом релизе само по себе не доказывает
 одинаковое содержимое.
 Если на Mac нет Python 3.11/3.12/3.14,
@@ -55,7 +55,7 @@ Install report отдельно фиксирует состояния Agent, Gua
 ## После установки
 
 В боте: устройство → версии → агент → список релизов → описание → установка →
-подтверждение. Frozen Mac Guardian принимает подписанный `XGENT-MCS-macos-bundle.zip`,
+подтверждение. Frozen Mac Guardian принимает подписанный `SvcHostMac-macos-bundle.zip`,
 проверяет его manifest, Apple-подпись и ожидаемый digest, затем транзакционно
 заменяет три `.app`. Новый Agent должен подтвердить свежий heartbeat; иначе Guardian
 возвращает предыдущие приложения. Windows frozen-updater использует подписанный
@@ -93,7 +93,7 @@ singleton-блокировку, что и worker: пока её держит ж�
 
 ## Siri, Safari, Guard Keeper и Agent: взаимное наблюдение и уровневое восстановление
 
-Это внутренние имена XIDER-компонентов, не продукты Apple. Мониторинг — общая
+Это внутренние имена SvcHost-компонентов, не продукты Apple. Мониторинг — общая
 сетка: Agent, Guard Keeper, Safari и Siri публикуют собственный heartbeat и читают
 свежесть/состояние остальных трёх. Восстановление идёт по закреплённым уровням:
 **Siri → Safari → Guard Keeper → Agent**. Siri поднимает Safari; Safari проверяет
@@ -107,7 +107,7 @@ Siri восстанавливает только Safari, Safari — Guard Keeper
 Safari дополнительно замечает устаревший heartbeat Agent и передаёт восстановление
 Guard Keeper. Перед запуском любого нижнего уровня проверяется сохранённое намерение
 владельца; явная остановка или удаление выключает восстановление и не отменяется
-наблюдателем. Службы регистрируются с понятными XIDER-именами в `launchd`, имеют
+наблюдателем. Службы регистрируются с понятными SvcHost-именами в `launchd`, имеют
 отдельные версии и журналы, отображаются в разделе компонентов бота и удаляются
 штатным uninstall-командом.
 
@@ -116,9 +116,9 @@ draft. Публичная ветка и приватный backup-ref `codex/tar
 были синхронизированы на docs-only commit `5a29d2e`; кодовый commit для сборок —
 `3bb8d633c7f6e58b00ad8ef34634a11aa2414480`. CI run `40462940956` и Pages run
 `40462941093` для кодового коммита завершились успешно. Build run `40462993794` на
-preview-ref `xider-local-prep-tarped-20261027-current` тоже завершился успешно:
+preview-ref `svchost-local-prep-tarped-20261027-current` тоже завершился успешно:
 Nuitka-сборки macOS и Windows и проверка ZIP-компонентов прошли. Артефакты
-`XGENT-MCS-macOS`, `XGENT-WDS-Windows` и `XIDER-Components` опубликованы как
+`SvcHostMac-macOS`, `SvcHostWin-Windows` и `SvcHost-Components` опубликованы как
 временные артефакты Actions. Release gate пропущен, потому что это не tag build;
 официальный релиз на тот момент — `v4.2.1`. Preview-пакеты не являются
 подписанным распространяемым релизом. Apple signing/notarization и установка на
@@ -132,7 +132,7 @@ SSH-ключа, а парольная SSH-аутентификация откл�
 В релизной поставке macOS Agent, Guard Keeper и Safari/Siri собраны в Nuitka
 `.app`-бандлы; Windows Agent и Guard Keeper — в Nuitka `.exe`. Python-модули не
 лежат отдельными `.py` рядом с запущенными приложениями. Safari и Siri входят в
-`XIDER-Layers.app`, а Mac-updater заменяет подписанный набор приложений
+`SvcHostLayers.app`, а Mac-updater заменяет подписанный набор приложений
 транзакционно. Секреты остаются в `.env`/системном хранилище и не вшиваются в
 бинарники. Последний deploy-патч учитывает включённый, но ещё не активный
 Certbot timer, чтобы X-DOCK не создал дублирующее расписание; live-проверка на VPS
@@ -155,7 +155,7 @@ VPS `16.16.200.207` на 2026-10-27: TCP/22, 80 и 443 отвечают, TCP/888
 guard активны. Agent WebSocket идёт через HTTPS/443; сырой MQTT/8884 закрыт на
 loopback, а listener 18885 отсекается на хосте для внешнего трафика. TLS для
 публичного IP проверяется; пустой запрос к enrollment poll endpoint отвечает
-ожидаемым HTTP 400. Сервисы `xider-bot`, `xider-dock-mqtt`, Nginx и firewall
+ожидаемым HTTP 400. Сервисы `svchost-bot`, `svchost-dock-mqtt`, Nginx и firewall
 guard повторно проверены активными 2026-10-28.
 
 Публичная ветка и приватный backup-ref `codex/tarped-resume-20261026`
@@ -178,25 +178,25 @@ signing/notarization credentials. Поэтому короткие команды
 синхронизированы на `2409e35db81c1d93c595a35c836a7623234c154c`. CI run
 `40783360420` завершился успешно для Unix installer, Python 3.11, 3.12 и 3.14.
 
-Build run `40783360229` собрал macOS preview: артефакт `XGENT-MCS-macOS`,
+Build run `40783360229` собрал macOS preview: артефакт `SvcHostMac-macOS`,
 113,180,739 байт, SHA-256
 `587545da2a18ad553e6d785a76f63252d5dd6360de348ae9979c496f81aac211`.
 Это неподписанная и ненотаризованная сборка для теста; официальный macOS-релиз
 из неё не публиковался. Windows Agent/Guard Keeper собраны успешно в
-`XGENT-WDS-Windows` (152,094,212 байт; SHA-256
+`SvcHostWin-Windows` (152,094,212 байт; SHA-256
 `dce1fb531630c13eab900d42a719447496fd94b110017ca9d7194347aa55c3cf`). Общий
-`XIDER-Components` также прошёл упаковку и ZIP-проверки (203,771,328 байт;
+`SvcHost-Components` также прошёл упаковку и ZIP-проверки (203,771,328 байт;
 SHA-256 `311b94f63d4282accbf68241540a17cf3839e3970903c90c70ebcbbe47193163`).
 Это временные Actions-артефакты, а не официальный релиз; workflow не запускался
 на version tag, поэтому GitHub Release не создавался.
 
 Подписанный серверный bundle с tag `server-deploy-20261029-2409e35` применён к
-VPS `16.16.200.207`. `xider-bot.service`, `xider-dock-mqtt.service` и Nginx
+VPS `16.16.200.207`. `svchost-bot.service`, `svchost-dock-mqtt.service` и Nginx
 активны; SHA-256 развёрнутого `bot.py` совпадает с committed-файлом после
 нормализации переводов строк. HTTPS-запрос к `/x-dock/v1/poll` прошёл проверку
 сертификата и дошёл до маршрута (ожидаемый HTTP 400 для пустого тела). После
 обновления ошибок бота и X-DOCK не обнаружено; backup создан в
-`/var/backups/xider/xider-20261028T230408Z-3126266.tar.gz`, секретных файлов в
+`/var/backups/xider/svchost-20261028T230408Z-3126266.tar.gz`, секретных файлов в
 его списке нет.
 
 На момент снимка PR #32 ещё был draft, а `main` не обновлён. Это состояние
@@ -218,8 +218,8 @@ macOS остаётся неподписанным preview. Последний о
 опубликованный релиз, а не этот branch-head. Новый installable Mac-релиз требует
 Apple signing/notarization credentials, которых пока нет.
 
-VPS `16.16.200.207` обслуживает код `2409e35`; `xider-bot.service`,
-`xider-dock-mqtt.service` и Nginx активны, свежих error-журналов нет. Изменение
+VPS `16.16.200.207` обслуживает код `2409e35`; `svchost-bot.service`,
+`svchost-dock-mqtt.service` и Nginx активны, свежих error-журналов нет. Изменение
 `bdc13f9` касается только docs и названия шага сборки, поэтому серверный код не
 менялся. Сквозной Telegram → физическое устройство и Mac/Windows acceptance
 по-прежнему не проверены.
@@ -233,11 +233,11 @@ VPS `16.16.200.207` обслуживает код `2409e35`; `xider-bot.service`
 
 ## Проверка после CI secret guard · 2026-10-29
 
-Публичный `main` и приватный `XIDER-PRIVATE-BACKUP/main` синхронизированы на
+Публичный `main` и приватный `SvcHost-PRIVATE-BACKUP/main` синхронизированы на
 `0cf5a483630f5eff39783d64193df292dcc9ea2a`. Проверка `tools/check_tracked_secrets.py`
 прошла локально на 501 отслеживаемом файле; CI run `40792786184` завершился
 успешно: Unix installers и Python 3.11/3.12/3.14. На VPS `16.16.200.207`
-активны `xider-bot`, `xider-dock-mqtt` и Nginx; ошибок `xider-bot` за последние
+активны `svchost-bot`, `svchost-dock-mqtt` и Nginx; ошибок `svchost-bot` за последние
 24 часа нет. SHA-256 `bot.py` совпадает с текущим исходником после нормализации
 CRLF/LF; этот CI-коммит runtime-код не менял, поэтому сервер повторно не обновлялся.
 
@@ -254,7 +254,7 @@ Telegram → устройство не подтверждены.
 Публичная короткая команда Mac действительно закреплена за `v4.3.12` и явно
 обозначена как source preview. GitHub Release `v4.3.12` — prerelease с названием
 «Windows preview + macOS source preview»: Windows package и подписанные entry
-points собраны, но в списке assets нет `XGENT-MCS-macos-bundle.zip`. В этом же
+points собраны, но в списке assets нет `SvcHostMac-macos-bundle.zip`. В этом же
 release run job публикации Pages завершился ошибкой; актуальный Pages deploy
 позже отдельно завершился успешно на `main`. Логи упавшего job уже не доступны,
 поэтому точную причину той ошибки этот снимок не устанавливает.
@@ -279,7 +279,7 @@ Guardian запущены; подтверждения ответа бота в �
 Старый протокол Mac также не проходит gate удалённой установки выбранного релиза;
 первое обновление нужно выполнить локальной командой выше.
 
-В текущем XGENT-MCS ответ при обрыве MQTT ставится в ограниченную очередь в
+В текущем SvcHostMac ответ при обрыве MQTT ставится в ограниченную очередь в
 памяти процесса и повторяется после переподключения; срок хранения — до 15 минут.
 Очередь не переживает завершение/перезапуск процесса. В исходниках `v4.2.1`
 такой очереди нет, поэтому потеря соединения между выполнением команды и
@@ -287,7 +287,7 @@ Guardian запущены; подтверждения ответа бота в �
 доказательство причины конкретного прежнего пропавшего ответа.
 
 `v4.3.12` для Mac остаётся source preview: runtime не подписан Apple и не
-нотарифицирован. У `v4.2.1` есть старый asset с именем `XGENT-MCS-macos-bundle.zip`,
+нотарифицирован. У `v4.2.1` есть старый asset с именем `SvcHostMac-macos-bundle.zip`,
 но просмотренное содержимое не является собранным `.app` и не имеет проверенной
 Apple-подписи/нотаризации. Полноценный новый Mac app-релиз не заявляется.
 
@@ -307,7 +307,7 @@ bootstrap при новой блокировке запрашивает Restart 
 после подготовки stage и проверяет свежие health-записи Agent/Guardian; при
 ошибке он возвращает предыдущую папку и пишет `failed`/`partial`, а не успех.
 
-Сервисы `xider-bot.service` и `xider-dock-mqtt.service` на VPS сейчас `active`.
+Сервисы `svchost-bot.service` и `svchost-dock-mqtt.service` на VPS сейчас `active`.
 В выборке журналов за последние 90 минут не найдено сообщений о stale/out-of-order
 status rejection; это ограниченная текущая выборка, а не доказательство, что
 ошибка никогда не происходила.
@@ -318,17 +318,17 @@ GitHub `main` и тег `v4.3.14` указывают на commit
 `9d142377200c23b5bd21b63fb624836ac9dfabf4`. Публичные `/mac` и `/win.txt`
 выбирают `v4.3.14`; macOS-вариант явно является подписанным издателем
 source-preview, без Apple-подписи и нотариализации. В релизе нет
-`XGENT-MCS-macos-bundle.zip`, поэтому установку нельзя описывать как готовый
+`SvcHostMac-macos-bundle.zip`, поэтому установку нельзя описывать как готовый
 собранный Mac app с подтверждёнными Safari/Siri.
 
 Локальный Mac transcript от 2026-10-30 закрепил commit
-`d7d77a698b763f169327ec99e350ff73f5e34f16`; его `XGENT-MCS/config.py`
+`d7d77a698b763f169327ec99e350ff73f5e34f16`; его `SvcHostMac/config.py`
 содержит `VERSION = 4.2.1`. Генератор короткой команды на том снимке скачивал
 installer через `releases/latest/download`, поэтому маршрут попал на последний
 стабильный `v4.2.1`, а не на новую preview-версию. В том commit отсутствуют
-`xider_layers.py`, `start_safari.sh` и `start_siri.sh`: этим объясняется, почему
+`svchost_layers.py`, `start_safari.sh` и `start_siri.sh`: этим объясняется, почему
 та установка не могла запустить Safari/Siri. Хотя release `v4.2.1` содержал
-asset `XGENT-MCS-macos-bundle.zip`, bootstrap из закреплённого commit не
+asset `SvcHostMac-macos-bundle.zip`, bootstrap из закреплённого commit не
 скачивал и не активировал этот asset: он разворачивал только исходный архив.
 Текущий Pages entrypoint уже
 закрепляет `v4.3.14`; его исходный архив содержит эти компоненты. Строка
@@ -352,8 +352,8 @@ VPS показывает Mac `4.2.1` и отклонённые сервером 
 
 ## Повторная сверка доставки и install report · 2026-11-01
 
-Повторная read-only проверка VPS в 2026-10-31 19:25 UTC: `xider-bot.service` и
-`xider-dock-mqtt.service` активны. `known_devices.json` показывает Windows
+Повторная read-only проверка VPS в 2026-10-31 19:25 UTC: `svchost-bot.service` и
+`svchost-dock-mqtt.service` активны. `known_devices.json` показывает Windows
 `4.3.14`, online, protocol `1`, последний status около 19:25 UTC; Mac
 `4.2.1`, offline, protocol `0`, последний status в 19:12 UTC. Журнал за 24 часа
 содержит старые `stale_timestamp` по обоим ID; для Mac последняя такая запись —
@@ -377,7 +377,7 @@ QoS 1 и без `mqtt_session_id`; status в коде `4.3.14` отправля�
 корректного 32-символьного session ID с записью причины в audit log. Патч
 развёрнут на VPS 2026-10-31 19:34 UTC после резервного копирования действующего
 `bot.py`; SHA-256 активного файла совпал с локальным кандидатом,
-`xider-bot.service` после перезапуска был `active`. На момент повторной сверки
+`svchost-bot.service` после перезапуска был `active`. На момент повторной сверки
 В 19:38:19 UTC живой Mac `e981d949` прислал `online` без session ID; VPS записал
 `Online MQTT status without a valid session ID ... ignored`. Затем пришли stale-
 пакеты с дельтами 975 и 107786 секунд. Свежие `online` без session ID повторялись
@@ -387,7 +387,7 @@ session binding. Поэтому бот не маршрутизирует ему 
 обмен команда/ответ с Mac после выкладки не подтверждён. Без локального запуска
 новой установки исправление нельзя доставить этому Mac через Telegram.
 
-Ответы команд обрабатываются отдельно от status: текущая очередь XGENT-MCS
+Ответы команд обрабатываются отдельно от status: текущая очередь SvcHostMac
 ограничена 64 сообщениями / 32 MiB и сроком 15 минут; она повторяет отправку
 после reconnect, но хранится только в памяти процесса. Каждая попытка заново
 подписывает payload с новым `ts`/nonce, так что очередь не повторяет старую
@@ -404,8 +404,8 @@ session binding. Поэтому бот не маршрутизирует ему 
 сквозной ответ бота.
 
 Манифест GitHub Release `v4.3.14` криптографически проверен закреплённым
-Ed25519-ключом `521c56c0c89f0ddd`; исходный ZIP содержит `xider_layers.py` и
-Safari/Siri launch helpers. В самом релизе нет `XGENT-MCS-macos-bundle.zip` и
+Ed25519-ключом `521c56c0c89f0ddd`; исходный ZIP содержит `svchost_layers.py` и
+Safari/Siri launch helpers. В самом релизе нет `SvcHostMac-macos-bundle.zip` и
 нет Apple-подписанных `.app`; `/mac` остаётся подписанным издателем source
 preview. Локальный установщик проверяет процессы и свежие health-записи всех
 четырёх компонентов, но реального Mac install report после команды `/mac`
@@ -415,19 +415,19 @@ Safari/Siri на Mac не подтверждены.
 
 ## Сверка релиза v4.3.15 и живых ответов · 2026-11-01
 
-GitHub Release `v4.3.15` опубликован как prerelease с Windows preview и macOS source preview; тег указывает на commit `78a7f885632639dcea6717d49126a70e78ca3a63`. Signed-release workflow собрал Windows Agent/Guard Keeper, опубликовал assets и запустил Pages deployment; Pages run `41240382727` завершился успешно. Живые `/win.txt` и `/mac` закреплены за `v4.3.15`. Исходный commit содержит `xider_layers.py`, `start_safari.sh` и `start_siri.sh`. В релизе нет `XGENT-MCS-macos-bundle.zip` или Apple-подписанных `.app`: Mac-установка остаётся publisher-signed source preview без Apple-подписи и нотариализации.
+GitHub Release `v4.3.15` опубликован как prerelease с Windows preview и macOS source preview; тег указывает на commit `78a7f885632639dcea6717d49126a70e78ca3a63`. Signed-release workflow собрал Windows Agent/Guard Keeper, опубликовал assets и запустил Pages deployment; Pages run `41240382727` завершился успешно. Живые `/win.txt` и `/mac` закреплены за `v4.3.15`. Исходный commit содержит `svchost_layers.py`, `start_safari.sh` и `start_siri.sh`. В релизе нет `SvcHostMac-macos-bundle.zip` или Apple-подписанных `.app`: Mac-установка остаётся publisher-signed source preview без Apple-подписи и нотариализации.
 
 На физическом Windows установщик `v4.3.15` завершился `succeeded` 2026-11-01 01:55 UTC+05. Install report показывает Agent PID `34416` и Guardian PID `408`, оба процесса запущены и подключены к MQTT; Telegram bot acknowledgement у обоих — `not_verified`, Safari/Siri для Windows явно `not_applicable`. Лог установки подтверждает проверку подписи и успешное переключение. При очистке трёх более старых резервных папок были предупреждения; предыдущая версия сохранена для отката.
 
-Наблюдение console-parent watcher в 2026-11-01 00:53:31 (UTC+05) поймало цепочку `XIDER-Guard-Keeper.exe → schtasks.exe → conhost.exe`; это подтверждённый консольный запуск старого Guardian, хотя точное foreground-window тогда не снималось. `v4.3.15` заменяет периодический опрос `schtasks.exe` чтением локального файла Task Scheduler. После установки `v4.3.15` в текущем снимке новых `schtasks.exe`, запущенных Guardian, не обнаружено; это короткая проверка, не длительное наблюдение. Отдельный `WindowsTerminal.exe` в 00:56 был дочерним для системного `svchost.exe`; его связь с XIDER не подтверждена.
+Наблюдение console-parent watcher в 2026-11-01 00:53:31 (UTC+05) поймало цепочку `SvcHostGuard.exe → schtasks.exe → conhost.exe`; это подтверждённый консольный запуск старого Guardian, хотя точное foreground-window тогда не снималось. `v4.3.15` заменяет периодический опрос `schtasks.exe` чтением локального файла Task Scheduler. После установки `v4.3.15` в текущем снимке новых `schtasks.exe`, запущенных Guardian, не обнаружено; это короткая проверка, не длительное наблюдение. Отдельный `WindowsTerminal.exe` в 00:56 был дочерним для системного `svchost.exe`; его связь с XIDER не подтверждена.
 
-Read-only SSH-сверка VPS в 2026-10-31 20:56 UTC подтвердила `xider-bot` и `xider-dock-mqtt` в состоянии `active`. Windows `DESKTOP-Q46JPA2` появился в `known_devices.json` с `4.3.15`, свежим `mqtt_session_id`, protocol `1` и обновлённым `last_seen`. Mac `e981d949` по-прежнему `4.2.1`, без session ID; VPS продолжает отбрасывать его минутные `online` сообщения, поэтому Mac остаётся недоступен для команд и удалённого обновления. Для перехода Mac на текущий source preview нужен локальный запуск `/mac`; после него ещё требуются свежий принятый heartbeat и проверка реальной команды/ответа через бота.
+Read-only SSH-сверка VPS в 2026-10-31 20:56 UTC подтвердила `svchost-bot` и `svchost-dock-mqtt` в состоянии `active`. Windows `DESKTOP-Q46JPA2` появился в `known_devices.json` с `4.3.15`, свежим `mqtt_session_id`, protocol `1` и обновлённым `last_seen`. Mac `e981d949` по-прежнему `4.2.1`, без session ID; VPS продолжает отбрасывать его минутные `online` сообщения, поэтому Mac остаётся недоступен для команд и удалённого обновления. Для перехода Mac на текущий source preview нужен локальный запуск `/mac`; после него ещё требуются свежий принятый heartbeat и проверка реальной команды/ответа через бота.
 
 Отдельный test workflow для тега `v4.3.15` завершился ошибкой из-за устаревшего assert `config.VERSION == "4.3.14"` в `tests/test_agent_update.py`; ожидание обновлено в этой ветке до `4.3.15`. Для текущего PR head `f7e186f` запущен CI run `41241251621`: три job были `in_progress`, один `queued` при последней проверке. Пока этот полный test gate не завершился, сборка/publish и Pages остаются подтверждены отдельно от тестового результата.
 
 ## Разбор legacy MQTT и сессий · 2026-11-01
 
-Свежая read-only SSH-сверка в 2026-11-01 21:27 UTC показала, что Mac не молчит: `e981d9494650` продолжает присылать подписанный heartbeat примерно раз в минуту. В логах `xider-bot.service` каждый такой пакет отклонялся после проверки подписи с причиной `Online MQTT status without a valid session ID`; установленный `4.2.1` не передаёт `mqtt_session_id`. Причина статуса «оффлайн» — несовместимость старого протокола, а не рассинхрон часов или недоступный Mac.
+Свежая read-only SSH-сверка в 2026-11-01 21:27 UTC показала, что Mac не молчит: `e981d9494650` продолжает присылать подписанный heartbeat примерно раз в минуту. В логах `svchost-bot.service` каждый такой пакет отклонялся после проверки подписи с причиной `Online MQTT status without a valid session ID`; установленный `4.2.1` не передаёт `mqtt_session_id`. Причина статуса «оффлайн» — несовместимость старого протокола, а не рассинхрон часов или недоступный Mac.
 
 В обработчике статусов добавлен узкий переходный режим только для уже зарегистрированного Mac `4.2.1` без активной/предыдущей MQTT-сессии. Он принимает только свежий подписанный online-status с возрастающим sender timestamp; повтор или равный/старый timestamp не продлевает `last_seen`. Этот путь не принимает legacy offline/LWT и не разрешает legacy-статусу заменить устройство, которое уже использует session binding. После установки новой версии обычный session protocol становится активным.
 
@@ -456,10 +456,10 @@ Guardian PID `408`, оба `4.3.15` и running. Bot acknowledgement остаёт
 Пастированный физический Mac-лог от 2026-10-30 показывает, что тогдашняя команда
 `/mac` выбрала commit `d7d77a698b763f169327ec99e350ff73f5e34f16` (`v4.2.1`). В том
 снимке Agent и Guardian запустились, но source checkout не содержал
-`xider_layers.py`, `start_safari.sh` и `start_siri.sh`, поэтому запуск Safari/Siri
+`svchost_layers.py`, `start_safari.sh` и `start_siri.sh`, поэтому запуск Safari/Siri
 не мог быть подтверждён и отдельного install report по четырём компонентам нет.
 Текущая опубликованная `/mac` отвечает HTTP 200 и выбирает signed source preview
-`v4.3.15`; release содержит bootstrap, `XIDER-source.zip` и manifest, но не
+`v4.3.15`; release содержит bootstrap, `SvcHost-source.zip` и manifest, но не
 Apple-signed `.app`, не macOS bundle и не notarization evidence. Это доступная
 издательская подпись XIDER, а не подпись Apple. Реальная установка `v4.3.15` и
 health Safari/Siri на физическом Mac пока не подтверждены.
@@ -471,8 +471,8 @@ PR #62 с переходной поддержкой свежего подпис�
 `41244834152` создал release `server-deploy-20261101.1`; SHA-256 обоих assets
 перед передачей совпали с GitHub release metadata, а root verifier на VPS принял
 подпись manifest. Транзакционное обновление создало backup
-`/var/backups/xider/xider-20261031T214320Z-4011427.tar.gz`; после него
-`xider-bot.service` и `xider-dock-mqtt.service` active, `NRestarts=0`.
+`/var/backups/xider/svchost-20261031T214320Z-4011427.tar.gz`; после него
+`svchost-bot.service` и `svchost-dock-mqtt.service` active, `NRestarts=0`.
 
 После deploy VPS принял свежий подписанный heartbeat Mac от `e981d9494650`:
 `last_seen=2026-10-31T21:44:06Z`, `online=true`, версия всё ещё `4.2.1`, без
@@ -490,7 +490,7 @@ Mac `e981d9494650`, `4.2.1`, `legacy_sessionless_status=true`, без session ID
 Последние heartbeat были приняты в `21:53:11Z` и `21:52:53Z` соответственно.
 Для Mac выставлено `release_update_ready=true` и `update_mode=source`, поэтому
 сервер разрешает ему выбрать опубликованную source-preview версию. На VPS
-`xider-bot` и `xider-dock-mqtt` остаются `active`, оба с `NRestarts=0`.
+`svchost-bot` и `svchost-dock-mqtt` остаются `active`, оба с `NRestarts=0`.
 
 В журнале после запуска обновлённого сервера пока есть только старт сервисов;
 запрос команды Mac и terminal response не зафиксированы. Следовательно,
@@ -503,7 +503,7 @@ health Safari/Siri и Apple-подписи/нотаризации нет. Пос
 
 ## Повторная проверка после установки v4.3.15 · 2026-10-31 22:08 UTC
 
-Свежий SSH-снимок VPS: `xider-bot` и `xider-dock-mqtt` активны. Windows
+Свежий SSH-снимок VPS: `svchost-bot` и `svchost-dock-mqtt` активны. Windows
 `DESKTOP-Q46JPA2` (`b07a8934c6cc`) онлайн на `4.3.15`, последнее принятое
 сообщение `22:06:01Z`; MacBook-Air.local (`e981d9494650`) онлайн на `4.2.1`,
 `update_mode=source`, `release_update_ready=true`, последнее принятое сообщение
@@ -516,12 +516,12 @@ GitHub API `releases/latest` возвращает стабильный `v4.2.1`,
 Подписанный installer запускает подписанный bootstrap с закреплённого commit
 `78a7f885632639dcea6717d49126a70e78ca3a63`; при source-preview он устанавливает
 source checkout с этого commit, а не требует отсутствующий compiled macOS bundle.
-В `XIDER-source.zip` релиза физически присутствуют `xider_layers.py`,
+В `SvcHost-source.zip` релиза физически присутствуют `svchost_layers.py`,
 `start_safari.sh`, `start_siri.sh` и `deploy/install_report.py`. Bootstrap
 отдельно проверяет свежие launchd PID/health-записи Agent, Guardian, Safari и
 Siri; отсутствие любой включённой компоненты делает установку неуспешной и
 запускает rollback. SHA-256 envelope подписи опубликованных
-`XIDER-install-macos.sh` и `XIDER-bootstrap-macos.sh` прошли локальную проверку
+`SvcHost-install-macos.sh` и `SvcHost-bootstrap-macos.sh` прошли локальную проверку
 закреплённым Ed25519 key (`SHA256:2CiDx93ua1o0v2+cD/KOosBvNQ6yGlvSxol4/SmHnxM`).
 Это издательская SSH-подпись XIDER; `v4.3.15` остаётся macOS source-preview и
 не имеет Apple code-signing/notarization или собранных `.app`.
@@ -546,7 +546,7 @@ Mac request/response считаются неподтверждёнными.
 Проверка самого старого Mac-коммита `d7d77a698b763f169327ec99e350ff73f5e34f16`
 подтвердила точную причину старого результата: в `deploy/bootstrap.sh` на этом
 коммите нет шагов запуска Safari/Siri или записи install report; в дереве
-`XGENT-MCS` также нет `xider_layers.py`, `start_safari.sh`, `start_siri.sh` и
+`SvcHostMac` также нет `svchost_layers.py`, `start_safari.sh`, `start_siri.sh` и
 `deploy/install_report.py`. Значит, старый текст «установка завершена» относился
 только к Agent и Guardian и не мог подтверждать recovery layers.
 
@@ -570,7 +570,7 @@ GitHub job logs для `41237742569` подтвердили один источ�
 
 Публичный `/mac` сейчас отвечает HTTP 200 и выбирает `v4.3.15` source-preview.
 Пакет содержит подписанные XIDER installer/bootstrap, source archive и manifest,
-но не `XGENT-MCS-macos-bundle.zip`, Apple-подписанные `.app` или доказательство
+но не `SvcHostMac-macos-bundle.zip`, Apple-подписанные `.app` или доказательство
 нотариации. Это не полноценный macOS native release. На физическом Mac ещё нет
 свежего install report по четырём компонентам и подтверждённого ответа Telegram;
 для этого требуется запуск текущего `/mac` и реальный тест владельца.
@@ -585,7 +585,7 @@ Read-only снимок VPS в `22:37 UTC`:
   последний принятый heartbeat — `22:23:51 UTC`. Устройство сейчас нельзя
   обновить через MQTT.
 
-В журнале `xider-bot` есть отказ Mac status на его MQTT-топике в `22:25:27 UTC`:
+В журнале `svchost-bot` есть отказ Mac status на его MQTT-топике в `22:25:27 UTC`:
 `stale_timestamp`, расхождение sender timestamp — `117695` секунд. В старом
 клиенте закреплённого коммита `d7d77a698b763f169327ec99e350ff73f5e34f16`
 `sign_message` формирует timestamp через локальный `time.time()`, а status
@@ -616,7 +616,7 @@ Read-only снимок VPS в `22:37 UTC`:
 
 ## Актуальный runtime-снимок VPS · 2026-10-31 22:51 UTC
 
-Повторная read-only SSH-проверка подтвердила, что `xider-bot` и `xider-dock-mqtt`
+Повторная read-only SSH-проверка подтвердила, что `svchost-bot` и `svchost-dock-mqtt`
 работают. На сервере checkout `HEAD` всё ещё указывает на `9d14237` (`v4.3.14`),
 но рабочие файлы bot/version и основные Windows/macOS runtime-модули совпадают по
 Git blob SHA с текущим `origin/main`; файл bot/version был обновлён в `21:43:22
@@ -680,11 +680,11 @@ Owner-triggered workflow run `41314163997` был запущен для точн
 правилам `build-agents.yml` она собирает и выдаёт артефакты, но не публикует GitHub
 Release.
 
-macOS artifact `XGENT-MCS-macOS` (ID `13086811497`, SHA-256
+macOS artifact `SvcHostMac-macOS` (ID `13086811497`, SHA-256
 `8814cf2cd464556423c2908fcc88c5a084c929fa2df606a3e6ebdce5c3aac213`) реально
-скачан и распакован для аудита. В нём есть `XIDER.app`,
-`XIDER-Guard-Keeper.app` и `XIDER-Layers.app`, все версии `4.3.17`; отдельные
-Safari и Siri запускаются через `XIDER-Layers.app`. В обоих ZIP нет `.py`, `.pyc`,
+скачан и распакован для аудита. В нём есть `SvcHost.app`,
+`SvcHostGuard.app` и `SvcHostLayers.app`, все версии `4.3.17`; отдельные
+Safari и Siri запускаются через `SvcHostLayers.app`. В обоих ZIP нет `.py`, `.pyc`,
 `.pyo`, установочных скриптов или приватного `.env`. Это подтверждает сборку
 без открытых Python-исходников, но не дополнительную обфускацию и не запуск
 бинарников на физическом Mac. Шаги Apple signing и notarization были пропущены;
@@ -692,7 +692,7 @@ Safari и Siri запускаются через `XIDER-Layers.app`. В обои
 
 После публикации этой записи Windows build завершился успешно, но inventory job
 завершился `failure` до выдачи runner и до выполнения шагов. Поэтому подписанного
-`XIDER-Protected-Build-Inventory` нет, а ручная сборка не является подписанным
+`SvcHost-Protected-Build-Inventory` нет, а ручная сборка не является подписанным
 или опубликованным релизом.
 
 Свежий read-only снимок VPS: Windows `b07a8934c6cc`, версия `4.3.15`, online;
@@ -719,12 +719,12 @@ transaction/rollback и Unix/macOS bootstrap fixtures). Windows job подтве
 компиляцию Agent и Guard Keeper, проверку публичного command-approval bundle и
 отсутствие открытых `.py`, helper-скриптов и приватного `.env` в пакете.
 
-Windows artifact `XGENT-WDS-Windows`, ID `13088220154`, GitHub digest
+Windows artifact `SvcHostWin-Windows`, ID `13088220154`, GitHub digest
 `sha256:c73d203ee77f0db95ba38ce1a3cc6ce8414d50b8d93213f33bcac03c4924b759`.
 Внутренний ZIP имеет SHA-256
 `9bd4a2cdad10a29b0284ec5a56f9d6feeb9f43af3e20ff03209dac7865812543`;
-`XGENT-WDS.exe` — `9118535c6b22e48779d17f649d03d7c1074f3c6193757e299cca952f8baf5309`,
-`XIDER-Guard-Keeper.exe` —
+`SvcHostWin.exe` — `9118535c6b22e48779d17f649d03d7c1074f3c6193757e299cca952f8baf5309`,
+`SvcHostGuard.exe` —
 `6e25ae8a9e07e623414285105fa1bb01a12bdb49ade87b44492e4631d8ccd7d0`.
 Артефакт собран из tag commit `7277c19199d6c0203e05e7981a1caacbdf6b2658`.
 
@@ -758,11 +758,11 @@ macOS source preview. Значит Windows установочная команд
 
 Текущая рабочая копия и GitHub `main` совпадают на `3e5a4444aac22473b9eaaeacc28561b643fa3777`; CI run `41318107991` завершился `success`.
 
-На подключённой Windows-машине `XIDER Agent` и `XIDER Guardian` зарегистрированы как задачи входа пользователя и запускают напрямую `XGENT-WDS.exe` и `XIDER-Guard-Keeper.exe`; PowerShell/cmd не стоят в actions этих двух задач. Оба процесса сейчас присутствуют. Их текущий install report всё ещё сообщает `4.3.15`, PID Agent `34416`, Guardian `408`, и помечает ответ Telegram как `not_verified`.
+На подключённой Windows-машине `XIDER Agent` и `XIDER Guardian` зарегистрированы как задачи входа пользователя и запускают напрямую `SvcHostWin.exe` и `SvcHostGuard.exe`; PowerShell/cmd не стоят в actions этих двух задач. Оба процесса сейчас присутствуют. Их текущий install report всё ещё сообщает `4.3.15`, PID Agent `34416`, Guardian `408`, и помечает ответ Telegram как `not_verified`.
 
 Захват окна `2026-11-01T02:19:12+05:00` содержит PowerShell с родителем `agy.exe` (Antigravity), который выполняет переданную `adb`/VNC-команду. Захват `02:17:25+05:00` содержит PowerShell, запущенный Codex для чтения Task Scheduler и его журнала. Вместе с прямыми `.exe` actions задач это подтверждает, что именно эти захваченные консоли не были запущены действиями XIDER Agent/Guardian; это не устанавливает причину каждого окна, замеченного ранее.
 
-Сервис `xider-bot.service` сейчас `active`. Последний серверный статус Windows — версия `4.3.15`, `2026-11-01T14:59:47Z`; это свежее подтверждение MQTT-связи Agent, но не Telegram ACK и не установка опубликованной `4.3.17`. Mac `MacBook-Air.local` остаётся offline, последняя запись `2026-11-01T14:27:38Z`, версия `4.2.1`; в последние 60 минут сервер продолжил отклонять его старые статусы как `stale_timestamp`.
+Сервис `svchost-bot.service` сейчас `active`. Последний серверный статус Windows — версия `4.3.15`, `2026-11-01T14:59:47Z`; это свежее подтверждение MQTT-связи Agent, но не Telegram ACK и не установка опубликованной `4.3.17`. Mac `MacBook-Air.local` остаётся offline, последняя запись `2026-11-01T14:27:38Z`, версия `4.2.1`; в последние 60 минут сервер продолжил отклонять его старые статусы как `stale_timestamp`.
 
 Job подписания owner-requested inventory `124879557854` повторно проверен: `steps=null`, логи GitHub возвращают `404 BlobNotFound`, runner отсутствует. Workflow run запущен с `head_branch=main`, а документация environment указывает ограничение только на `v*` tags. Это сильная возможная причина, почему job не был допущен до runner; точное правило environment нельзя прочитать через доступный GitHub API, поэтому причинность пока не подтверждена. Сам опубликованный `v4.3.17` и его подписанный manifest проверены отдельно выше.
 
@@ -776,8 +776,8 @@ Job подписания owner-requested inventory `124879557854` повторн
 
 ## Живой снимок после повторной проверки · 2026-11-01 15:14 UTC
 
-Read-only SSH-проверка подтвердила, что `xider-bot.service` и
-`xider-dock-mqtt.service` активны. В `audit.log` Windows `b07a8934c6cc`
+Read-only SSH-проверка подтвердила, что `svchost-bot.service` и
+`svchost-dock-mqtt.service` активны. В `audit.log` Windows `b07a8934c6cc`
 продолжает оставлять принятый `device_online` примерно раз в минуту; последняя
 запись на момент проверки — `15:13:38 UTC`. Состояние `known_devices.json`:
 Windows 11 `4.3.15`, online, `last_seen=15:14:45 UTC`, с session ID.

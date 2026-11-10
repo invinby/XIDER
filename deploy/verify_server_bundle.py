@@ -16,11 +16,11 @@ try:
     # /usr/local/libexec/xider. The fallback is only for repository tests.
     from release_signature import verify_manifest_signature
 except ImportError:  # pragma: no cover - exercised by repository test imports
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "XGENT-MCS"))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "SvcHostMac"))
     from release_signature import verify_manifest_signature
 
 
-SERVER_ASSET = "XIDER-source.zip"
+SERVER_ASSET = "SvcHost-source.zip"
 MAX_SERVER_BUNDLE_BYTES = 256 * 1024 * 1024
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _RELEASE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
@@ -62,7 +62,7 @@ def verify_server_bundle(
 
     matches = [asset for asset in assets if isinstance(asset, dict) and asset.get("name") == SERVER_ASSET]
     if len(matches) != 1:
-        raise ValueError("Release manifest must contain exactly one XIDER-source.zip entry.")
+        raise ValueError("Release manifest must contain exactly one SvcHost-source.zip entry.")
     asset = matches[0]
     size = asset.get("size")
     digest = asset.get("sha256")
@@ -75,7 +75,7 @@ def verify_server_bundle(
         or not isinstance(digest, str)
         or not _SHA256.fullmatch(digest)
     ):
-        raise ValueError("XIDER-source.zip manifest entry is invalid.")
+        raise ValueError("SvcHost-source.zip manifest entry is invalid.")
 
     if not bundle_path.is_file() or bundle_path.stat().st_size != size:
         raise ValueError("Server bundle size does not match its signed manifest.")
@@ -91,7 +91,7 @@ def verify_server_bundle(
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if len(args) != 2:
-        print("Usage: verify_server_bundle.py RELEASE-MANIFEST.json XIDER-source.zip", file=sys.stderr)
+        print("Usage: verify_server_bundle.py RELEASE-MANIFEST.json SvcHost-source.zip", file=sys.stderr)
         return 2
     try:
         release = verify_server_bundle(Path(args[0]), Path(args[1]))

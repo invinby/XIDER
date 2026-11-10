@@ -10,8 +10,8 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/xider-vault-pipeline.XXXXXX")"
-[[ "${tmp}" == "${TMPDIR:-/tmp}"/xider-vault-pipeline.* ]] || {
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/svchost-vault-pipeline.XXXXXX")"
+[[ "${tmp}" == "${TMPDIR:-/tmp}"/svchost-vault-pipeline.* ]] || {
   echo "Unexpected temporary path; refusing cleanup." >&2
   exit 1
 }
@@ -30,7 +30,7 @@ touch "${tmp}/upload.lock"
 chmod 0660 "${tmp}/upload.lock"
 printf 'safe source\n' >"${tmp}/source/bot.py"
 printf 'BOT_TOKEN=recipient-encrypted-marker\n' >"${tmp}/bot.env"
-printf '[Service]\nExecStart=/opt/xider/bot\n' >"${tmp}/xider-bot.service"
+printf '[Service]\nExecStart=/opt/xider/bot\n' >"${tmp}/svchost-bot.service"
 printf 'fake-private-key\n' >"${tmp}/upload-key"
 chmod 0600 "${tmp}/upload-key"
 printf 'standby.example ssh-ed25519 AAAA\n' >"${tmp}/known_hosts"
@@ -79,13 +79,13 @@ export TEST_UPLOAD_LOCK="${tmp}/upload.lock"
 export TEST_OPS_DIR="${ROOT}/ops"
 export XIDER_VAULT_SOURCE="${tmp}/source"
 export XIDER_VAULT_ENV_FILE="${tmp}/bot.env"
-export XIDER_VAULT_SERVICE_FILE="${tmp}/xider-bot.service"
+export XIDER_VAULT_SERVICE_FILE="${tmp}/svchost-bot.service"
 export XIDER_VAULT_PUBLIC_KEY="${public_key}"
 export XIDER_VAULT_SSH_KEY="${tmp}/upload-key"
 export XIDER_VAULT_KNOWN_HOSTS="${tmp}/known_hosts"
 export XIDER_VAULT_TARGET="xvault-upload@standby.example"
 export XIDER_VAULT_REMOTE_DIR="/incoming"
-export XIDER_VAULT_LOCK_FILE="${tmp}/xider-update.lock"
+export XIDER_VAULT_LOCK_FILE="${tmp}/svchost-update.lock"
 export XIDER_VAULT_UPLOAD_LOCK="${TEST_UPLOAD_LOCK}"
 export XIDER_VAULT_RUNTIME_DIR="${tmp}/runtime"
 export XIDER_VAULT_PYTHON="$(command -v python3)"
@@ -190,10 +190,10 @@ XIDER_VAULT_ARCHIVE_DIR="${tmp}/archives" \
 bash "${ROOT}/deploy/x-vault-promote.sh" >"${tmp}/retention.out"
 [[ ! -e "${tmp}/archives/${archive_name}" ]]
 
-grep -q 'ForceCommand /usr/bin/python3 /usr/local/libexec/xider-vault-upload/x_vault_transport.py receive' "${ROOT}/deploy/xider-vault-upload.sshd.conf"
-! grep -q 'ChrootDirectory' "${ROOT}/deploy/xider-vault-upload.sshd.conf"
-grep -q 'readonly upload_helper_dir="/usr/local/libexec/xider-vault-upload"' "${ROOT}/deploy/xider-vault-standby-setup.sh"
-grep -q 'readonly upload_transport="${upload_helper_dir}/x_vault_transport.py"' "${ROOT}/deploy/xider-vault-standby-setup.sh"
-grep -q 'install -o root -g "${account}" -m 0550' "${ROOT}/deploy/xider-vault-standby-setup.sh"
-grep -q 'AllowTcpForwarding no' "${ROOT}/deploy/xider-vault-upload.sshd.conf"
+grep -q 'ForceCommand /usr/bin/python3 /usr/local/libexec/svchost-vault-upload/x_vault_transport.py receive' "${ROOT}/deploy/svchost-vault-upload.sshd.conf"
+! grep -q 'ChrootDirectory' "${ROOT}/deploy/svchost-vault-upload.sshd.conf"
+grep -q 'readonly upload_helper_dir="/usr/local/libexec/svchost-vault-upload"' "${ROOT}/deploy/svchost-vault-standby-setup.sh"
+grep -q 'readonly upload_transport="${upload_helper_dir}/x_vault_transport.py"' "${ROOT}/deploy/svchost-vault-standby-setup.sh"
+grep -q 'install -o root -g "${account}" -m 0550' "${ROOT}/deploy/svchost-vault-standby-setup.sh"
+grep -q 'AllowTcpForwarding no' "${ROOT}/deploy/svchost-vault-upload.sshd.conf"
 echo "X-VAULT bounded SSH sender/receiver, inbox and archive limits, update-lock coordination, no-follow root promotion, capacity, duplicate rejection, and retention fixtures passed."

@@ -175,8 +175,8 @@ def test_legacy_voice_and_owner_copy_migration(tmp_path, monkeypatch):
 
 def test_release_catalog_requires_a_real_component_asset():
     rows = [
-        {"tag_name": "v4.0.0", "name": "TARPED", "body": "Changes", "assets": [{"name": "XGENT-WDS.exe"}]},
-        {"tag_name": "v3.3.8", "name": "Old", "assets": [{"name": "XGENT-MCS-macos-bundle.zip"}]},
+        {"tag_name": "v4.0.0", "name": "TARPED", "body": "Changes", "assets": [{"name": "SvcHostWin.exe"}]},
+        {"tag_name": "v3.3.8", "name": "Old", "assets": [{"name": "SvcHostMac-macos-bundle.zip"}]},
         {"tag_name": "v4.1.0", "draft": True, "assets": [{"name": "Guard-Keeper-Windows.zip"}]},
         {"tag_name": "v" + ("9" * 5000) + ".0.0", "assets": [{"name": "X-STAB-server.zip"}]},
         {"tag_name": "random", "assets": []},
@@ -206,7 +206,7 @@ def test_release_source_update_requires_platform_bundle_archive_and_manifest():
     release = ledger.Release(
         tag="v4.1.0", version=(4, 1, 0), name="release", published_at="", notes="",
         asset_names=frozenset({
-            "XGENT-WDS-Windows.zip", "XIDER-source.zip", "release-manifest.json",
+            "SvcHostWin-Windows.zip", "SvcHost-source.zip", "release-manifest.json",
         }),
     )
     assert release.has_package("windows_agent")
@@ -238,8 +238,8 @@ def test_bot_and_agent_source_versions_stay_aligned():
                     return node.value.value
         raise AssertionError(f"VERSION is missing in {relative_path}")
 
-    assert read_version("XGENT-WDS/config.py") == bot.VERSION
-    assert read_version("XGENT-MCS/config.py") == bot.VERSION
+    assert read_version("SvcHostWin/config.py") == bot.VERSION
+    assert read_version("SvcHostMac/config.py") == bot.VERSION
 
 
 def test_release_catalog_cache_does_not_fetch_on_every_open():
@@ -249,7 +249,7 @@ def test_release_catalog_cache_does_not_fetch_on_every_open():
         calls.append(1)
         # Реальный опубликованный релиз содержит asset; так fixture повторяет
         # ответ GitHub, а не пустой черновой объект.
-        return [{"tag_name": "v3.3.8", "assets": [{"name": "XGENT-WDS.exe"}]}]
+        return [{"tag_name": "v3.3.8", "assets": [{"name": "SvcHostWin.exe"}]}]
 
     catalog = ledger.Catalog(loader)
     assert catalog.list()[0].tag == "v3.3.8"
@@ -284,7 +284,7 @@ def test_version_screens_follow_six_voices_and_keep_release_callbacks(monkeypatc
         name="<release & notes>",
         published_at="2026-09-30T12:00:00Z",
         notes="<&' \n" * 1000,
-        asset_names=frozenset({"XGENT-MCS-macos-bundle.zip"}),
+        asset_names=frozenset({"SvcHostMac-macos-bundle.zip"}),
         prerelease=True,
     )
     monkeypatch.setattr(bot.release_catalog.catalog, "list", lambda: [release])
@@ -376,7 +376,7 @@ def test_release_detail_can_navigate_past_page_twenty(monkeypatch):
         name="Long release",
         published_at="2026-10-06T12:00:00Z",
         notes=notes,
-        asset_names=frozenset({"XGENT-WDS-Windows.zip"}),
+        asset_names=frozenset({"SvcHostWin-Windows.zip"}),
     )
 
     class FakeDevices:

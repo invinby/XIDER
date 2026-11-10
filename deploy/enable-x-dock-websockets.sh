@@ -2,12 +2,12 @@
 set -Eeuo pipefail
 
 APP_DIR="${XIDER_APP_DIR:-/opt/xider}"
-BROKER_CONFIG=/etc/xider-dock/mosquitto.conf
-NGINX_SITE=/etc/nginx/conf.d/xider-dock.conf
+BROKER_CONFIG=/etc/svchost-dock/mosquitto.conf
+NGINX_SITE=/etc/nginx/conf.d/svchost-dock.conf
 BOT_ENV=/etc/xider/bot.env
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP_DIR="/var/backups/xider/x-dock-websockets-${STAMP}"
-STAGE="$(mktemp -d /etc/xider-dock/.ws.XXXXXX)"
+STAGE="$(mktemp -d /etc/svchost-dock/.ws.XXXXXX)"
 chown root:mosquitto "$STAGE"
 chmod 0750 "$STAGE"
 BROKER_CHANGED=0
@@ -26,17 +26,17 @@ rollback() {
     fi
     if [[ "$BROKER_CHANGED" -eq 1 && -s "$BACKUP_DIR/mosquitto.conf" ]]; then
       install -o root -g mosquitto -m 0640 "$BACKUP_DIR/mosquitto.conf" "$BROKER_CONFIG"
-      systemctl restart xider-dock-mqtt || true
+      systemctl restart svchost-dock-mqtt || true
     fi
     if [[ "$ENV_CHANGED" -eq 1 && -s "$BACKUP_DIR/bot.env" ]]; then
       install -o root -g xider -m 0640 "$BACKUP_DIR/bot.env" "$BOT_ENV"
-      systemctl restart xider-bot || true
+      systemctl restart svchost-bot || true
     fi
-    if [[ "$UNIT_CHANGED" -eq 1 && -s "$BACKUP_DIR/xider-dock-mqtt-ws.conf" ]]; then
-      install -o root -g root -m 0644 "$BACKUP_DIR/xider-dock-mqtt-ws.conf" /etc/systemd/system/xider-dock-mqtt.service.d/20-ws-firewall.conf
+    if [[ "$UNIT_CHANGED" -eq 1 && -s "$BACKUP_DIR/svchost-dock-mqtt-ws.conf" ]]; then
+      install -o root -g root -m 0644 "$BACKUP_DIR/svchost-dock-mqtt-ws.conf" /etc/systemd/system/svchost-dock-mqtt.service.d/20-ws-firewall.conf
       systemctl daemon-reload || true
     elif [[ "$UNIT_CHANGED" -eq 1 ]]; then
-      rm -f /etc/systemd/system/xider-dock-mqtt.service.d/20-ws-firewall.conf
+      rm -f /etc/systemd/system/svchost-dock-mqtt.service.d/20-ws-firewall.conf
       systemctl daemon-reload || true
     fi
   fi
@@ -52,14 +52,14 @@ fi
 for path in "$BROKER_CONFIG" "$NGINX_SITE" "$BOT_ENV"; do
   [[ -f "$path" && ! -L "$path" ]] || { echo "Missing or unsafe X-DOCK path: $path" >&2; exit 3; }
 done
-systemctl is-active --quiet xider-dock-mqtt
+systemctl is-active --quiet svchost-dock-mqtt
 systemctl is-active --quiet nginx
-systemctl is-active --quiet xider-bot
+systemctl is-active --quiet svchost-bot
 grep -Fq 'XIDER_DOCK_ENABLED=true' "$BOT_ENV"
 grep -Fq 'transport="websockets"' "$APP_DIR/TG-BOT-SERVER/bot.py"
 grep -Fq -- '--websocket-port' "$APP_DIR/broker/x_dock_config.py"
-[[ -f "$APP_DIR/deploy/xider-ws-firewall.sh" && ! -L "$APP_DIR/deploy/xider-ws-firewall.sh" && \
-   -f "$APP_DIR/deploy/xider-ws-firewall.service" && ! -L "$APP_DIR/deploy/xider-ws-firewall.service" ]]
+[[ -f "$APP_DIR/deploy/svchost-ws-firewall.sh" && ! -L "$APP_DIR/deploy/svchost-ws-firewall.sh" && \
+   -f "$APP_DIR/deploy/svchost-ws-firewall.service" && ! -L "$APP_DIR/deploy/svchost-ws-firewall.service" ]]
 ldd /usr/sbin/mosquitto | grep 'libwebsockets' >/dev/null || {
   echo "Mosquitto was built without WebSocket support." >&2; exit 4;
 }
@@ -72,35 +72,35 @@ cp -a "$BOT_ENV" "$BACKUP_DIR/bot.env"
 # Mosquitto's libwebsockets listener binds all interfaces even when its
 # listener line names 127.0.0.1. Install an explicit host firewall guard before
 # starting that listener; nginx still reaches it through loopback.
-install -o root -g root -m 0750 "$APP_DIR/deploy/xider-ws-firewall.sh" /usr/local/sbin/xider-ws-firewall
-install -o root -g root -m 0644 "$APP_DIR/deploy/xider-ws-firewall.service" /etc/systemd/system/xider-ws-firewall.service
-install -d -o root -g root -m 0755 /etc/systemd/system/xider-dock-mqtt.service.d
-DROPIN=/etc/systemd/system/xider-dock-mqtt.service.d/20-ws-firewall.conf
-if [[ -e "$DROPIN" ]]; then cp -a "$DROPIN" "$BACKUP_DIR/xider-dock-mqtt-ws.conf"; fi
+install -o root -g root -m 0750 "$APP_DIR/deploy/svchost-ws-firewall.sh" /usr/local/sbin/svchost-ws-firewall
+install -o root -g root -m 0644 "$APP_DIR/deploy/svchost-ws-firewall.service" /etc/systemd/system/svchost-ws-firewall.service
+install -d -o root -g root -m 0755 /etc/systemd/system/svchost-dock-mqtt.service.d
+DROPIN=/etc/systemd/system/svchost-dock-mqtt.service.d/20-ws-firewall.conf
+if [[ -e "$DROPIN" ]]; then cp -a "$DROPIN" "$BACKUP_DIR/svchost-dock-mqtt-ws.conf"; fi
 UNIT_CHANGED=1
 cat > "$DROPIN" <<'EOF'
 [Unit]
-Requires=xider-ws-firewall.service
-After=xider-ws-firewall.service
+Requires=svchost-ws-firewall.service
+After=svchost-ws-firewall.service
 EOF
 chmod 0644 "$DROPIN"
 systemctl daemon-reload
-systemctl enable --now xider-ws-firewall.service
-"/usr/local/sbin/xider-ws-firewall"
+systemctl enable --now svchost-ws-firewall.service
+"/usr/local/sbin/svchost-ws-firewall"
 
 python3 "$APP_DIR/broker/x_dock_config.py" \
   --plugin /usr/lib/x86_64-linux-gnu/mosquitto_dynamic_security.so \
-  --security-file /var/lib/xider-dock/dynamic-security.json \
-  --data-dir /var/lib/xider-dock/data \
-  --cert-file /etc/xider-dock/tls/fullchain.pem \
-  --key-file /etc/xider-dock/tls/privkey.pem \
+  --security-file /var/lib/svchost-dock/dynamic-security.json \
+  --data-dir /var/lib/svchost-dock/data \
+  --cert-file /etc/svchost-dock/tls/fullchain.pem \
+  --key-file /etc/svchost-dock/tls/privkey.pem \
   --port 8884 --bind-address 127.0.0.1 --websocket-port 18885 \
   --output "$STAGE/mosquitto.conf"
 chown root:mosquitto "$STAGE/mosquitto.conf"
 chmod 0640 "$STAGE/mosquitto.conf"
 install -o root -g mosquitto -m 0640 "$STAGE/mosquitto.conf" "$BROKER_CONFIG"
 BROKER_CHANGED=1
-systemctl restart xider-dock-mqtt
+systemctl restart svchost-dock-mqtt
 for attempt in {1..20}; do
   if ss -ltn | awk '{print $4}' | grep -qE '(0\.0\.0\.0|\*):18885$' && \
      ss -ltn | awk '{print $4}' | grep -q '127.0.0.1:8884$'; then break; fi
@@ -108,7 +108,7 @@ for attempt in {1..20}; do
 done
 ss -ltn | awk '{print $4}' | grep -qE '(0\.0\.0\.0|\*):18885$'
 ss -ltn | awk '{print $4}' | grep -q '127.0.0.1:8884$'
-"/usr/local/sbin/xider-ws-firewall"
+"/usr/local/sbin/svchost-ws-firewall"
 
 python3 - "$NGINX_SITE" "$STAGE/nginx.conf" <<'PY'
 import pathlib, sys
@@ -184,9 +184,9 @@ finally:
     pathlib.Path(name).unlink(missing_ok=True)
 PY
 ENV_CHANGED=1
-systemctl restart xider-bot
-systemctl is-active --quiet xider-bot
-systemctl is-active --quiet xider-dock-mqtt
+systemctl restart svchost-bot
+systemctl is-active --quiet svchost-bot
+systemctl is-active --quiet svchost-dock-mqtt
 systemctl is-active --quiet nginx
 PUBLIC_IP="$(awk -F= '/^XIDER_DOCK_BROKER_HOST=/{print $2}' "$BOT_ENV" | tail -n 1)"
 [[ "$PUBLIC_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]

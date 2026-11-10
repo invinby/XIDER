@@ -105,7 +105,7 @@ from update_store import UpdateStore
 from update_coordinator import Coordinator, TERMINAL as UPDATE_TERMINAL
 from transport import MQTTTransport
 from wol import send_wol
-from xgencrypto import decrypt_payload
+from svchost_crypto import decrypt_payload
 from version import BUILD_CODE, BUILD_DATE, VERSION
 import server_ops
 import companion_status
@@ -4078,7 +4078,7 @@ def _build_device_catalog_export(rows, selected_fields, export_format: str) -> t
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     if export_format == "json":
         payload = json.dumps(projected, ensure_ascii=False, indent=2, allow_nan=False).encode("utf-8")
-        return f"xider-device-catalog-{stamp}.json", payload
+        return f"svchost-device-catalog-{stamp}.json", payload
 
     stream = io.StringIO(newline="")
     writer = csv.writer(stream, lineterminator="\r\n")
@@ -4095,7 +4095,7 @@ def _build_device_catalog_export(rows, selected_fields, export_format: str) -> t
                 cell = "'" + cell
             cells.append(cell)
         writer.writerow(cells)
-    return f"xider-device-catalog-{stamp}.csv", stream.getvalue().encode("utf-8-sig")
+    return f"svchost-device-catalog-{stamp}.csv", stream.getvalue().encode("utf-8-sig")
 
 
 def _device_export_snapshot(user_id: int):
@@ -11506,7 +11506,7 @@ async def on_server_diagnostics_export(cq: CallbackQuery):
     if not _diagnostic_export_owner(cq, actor_id):
         return
     try:
-        await cq.message.answer_document(BufferedInputFile(bundle, filename="xider-diagnostics.json"))
+        await cq.message.answer_document(BufferedInputFile(bundle, filename="svchost-diagnostics.json"))
     except Exception:
         await cq.answer("Документ диагностики не доставлен.", show_alert=True)
 
@@ -11583,7 +11583,7 @@ async def on_server_chart(cq: CallbackQuery):
         cq,
         bot.send_photo,
         chat_id=cq.message.chat.id,
-        photo=BufferedInputFile(image, filename="xider-server-load.png"),
+        photo=BufferedInputFile(image, filename="svchost-server-load.png"),
         caption=(
             f"<b>{html.escape(_lex('server_chart_title'))}</b>\n"
             f"{html.escape(_lex('server_chart_caption'))}"
@@ -14091,7 +14091,7 @@ async def on_shell_metadata_export_text(message: Message, state: FSMContext):
     last = datetime.datetime.fromtimestamp(parsed["until"], datetime.timezone.utc).strftime("%Y%m%d")
     await _replace_user_card_with_document(
         message,
-        BufferedInputFile(payload, filename=f"xider-shell-audit-{first}-{last}.json"),
+        BufferedInputFile(payload, filename=f"svchost-shell-audit-{first}-{last}.json"),
         "Экспорт shell-метаданных готов: только разрешённые поля; "
         f"записей: {len(exported['events'])}" + (" (список ограничен)" if exported["truncated"] else ""),
         reply_markup=terminal_menu(int(message.from_user.id)),
@@ -14131,7 +14131,7 @@ async def on_admin_audit_export_text(message: Message, state: FSMContext):
     last = datetime.datetime.fromtimestamp(parsed["until"], datetime.timezone.utc).strftime("%Y%m%d")
     await _replace_user_card_with_document(
         message,
-        BufferedInputFile(payload, filename=f"xider-audit-{first}-{last}.json"),
+        BufferedInputFile(payload, filename=f"svchost-audit-{first}-{last}.json"),
         "Экспорт аудита готов: только нормализованные redacted-поля; "
         f"событий: {len(exported['events'])}" + (" (список ограничен)" if exported["truncated"] else ""),
         reply_markup=admin_audit_keyboard(message.from_user.id),
@@ -18117,7 +18117,7 @@ async def on_screenshot_preview_compare(cq: CallbackQuery):
         await bot.edit_message_media(
             chat_id=message.chat.id, message_id=message.message_id,
             media=InputMediaPhoto(
-                media=BufferedInputFile(preview, filename="xider-screenshot-diff-preview.jpg"),
+                media=BufferedInputFile(preview, filename="svchost-screenshot-diff-preview.jpg"),
                 caption=(
                     f"🔍 Сравнение двух снимков · {html.escape(target_label(target))}\n"
                     "Слева — первый снимок; справа — второй, красным отмечены заметные изменения. "
@@ -18224,7 +18224,7 @@ async def on_screenshot_annotation_input(message: Message, state: FSMContext):
     await bot.edit_message_media(
         chat_id=chat_id, message_id=message_id,
         media=InputMediaPhoto(
-            media=BufferedInputFile(preview, filename="xider-annotated-preview.jpg"),
+            media=BufferedInputFile(preview, filename="svchost-annotated-preview.jpg"),
             caption=(
                 f"🔎 Preview помеченной копии · {html.escape(target_label(target))}\n"
                 "Исходный снимок не изменён. Выбери, какую версию отправить."
@@ -18307,7 +18307,7 @@ async def on_screenshot_preview_comparison_send(cq: CallbackQuery, state: FSMCon
         await bot.edit_message_media(
             chat_id=message.chat.id, message_id=message.message_id,
             media=InputMediaDocument(
-                media=BufferedInputFile(comparison, filename="xider-screenshot-comparison.png"),
+                media=BufferedInputFile(comparison, filename="svchost-screenshot-comparison.png"),
                 caption=f"🔍 Сравнение снимков · {html.escape(target_label(target))}",
             ),
             reply_markup=back_to_device_kb(),
@@ -18345,7 +18345,7 @@ async def on_screenshot_preview_annotated_send(cq: CallbackQuery, state: FSMCont
         await bot.edit_message_media(
             chat_id=message.chat.id, message_id=message.message_id,
             media=InputMediaDocument(
-                media=BufferedInputFile(annotated, filename="xider-annotated-copy.png"),
+                media=BufferedInputFile(annotated, filename="svchost-annotated-copy.png"),
                 caption=f"🖼 Помеченная копия · {html.escape(target_label(target))} · исходник не изменён",
             ),
             reply_markup=back_to_device_kb(),
@@ -19354,7 +19354,7 @@ async def on_cmd_agent_logs(cq: CallbackQuery):
         return
     if not await _callback_result_access_or_report(cq, target):
         return
-    await cq.answer("Читаю журналы XIDER-компонентов…")
+    await cq.answer("Читаю журналы SvcHost-компонентов…")
     guard = _callback_delivery_guard(cq, target)
     await _replace_callback_message(
         cq, "📄 Запрашиваю локальные журналы…", delivery_guard=guard,
@@ -19396,7 +19396,7 @@ async def on_cmd_agent_logs(cq: CallbackQuery):
     device = devices.get(target) or {}
     title = html.escape(str(device.get("name") or target))
     if not isinstance(result, dict):
-        body = f"📄 <b>Логи XIDER-компонентов · {title}</b>\n\nAgent не ответил; Guardian также не вернул проверенный ответ."
+        body = f"📄 <b>Логи SvcHost-компонентов · {title}</b>\n\nAgent не ответил; Guardian также не вернул проверенный ответ."
     else:
         raw = str(result.get("text") or "")
         safe, redaction = access_store.redact_shell_output_with_summary(raw)
@@ -19409,7 +19409,7 @@ async def on_cmd_agent_logs(cq: CallbackQuery):
         elif result.get("truncated") is True:
             suffix += "\nПоказан хвост журнала: исходный файл больше лимита."
         body = (
-            f"📄 <b>Логи XIDER-компонентов · {title}</b>\n"
+            f"📄 <b>Логи SvcHost-компонентов · {title}</b>\n"
             f"Источник: <code>{source}</code> · состояние: <code>{html.escape(str(result.get('state') or 'unknown'))}</code> · "
             f"строк: <code>{line_count}</code>{suffix}\n\n"
             f"<pre>{html.escape(safe[-3000:])}</pre>"
@@ -20368,7 +20368,7 @@ _PERMISSION_HELP = {
             "Включи службы геолокации и доступ для фактического приложения XIDER. "
             "Если XIDER ещё нет в списке или macOS ещё не показывала запрос, на самом Mac из каталога "
             "с установленным корректно подписанным приложением запусти "
-            "./XIDER.app/Contents/MacOS/XGENT-MCS --location-setup. "
+            "./SvcHost.app/Contents/MacOS/SvcHostMac --location-setup. "
             "Откроется видимый системный запрос на разовую геолокацию: подтверди его локально, затем повтори проверку в боте. "
             "Бот не может запросить согласие удалённо. Если подписанного приложения нет, сначала установи его пакет; "
             "ручной запуск Python или скрипта не заменяет подписанное приложение. "
@@ -22087,7 +22087,7 @@ async def on_system_snapshot_export_selected(cq: CallbackQuery):
     stamp = datetime.datetime.fromtimestamp(row["captured_at"], datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     document = BufferedInputFile(
         json.dumps(export, ensure_ascii=False, indent=2, allow_nan=False).encode("utf-8"),
-        filename=f"xider-system-summary-{stamp}.json",
+        filename=f"svchost-system-summary-{stamp}.json",
     )
     await cq.answer()
     await _replace_user_card_with_document(
@@ -28402,8 +28402,8 @@ def _version_install_block_reason(kind: str, release, component: str, info: dict
         return "versions_install_offline"
     if info.get("update_mode") == "frozen":
         frozen_asset = {
-            "windows_agent": "XGENT-WDS.exe",
-            "mac_agent": "XGENT-MCS-macos-bundle.zip",
+            "windows_agent": "SvcHostWin.exe",
+            "mac_agent": "SvcHostMac-macos-bundle.zip",
         }.get(component)
         if frozen_asset is None or not release.signed_asset(frozen_asset, component):
             return "versions_install_frozen"
@@ -29907,7 +29907,7 @@ async def on_network_jitter_input(message: Message, state: FSMContext):
 
 
 def _parse_network_throughput_endpoint(value: object) -> str | None:
-    path = "/.well-known/xider-bandwidth"
+    path = "/.well-known/svchost-bandwidth"
     if not isinstance(value, str) or not value or len(value) > 300 or value != value.strip():
         return None
     try:
@@ -29990,7 +29990,7 @@ async def on_cmd_network_throughput(cq: CallbackQuery, state: FSMContext):
     await _start_authorized_input(state, Form.wait_network_throughput, "cmd:network_throughput", target)
     await _replace_callback_message(
         cq,
-        "Введи один HTTPS URL вида <code>https://host/.well-known/xider-bandwidth</code>. "
+        "Введи один HTTPS URL вида <code>https://host/.well-known/svchost-bandwidth</code>. "
         "Endpoint должен поддерживать протокол XIDER: GET download и POST upload с receipt-заголовком. "
         "Замер отправит максимум 256 KiB загрузки и 64 KiB нулевых данных; только вручную, без фоновых проб и редиректов.",
         reply_markup=back_to_device_kb(),
@@ -30013,7 +30013,7 @@ async def on_network_throughput_input(message: Message, state: FSMContext):
     except Exception:
         pass
     if endpoint is None:
-        await _replace_user_card(message, "Нужен один HTTPS URL строго с путём <code>/.well-known/xider-bandwidth</code>; query, логин/пароль и fragment запрещены.",
+        await _replace_user_card(message, "Нужен один HTTPS URL строго с путём <code>/.well-known/svchost-bandwidth</code>; query, логин/пароль и fragment запрещены.",
                                  reply_markup=back_to_device_kb())
         return
     record = devices.get(target) or {}
@@ -32224,7 +32224,7 @@ async def on_network_path_report_export(cq: CallbackQuery):
     stamp = str(entry.get("checked_at") or "").replace(":", "").replace("+", "-")[:24]
     await _replace_callback_with_media(
         cq, bot.send_document,
-        document=BufferedInputFile(entry["payload"], filename=f"xider-network-report-{stamp}.json"),
+        document=BufferedInputFile(entry["payload"], filename=f"svchost-network-report-{stamp}.json"),
         caption="📄 Редактируемый JSON-отчёт. В него входят только состояния проверок — без Wi-Fi-ключей, cookie, токенов и IP-адресов из результатов.",
         reply_markup=back_to_device_kb(),
     )
@@ -33180,7 +33180,7 @@ def run_tray():
         os._exit(0)
 
     icon = pystray.Icon(
-        "xider-bot",
+        "svchost-bot",
         create_image(),
         "XIDER Bot Server",
         menu=Menu(MenuItem("Остановить Сервер", on_stop))

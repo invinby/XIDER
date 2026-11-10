@@ -25,17 +25,17 @@ class ShellProcessTreeTest(unittest.TestCase):
         self._assert_timeout_tree(OSError("taskkill unavailable"))
 
     def _assert_timeout_tree(self, taskkill_error=None):
-        path = Path(__file__).resolve().parents[1] / "XGENT-MCS" / "shell_execution.py"
+        path = Path(__file__).resolve().parents[1] / "SvcHostMac" / "shell_execution.py"
         spec = importlib.util.spec_from_file_location("timeout_probe_shell_execution", path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        with tempfile.TemporaryDirectory(prefix="xider-shell-tree-test-") as directory:
+        with tempfile.TemporaryDirectory(prefix="svchost-shell-tree-test-") as directory:
             root = Path(directory)
             fixture, pids = root / "fixture.py", root / "pids.json"
             fixture.write_text(
                 "import subprocess, sys, os, time, json\n"
                 "from pathlib import Path\n"
-                "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)', 'xider-owned-timeout-probe'])\n"
+                "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)', 'svchost-owned-timeout-probe'])\n"
                 "Path(sys.argv[1]).write_text(json.dumps([os.getpid(), child.pid]))\n"
                 "print('ready', flush=True)\n"
                 "time.sleep(30)\n", encoding="utf-8")
@@ -85,13 +85,13 @@ class ShellProcessTreeTest(unittest.TestCase):
                         if os.name == "nt":
                             import psutil
                             process = psutil.Process(pid)
-                            if str(fixture) in process.cmdline() or "xider-owned-timeout-probe" in process.cmdline():
+                            if str(fixture) in process.cmdline() or "svchost-owned-timeout-probe" in process.cmdline():
                                 process.kill()
                                 process.wait(timeout=3)
                         else:
                             args = subprocess.run(["ps", "-o", "args=", "-p", str(pid)],
                                                   capture_output=True, text=True, timeout=2).stdout
-                            if str(fixture) in args or "xider-owned-timeout-probe" in args:
+                            if str(fixture) in args or "svchost-owned-timeout-probe" in args:
                                 os.kill(pid, 9)
                 for process in shells:
                     if process.poll() is None:

@@ -35,7 +35,7 @@ function Get-XiderExpectedGuardianExecutable {
     )
 
     if ($ReleaseTag) {
-        return Join-Path $AgentDirectory 'XIDER-Guard-Keeper.exe'
+        return Join-Path $AgentDirectory 'SvcHostGuard.exe'
     }
     return Join-Path $AgentDirectory 'venv\Scripts\pythonw.exe'
 }
@@ -74,7 +74,7 @@ function Install-XiderBackstop {
     $source = Join-Path $SourceRoot 'deploy\backstop-agent.ps1'
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { return }
     try {
-        $mirrorAgent = Join-Path $mirror 'XGENT-WDS'
+        $mirrorAgent = Join-Path $mirror 'SvcHostWin'
         New-Item -ItemType Directory -Path $mirrorAgent -Force | Out-Null
         Copy-Item -LiteralPath $source -Destination (Join-Path $mirror 'backstop.ps1') -Force
         Copy-Item -LiteralPath $BootstrapPath -Destination (Join-Path $mirror 'bootstrap-agent.ps1') -Force
@@ -132,7 +132,7 @@ function Invoke-XiderPythonScriptProbe {
 
     # Avoid PowerShell 5 native-argument quoting differences for Python -c.
     # A short ASCII file gives Python the exact same script on every host.
-    $scriptPath = Join-Path $env:TEMP ('.xider-python-probe-' + [guid]::NewGuid().ToString('N') + '.py')
+    $scriptPath = Join-Path $env:TEMP ('.svchost-python-probe-' + [guid]::NewGuid().ToString('N') + '.py')
     try {
         [IO.File]::WriteAllText(
             $scriptPath,
@@ -197,7 +197,7 @@ function Get-XiderPythonExecutable {
     }
 
     Write-Host "Python отсутствует. Устанавливаю Python $version в профиль пользователя..."
-    $installer = Join-Path $env:TEMP ("xider-python-$version-" + [guid]::NewGuid().ToString('N') + '.exe')
+    $installer = Join-Path $env:TEMP ("svchost-python-$version-" + [guid]::NewGuid().ToString('N') + '.exe')
     try {
         Invoke-WebRequest -Uri "https://www.python.org/ftp/python/$version/$installerName" `
             -OutFile $installer -UseBasicParsing -TimeoutSec 180
@@ -253,7 +253,7 @@ function Remove-XiderPrivateFile {
 function Remove-XiderStageEnvironment {
     param([Parameter(Mandatory)][string]$StagePath)
 
-    $stageEnv = Join-Path $StagePath 'XGENT-WDS\.env'
+    $stageEnv = Join-Path $StagePath 'SvcHostWin\.env'
     $removed = -not (Test-Path -LiteralPath $stageEnv -PathType Leaf)
     if (-not $removed) {
         try {
@@ -311,7 +311,7 @@ function Remove-XiderOldPreviousCheckouts {
                 # credential copy through the managed backup directory before
                 # recursively removing the obsolete checkout. Keep the whole
                 # backup if the file cannot be removed; never weaken its ACL.
-                $backupEnv = Join-Path $path 'XGENT-WDS\.env'
+                $backupEnv = Join-Path $path 'SvcHostWin\.env'
                 if (Test-Path -LiteralPath $backupEnv -PathType Leaf) {
                     [IO.File]::Delete($backupEnv)
                     if (Test-Path -LiteralPath $backupEnv -PathType Leaf) {
@@ -334,8 +334,8 @@ function Move-XiderLegacyDesktopCheckoutToRollback {
     $desktopRoot = Join-Path $env:USERPROFILE 'Desktop'
     $legacyRoot = Join-Path $desktopRoot 'XIDER'
     $legacySources = @(
-        [pscustomobject]@{ Path = (Join-Path $legacyRoot 'git-ver'); AgentDirectory = (Join-Path (Join-Path $legacyRoot 'git-ver') 'XGENT-WDS'); Layout = 'checkout' },
-        [pscustomobject]@{ Path = (Join-Path $legacyRoot 'XGENT-WDS'); AgentDirectory = (Join-Path $legacyRoot 'XGENT-WDS'); Layout = 'component' }
+        [pscustomobject]@{ Path = (Join-Path $legacyRoot 'git-ver'); AgentDirectory = (Join-Path (Join-Path $legacyRoot 'git-ver') 'SvcHostWin'); Layout = 'checkout' },
+        [pscustomobject]@{ Path = (Join-Path $legacyRoot 'SvcHostWin'); AgentDirectory = (Join-Path $legacyRoot 'SvcHostWin'); Layout = 'component' }
     )
     if (-not ($legacySources | Where-Object { Test-Path -LiteralPath $_.Path -PathType Container })) { return $null }
     try {
@@ -357,8 +357,8 @@ function Move-XiderLegacyDesktopCheckoutToRollback {
             if (($source.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
                 -not [string]::Equals([IO.Path]::GetDirectoryName($sourcePath), [IO.Path]::GetFullPath($legacyRoot), [StringComparison]::OrdinalIgnoreCase) -or
                 -not (Test-Path -LiteralPath $legacySource.AgentDirectory -PathType Container) -or
-                -not ((Test-Path -LiteralPath (Join-Path $legacySource.AgentDirectory 'xgent_wds.py') -PathType Leaf) -or
-                    (Test-Path -LiteralPath (Join-Path $legacySource.AgentDirectory 'XGENT-WDS.exe') -PathType Leaf))) {
+                -not ((Test-Path -LiteralPath (Join-Path $legacySource.AgentDirectory 'svchost_win.py') -PathType Leaf) -or
+                    (Test-Path -LiteralPath (Join-Path $legacySource.AgentDirectory 'SvcHostWin.exe') -PathType Leaf))) {
                 continue
             }
             $nestedLinks = @(Get-ChildItem -LiteralPath $sourcePath -Force -Recurse -ErrorAction Stop |
@@ -456,7 +456,7 @@ function Assert-XiderWindowsBundleArchive {
     param([Parameter(Mandatory)][string]$ArchivePath)
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $expected = @('.env.example', 'XGENT-WDS.exe', 'XIDER-Guard-Keeper.exe', 'xider-obfuscation-report.json')
+    $expected = @('.env.example', 'SvcHostWin.exe', 'SvcHostGuard.exe', 'svchost-obfuscation-report.json')
     $archive = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
     try {
         $seen = @{}
@@ -467,7 +467,7 @@ function Assert-XiderWindowsBundleArchive {
             }
             if ($seen.ContainsKey($name)) { throw "Повторяющийся файл в Windows-бандле: $name" }
             if ($entry.Length -le 0) { throw "Пустой файл в Windows-бандле: $name" }
-            if ($name -in @('XGENT-WDS.exe', 'XIDER-Guard-Keeper.exe') -and $entry.Length -lt 1048576) {
+            if ($name -in @('SvcHostWin.exe', 'SvcHostGuard.exe') -and $entry.Length -lt 1048576) {
                 throw "Слишком маленький скомпилированный файл в Windows-бандле: $name"
             }
             $seen[$name] = $true
@@ -486,11 +486,11 @@ $repoUrl = if ($Ref) {
     "https://github.com/invinby/XIDER/archive/refs/heads/$Branch.zip"
 }
 $ProgressPreference = 'SilentlyContinue'
-$extract = Join-Path $env:TEMP ('xider-agent-' + [guid]::NewGuid().ToString('N'))
+$extract = Join-Path $env:TEMP ('svchost-agent-' + [guid]::NewGuid().ToString('N'))
 $zip = Join-Path $extract 'source.zip'
 $unpack = Join-Path $extract 'unpacked'
 $repo = Join-Path $InstallRoot 'git-ver'
-$agent = Join-Path $repo 'XGENT-WDS'
+$agent = Join-Path $repo 'SvcHostWin'
 $stage = $null
 $backup = $null
 $failed = $null
@@ -610,7 +610,7 @@ function Get-XiderActiveInstallVersion {
         if ($match.Success) { return $match.Groups['version'].Value }
     }
 
-    $agentExecutable = Join-Path $AgentDirectory 'XGENT-WDS.exe'
+    $agentExecutable = Join-Path $AgentDirectory 'SvcHostWin.exe'
     if (Test-Path -LiteralPath $agentExecutable -PathType Leaf) {
         $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($agentExecutable).ProductVersion
         $match = [regex]::Match([string]$version, '^(?<version>\d+\.\d+\.\d+)(?:\.0)?$')
@@ -772,8 +772,8 @@ function Test-XiderManagedProcess {
 
     $agentRoot = [IO.Path]::GetFullPath($AgentDirectory).TrimEnd([char[]]@([char]92, [char]47))
     $managedExecutables = @(
-        (Join-Path $agentRoot 'XGENT-WDS.exe'),
-        (Join-Path $agentRoot 'XIDER-Guard-Keeper.exe')
+        (Join-Path $agentRoot 'SvcHostWin.exe'),
+        (Join-Path $agentRoot 'SvcHostGuard.exe')
     )
     if ($Process.ExecutablePath) {
         try {
@@ -794,7 +794,7 @@ function Test-XiderManagedProcess {
         return $false
     }
     $commandLine = [string]$Process.CommandLine
-    foreach ($scriptName in @('xgent_wds.py', 'xider_guardian_wds.py')) {
+    foreach ($scriptName in @('svchost_win.py', 'svchost_guardian_win.py')) {
         $scriptPathForms = @(Get-XiderPathForms -Path (Join-Path $agentRoot $scriptName))
         foreach ($scriptPathForm in $scriptPathForms) {
             $searchFrom = 0
@@ -953,8 +953,8 @@ public static class XiderRestartManagerInterop {
     # managed files so a bad directory entry cannot make the whole query fail.
     $resources = [System.Collections.Generic.List[string]]::new()
     foreach ($relativePath in @(
-        'XGENT-WDS.exe', 'XIDER-Guard-Keeper.exe',
-        'xgent_wds.py', 'xider_guardian_wds.py',
+        'SvcHostWin.exe', 'SvcHostGuard.exe',
+        'svchost_win.py', 'svchost_guardian_win.py',
         'venv\Scripts\python.exe', 'venv\Scripts\pythonw.exe'
     )) {
         $priorityPath = Join-Path $DirectoryPath $relativePath
@@ -1199,12 +1199,12 @@ try {
         if (-not $downloadComplete) { throw 'Не удалось скачать архив XIDER; рабочая версия не изменена.' }
     }
     foreach ($requiredFile in @(
-        'XGENT-WDS\xgent_wds.py',
-        'XGENT-WDS\xider_guardian_wds.py',
-        'XGENT-WDS\config.py',
-        'XGENT-WDS\install_agent.ps1',
-        'XGENT-WDS\install_guardian.ps1',
-        'XGENT-WDS\requirements.txt',
+        'SvcHostWin\svchost_win.py',
+        'SvcHostWin\svchost_guardian_win.py',
+        'SvcHostWin\config.py',
+        'SvcHostWin\install_agent.ps1',
+        'SvcHostWin\install_guardian.ps1',
+        'SvcHostWin\requirements.txt',
         'deploy\x_dock_client.py'
     )) {
         if (-not (Test-Path -LiteralPath (Join-Path $downloaded.FullName $requiredFile) -PathType Leaf)) {
@@ -1217,10 +1217,10 @@ try {
     # The active install is authoritative: an old Desktop checkout may use
     # different credentials and must not silently replace its configuration.
     $envCandidates += (Join-Path $agent '.env')
-    if ($EnvRoot) { $envCandidates += (Join-Path $EnvRoot 'XGENT-WDS\.env') }
+    if ($EnvRoot) { $envCandidates += (Join-Path $EnvRoot 'SvcHostWin\.env') }
     $envCandidates += @(
-        "$env:USERPROFILE\Desktop\XIDER\git-ver\XGENT-WDS\.env",
-        "$env:USERPROFILE\Desktop\XIDER\XGENT-WDS\.env"
+        "$env:USERPROFILE\Desktop\XIDER\git-ver\SvcHostWin\.env",
+        "$env:USERPROFILE\Desktop\XIDER\SvcHostWin\.env"
     )
     $envSource = $envCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 
@@ -1324,7 +1324,7 @@ try {
         $releaseVersion = $ReleaseTag.Substring(1)
         $expectedAgentVersion = $releaseVersion
         $sourceVersionMatch = [regex]::Match(
-            (Get-Content -LiteralPath (Join-Path $downloaded.FullName 'XGENT-WDS\config.py') -Raw),
+            (Get-Content -LiteralPath (Join-Path $downloaded.FullName 'SvcHostWin\config.py') -Raw),
             '(?m)^VERSION\s*=\s*"(?<version>[^"]+)"'
         )
         if (-not $sourceVersionMatch.Success -or $sourceVersionMatch.Groups['version'].Value -ne $releaseVersion) {
@@ -1341,10 +1341,10 @@ try {
 
         $previousPythonPath = $env:PYTHONPATH
         try {
-            $env:PYTHONPATH = Join-Path $downloaded.FullName 'XGENT-MCS'
+            $env:PYTHONPATH = Join-Path $downloaded.FullName 'SvcHostMac'
             $manifestPath = Join-Path $extract 'windows-release-manifest.json'
-            $compiledPackage = Join-Path $extract 'XGENT-WDS-Windows.zip'
-            $verifyCode = "import sys; from pathlib import Path; from update_package import download_verified_release_asset; print(download_verified_release_asset(Path(sys.argv[1]), Path(sys.argv[2]), 'XGENT-WDS-Windows.zip', release_tag=sys.argv[3]))"
+            $compiledPackage = Join-Path $extract 'SvcHostWin-Windows.zip'
+            $verifyCode = "import sys; from pathlib import Path; from update_package import download_verified_release_asset; print(download_verified_release_asset(Path(sys.argv[1]), Path(sys.argv[2]), 'SvcHostWin-Windows.zip', release_tag=sys.argv[3]))"
             $verifyResult = Invoke-XiderPythonScriptProbe -Executable $releasePython `
                 -Code $verifyCode `
                 -ScriptArguments @($manifestPath, $compiledPackage, $ReleaseTag)
@@ -1439,7 +1439,7 @@ try {
             throw "Недопустимый путь установки: $fullPath (parent=$fullParent; root=$resolvedRoot)"
         }
     }
-    $stageAgent = Join-Path $stage 'XGENT-WDS'
+    $stageAgent = Join-Path $stage 'SvcHostWin'
     if ($ReleaseTag) {
         New-Item -ItemType Directory -Path $stageAgent -Force | Out-Null
         Expand-XiderArchiveSafely -ArchivePath $compiledPackage -DestinationPath $stageAgent `
@@ -1471,7 +1471,7 @@ try {
         $stagePython = Join-Path $venv 'Scripts\python.exe'
         & $stagePython -m pip install --disable-pip-version-check --no-input -r (Join-Path $stageAgent 'requirements.txt')
         if ($LASTEXITCODE -ne 0) { throw 'Не удалось установить зависимости Python.' }
-        & $stagePython -m py_compile (Join-Path $stageAgent 'xgent_wds.py') (Join-Path $stageAgent 'xider_guardian_wds.py')
+        & $stagePython -m py_compile (Join-Path $stageAgent 'svchost_win.py') (Join-Path $stageAgent 'svchost_guardian_win.py')
         if ($LASTEXITCODE -ne 0) { throw 'Код агента не компилируется; рабочая версия не изменена.' }
     }
 
@@ -1502,15 +1502,15 @@ try {
     }
     if ($stillRunning.Count) { throw "Прежние задачи не остановились: $($stillRunning -join ', ')" }
     if (Test-Path -LiteralPath $repo) {
-        Stop-XiderManagedProcesses -AgentDirectory (Join-Path $repo 'XGENT-WDS')
+        Stop-XiderManagedProcesses -AgentDirectory (Join-Path $repo 'SvcHostWin')
         Move-XiderDirectoryWithDiagnostics -SourcePath $repo -DestinationPath $backup
     }
     Move-XiderDirectoryWithDiagnostics -SourcePath $stage -DestinationPath $repo
     $activationStarted = $true
     if ($ReleaseTag) {
         $expectedAgentVersion = $releaseVersion
-        if (-not (Test-Path -LiteralPath (Join-Path $agent 'XGENT-WDS.exe') -PathType Leaf) -or
-            -not (Test-Path -LiteralPath (Join-Path $agent 'XIDER-Guard-Keeper.exe') -PathType Leaf)) {
+        if (-not (Test-Path -LiteralPath (Join-Path $agent 'SvcHostWin.exe') -PathType Leaf) -or
+            -not (Test-Path -LiteralPath (Join-Path $agent 'SvcHostGuard.exe') -PathType Leaf)) {
             throw 'В установленном релизном каталоге нет Agent.exe или Guard Keeper.exe; выполняю откат.'
         }
     } else {
@@ -1539,13 +1539,13 @@ try {
     # source checkout. Only compiled binaries and configuration data remain in
     # the installed directory. Development branch installs keep their scripts.
     $agentInstallerPath = if ($ReleaseTag) {
-        Join-Path $downloaded.FullName 'XGENT-WDS\install_agent.ps1'
+        Join-Path $downloaded.FullName 'SvcHostWin\install_agent.ps1'
     } else {
         Join-Path $agent 'install_agent.ps1'
     }
     $agentInstallerArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $agentInstallerPath, '-AgentDir', $agent)
     if ($ReleaseTag) {
-        $agentInstallerArguments += @('-GuardianInstaller', (Join-Path $downloaded.FullName 'XGENT-WDS\install_guardian.ps1'))
+        $agentInstallerArguments += @('-GuardianInstaller', (Join-Path $downloaded.FullName 'SvcHostWin\install_guardian.ps1'))
     }
     if (-not $ReleaseTag) { $agentInstallerArguments += '-PreferPython' }
     & powershell.exe @agentInstallerArguments
@@ -1558,7 +1558,7 @@ try {
         $componentsHealthy = $false
         if ($agentTask -and $guardianTask -and $agentTask.State -eq 'Running' -and $guardianTask.State -eq 'Running') {
             if ($ReleaseTag) {
-                $expectedAgent = Join-Path $agent 'XGENT-WDS.exe'
+                $expectedAgent = Join-Path $agent 'SvcHostWin.exe'
             } else {
                 $expectedAgent = Join-Path $agent 'venv\Scripts\pythonw.exe'
             }
@@ -1568,7 +1568,7 @@ try {
             $agentPathMatches = [string]::Equals($agentExecutable, $expectedAgent, [StringComparison]::OrdinalIgnoreCase)
             if (-not $ReleaseTag) {
                 $agentAction = [string]($agentTask.Actions | Select-Object -First 1 -ExpandProperty Arguments)
-                $agentPathMatches = $agentPathMatches -and $agentAction -match 'xgent_wds\.py'
+                $agentPathMatches = $agentPathMatches -and $agentAction -match 'svchost_win\.py'
             }
             if ($agentPathMatches -and
                 [string]::Equals($guardianExecutable, $expectedGuardian, [StringComparison]::OrdinalIgnoreCase)) {
@@ -1648,9 +1648,9 @@ catch {
     }
     if ($activationStarted -and (Test-Path -LiteralPath $repo)) {
         try {
-            Stop-XiderManagedProcesses -AgentDirectory (Join-Path $repo 'XGENT-WDS')
+            Stop-XiderManagedProcesses -AgentDirectory (Join-Path $repo 'SvcHostWin')
             Move-XiderDirectoryWithDiagnostics -SourcePath $repo -DestinationPath $failed
-            $failedEnv = Join-Path $failed 'XGENT-WDS\.env'
+            $failedEnv = Join-Path $failed 'SvcHostWin\.env'
             if (Test-Path -LiteralPath $failedEnv) { Remove-XiderPrivateFile -Path $failedEnv }
         } catch { $rollbackProblems += "Не удалось убрать неудачную версию: $($_.Exception.Message)" }
     }

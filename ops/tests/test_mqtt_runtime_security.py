@@ -9,15 +9,15 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 COMPONENTS = (
     ROOT / "TG-BOT-SERVER",
-    ROOT / "XGENT-WDS",
-    ROOT / "XGENT-MCS",
+    ROOT / "SvcHostWin",
+    ROOT / "SvcHostMac",
 )
 
 
 def _run_config(component: Path, *, tls="true", username="test-user", password="test-password-not-real"):
     env = os.environ.copy()
     env.update({
-        "SHARED_KEY": "xider-test-only-shared-key-0123456789",
+        "SHARED_KEY": "svchost-test-only-shared-key-0123456789",
         "BOT_TOKEN": "123456:TEST-TOKEN-NOT-REAL",
         "ADMIN_ID": "0",
         "MQTT_BROKER": "localhost",
@@ -61,12 +61,12 @@ def test_runtime_defaults_are_tls_and_private_mqtt_port():
     for component in COMPONENTS:
         env = os.environ.copy()
         env.update({
-            "SHARED_KEY": "xider-test-only-shared-key-0123456789",
+            "SHARED_KEY": "svchost-test-only-shared-key-0123456789",
             "BOT_TOKEN": "123456:TEST-TOKEN-NOT-REAL",
             "ADMIN_ID": "0",
             "MQTT_BROKER": "localhost",
-            "MQTT_USERNAME": "xider-test-user",
-            "MQTT_PASSWORD": "xider-test-password-not-real",
+            "MQTT_USERNAME": "svchost-test-user",
+            "MQTT_PASSWORD": "svchost-test-password-not-real",
         })
         for name in ("MQTT_PORT", "MQTT_TLS"):
             env.pop(name, None)

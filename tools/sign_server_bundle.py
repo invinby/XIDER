@@ -13,14 +13,14 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SIGNATURE_DIR = ROOT / "XGENT-MCS"
+SIGNATURE_DIR = ROOT / "SvcHostMac"
 if str(SIGNATURE_DIR) not in sys.path:
     sys.path.insert(0, str(SIGNATURE_DIR))
 
 from release_signature import TRUSTED_RELEASE_KEYS, sign_manifest
 
 
-ASSET_NAME = "XIDER-source.zip"
+ASSET_NAME = "SvcHost-source.zip"
 RELEASE_LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
 
 

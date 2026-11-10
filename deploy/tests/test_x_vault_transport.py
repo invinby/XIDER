@@ -30,7 +30,7 @@ from x_vault_transport import MAGIC, UploadError, receive_upload, send_archive  
 
 class VaultTransportTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="xider-vault-transport-")
+        self.tmp = tempfile.TemporaryDirectory(prefix="svchost-vault-transport-")
         self.root = Path(self.tmp.name)
         self.incoming = self.root / "incoming"
         self.incoming.mkdir(mode=0o700)

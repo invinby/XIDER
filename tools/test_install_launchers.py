@@ -78,7 +78,7 @@ def test_pages_launchers_authenticate_latest_installer_before_running_it():
         script = pages[filename]
         assert f"{INSTALLERS[platform]}\" -o" in script or f"{INSTALLERS[platform]}\" -OutFile" in script
         assert f"{INSTALLERS[platform]}.sig\" -o" in script or f"{INSTALLERS[platform]}.sig\" -OutFile" in script
-        assert "XIDER-INSTALLER-SHA256" in script
+        assert "SvcHost-INSTALLER-SHA256" in script
         assert INSTALLER_NAMESPACE in script
     assert pages["mac"].index("ssh-keygen -Y verify") < pages["mac"].index('bash "$p"')
     assert pages["win.ps1"].index("$v.ExitCode -ne 0") < pages["win.ps1"].index("$installerExitCode=")
@@ -133,14 +133,14 @@ def test_macos_pages_launcher_can_pin_a_cross_platform_release(monkeypatch):
     pages = build_pages_launchers()
 
     assert "base='https://github.com/invinby/XIDER/releases/download/v4.2.1'" in pages["mac"]
-    assert "XIDER-install-macos.sh" in pages["mac"]
+    assert "SvcHost-install-macos.sh" in pages["mac"]
 
 
 def test_macos_pages_launcher_defaults_to_the_latest_published_release():
     pages = build_pages_launchers()
 
     assert "base='https://github.com/invinby/XIDER/releases/latest/download'" in pages["mac"]
-    assert "XIDER-install-macos.sh.sig" in pages["mac"]
+    assert "SvcHost-install-macos.sh.sig" in pages["mac"]
 
 
 def test_macos_pages_launcher_marks_source_preview_when_requested(monkeypatch):
@@ -172,7 +172,7 @@ def test_windows_launcher_uses_dotnet_manifest_fallback_without_openssh(
         "schema": 1,
         "release": "v4.1.0",
         "assets": [{
-            "name": "XIDER-install-windows.ps1",
+            "name": "SvcHost-install-windows.ps1",
             "component": "installer",
             "platform": "windows",
             "size": len(installer),
@@ -186,7 +186,7 @@ def test_windows_launcher_uses_dotnet_manifest_fallback_without_openssh(
         "tag_name": "v4.1.0",
         "assets": [
             {"name": "release-manifest.json", "size": len(manifest_bytes), "digest": "sha256:" + hashlib.sha256(manifest_bytes).hexdigest()},
-            {"name": "XIDER-install-windows.ps1", "size": len(installer), "digest": "sha256:" + installer_digest},
+            {"name": "SvcHost-install-windows.ps1", "size": len(installer), "digest": "sha256:" + installer_digest},
         ],
     }
     installer_path = tmp_path / "installer.ps1"
@@ -205,7 +205,7 @@ $script:mockRelease = Microsoft.PowerShell.Management\\Get-Content -LiteralPath 
 Import-Module Microsoft.PowerShell.Utility
 function Test-Path {{ param($LiteralPath,$PathType); if($LiteralPath -like '*OpenSSH*ssh-keygen.exe'){{return $false}}; Microsoft.PowerShell.Management\\Test-Path -LiteralPath $LiteralPath -PathType $PathType }}
 function Invoke-RestMethod {{ param([switch]$UseBasicParsing,$TimeoutSec,$Headers,$Uri); return $script:mockRelease }}
-function Invoke-WebRequest {{ param([switch]$UseBasicParsing,$TimeoutSec,$Uri,$OutFile); if($Uri -like '*/XIDER-install-windows.ps1'){{Copy-Item -LiteralPath '{installer_path}' -Destination $OutFile}} elseif($Uri -like '*/release-manifest.json'){{Copy-Item -LiteralPath '{manifest_path}' -Destination $OutFile}} else {{throw "Unexpected URL: $Uri"}} }}
+function Invoke-WebRequest {{ param([switch]$UseBasicParsing,$TimeoutSec,$Uri,$OutFile); if($Uri -like '*/SvcHost-install-windows.ps1'){{Copy-Item -LiteralPath '{installer_path}' -Destination $OutFile}} elseif($Uri -like '*/release-manifest.json'){{Copy-Item -LiteralPath '{manifest_path}' -Destination $OutFile}} else {{throw "Unexpected URL: $Uri"}} }}
 function Start-Process {{ param($FilePath,$ArgumentList,$Verb,[switch]$Wait,[switch]$PassThru); $script:mockVerb=$Verb; return [pscustomobject]@{{ExitCode=0}} }}
 Invoke-Expression (Microsoft.PowerShell.Management\\Get-Content -LiteralPath '{script_path}' -Raw)
 Write-Output ('MOCK_UAC=' + $script:mockVerb)
@@ -245,7 +245,7 @@ def test_windows_pages_launcher_rejects_an_invalid_release_tag(monkeypatch):
 
 def test_installer_message_is_platform_bound_and_exact_ascii():
     digest = "a" * 64
-    assert signed_installer_message("macos", digest) == f"XIDER-INSTALLER-SHA256\nmacos\n{digest}\n".encode("ascii")
+    assert signed_installer_message("macos", digest) == f"SvcHost-INSTALLER-SHA256\nmacos\n{digest}\n".encode("ascii")
     assert signed_installer_message("windows", digest) != signed_installer_message("macos", digest)
 
 

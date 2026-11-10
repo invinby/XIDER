@@ -1,10 +1,10 @@
 $ErrorActionPreference = 'Stop'
 $bootstrap = (Resolve-Path (Join-Path $PSScriptRoot '..\bootstrap-agent.ps1')).Path
-$fixture = Join-Path $env:TEMP ('xider-bootstrap-preflight-' + [guid]::NewGuid().ToString('N'))
+$fixture = Join-Path $env:TEMP ('svchost-bootstrap-preflight-' + [guid]::NewGuid().ToString('N'))
 $sourceRoot = Join-Path $fixture 'source'
-$agentSource = Join-Path $sourceRoot 'XIDER-fixture\XGENT-WDS'
+$agentSource = Join-Path $sourceRoot 'SvcHost-fixture\SvcHostWin'
 $envRoot = Join-Path $fixture 'env'
-$envDir = Join-Path $envRoot 'XGENT-WDS'
+$envDir = Join-Path $envRoot 'SvcHostWin'
 $installRoot = Join-Path $fixture 'install'
 $archive = Join-Path $fixture 'source.zip'
 $traversalArchive = Join-Path $fixture 'traversal.zip'
@@ -37,11 +37,11 @@ function New-WindowsBundleZip($path, [string[]]$ExtraEntries = @()) {
     $stream = [IO.File]::Open($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
     $zip = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create)
     try {
-        foreach ($name in (@('.env.example', 'XGENT-WDS.exe', 'XIDER-Guard-Keeper.exe', 'xider-obfuscation-report.json') + $ExtraEntries)) {
+        foreach ($name in (@('.env.example', 'SvcHostWin.exe', 'SvcHostGuard.exe', 'svchost-obfuscation-report.json') + $ExtraEntries)) {
             $entry = $zip.CreateEntry($name, [IO.Compression.CompressionLevel]::NoCompression)
             $entryStream = $entry.Open()
             try {
-                if ($name -in @('XGENT-WDS.exe', 'XIDER-Guard-Keeper.exe')) {
+                if ($name -in @('SvcHostWin.exe', 'SvcHostGuard.exe')) {
                     $bytes = New-Object byte[] (1024 * 1024)
                 } else {
                     $bytes = [Text.Encoding]::UTF8.GetBytes('{}')
@@ -230,7 +230,7 @@ try {
     }
 
     $successfulStage = Join-Path $fixture 'stage-cleanup-success'
-    $successfulStageAgent = Join-Path $successfulStage 'XGENT-WDS'
+    $successfulStageAgent = Join-Path $successfulStage 'SvcHostWin'
     New-Item -ItemType Directory -Path $successfulStageAgent -Force | Out-Null
     $successfulStageEnv = Join-Path $successfulStageAgent '.env'
     $successfulStageMarker = Join-Path $successfulStage 'keep.marker'
@@ -247,7 +247,7 @@ try {
     }
 
     $failedStage = Join-Path $fixture 'stage-cleanup-failure'
-    $failedStageAgent = Join-Path $failedStage 'XGENT-WDS'
+    $failedStageAgent = Join-Path $failedStage 'SvcHostWin'
     New-Item -ItemType Directory -Path $failedStageAgent -Force | Out-Null
     $failedStageEnv = Join-Path $failedStageAgent '.env'
     [IO.File]::WriteAllText($failedStageEnv, 'synthetic stage secret', $utf8)
@@ -270,14 +270,14 @@ try {
     }
 
     New-Item -ItemType Directory -Path $agentSource,$envDir -Force | Out-Null
-    foreach ($name in @('config.py','xgent_wds.py','xider_guardian_wds.py','install_agent.ps1','install_guardian.ps1','requirements.txt')) {
+    foreach ($name in @('config.py','svchost_win.py','svchost_guardian_win.py','install_agent.ps1','install_guardian.ps1','requirements.txt')) {
         $body = if ($name -eq 'config.py') { 'VERSION = "fixture"' } elseif ($name -eq 'requirements.txt') { '' } else { 'fixture' }
         [IO.File]::WriteAllText((Join-Path $agentSource $name), $body, $utf8)
     }
-    $dockClient = Join-Path $sourceRoot 'XIDER-fixture\deploy\x_dock_client.py'
+    $dockClient = Join-Path $sourceRoot 'SvcHost-fixture\deploy\x_dock_client.py'
     New-Item -ItemType Directory -Path (Split-Path -Parent $dockClient) -Force | Out-Null
     [IO.File]::WriteAllText($dockClient, '# fixture client', $utf8)
-    Compress-Archive -Path (Join-Path $sourceRoot 'XIDER-fixture') -DestinationPath $archive
+    Compress-Archive -Path (Join-Path $sourceRoot 'SvcHost-fixture') -DestinationPath $archive
 
     $currentPrincipal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
     if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -285,7 +285,7 @@ try {
             -InstallRoot (Join-Path $fixture 'elevation-install') -SourceArchive $archive
     }
 
-    $escapeName = 'xider-agent-bootstrap-escape-' + [guid]::NewGuid().ToString('N') + '.txt'
+    $escapeName = 'svchost-agent-bootstrap-escape-' + [guid]::NewGuid().ToString('N') + '.txt'
     # This bootstrap extracts beneath a second "unpacked" directory, so two
     # parent segments would escape its entire unique temp directory.
     New-TraversalZip $traversalArchive "../$escapeName"
@@ -446,7 +446,7 @@ try {
 
     [IO.File]::WriteAllLines($envPath, $complete, $utf8)
     Remove-Item -LiteralPath (Join-Path $agentSource 'install_guardian.ps1') -Force
-    Compress-Archive -Path (Join-Path $sourceRoot 'XIDER-fixture') -DestinationPath $missingFileArchive
+    Compress-Archive -Path (Join-Path $sourceRoot 'SvcHost-fixture') -DestinationPath $missingFileArchive
     $missingSourceRejected = $false
     try { & $bootstrap -InstallRoot $installRoot -EnvRoot $envRoot -SourceArchive $missingFileArchive -PreflightOnly }
     catch { $missingSourceRejected = $_.Exception.Message -match 'install_guardian.ps1' }
@@ -483,7 +483,7 @@ finally {
     Remove-Variable XiderBootstrapDownloadSource,XiderBootstrapObservedUri,XiderBootstrapObservedTimeoutSec,XiderBootstrapObservedProgressPreference -Scope Global -ErrorAction SilentlyContinue
     if ((Test-Path -LiteralPath $fixture) -and
         $fixture.StartsWith([IO.Path]::GetFullPath($env:TEMP), [StringComparison]::OrdinalIgnoreCase) -and
-        (Split-Path $fixture -Leaf) -like 'xider-bootstrap-preflight-*') {
+        (Split-Path $fixture -Leaf) -like 'svchost-bootstrap-preflight-*') {
         Remove-Item -LiteralPath $fixture -Recurse -Force
     }
 }

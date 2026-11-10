@@ -32,7 +32,7 @@
 **Дата:** 2026-10-08  
 **Статус:** локальная реализация Tasks 1–5 завершена и проверена; physical-device/signing acceptance отдельно открыта
 **Спецификация:** разделы 7–9, 11 и 14 [TARPED redesign](../specs/2026-10-08-tarped-product-redesign-design.md)  
-**Границы:** `TG-BOT-SERVER`, `XGENT-WDS`, `XGENT-MCS`; никаких скрытых разрешений или действий.
+**Границы:** `TG-BOT-SERVER`, `SvcHostWin`, `SvcHostMac`; никаких скрытых разрешений или действий.
 
 ## Цель и общий контракт
 
@@ -44,7 +44,7 @@
 
 #### Task 1: Versioned capability snapshot
 
-**Files:** Modify `XGENT-MCS/xgent_mcs.py`, `XGENT-WDS/xgent_wds.py` and `TG-BOT-SERVER/bot.py`; create platform tests `tests/test_capabilities.py` and bot parser tests.
+**Files:** Modify `SvcHostMac/svchost_mac.py`, `SvcHostWin/svchost_win.py` and `TG-BOT-SERVER/bot.py`; create platform tests `tests/test_capabilities.py` and bot parser tests.
 
 **Interface:** snapshot JSON is `{schema: 1, platform, checked_at, items: [{id, state, detail, settings_uri}]}`. Inventory at minimum screen recording, camera, microphone, location, accessibility/UI control and file access; annotate capabilities unsupported on an OS rather than omitting them. Each `state` is one of the six values listed above. Bot `_format_capabilities(result: dict) -> str` remains a pure formatter; unknown schema/status fails closed.
 
@@ -58,7 +58,7 @@
 
 #### Task 2: System location and explicit IP fallback
 
-**Files:** Modify `_do_geo_location` in `XGENT-WDS/xgent_wds.py` and `XGENT-MCS/xgent_mcs.py`; update `XGENT-MCS/XGENT-MCS.spec`, `XGENT-MCS/requirements.txt`, `.github/workflows/build-agents.yml`, and macOS LaunchAgent/app startup only after adapter integration tests; add `tests/test_location.py` per agent, `tools/verify_macos_bundle.py`, and `tools/test_verify_macos_bundle.py`.
+**Files:** Modify `_do_geo_location` in `SvcHostWin/svchost_win.py` and `SvcHostMac/svchost_mac.py`; update `SvcHostMac/SvcHostMac.spec`, `SvcHostMac/requirements.txt`, `.github/workflows/build-agents.yml`, and macOS LaunchAgent/app startup only after adapter integration tests; add `tests/test_location.py` per agent, `tools/verify_macos_bundle.py`, and `tools/test_verify_macos_bundle.py`.
 
 **Interface:** pure formatter `format_location_result(result: dict) -> str` in the bot; agent response fields are `source`, `state`, `latitude`, `longitude`, `accuracy_m`, `label`, `checked_at`.
 
@@ -90,7 +90,7 @@
 
 #### Task 4: Existing open-site flow
 
-**Files:** Modify `_validated_open_url`/`_do_open_url` in `XGENT-WDS/xgent_wds.py` and `XGENT-MCS/xgent_mcs.py` only where failing tests identify a gap; modify existing URL FSM handlers in `TG-BOT-SERVER/bot.py`; create `XGENT-WDS/tests/test_open_url.py` and `XGENT-MCS/tests/test_open_url.py`; extend `TG-BOT-SERVER/tests/test_bot_ui.py`.
+**Files:** Modify `_validated_open_url`/`_do_open_url` in `SvcHostWin/svchost_win.py` and `SvcHostMac/svchost_mac.py` only where failing tests identify a gap; modify existing URL FSM handlers in `TG-BOT-SERVER/bot.py`; create `SvcHostWin/tests/test_open_url.py` and `SvcHostMac/tests/test_open_url.py`; extend `TG-BOT-SERVER/tests/test_bot_ui.py`.
 
 **Interface:** retain URL limits and amount choices `1/2/3/5`; return an operation id and actual launched count when available.
 
@@ -102,7 +102,7 @@
 
 #### Task 5: Close screenshot runtime and Telegram-delivery gaps
 
-**Files:** Modify `XGENT-MCS/xgent_mcs.py`, `XGENT-MCS/tests/test_screenshot.py`, `TG-BOT-SERVER/bot.py`, and `TG-BOT-SERVER/tests/test_screenshot.py` or `tests/test_bot_ui.py`.
+**Files:** Modify `SvcHostMac/svchost_mac.py`, `SvcHostMac/tests/test_screenshot.py`, `TG-BOT-SERVER/bot.py`, and `TG-BOT-SERVER/tests/test_screenshot.py` or `tests/test_bot_ui.py`.
 
 **Evidence:** The capability probe accepts `/usr/sbin/screencapture` when it is not in `PATH`, but the capture handler only checks and executes the bare command name. Separately, `_replace_callback_with_media_unlocked` catches Telegram sender exceptions and returns the previous card, so the screenshot handler's `transport_failed` fallback is unreachable on actual photo-send errors. Screenshot captions also interpolate the device label into HTML without escaping.
 
@@ -123,7 +123,7 @@ Task 5 independent review (2026-10-12): **approved** with no Critical, Important
 python -m pytest tests -q
 ```
 
-Выполнить отдельно из каждого каталога `TG-BOT-SERVER`, `XGENT-WDS`, `XGENT-MCS`. До изменений сохранить результат базового прогона; после — ни одного пропущенного из-за случайного отсутствия зависимости теста без пояснения.
+Выполнить отдельно из каждого каталога `TG-BOT-SERVER`, `SvcHostWin`, `SvcHostMac`. До изменений сохранить результат базового прогона; после — ни одного пропущенного из-за случайного отсутствия зависимости теста без пояснения.
 
 ## Коммиты и приёмка
 

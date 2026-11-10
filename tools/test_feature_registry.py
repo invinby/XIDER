@@ -101,7 +101,7 @@ def test_feature_registry_validator_is_available_as_a_standalone_tool() -> None:
             "-c",
             "import sys; import validate_feature_registry as v; "
             "assert callable(v.validate_feature_registry); "
-            "assert not {'bot', 'xgent_wds', 'xgent_mcs'} & sys.modules.keys()",
+            "assert not {'bot', 'svchost_win', 'svchost_mac'} & sys.modules.keys()",
         ],
         cwd=ROOT / "tools",
         capture_output=True,
@@ -464,7 +464,7 @@ def test_valid_catalog_has_thirty_rows_per_area_and_does_not_load_runtime(tmp_pa
             "import sys; from pathlib import Path; "
             "import validate_feature_registry as v; "
             "assert v.validate_feature_registry(Path(sys.argv[1])) == []; "
-            "assert not {'bot', 'xgent_wds', 'xgent_mcs'} & sys.modules.keys()",
+            "assert not {'bot', 'svchost_win', 'svchost_mac'} & sys.modules.keys()",
             str(path),
         ],
         cwd=ROOT / "tools",
@@ -590,8 +590,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert p01_f25["handler_id"] == "p01.f25.location.compare"
     assert set(p01_f25["test_refs"]) == {
         "TG-BOT-SERVER/tests/test_location.py::test_comparison_keyboard_and_callback_are_owner_only",
-        "XGENT-WDS/tests/test_location.py::test_owner_compare_opt_in_returns_distinct_system_and_ip_sources_without_persisting",
-        "XGENT-MCS/tests/test_location.py::test_owner_compare_opt_in_returns_distinct_system_and_ip_sources_without_persisting",
+        "SvcHostWin/tests/test_location.py::test_owner_compare_opt_in_returns_distinct_system_and_ip_sources_without_persisting",
+        "SvcHostMac/tests/test_location.py::test_owner_compare_opt_in_returns_distinct_system_and_ip_sources_without_persisting",
     }
     p01_f09 = next(feature for feature in features if feature["feature_id"] == "P01-F09")
     assert p01_f09["support_state"] == "needs_device_test"
@@ -603,10 +603,10 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert d01_f23["support_state"] == "needs_device_test"
     assert d01_f23["handler_id"] == "d01.f23.regional.snapshot"
     assert set(d01_f23["test_refs"]) == {
-        "XGENT-WDS/tests/test_capabilities.py::test_system_region_snapshot_has_separate_truthful_timezone_and_locale_sources",
-        "XGENT-WDS/tests/test_capabilities.py::test_sysinfo_embeds_the_correlated_regional_snapshot",
-        "XGENT-MCS/tests/test_capabilities.py::test_system_region_snapshot_has_separate_truthful_timezone_and_locale_sources",
-        "XGENT-MCS/tests/test_capabilities.py::test_sysinfo_embeds_the_correlated_regional_snapshot",
+        "SvcHostWin/tests/test_capabilities.py::test_system_region_snapshot_has_separate_truthful_timezone_and_locale_sources",
+        "SvcHostWin/tests/test_capabilities.py::test_sysinfo_embeds_the_correlated_regional_snapshot",
+        "SvcHostMac/tests/test_capabilities.py::test_system_region_snapshot_has_separate_truthful_timezone_and_locale_sources",
+        "SvcHostMac/tests/test_capabilities.py::test_sysinfo_embeds_the_correlated_regional_snapshot",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_sysinfo_renders_only_reported_timezone_and_locale_as_escaped_values",
     }
     d01_f01 = next(feature for feature in features if feature["feature_id"] == "D01-F01")
@@ -621,10 +621,10 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert d01_f02["support_state"] == "needs_device_test"
     assert d01_f02["handler_id"] == "d01.f02.cpu.history"
     assert set(d01_f02["test_refs"]) == {
-        "XGENT-WDS/tests/test_capabilities.py::test_cpu_history_returns_bounded_correlated_samples_for_selected_period",
-        "XGENT-WDS/tests/test_capabilities.py::test_cpu_history_rejects_unbounded_period_without_sampling",
-        "XGENT-MCS/tests/test_capabilities.py::test_cpu_history_returns_bounded_correlated_samples_for_selected_period",
-        "XGENT-MCS/tests/test_capabilities.py::test_cpu_history_rejects_unbounded_period_without_sampling",
+        "SvcHostWin/tests/test_capabilities.py::test_cpu_history_returns_bounded_correlated_samples_for_selected_period",
+        "SvcHostWin/tests/test_capabilities.py::test_cpu_history_rejects_unbounded_period_without_sampling",
+        "SvcHostMac/tests/test_capabilities.py::test_cpu_history_returns_bounded_correlated_samples_for_selected_period",
+        "SvcHostMac/tests/test_capabilities.py::test_cpu_history_rejects_unbounded_period_without_sampling",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_cpu_history_renders_only_a_correlated_selected_period",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_cpu_history_hides_samples_for_stale_or_malformed_results",
     }
@@ -632,9 +632,9 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert d01_f03["support_state"] == "needs_device_test"
     assert d01_f03["handler_id"] == "d01.f03.memory.history"
     assert set(d01_f03["test_refs"]) == {
-        "XGENT-WDS/tests/test_capabilities.py::test_memory_history_returns_bounded_correlated_ram_and_swap_samples",
-        "XGENT-WDS/tests/test_capabilities.py::test_memory_history_marks_absent_swap_unsupported_not_zero",
-        "XGENT-MCS/tests/test_capabilities.py::test_memory_history_returns_bounded_correlated_ram_and_swap_samples",
+        "SvcHostWin/tests/test_capabilities.py::test_memory_history_returns_bounded_correlated_ram_and_swap_samples",
+        "SvcHostWin/tests/test_capabilities.py::test_memory_history_marks_absent_swap_unsupported_not_zero",
+        "SvcHostMac/tests/test_capabilities.py::test_memory_history_returns_bounded_correlated_ram_and_swap_samples",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_memory_history_renders_only_a_correlated_bounded_ram_and_swap_series",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_memory_history_does_not_invent_swap_zero_or_render_stale_samples",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_memory_history_keeps_ram_when_swap_series_is_partial_and_marks_swap_unknown",
@@ -646,10 +646,10 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert d01_f04["support_state"] == "needs_device_test"
     assert d01_f04["handler_id"] == "d01.f04.volume.history"
     assert set(d01_f04["test_refs"]) == {
-        "XGENT-WDS/tests/test_capabilities.py::test_volume_history_keeps_real_samples_and_withholds_short_term_forecast",
-        "XGENT-WDS/tests/test_capabilities.py::test_volume_history_estimates_only_from_same_volume_capacity_after_six_hours",
-        "XGENT-MCS/tests/test_capabilities.py::test_volume_history_keeps_real_samples_and_withholds_short_term_forecast",
-        "XGENT-MCS/tests/test_capabilities.py::test_volume_history_estimates_only_from_same_volume_capacity_after_six_hours",
+        "SvcHostWin/tests/test_capabilities.py::test_volume_history_keeps_real_samples_and_withholds_short_term_forecast",
+        "SvcHostWin/tests/test_capabilities.py::test_volume_history_estimates_only_from_same_volume_capacity_after_six_hours",
+        "SvcHostMac/tests/test_capabilities.py::test_volume_history_keeps_real_samples_and_withholds_short_term_forecast",
+        "SvcHostMac/tests/test_capabilities.py::test_volume_history_estimates_only_from_same_volume_capacity_after_six_hours",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_volume_history_renders_correlated_live_usage_and_measured_forecast",
         "TG-BOT-SERVER/tests/test_capabilities.py::test_volume_history_hides_stale_or_unreliable_forecast_values",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_volume_history_is_owner_only_and_registry_backed",
@@ -823,7 +823,7 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     summary_interval = next(feature for feature in features if feature["feature_id"] == "D01-F26")
     assert summary_interval["support_state"] == "needs_device_test"
     assert summary_interval["handler_id"] == "d01.f26.system.summary.interval"
-    assert "XGENT-WDS/tests/test_sysinfo_schedule.py::test_scheduler_publishes_only_sanitized_metrics_and_coalesces_missed_ticks" in summary_interval["test_refs"]
+    assert "SvcHostWin/tests/test_sysinfo_schedule.py::test_scheduler_publishes_only_sanitized_metrics_and_coalesces_missed_ticks" in summary_interval["test_refs"]
     summary_interval_page = next(page for page in registry["navigation"] if page["page_id"] == "system.summary_interval")
     assert summary_interval_page["callback"] == "sysinfo:interval"
     assert summary_interval_page["roles"] == ["owner"]
@@ -855,7 +855,7 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     camera_quality = next(feature for feature in features if feature["feature_id"] == "D02-F13")
     assert camera_quality["support_state"] == "needs_device_test"
     assert camera_quality["handler_id"] == "d02.f13.camera.quality.local"
-    assert "XGENT-WDS/tests/test_camera_quality.py::test_camera_quality_captures_one_local_frame_and_never_returns_image" in camera_quality["test_refs"]
+    assert "SvcHostWin/tests/test_camera_quality.py::test_camera_quality_captures_one_local_frame_and_never_returns_image" in camera_quality["test_refs"]
     camera_quality_page = next(page for page in registry["navigation"] if page["page_id"] == "screen.camera_quality")
     assert camera_quality_page["callback"] == "camera:quality"
     assert camera_quality_page["roles"] == ["owner"]
@@ -1366,8 +1366,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert mtu["handler_id"] == "d04.f10.network.path_mtu"
     assert mtu["role"] == ["owner"]
     assert set(mtu["test_refs"]) == {
-        "XGENT-WDS/tests/test_path_mtu.py::test_agent_publishes_correlated_path_mtu_result",
-        "XGENT-MCS/tests/test_path_mtu.py::test_agent_publishes_correlated_path_mtu_result",
+        "SvcHostWin/tests/test_path_mtu.py::test_agent_publishes_correlated_path_mtu_result",
+        "SvcHostMac/tests/test_path_mtu.py::test_agent_publishes_correlated_path_mtu_result",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_path_mtu_is_owner_only_correlated_and_edits_one_card",
     }
     mtu_nav = next(row for row in registry["navigation"] if row["callback"] == "cmd:path_mtu")
@@ -1380,8 +1380,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert captive_portal["handler_id"] == "d04.f11.network.captive_portal"
     assert captive_portal["role"] == ["owner"]
     assert set(captive_portal["test_refs"]) == {
-        "XGENT-WDS/tests/test_captive_portal.py::test_agent_publishes_correlated_captive_portal_status",
-        "XGENT-MCS/tests/test_captive_portal.py::test_agent_publishes_correlated_captive_portal_status",
+        "SvcHostWin/tests/test_captive_portal.py::test_agent_publishes_correlated_captive_portal_status",
+        "SvcHostMac/tests/test_captive_portal.py::test_agent_publishes_correlated_captive_portal_status",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_captive_portal_is_owner_only_correlated_and_edits_one_card",
     }
     captive_portal_nav = next(row for row in registry["navigation"] if row["callback"] == "cmd:captive_portal")
@@ -1394,8 +1394,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert ipv6["handler_id"] == "d04.f12.network.ipv6_connectivity"
     assert ipv6["role"] == ["owner"]
     assert set(ipv6["test_refs"]) == {
-        "XGENT-WDS/tests/test_ipv6_connectivity.py::test_agent_publishes_correlated_ipv6_reachability",
-        "XGENT-MCS/tests/test_ipv6_connectivity.py::test_agent_publishes_correlated_ipv6_reachability",
+        "SvcHostWin/tests/test_ipv6_connectivity.py::test_agent_publishes_correlated_ipv6_reachability",
+        "SvcHostMac/tests/test_ipv6_connectivity.py::test_agent_publishes_correlated_ipv6_reachability",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_ipv6_connectivity_is_owner_only_correlated_and_edits_one_card",
     }
     ipv6_nav = next(row for row in registry["navigation"] if row["callback"] == "cmd:ipv6_connectivity")
@@ -1408,8 +1408,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert tls_cert["handler_id"] == "d04.f13.network.tls_certificate"
     assert tls_cert["role"] == ["owner"]
     assert set(tls_cert["test_refs"]) == {
-        "XGENT-WDS/tests/test_tls_certificate.py::test_agent_publishes_correlated_certificate_result",
-        "XGENT-MCS/tests/test_tls_certificate.py::test_agent_publishes_correlated_certificate_result",
+        "SvcHostWin/tests/test_tls_certificate.py::test_agent_publishes_correlated_certificate_result",
+        "SvcHostMac/tests/test_tls_certificate.py::test_agent_publishes_correlated_certificate_result",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_tls_certificate_is_owner_only_correlated_and_replaces_the_current_card",
     }
     tls_cert_nav = next(row for row in registry["navigation"] if row["callback"] == "cmd:tls_certificate")
@@ -1422,8 +1422,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert service_probe["handler_id"] == "d04.f14.network.service_probe"
     assert service_probe["role"] == ["owner"]
     assert set(service_probe["test_refs"]) == {
-        "XGENT-WDS/tests/test_service_probe.py::test_agent_publishes_correlated_service_status",
-        "XGENT-MCS/tests/test_service_probe.py::test_agent_publishes_correlated_service_status",
+        "SvcHostWin/tests/test_service_probe.py::test_agent_publishes_correlated_service_status",
+        "SvcHostMac/tests/test_service_probe.py::test_agent_publishes_correlated_service_status",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_service_probe_is_owner_only_and_replaces_the_current_card",
     }
     service_probe_nav = next(row for row in registry["navigation"] if row["callback"] == "cmd:service_probe")
@@ -1436,8 +1436,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert wifi_quality["handler_id"] == "d04.f15.network.wifi_quality_history"
     assert wifi_quality["role"] == ["owner"]
     assert set(wifi_quality["test_refs"]) == {
-        "XGENT-WDS/tests/test_wifi_quality.py::test_agent_publishes_correlated_wifi_quality_sample_without_network_identity",
-        "XGENT-MCS/tests/test_wifi_quality.py::test_agent_publishes_correlated_wifi_quality_sample_without_network_identity",
+        "SvcHostWin/tests/test_wifi_quality.py::test_agent_publishes_correlated_wifi_quality_sample_without_network_identity",
+        "SvcHostMac/tests/test_wifi_quality.py::test_agent_publishes_correlated_wifi_quality_sample_without_network_identity",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_wifi_quality_history_is_owner_only_persists_one_sample_and_edits_card",
     }
     wifi_quality_nav = next(row for row in registry["navigation"] if row["callback"] == "cmd:wifi_quality_history")
@@ -1450,8 +1450,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert wifi_channel["handler_id"] == "d04.f16.network.wifi_channel_summary"
     assert wifi_channel["role"] == ["owner"]
     assert set(wifi_channel["test_refs"]) == {
-        "XGENT-WDS/tests/test_wifi_quality.py::test_agent_publishes_correlated_wifi_channel_summary",
-        "XGENT-MCS/tests/test_wifi_quality.py::test_agent_publishes_correlated_wifi_channel_summary",
+        "SvcHostWin/tests/test_wifi_quality.py::test_agent_publishes_correlated_wifi_channel_summary",
+        "SvcHostMac/tests/test_wifi_quality.py::test_agent_publishes_correlated_wifi_channel_summary",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_wifi_channel_summary_is_owner_only_correlated_and_replaces_the_current_card",
     }
     wifi_channel_nav = next(row for row in registry["navigation"] if row["callback"] == "cmd:wifi_channel_summary")
@@ -1464,8 +1464,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert wifi_history["handler_id"] == "d04.f17.network.wifi_connection_history"
     assert wifi_history["role"] == ["owner"]
     assert set(wifi_history["test_refs"]) == {
-        "XGENT-WDS/tests/test_wifi_connection_history.py::test_agent_publishes_correlated_wifi_connection_history_without_event_payloads",
-        "XGENT-MCS/tests/test_wifi_connection_history.py::test_agent_publishes_correlated_wifi_connection_history_without_event_payloads",
+        "SvcHostWin/tests/test_wifi_connection_history.py::test_agent_publishes_correlated_wifi_connection_history_without_event_payloads",
+        "SvcHostMac/tests/test_wifi_connection_history.py::test_agent_publishes_correlated_wifi_connection_history_without_event_payloads",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_wifi_connection_history_is_owner_only_and_edits_the_same_card",
     }
     wifi_history_nav = next(row for row in registry["navigation"] if row["callback"] == "cmd:wifi_connection_history")
@@ -1478,8 +1478,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert traffic["handler_id"] == "d04.f18.network.interface_traffic"
     assert traffic["role"] == ["owner"]
     assert set(traffic["test_refs"]) == {
-        "XGENT-WDS/tests/test_network_traffic.py::test_windows_agent_publishes_correlated_selected_adapter_traffic",
-        "XGENT-MCS/tests/test_network_traffic.py::test_macos_agent_publishes_correlated_selected_adapter_traffic",
+        "SvcHostWin/tests/test_network_traffic.py::test_windows_agent_publishes_correlated_selected_adapter_traffic",
+        "SvcHostMac/tests/test_network_traffic.py::test_macos_agent_publishes_correlated_selected_adapter_traffic",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_network_traffic_is_owner_only_and_edits_the_same_card",
     }
     traffic_nav = next(row for row in registry["navigation"] if row["callback"] == "cmd:network_traffic")
@@ -1492,8 +1492,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert traffic_alert["handler_id"] == "d04.f19.network.traffic_threshold_alert"
     assert traffic_alert["role"] == ["owner"]
     assert set(traffic_alert["test_refs"]) == {
-        "XGENT-WDS/tests/test_network_traffic.py::test_windows_agent_acknowledges_owner_selected_threshold_schedule",
-        "XGENT-MCS/tests/test_network_traffic.py::test_macos_agent_acknowledges_owner_selected_threshold_schedule",
+        "SvcHostWin/tests/test_network_traffic.py::test_windows_agent_acknowledges_owner_selected_threshold_schedule",
+        "SvcHostMac/tests/test_network_traffic.py::test_macos_agent_acknowledges_owner_selected_threshold_schedule",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_network_traffic_alert_sample_requires_exact_fresh_selected_interface",
     }
     implemented_ids.add("D04-F19")
@@ -1502,8 +1502,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert interface_history["handler_id"] == "d04.f20.network.interface_status_history"
     assert interface_history["role"] == ["owner"]
     assert set(interface_history["test_refs"]) == {
-        "XGENT-WDS/tests/test_interface_status_history.py::test_history_records_only_verified_state_transitions_and_bounds_rows",
-        "XGENT-MCS/tests/test_interface_status_history.py::test_history_records_only_verified_state_transitions_and_bounds_rows",
+        "SvcHostWin/tests/test_interface_status_history.py::test_history_records_only_verified_state_transitions_and_bounds_rows",
+        "SvcHostMac/tests/test_interface_status_history.py::test_history_records_only_verified_state_transitions_and_bounds_rows",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_interface_status_history_validator_requires_fresh_exact_transition_rows",
     }
     implemented_ids.add("D04-F20")
@@ -1517,8 +1517,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
         "novelty_status": "confirmed_absent",
     }]
     assert set(proxy_status["test_refs"]) == {
-        "XGENT-WDS/tests/test_proxy_status.py::test_agent_publishes_correlated_redacted_proxy_status",
-        "XGENT-MCS/tests/test_proxy_status.py::test_agent_publishes_correlated_redacted_proxy_status",
+        "SvcHostWin/tests/test_proxy_status.py::test_agent_publishes_correlated_redacted_proxy_status",
+        "SvcHostMac/tests/test_proxy_status.py::test_agent_publishes_correlated_redacted_proxy_status",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_proxy_status_is_owner_only_and_edits_the_current_card",
     }
     proxy_nav = next(row for row in registry["navigation"] if row["callback"] == "cmd:proxy_status")
@@ -1536,8 +1536,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
         "novelty_status": "confirmed_absent",
     }]
     assert set(vpn_route["test_refs"]) == {
-        "XGENT-WDS/tests/test_vpn_route.py::test_agent_publishes_correlated_vpn_route_summary",
-        "XGENT-MCS/tests/test_vpn_route.py::test_agent_publishes_correlated_vpn_route_summary",
+        "SvcHostWin/tests/test_vpn_route.py::test_agent_publishes_correlated_vpn_route_summary",
+        "SvcHostMac/tests/test_vpn_route.py::test_agent_publishes_correlated_vpn_route_summary",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_vpn_route_status_is_owner_only_and_edits_the_current_card",
     }
     vpn_nav = next(row for row in registry["navigation"] if row["callback"] == "cmd:vpn_route_status")
@@ -1555,8 +1555,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
         "novelty_status": "confirmed_absent",
     }]
     assert set(endpoint_batch["test_refs"]) == {
-        "XGENT-WDS/tests/test_endpoint_batch.py::test_agent_publishes_correlated_bounded_endpoint_set",
-        "XGENT-MCS/tests/test_endpoint_batch.py::test_agent_publishes_correlated_bounded_endpoint_set",
+        "SvcHostWin/tests/test_endpoint_batch.py::test_agent_publishes_correlated_bounded_endpoint_set",
+        "SvcHostMac/tests/test_endpoint_batch.py::test_agent_publishes_correlated_bounded_endpoint_set",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_endpoint_batch_is_owner_only_fixed_and_edits_the_current_card",
     }
     endpoints_nav = next(row for row in registry["navigation"] if row["callback"] == "cmd:endpoint_batch")
@@ -1569,8 +1569,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert dnssec["handler_id"] == "d04.f26.network.dnssec_check"
     assert dnssec["role"] == ["owner"]
     assert dnssec["baseline_evidence"][0]["novelty_status"] == "confirmed_absent"
-    assert {"XGENT-WDS/tests/test_dnssec_check.py::test_agent_publishes_correlated_dnssec_assessment",
-            "XGENT-MCS/tests/test_dnssec_check.py::test_agent_publishes_correlated_dnssec_assessment",
+    assert {"SvcHostWin/tests/test_dnssec_check.py::test_agent_publishes_correlated_dnssec_assessment",
+            "SvcHostMac/tests/test_dnssec_check.py::test_agent_publishes_correlated_dnssec_assessment",
             "TG-BOT-SERVER/tests/test_bot_ui.py::test_dnssec_check_is_owner_only_and_edits_current_card"} == set(dnssec["test_refs"])
     dnssec_nav = next(row for row in registry["navigation"] if row["callback"] == "cmd:dnssec_check")
     assert (dnssec_nav["parent"], dnssec_nav["roles"], dnssec_nav["presentation"]) == (
@@ -1622,8 +1622,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert latency_series["role"] == ["owner"]
     assert latency_series["baseline_evidence"][0]["novelty_status"] == "confirmed_absent"
     assert set(latency_series["test_refs"]) == {
-        "XGENT-WDS/tests/test_latency_series.py::test_agent_publishes_correlated_series_from_fixed_five_attempt_contract",
-        "XGENT-MCS/tests/test_latency_series.py::test_agent_publishes_correlated_series_from_fixed_five_attempt_contract",
+        "SvcHostWin/tests/test_latency_series.py::test_agent_publishes_correlated_series_from_fixed_five_attempt_contract",
+        "SvcHostMac/tests/test_latency_series.py::test_agent_publishes_correlated_series_from_fixed_five_attempt_contract",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_latency_series_owner_flow_is_correlated_and_edits_existing_card",
     }
     latency_series_nav = next(row for row in registry["navigation"] if row["callback"] == "cmd:latency_series")
@@ -1637,8 +1637,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert packet_loss["role"] == ["owner"]
     assert packet_loss["baseline_evidence"][0]["novelty_status"] == "confirmed_absent"
     assert set(packet_loss["test_refs"]) == {
-        "XGENT-WDS/tests/test_packet_loss_history.py::test_agent_publishes_correlated_packet_loss_history",
-        "XGENT-MCS/tests/test_packet_loss_history.py::test_agent_publishes_correlated_packet_loss_history",
+        "SvcHostWin/tests/test_packet_loss_history.py::test_agent_publishes_correlated_packet_loss_history",
+        "SvcHostMac/tests/test_packet_loss_history.py::test_agent_publishes_correlated_packet_loss_history",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_packet_loss_history_owner_flow_is_single_device_owner_only_and_correlated",
     }
     packet_loss_nav = next(row for row in registry["navigation"] if row["callback"] == "cmd:packet_loss_history")
@@ -1652,8 +1652,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert jitter["role"] == ["owner"]
     assert jitter["baseline_evidence"][0]["novelty_status"] == "confirmed_absent"
     assert set(jitter["test_refs"]) == {
-        "XGENT-WDS/tests/test_jitter_measurement.py::test_agent_publishes_correlated_icmp_jitter_result",
-        "XGENT-MCS/tests/test_jitter_measurement.py::test_agent_publishes_correlated_icmp_jitter_result",
+        "SvcHostWin/tests/test_jitter_measurement.py::test_agent_publishes_correlated_icmp_jitter_result",
+        "SvcHostMac/tests/test_jitter_measurement.py::test_agent_publishes_correlated_icmp_jitter_result",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_network_jitter_owner_flow_is_single_device_owner_only_and_correlated",
     }
     jitter_nav = next(row for row in registry["navigation"] if row["callback"] == "cmd:network_jitter")
@@ -1666,8 +1666,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert throughput["handler_id"] == "d04.f04.network.throughput"
     assert throughput["baseline_evidence"][0]["novelty_status"] == "confirmed_absent"
     assert set(throughput["test_refs"]) == {
-        "XGENT-WDS/tests/test_network_throughput.py::test_agent_publishes_correlated_throughput_result",
-        "XGENT-MCS/tests/test_network_throughput.py::test_agent_publishes_correlated_throughput_result",
+        "SvcHostWin/tests/test_network_throughput.py::test_agent_publishes_correlated_throughput_result",
+        "SvcHostMac/tests/test_network_throughput.py::test_agent_publishes_correlated_throughput_result",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_network_throughput_owner_flow_is_single_device_owner_only_and_correlated",
     }
     throughput_nav = next(row for row in registry["navigation"] if row["callback"] == "cmd:network_throughput")
@@ -1680,8 +1680,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert link_speed["handler_id"] == "d04.f21.network.link_speed"
     assert link_speed["baseline_evidence"][0]["novelty_status"] == "confirmed_absent"
     assert set(link_speed["test_refs"]) == {
-        "XGENT-WDS/tests/test_network_link_speed.py::test_agent_publishes_correlated_link_speed_result",
-        "XGENT-MCS/tests/test_network_link_speed.py::test_agent_publishes_correlated_link_speed_result",
+        "SvcHostWin/tests/test_network_link_speed.py::test_agent_publishes_correlated_link_speed_result",
+        "SvcHostMac/tests/test_network_link_speed.py::test_agent_publishes_correlated_link_speed_result",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_network_link_speed_owner_flow_selects_one_interface_and_edits_card",
     }
     link_speed_nav = next(row for row in registry["navigation"] if row["callback"] == "cmd:network_link_speed")
@@ -1694,8 +1694,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert route_lookup["handler_id"] == "d04.f22.network.route_lookup"
     assert route_lookup["baseline_evidence"][0]["novelty_status"] == "confirmed_absent"
     assert set(route_lookup["test_refs"]) == {
-        "XGENT-WDS/tests/test_route_lookup.py::test_agent_publishes_correlated_route_lookup",
-        "XGENT-MCS/tests/test_route_lookup.py::test_agent_publishes_correlated_route_lookup",
+        "SvcHostWin/tests/test_route_lookup.py::test_agent_publishes_correlated_route_lookup",
+        "SvcHostMac/tests/test_route_lookup.py::test_agent_publishes_correlated_route_lookup",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_route_lookup_is_owner_only_correlated_and_edits_one_card",
     }
     route_lookup_nav = next(row for row in registry["navigation"] if row["callback"] == "cmd:route_lookup")
@@ -1720,7 +1720,7 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert shell_runner["support_state"] == "needs_device_test"
     assert shell_runner["handler_id"] == "d05.f29.terminal.shell_runner_diagnostic"
     assert shell_runner["baseline_evidence"][0]["novelty_status"] == "confirmed_absent"
-    assert "XGENT-MCS/tests/test_capabilities.py::test_shell_runner_probe_checks_filesystem_only_and_never_starts_a_process" in shell_runner["test_refs"]
+    assert "SvcHostMac/tests/test_capabilities.py::test_shell_runner_probe_checks_filesystem_only_and_never_starts_a_process" in shell_runner["test_refs"]
     shell_runner_nav = next(row for row in registry["navigation"] if row["callback"] == "cmd:shell_runner_diagnostic")
     assert (shell_runner_nav["parent"], shell_runner_nav["roles"], shell_runner_nav["presentation"]) == (
         "terminal", ["owner"], "terminal_shell_runner_diagnostic",
@@ -1883,8 +1883,8 @@ def test_builder_migrates_only_the_approved_unique_catalog_rows(tmp_path: Path) 
     assert set(external_ip_watch["test_refs"]) == {
         "TG-BOT-SERVER/tests/test_device_store.py::test_external_ip_watch_is_owner_opt_in_persistent_and_queues_changes",
         "TG-BOT-SERVER/tests/test_bot_ui.py::test_external_ip_watch_callbacks_are_owner_only_and_registered",
-        "XGENT-WDS/tests/test_wds.py::test_external_ip_response_is_correlated_and_rejects_non_public_ip",
-        "XGENT-MCS/tests/test_capabilities.py::test_macos_external_ip_response_correlates_public_result_and_hides_provider_error",
+        "SvcHostWin/tests/test_wds.py::test_external_ip_response_is_correlated_and_rejects_non_public_ip",
+        "SvcHostMac/tests/test_capabilities.py::test_macos_external_ip_response_correlates_public_result_and_hides_provider_error",
     }
     external_watch_nav = next(row for row in registry["navigation"] if row["callback"] == "cmd:external_ip_watch")
     assert (external_watch_nav["parent"], external_watch_nav["roles"], external_watch_nav["presentation"]) == (

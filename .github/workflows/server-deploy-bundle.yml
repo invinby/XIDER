@@ -12,7 +12,7 @@ jobs:
     name: "Build and sign the exact server source"
     runs-on: ubuntu-latest
     environment:
-      name: xider-release-signing
+      name: svchost-release-signing
     permissions:
       contents: write
 
@@ -34,27 +34,27 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          git archive --format=zip --prefix=XIDER-source/ --output=artifacts/XIDER-source.zip HEAD
-          python tools/verify_command_approval_bundle.py --public-only-zip artifacts/XIDER-source.zip
-          key_path="$RUNNER_TEMP/xider-release-signing.pem"
+          git archive --format=zip --prefix=SvcHost-source/ --output=artifacts/SvcHost-source.zip HEAD
+          python tools/verify_command_approval_bundle.py --public-only-zip artifacts/SvcHost-source.zip
+          key_path="$RUNNER_TEMP/svchost-release-signing.pem"
           trap 'rm -f "$key_path"' EXIT
           printf '%s' "$XIDER_RELEASE_PRIVATE_KEY_B64" | base64 --decode > "$key_path"
           chmod 0600 "$key_path"
           python tools/sign_server_bundle.py \
-            --bundle artifacts/XIDER-source.zip \
+            --bundle artifacts/SvcHost-source.zip \
             --manifest artifacts/release-manifest.json \
             --key "$key_path" \
             --release "$GITHUB_REF_NAME"
           unset XIDER_RELEASE_PRIVATE_KEY_B64
           python deploy/verify_server_bundle.py \
-            artifacts/release-manifest.json artifacts/XIDER-source.zip
+            artifacts/release-manifest.json artifacts/SvcHost-source.zip
 
       - name: "Upload signed server deployment artifact"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: XIDER-server-deploy-bundle
+          name: SvcHost-server-deploy-bundle
           path: |
-            artifacts/XIDER-source.zip
+            artifacts/SvcHost-source.zip
             artifacts/release-manifest.json
           if-no-files-found: error
 
@@ -64,7 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           gh release create "$GITHUB_REF_NAME" \
-            artifacts/XIDER-source.zip \
+            artifacts/SvcHost-source.zip \
             artifacts/release-manifest.json \
             --verify-tag \
             --prerelease \

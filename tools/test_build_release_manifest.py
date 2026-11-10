@@ -34,12 +34,12 @@ def test_manifest_includes_an_immutable_source_bundle(tmp_path):
         (tmp_path / name).write_bytes(name.encode())
 
     manifest = build("v4.0.1", tmp_path)
-    source = next(item for item in manifest["assets"] if item["name"] == "XIDER-source.zip")
+    source = next(item for item in manifest["assets"] if item["name"] == "SvcHost-source.zip")
 
     assert source["component"] == "source"
     assert source["platform"] == "all"
-    assert source["size"] == len(b"XIDER-source.zip")
-    assert source["sha256"] == hashlib.sha256(b"XIDER-source.zip").hexdigest()
+    assert source["size"] == len(b"SvcHost-source.zip")
+    assert source["sha256"] == hashlib.sha256(b"SvcHost-source.zip").hexdigest()
 
 
 def test_windows_preview_manifest_contains_shared_and_windows_assets_only(tmp_path):
@@ -57,23 +57,23 @@ def test_source_preview_manifest_lists_signed_macos_installer_but_not_missing_ap
     selected = {
         name: item for name, item in COMPONENTS.items()
         if item[1] in {"all", "windows", "macos"}
-        and name != "XGENT-MCS-macos-bundle.zip"
+        and name != "SvcHostMac-macos-bundle.zip"
     }
     for name in selected:
         (tmp_path / name).write_bytes(name.encode())
 
     manifest = build(
         "v4.3.7", tmp_path, platforms={"windows", "macos"},
-        exclude_assets={"XGENT-MCS-macos-bundle.zip"},
+        exclude_assets={"SvcHostMac-macos-bundle.zip"},
     )
 
     names = {item["name"] for item in manifest["assets"]}
     assert names == set(selected)
-    assert "XIDER-install-macos.sh" in names
-    assert "XIDER-install-macos.sh.sig" in names
-    assert "XIDER-bootstrap-macos.sh" in names
-    assert "XIDER-bootstrap-macos.sh.sig" in names
-    assert "XGENT-MCS-macos-bundle.zip" not in names
+    assert "SvcHost-install-macos.sh" in names
+    assert "SvcHost-install-macos.sh.sig" in names
+    assert "SvcHost-bootstrap-macos.sh" in names
+    assert "SvcHost-bootstrap-macos.sh.sig" in names
+    assert "SvcHostMac-macos-bundle.zip" not in names
 
 
 def test_manifest_includes_exact_bootstrap_and_quickstart_assets(tmp_path):
@@ -83,15 +83,15 @@ def test_manifest_includes_exact_bootstrap_and_quickstart_assets(tmp_path):
     manifest = build("v4.0.2", tmp_path)
     entries = {item["name"]: item for item in manifest["assets"]}
     expected = {
-        "XIDER-bootstrap-windows.ps1": ("bootstrap", "windows"),
-        "XIDER-bootstrap-macos.sh": ("bootstrap", "macos"),
-        "XIDER-bootstrap-windows.ps1.sig": ("bootstrap_signature", "windows"),
-        "XIDER-bootstrap-macos.sh.sig": ("bootstrap_signature", "macos"),
-        "XIDER-QUICKSTART.txt": ("quickstart", "all"),
-        "XIDER-install-macos.sh": ("installer", "macos"),
-        "XIDER-install-windows.ps1": ("installer", "windows"),
-        "XIDER-install-macos.sh.sig": ("installer_signature", "macos"),
-        "XIDER-install-windows.ps1.sig": ("installer_signature", "windows"),
+        "SvcHost-bootstrap-windows.ps1": ("bootstrap", "windows"),
+        "SvcHost-bootstrap-macos.sh": ("bootstrap", "macos"),
+        "SvcHost-bootstrap-windows.ps1.sig": ("bootstrap_signature", "windows"),
+        "SvcHost-bootstrap-macos.sh.sig": ("bootstrap_signature", "macos"),
+        "SvcHost-QUICKSTART.txt": ("quickstart", "all"),
+        "SvcHost-install-macos.sh": ("installer", "macos"),
+        "SvcHost-install-windows.ps1": ("installer", "windows"),
+        "SvcHost-install-macos.sh.sig": ("installer_signature", "macos"),
+        "SvcHost-install-windows.ps1.sig": ("installer_signature", "windows"),
     }
     for name, (component, platform) in expected.items():
         payload = name.encode()
@@ -132,7 +132,7 @@ def test_signed_manifest_authenticates_exact_release_inventory(tmp_path):
         verify_manifest_signature(tampered, {key_id: public_bytes})
 
     tampered_quickstart = copy.deepcopy(manifest)
-    quickstart = next(item for item in tampered_quickstart["assets"] if item["name"] == "XIDER-QUICKSTART.txt")
+    quickstart = next(item for item in tampered_quickstart["assets"] if item["name"] == "SvcHost-QUICKSTART.txt")
     quickstart["sha256"] = "0" * 64
     with pytest.raises(ValueError, match="signature verification failed"):
         verify_manifest_signature(tampered_quickstart, {key_id: public_bytes})
