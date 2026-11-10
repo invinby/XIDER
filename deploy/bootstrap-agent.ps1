@@ -40,6 +40,25 @@ function Get-XiderExpectedGuardianExecutable {
     return Join-Path $AgentDirectory 'venv\Scripts\pythonw.exe'
 }
 
+function Hide-XiderInstallTree {
+    param([Parameter(Mandatory)][string]$InstallRoot)
+
+    # Make the whole checkout invisible and system-marked so a casual glance at
+    # %LOCALAPPDATA% does not reveal XIDER. Hidden/system attributes are
+    # cosmetic: PowerShell, git, Move-Item and the agent runtime keep working.
+    # Everything is best effort, so a stripped host without attrib.exe or a
+    # transient lock never fails a healthy install.
+    if (-not (Get-Command attrib.exe -ErrorAction SilentlyContinue)) { return }
+    $root = [IO.Path]::GetFullPath($InstallRoot)
+    if (-not (Test-Path -LiteralPath $root)) { return }
+    try {
+        & attrib.exe +h +s /s /d $root | Out-Null
+        & attrib.exe +h +s $root | Out-Null
+    } catch {
+        Write-Warning ("Не удалось скрыть каталог установки: {0}" -f $_.Exception.Message)
+    }
+}
+
 function Invoke-XiderNativeProbe {
     param(
         [Parameter(Mandatory)][string]$Executable,
@@ -1560,6 +1579,7 @@ try {
     Remove-XiderOldFailedCheckouts -InstallRoot $resolvedRoot -Keep 1
     Remove-XiderOldStageCheckouts -InstallRoot $resolvedRoot -MaxAgeHours 24
     if (Test-Path -LiteralPath $backup) { Write-Host "[BACKUP] Предыдущая версия сохранена: $backup" }
+    Hide-XiderInstallTree -InstallRoot $resolvedRoot
 }
 catch {
     $originalError = $_

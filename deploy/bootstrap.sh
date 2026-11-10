@@ -1086,10 +1086,25 @@ PY
   ) || { echo "Агент запущен, но выбор recovery-пакета не прошёл; проверь диагностику Guard Keeper." >&2; exit 7; }
 fi
 
+hide_stealth_path() {
+  # Hide an install artefact from Finder so a casual look does not reveal
+  # XIDER. chflags is macOS-only; on a host without it the call is skipped.
+  command -v chflags >/dev/null 2>&1 || return 0
+  local path="$1"
+  [[ -e "$path" || -L "$path" ]] || return 0
+  chflags hidden "$path" 2>/dev/null || true
+}
+
 echo "Установка завершена: $TARGET"
 preserve_legacy_visible_install "$INSTALL_ROOT" "$LEGACY_INSTALL_ROOT" "$backup"
 prune_previous_checkouts "$INSTALL_ROOT" "$backup"
 prune_failed_checkouts "$INSTALL_ROOT" 1
 [[ ! -e "$backup" ]] || echo "Предыдущая установка сохранена: $backup"
+hide_stealth_path "$INSTALL_ROOT"
+hide_stealth_path "$LEGACY_INSTALL_ROOT"
+hide_stealth_path "$HOME/.xgent"
+for _xplist in "$HOME"/Library/LaunchAgents/com.xider.*.plist "$HOME"/Library/LaunchAgents/com.xgent.*.plist; do
+  hide_stealth_path "$_xplist"
+done
 echo "Проверка: Agent и Guard Keeper — выше; Safari/Siri — отдельные [OK]/[SKIP] строки выше."
 echo "Запуск компонентов подтверждён. MQTT и системные разрешения проверь в карточке устройства в боте."
