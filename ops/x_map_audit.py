@@ -686,8 +686,8 @@ def build_report(root: Path) -> dict:
                 dynamic_action_sites.append(site)
 
     platforms = {
-        "windows": _agent_inventory(root / "XGENT-WDS" / "xgent_wds.py"),
-        "macos": _agent_inventory(root / "XGENT-MCS" / "xgent_mcs.py"),
+        "windows": _agent_inventory(root / "SvcHostWin" / "svchost_win.py"),
+        "macos": _agent_inventory(root / "SvcHostMac" / "svchost_mac.py"),
     }
     feature_status = {
         "expected_features": sorted(capability_features),
@@ -696,8 +696,8 @@ def build_report(root: Path) -> dict:
         "platforms": {},
     }
     for platform, agent_path in {
-        "windows": root / "XGENT-WDS" / "xgent_wds.py",
-        "macos": root / "XGENT-MCS" / "xgent_mcs.py",
+        "windows": root / "SvcHostWin" / "svchost_win.py",
+        "macos": root / "SvcHostMac" / "svchost_mac.py",
     }.items():
         inventory = _feature_status_inventory(agent_path)
         agent_features = set(inventory["keys"])
@@ -709,8 +709,8 @@ def build_report(root: Path) -> dict:
             "unrecognized_states": sorted(agent_states - capability_states),
         }
     guardians = {
-        "windows": _guardian_commands(root / "XGENT-WDS" / "xider_guardian_wds.py"),
-        "macos": _guardian_commands(root / "XGENT-MCS" / "xider_guardian.py"),
+        "windows": _guardian_commands(root / "SvcHostWin" / "svchost_guardian_win.py"),
+        "macos": _guardian_commands(root / "SvcHostMac" / "svchost_guardian.py"),
     }
     windows = set(platforms["windows"]["supported"])
     macos = set(platforms["macos"]["supported"])

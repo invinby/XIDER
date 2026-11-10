@@ -2,14 +2,14 @@
 
 :root {
   color-scheme: light dark;
-  --paper: #f5f1ea;
-  --surface: #fffdf9;
-  --ink: #171615;
-  --muted: #5d5a56;
-  --line: #d8d0c5;
-  --signal: #d9041f;
-  --signal-deep: #a90a1c;
-  --pale-red: #f7dedf;
+  --paper: #FFE1EC;
+  --surface: #FFF8FA;
+  --ink: #171014;
+  --muted: #66505A;
+  --line: #E7BFCB;
+  --signal: #FF0040;
+  --signal-deep: #C80032;
+  --pale-red: #FFC7D7;
   --route-bg: #1b1b1a;
   --route-ink: #f7f3ed;
   --route-muted: #c4beb5;
@@ -20,14 +20,14 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --paper: #171818;
-    --surface: #202221;
-    --ink: #f3f0e9;
-    --muted: #b9b5ad;
-    --line: #41413e;
-    --signal: #ff4654;
-    --signal-deep: #ff6974;
-    --pale-red: #452529;
+    --paper: #160A0E;
+    --surface: #241117;
+    --ink: #FFF5F8;
+    --muted: #D6B7C1;
+    --line: #58303C;
+    --signal: #FF4777;
+    --signal-deep: #FF8DAA;
+    --pale-red: #49202D;
     --route-bg: #0c0d0d;
     --route-ink: #f7f3ed;
     --route-muted: #c4beb5;

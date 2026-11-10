@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+# SvcHost Agent Launcher v2.0 — macOS
+# Убивает зомби, проверяет окружение, запускает в фоне с watchdog.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+ENTRY="svchost_mac.py"
+PIDFILE="agent.pid"
+LOGFILE="agent.log"
+VENV_DIR="venv"
+
+# ──────────────────────────────────────────
+# 0. Флаг --setup — мастер разрешений macOS
+# ──────────────────────────────────────────
+if [[ "${1:-}" == "--setup" ]]; then
+    echo "🍎 Запуск мастера настройки разрешений macOS..."
+    if [[ -x SvcHost.app/Contents/MacOS/SvcHostMac ]]; then
+        exec "$(pwd)/SvcHost.app/Contents/MacOS/SvcHostMac" --location-setup
+    fi
+    python3 setup_mac.py
+    exit 0
+fi
+
+# Полная остановка: убрать LaunchAgent, чтобы macOS не подняла его снова.
+if [[ "${1:-}" == "--stop" || "${1:-}" == "-x" ]]; then
+    PLIST="$HOME/Library/LaunchAgents/com.svchost.agent.plist"
+    launchctl bootout "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || true
+    rm -f "$PLIST"
+    ./stop_agent.sh
+    exit 0
+fi
+
+if [[ "${1:-}" == "--status" || "${1:-}" == "-s" ]]; then
+    if [[ -x SvcHost.app/Contents/MacOS/SvcHostMac ]]; then
+        SvcHost.app/Contents/MacOS/SvcHostMac --service status
+        exit $?
+    fi
+    if [[ -f "$ENTRY" ]]; then
+        PYTHON="$PWD/venv/bin/python3"
+        [[ -x "$PYTHON" ]] || PYTHON="$(command -v python3 || true)"
+        if [[ -n "$PYTHON" ]]; then
+            "$PYTHON" "$ENTRY" --service status
+            exit $?
+        fi
+    fi
+    if command -v launchctl >/dev/null 2>&1; then
+        LAUNCH_STATE="$(launchctl print "gui/$(id -u)/com.svchost.agent" 2>/dev/null || true)"
+        if printf '%s\n' "$LAUNCH_STATE" | grep -Eq 'pid = [0-9]+|state = running'; then
+            echo "[OK] SvcHost Agent работает через LaunchAgent"
+            echo "[LOG] $(pwd)/$LOGFILE"
+            exit 0
+        fi
+    fi
+    if [[ -f "$PIDFILE" ]]; then
+        PID="$(cat "$PIDFILE" 2>/dev/null || true)"
+        if [[ -n "$PID" ]] && ps -p "$PID" >/dev/null 2>&1; then
+            echo "[OK] SvcHost Agent работает (PID: $PID)"
+            echo "[LOG] $(pwd)/$LOGFILE"
+            exit 0
+        fi
+    fi
+    if command -v pgrep >/dev/null 2>&1; then
+        if [[ -d SvcHost.app ]]; then
+            PID="$(pgrep -f "$(pwd)/SvcHost.app/Contents/MacOS/SvcHostMac" 2>/dev/null | head -n 1 || true)"
+            if [[ -n "$PID" ]] && ps -p "$PID" >/dev/null 2>&1; then
+                echo "[OK] SvcHost.app работает (PID: $PID)"
+                exit 0
+            fi
+        fi
+        PID="$(pgrep -f "$ENTRY" 2>/dev/null | head -n 1 || true)"
+        if [[ -n "$PID" ]] && ps -p "$PID" >/dev/null 2>&1; then
+            echo "[OK] SvcHost Agent работает под Guardian/LaunchAgent (PID: $PID)"
+            echo "[LOG] $(pwd)/$LOGFILE"
+            exit 0
+        fi
+    fi
+    echo "[STOPPED] SvcHost Agent не запущен"
+    exit 1
+fi
+
+APP_BINARY="$(pwd)/SvcHost.app/Contents/MacOS/SvcHostMac"
+if [[ -d SvcHost.app ]]; then
+    if [[ ! -x "$APP_BINARY" ]]; then
+        echo "BLOCKED: SvcHost.app executable is missing; reinstall locally." >&2
+        exit 1
+    fi
+    if [[ "${1:-}" == "--location-setup" ]]; then
+        exec "$APP_BINARY" --location-setup
+    elif [[ "${1:-}" == "--foreground" || "${1:-}" == "-f" ]]; then
+        exec "$APP_BINARY"
+    else
+        # LaunchServices runs the signed bundled executable, never shell/venv.
+        open -g "$(pwd)/SvcHost.app"
+        exit $?
+    fi
+fi
+
+# ──────────────────────────────────────────
+# 1. Проверка Python
+# ──────────────────────────────────────────
+if ! command -v python3 &>/dev/null; then
+    echo "❌ [ERROR] python3 не найден в PATH"
+    exit 1
+fi
+
+# ──────────────────────────────────────────
+# 2. Создание/активация venv
+# ──────────────────────────────────────────
+if [ ! -d "$VENV_DIR" ]; then
+    echo "📦 Создание виртуального окружения..."
+    python3 -m venv "$VENV_DIR"
+fi
+source "$VENV_DIR/bin/activate"
+if [[ "${XIDER_RUNTIME_PREPARED:-0}" != 1 ]]; then
+    python3 -m pip install --disable-pip-version-check -q -r requirements.txt
+fi
+
+# ──────────────────────────────────────────
+# 3. Создание .env если нет
+# ──────────────────────────────────────────
+if [ ! -f ".env" ]; then
+    echo "⚠️  Файл .env не найден. Копирую из .env.example..."
+    cp .env.example .env
+    echo "✏️  Заполните .env и перезапустите агент!"
+    exit 1
+fi
+
+# ──────────────────────────────────────────
+# 4. Убийство старых экземпляров (и зомби!)
+# ──────────────────────────────────────────
+# По PID-файлу
+if [ -f "$PIDFILE" ]; then
+    OLD_PID=$(cat "$PIDFILE" 2>/dev/null || echo "")
+    if [ -n "$OLD_PID" ] && ps -p "$OLD_PID" >/dev/null 2>&1; then
+        echo "🛑 Останавливаю предыдущий агент (PID: $OLD_PID)..."
+        kill "$OLD_PID" 2>/dev/null || true
+        sleep 1
+        kill -9 "$OLD_PID" 2>/dev/null || true
+    fi
+    rm -f "$PIDFILE"
+fi
+
+# Убиваем зомби по имени файла (если PID-файл потерялся)
+ZOMBIE_PIDS=$(pgrep -f "$ENTRY" 2>/dev/null || true)
+if [ -n "$ZOMBIE_PIDS" ]; then
+    echo "🧟 Убиваю зомби-процессы: $ZOMBIE_PIDS"
+    echo "$ZOMBIE_PIDS" | xargs kill -9 2>/dev/null || true
+    sleep 1
+fi
+
+# ──────────────────────────────────────────
+# 5. Проверка разрешений на исполнение
+# ──────────────────────────────────────────
+chmod +x "$0"
+
+# ──────────────────────────────────────────
+# 6. Автозапуск: сначала регистрируем LaunchAgent,
+#    затем отдаём запуск самому launchd (без второго процесса).
+# ──────────────────────────────────────────
+if [[ "${1:-}" != "--foreground" && "${1:-}" != "-f" && "${XIDER_NO_AUTOSTART:-0}" != "1" && -x "$VENV_DIR/bin/python3" ]]; then
+    if "$VENV_DIR/bin/python3" -c 'from svchost_mac import XgentClient; XgentClient()._do_autorun_enable({})' >/dev/null 2>&1 \
+       && launchctl print "gui/$(id -u)/com.svchost.agent" >/dev/null 2>&1; then
+        for attempt in {1..10}; do
+            LAUNCH_STATE="$(launchctl print "gui/$(id -u)/com.svchost.agent" 2>/dev/null || true)"
+            if printf '%s\n' "$LAUNCH_STATE" | grep -Eq 'pid = [0-9]+|state = running'; then
+                echo "🚀 LaunchAgent зарегистрирован; процесс агента запущен через launchd."
+                exit 0
+            fi
+            sleep 1
+        done
+        echo "[ERROR] LaunchAgent зарегистрирован, но процесс агента не запустился. Проверь agent.log." >&2
+        exit 1
+    fi
+fi
+
+# ──────────────────────────────────────────
+# 7. Запуск (--foreground или фон)
+# ──────────────────────────────────────────
+if [[ "${1:-}" == "--foreground" || "${1:-}" == "-f" ]]; then
+    echo "🟢 SvcHost Agent v2.0 — интерактивный режим (Ctrl+C для выхода)"
+    python3 "$ENTRY"
+else
+    echo "🚀 Запускаю SvcHost Agent v2.0 в фоне..."
+    nohup python3 "$ENTRY" >"$LOGFILE" 2>&1 &
+    PID=$!
+    echo "$PID" >"$PIDFILE"
+
+    sleep 1.5
+    if ps -p "$PID" >/dev/null 2>&1; then
+        echo "╔══════════════════════════════════════╗"
+        echo "║  ✅  SvcHost Agent запущен успешно!    ║"
+        echo "╠══════════════════════════════════════╣"
+        echo "║  PID:  $PID"
+        echo "║  Лог:  $(pwd)/$LOGFILE"
+        echo "║  Стоп: ./stop_agent.sh               ║"
+        echo "╚══════════════════════════════════════╝"
+        echo ""
+        echo "💡 Если нет доступа к экрану/мику — запусти: ./start_agent.sh --setup"
+    else
+        echo "╔══════════════════════════════════════╗"
+        echo "║  ❌  Агент завершился с ошибкой!     ║"
+        echo "╚══════════════════════════════════════╝"
+        echo ""
+        echo "Последние строки лога:"
+        tail -n 20 "$LOGFILE" 2>/dev/null || echo "(лог пустой)"
+        exit 1
+    fi
+fi

@@ -31,7 +31,7 @@ LINUX_ROOT = sys.platform.startswith("linux") and hasattr(os, "geteuid") and os.
 @unittest.skipUnless(LINUX_ROOT, "real SSH UID/group/ACL semantics require Linux root")
 class VaultSetupPermissionsTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="xider-vault-permissions-")
+        self.tmp = tempfile.TemporaryDirectory(prefix="svchost-vault-permissions-")
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.root.chmod(0o755)
@@ -55,13 +55,13 @@ class VaultSetupPermissionsTests(unittest.TestCase):
         self.key = self.root / "upload-key"
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(self.key)], check=True)
         self.authorized = self.root / "etc/ssh/authorized_keys" / self.user.pw_name
-        self.receiver = self.root / "usr/local/libexec/xider-vault-upload/x_vault_transport.py"
+        self.receiver = self.root / "usr/local/libexec/svchost-vault-upload/x_vault_transport.py"
         for relative in (
             "deploy/x-vault-promote.sh", "deploy/promote_x_vault.py", "ops/x_vault_transport.py",
-            "deploy/xider-vault-promote.service", "deploy/xider-vault-promote.timer",
-            "deploy/xider-vault-upload.sshd.conf", "ops/x_vault.py",
-            "deploy/x-vault-backup.sh", "deploy/xider-vault-backup.service",
-            "deploy/xider-vault-backup.timer",
+            "deploy/svchost-vault-promote.service", "deploy/svchost-vault-promote.timer",
+            "deploy/svchost-vault-upload.sshd.conf", "ops/x_vault.py",
+            "deploy/x-vault-backup.sh", "deploy/svchost-vault-backup.service",
+            "deploy/svchost-vault-backup.timer",
         ):
             destination = self.app / relative
             destination.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
@@ -79,8 +79,8 @@ class VaultSetupPermissionsTests(unittest.TestCase):
             self._tool(name, f'printf \'%s\\n\' \'{name}\' >>\'{self.log}\'\n')
         for name in ("useradd", "groupadd"):
             self._tool(name, 'echo "Fixture must not create system accounts" >&2\nexit 93\n')
-        self.standby = self._mapped_script("xider-vault-standby-setup.sh")
-        self.primary = self._mapped_script("xider-vault-primary-setup.sh")
+        self.standby = self._mapped_script("svchost-vault-standby-setup.sh")
+        self.primary = self._mapped_script("svchost-vault-primary-setup.sh")
 
     def _tool(self, name, body):
         path = self.bin / name
@@ -90,9 +90,9 @@ class VaultSetupPermissionsTests(unittest.TestCase):
     def _mapped_script(self, name):
         source = (ROOT / "deploy" / name).read_text()
         # Map every host installation prefix; no literal system path may remain.
-        for prefix in ("/srv/xider-vault", "/etc/ssh", "/etc/xider", "/etc/tmpfiles.d", "/etc/systemd/system", "/usr/local/sbin", "/usr/local/libexec", "/run/xider-vault-upload.lock"):
+        for prefix in ("/srv/svchost-vault", "/etc/ssh", "/etc/xider", "/etc/tmpfiles.d", "/etc/systemd/system", "/usr/local/sbin", "/usr/local/libexec", "/run/svchost-vault-upload.lock"):
             source = source.replace(prefix, str(self.root) + prefix)
-        if name.startswith("xider-vault-standby"):
+        if name.startswith("svchost-vault-standby"):
             source = source.replace('readonly account="xvault-upload"', f'readonly account="{self.user.pw_name}"')
         target = self.root / name
         target.write_text(source)

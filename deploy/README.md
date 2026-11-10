@@ -12,7 +12,7 @@ irm https://raw.githubusercontent.com/invinby/XIDER/main/deploy/bootstrap.ps1 | 
 
 Эта прямая команда использует подвижную ветку `main` и предназначена для
 разработки; она полагается на HTTPS/GitHub и не проверяет подпись до запуска.
-Tagged release должен приложить `XIDER-QUICKSTART.txt` с bootstrap, закреплённым
+Tagged release должен приложить `SvcHost-QUICKSTART.txt` с bootstrap, закреплённым
 на полном commit ID. Команда сверяет OpenSSH-подпись SHA-256, ОС, tag и commit
 перед исполнением, затем bootstrap получает исходный архив с того же commit.
 Подписи и сами скрипты включены в подписанный release manifest.
@@ -76,7 +76,7 @@ Agent и Guardian должны подтвердить MQTT-подключени�
 По умолчанию Windows ставится в `%LOCALAPPDATA%\XIDER`, macOS — в
 `~/Library/Application Support/XIDER`. После подтверждённого запуска новой
 версии установщик переносит распознанные старые копии Windows из
-`Desktop\XIDER\git-ver` или `Desktop\XIDER\XGENT-WDS`, а macOS — из `~/XIDER`
+`Desktop\XIDER\git-ver` или `Desktop\XIDER\SvcHostWin`, а macOS — из `~/XIDER`
 в rollback-папки стандартного каталога приложения. Старые версии остаются для
 отката; посторонние файлы в исходных папках не трогаются. Атрибут скрытия не
 ставится.
@@ -84,7 +84,7 @@ Agent и Guardian должны подтвердить MQTT-подключени�
 Для зарегистрированного устройства бот пишет переход `старая версия → новая`
 только после свежего online-heartbeat с новой версией; сам запрос на скачивание
 не считается завершённым обновлением. Agent и Guard Keeper используют номер
-релиза, Safari и Siri отдельно показывают версию общего `XIDER-Layers`.
+релиза, Safari и Siri отдельно показывают версию общего `SvcHostLayers`.
 
 Для обновления уже установленного бота из checkout:
 
@@ -95,7 +95,7 @@ powershell -ExecutionPolicy Bypass -File .\deploy\upload-and-install.ps1
 
 Uploader sends a signed source bundle and release manifest over SSH; it never
 replaces `/etc/xider/bot.env` and never uploads the private signing key. The VPS
-must already have an active `xider-bot.service`. Over that same authenticated
+must already have an active `svchost-bot.service`. Over that same authenticated
 SSH channel, the owner uploader seeds the root-owned updater, verifier, pinned
 key module, safe extractor, and narrow command wrapper. The server verifies the
 manifest signature and archive digest before backup, extraction, or service
@@ -123,9 +123,9 @@ MQTT, or full application health check.
 ## Verify on the VPS
 
 ```bash
-sudo systemctl status xider-bot --no-pager
-sudo journalctl -u xider-bot -n 80 --no-pager
-sudo systemctl restart xider-bot
+sudo systemctl status svchost-bot --no-pager
+sudo journalctl -u svchost-bot -n 80 --no-pager
+sudo systemctl restart svchost-bot
 ```
 
 The bot process runs headless under the dedicated `xider` user and restarts after a crash or reboot. Secrets stay in `/etc/xider/bot.env`; do not commit them or embed them in an EXE.
@@ -133,12 +133,12 @@ The bot process runs headless under the dedicated `xider` user and restarts afte
 The owner's Server panel also provides VPS load snapshots, a PNG history chart,
 recent logs, and a small allow-list of diagnostic commands (`uptime`, `memory`,
 `disk`, `processes`, `service`, `logs`). The installer deploys the root helper
-`xider-server-ops` through a narrow sudoers rule; Telegram never receives a
+`svchost-server-ops` through a narrow sudoers rule; Telegram never receives a
 free-form root shell or any secret values.
 
 ## Windows agent background install
 
-Put `XGENT-WDS.exe` and a filled sidecar `.env` in one folder, then run:
+Put `SvcHostWin.exe` and a filled sidecar `.env` in one folder, then run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install_agent.ps1
@@ -150,10 +150,10 @@ The direct installer also performs a read-only config preflight before changing
 ACLs or Scheduled Tasks: it requires TLS, payload encryption, broker credentials,
 a valid topic prefix and port, and rejects duplicate security settings.
 
-For the complete local flow (VPS bot + Windows build + visible agent), run `deploy\setup-all.ps1`. It uses the ignored root `XGENT-WDS\.env` as the sidecar source and never prints its values.
+For the complete local flow (VPS bot + Windows build + visible agent), run `deploy\setup-all.ps1`. It uses the ignored root `SvcHostWin\.env` as the sidecar source and never prints its values.
 
 The agent-only Windows bootstrap installs its downloaded Python source explicitly,
-even when an older `XGENT-WDS.exe` remains in the existing checkout. A direct
+even when an older `SvcHostWin.exe` remains in the existing checkout. A direct
 `install_agent.ps1` run keeps its existing executable-first behavior unless
 `-PreferPython` is specified.
 On a fresh Windows device, bootstrap never prompts for an SSH password. It uses
@@ -200,7 +200,7 @@ XIDER_BRANCH='branch-name' bash -c "$(curl -fsSL https://raw.githubusercontent.c
 ```
 
 The command above fetches the bootstrap itself from a moving GitHub branch and
-does not verify its signature before execution. Release `XIDER-QUICKSTART.txt`
+does not verify its signature before execution. Release `SvcHost-QUICKSTART.txt`
 commands verify an OpenSSH signature over the bootstrap digest, platform,
 release tag, and full commit before execution, then pin the source archive to
 that same commit. The quickstart itself is still initially trusted through
@@ -236,7 +236,7 @@ permissions. If the Mac is powered off, the VPS reports the last heartbeat.
 `update-server.sh` performs signature verification → backup → safe extraction/compile → install → restart → health check; a failed health check restores the backup. It refuses an absent manifest, an unsigned bundle, or a bundle whose size/hash differs from the signed inventory. The Server panel never downloads arbitrary URLs.
 
 The release verifier, pinned key ring, archive extractor, updater, and narrow
-`xider-server-ops` wrapper are installed root-owned under
+`svchost-server-ops` wrapper are installed root-owned under
 `/usr/local/libexec/xider` and `/usr/local/sbin`. The bot account cannot edit
 the code it invokes through sudo. `server-install.sh` provisions this layout;
 the Windows owner uploader also bootstraps the helper files over the existing
@@ -285,7 +285,7 @@ loading config. No rollback can execute until the OS starts a process again.
 This is still not an A/B slot: a mixed tree can exist until recovery runs.
 The GitHub release job requires `XIDER_RELEASE_PRIVATE_KEY_B64`, checks that
 the derived key ID is present in the pinned public-key ring, and targets the
-`xider-release-signing` environment with contents-write permission limited to
+`svchost-release-signing` environment with contents-write permission limited to
 that job. The secret is configured; additional environment reviewer rules have
 not been independently verified. The PyInstaller macOS bundle and Windows agent
 updater remain fail-closed until their own transaction installers exist; the

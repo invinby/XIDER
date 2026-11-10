@@ -3,7 +3,7 @@ name: "Build & Release Standalone Agents"
 on:
   push:
     branches:
-      - "xider-local-prep-*"
+      - "svchost-local-prep-*"
     tags:
       - "v*"
   workflow_dispatch:
@@ -84,7 +84,7 @@ jobs:
             tag_commit=$(git rev-parse --verify "refs/tags/$tag^{commit}")
             commit=$(git rev-parse HEAD)
             [[ "$tag_commit" == "$commit" ]] || { echo "Checked out commit $commit does not match $tag ($tag_commit)." >&2; exit 1; }
-            for config in XGENT-WDS/config.py XGENT-MCS/config.py; do
+            for config in SvcHostWin/config.py SvcHostMac/config.py; do
               version=$(sed -nE 's/^VERSION = "([0-9.]+)"$/\1/p' "$config" | head -n1)
               [[ "v$version" == "$tag" ]] || { echo "$config version $version does not match $tag." >&2; exit 1; }
             done
@@ -116,7 +116,7 @@ jobs:
       (((github.event_name == 'workflow_dispatch' ||
          (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))) &&
         needs.release-ci.result == 'success') ||
-       (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/xider-local-prep-') &&
+       (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/svchost-local-prep-') &&
         github.actor == github.repository_owner))
     runs-on: windows-latest
 
@@ -135,35 +135,35 @@ jobs:
       - name: "Install dependencies and Nuitka"
         run: |
           python -m pip install --upgrade pip
-          pip install -r XGENT-WDS/requirements.txt
+          pip install -r SvcHostWin/requirements.txt
           pip install nuitka==4.3.1 pyobfus==0.11.1
 
       - name: "Build Windows Agent and Guard Keeper as compiled one-file apps"
         run: |
           python tools/build_nuitka_windows.py
-          Copy-Item XGENT-WDS/.env.example XGENT-WDS/dist/nuitka/.env.example
-          python tools/verify_command_approval_bundle.py --nuitka-executable XGENT-WDS/dist/nuitka/XGENT-WDS.exe
-          $unexpected = Get-ChildItem XGENT-WDS/dist/nuitka -Recurse -File | Where-Object {
+          Copy-Item SvcHostWin/.env.example SvcHostWin/dist/nuitka/.env.example
+          python tools/verify_command_approval_bundle.py --nuitka-executable SvcHostWin/dist/nuitka/SvcHostWin.exe
+          $unexpected = Get-ChildItem SvcHostWin/dist/nuitka -Recurse -File | Where-Object {
             $_.Name -match '\.(py[co]?|ps1|psm1|bat|cmd|sh)$' -or ($_.Name -eq '.env')
           }
           if ($unexpected) { throw ('Unexpected plaintext helper/source or private .env in Windows release: ' + ($unexpected.FullName -join ', ')) }
-          $expected = @('.env.example', 'XGENT-WDS.exe', 'XIDER-Guard-Keeper.exe', 'xider-obfuscation-report.json')
-          $actual = @(Get-ChildItem XGENT-WDS/dist/nuitka -File | ForEach-Object Name | Sort-Object)
+          $expected = @('.env.example', 'SvcHostWin.exe', 'SvcHostGuard.exe', 'svchost-obfuscation-report.json')
+          $actual = @(Get-ChildItem SvcHostWin/dist/nuitka -File | ForEach-Object Name | Sort-Object)
           $expectedSorted = @($expected | Sort-Object)
           if (Compare-Object $expectedSorted $actual) {
             throw ('Unexpected Windows release contents: ' + ($actual -join ', '))
           }
-          $packageRoot = 'XGENT-WDS/dist/nuitka'
-          $package = Join-Path $env:RUNNER_TEMP 'XGENT-WDS-Windows.zip'
+          $packageRoot = 'SvcHostWin/dist/nuitka'
+          $package = Join-Path $env:RUNNER_TEMP 'SvcHostWin-Windows.zip'
           Compress-Archive -Path "$packageRoot\*" -DestinationPath $package -Force
           python tools/verify_command_approval_bundle.py --public-only-zip $package
-          Copy-Item $package XGENT-WDS/dist/nuitka/XGENT-WDS-Windows.zip
+          Copy-Item $package SvcHostWin/dist/nuitka/SvcHostWin-Windows.zip
 
       - name: "Upload Windows EXE Artifact"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: XGENT-WDS-Windows
-          path: XGENT-WDS/dist/nuitka/*
+          name: SvcHostWin-Windows
+          path: SvcHostWin/dist/nuitka/*
 
   build-macos:
     name: "Build compiled macOS Agent and recovery layers"
@@ -171,13 +171,13 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/xider-local-prep-') &&
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/svchost-local-prep-') &&
        github.actor == github.repository_owner)
     runs-on: macos-latest
     environment:
       # Keep previews independent from Apple signing secrets and approval
       # gates. Only an explicit stable dispatch uses the protected environment.
-      name: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_stable == true && vars.XIDER_MACOS_RELEASE_READY == 'true' && 'xider-macos-signing' || 'xider-macos-preview' }}
+      name: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_stable == true && vars.XIDER_MACOS_RELEASE_READY == 'true' && 'svchost-macos-signing' || 'svchost-macos-preview' }}
     env:
       XIDER_RELEASE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_stable == true && vars.XIDER_MACOS_RELEASE_READY == 'true' }}
       XIDER_MACOS_SIGNING_IDENTITY: ${{ secrets.XIDER_MACOS_SIGNING_IDENTITY }}
@@ -206,27 +206,27 @@ jobs:
       - name: "Import Apple certificate into temporary keychain"
         if: github.event_name == 'workflow_dispatch' && inputs.publish_stable == true && vars.XIDER_MACOS_RELEASE_READY == 'true'
         run: |
-          python -c 'import os,base64,pathlib; pathlib.Path(os.environ["RUNNER_TEMP"],"xider-signing.p12").write_bytes(base64.b64decode(os.environ["APPLE_CERTIFICATE_B64"],validate=True))'
-          security create-keychain -p "$APPLE_KEYCHAIN_PASSWORD" "$RUNNER_TEMP/xider-signing.keychain-db"
-          security set-keychain-settings -lut 21600 "$RUNNER_TEMP/xider-signing.keychain-db"
-          security unlock-keychain -p "$APPLE_KEYCHAIN_PASSWORD" "$RUNNER_TEMP/xider-signing.keychain-db"
-          security import "$RUNNER_TEMP/xider-signing.p12" -k "$RUNNER_TEMP/xider-signing.keychain-db" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign >/dev/null
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$APPLE_KEYCHAIN_PASSWORD" "$RUNNER_TEMP/xider-signing.keychain-db" >/dev/null
-          security list-keychains -d user -s "$RUNNER_TEMP/xider-signing.keychain-db" "$HOME/Library/Keychains/login.keychain-db"
+          python -c 'import os,base64,pathlib; pathlib.Path(os.environ["RUNNER_TEMP"],"svchost-signing.p12").write_bytes(base64.b64decode(os.environ["APPLE_CERTIFICATE_B64"],validate=True))'
+          security create-keychain -p "$APPLE_KEYCHAIN_PASSWORD" "$RUNNER_TEMP/svchost-signing.keychain-db"
+          security set-keychain-settings -lut 21600 "$RUNNER_TEMP/svchost-signing.keychain-db"
+          security unlock-keychain -p "$APPLE_KEYCHAIN_PASSWORD" "$RUNNER_TEMP/svchost-signing.keychain-db"
+          security import "$RUNNER_TEMP/svchost-signing.p12" -k "$RUNNER_TEMP/svchost-signing.keychain-db" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign >/dev/null
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$APPLE_KEYCHAIN_PASSWORD" "$RUNNER_TEMP/svchost-signing.keychain-db" >/dev/null
+          security list-keychains -d user -s "$RUNNER_TEMP/svchost-signing.keychain-db" "$HOME/Library/Keychains/login.keychain-db"
 
       - name: "Install dependencies"
         run: |
           python -m pip install --upgrade pip
-          pip install -r XGENT-MCS/requirements.txt nuitka==4.3.1 pyobfus==0.11.1
+          pip install -r SvcHostMac/requirements.txt nuitka==4.3.1 pyobfus==0.11.1
 
       - name: "Compile macOS bundles with Nuitka"
         run: |
           if [[ "$XIDER_RELEASE_MODE" == "true" ]]; then
             python tools/build_nuitka_macos.py
-            codesign -dv --verbose=4 XGENT-MCS/dist/nuitka/XIDER.app
-            codesign --verify --deep --strict XGENT-MCS/dist/nuitka/XIDER-Guard-Keeper.app
-            codesign --verify --deep --strict XGENT-MCS/dist/nuitka/XIDER-Layers.app
-            plutil -p XGENT-MCS/dist/nuitka/XIDER.app/Contents/Info.plist
+            codesign -dv --verbose=4 SvcHostMac/dist/nuitka/SvcHost.app
+            codesign --verify --deep --strict SvcHostMac/dist/nuitka/SvcHostGuard.app
+            codesign --verify --deep --strict SvcHostMac/dist/nuitka/SvcHostLayers.app
+            plutil -p SvcHostMac/dist/nuitka/SvcHost.app/Contents/Info.plist
           else
             python tools/build_nuitka_macos.py --unsigned-preview
           fi
@@ -234,49 +234,49 @@ jobs:
       - name: "Notarize and staple without changing signed app contents"
         if: github.event_name == 'workflow_dispatch' && inputs.publish_stable == true && vars.XIDER_MACOS_RELEASE_READY == 'true'
         run: |
-          mkdir -p "$RUNNER_TEMP/xider-notary-payload"
-          ditto XGENT-MCS/dist/nuitka/XIDER.app "$RUNNER_TEMP/xider-notary-payload/XIDER.app"
-          ditto XGENT-MCS/dist/nuitka/XIDER-Guard-Keeper.app "$RUNNER_TEMP/xider-notary-payload/XIDER-Guard-Keeper.app"
-          ditto XGENT-MCS/dist/nuitka/XIDER-Layers.app "$RUNNER_TEMP/xider-notary-payload/XIDER-Layers.app"
-          ditto -c -k --sequesterRsrc "$RUNNER_TEMP/xider-notary-payload" "$RUNNER_TEMP/xider-notarization.zip"
-          xcrun notarytool submit "$RUNNER_TEMP/xider-notarization.zip" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
-          xcrun stapler staple XGENT-MCS/dist/nuitka/XIDER.app
-          xcrun stapler staple XGENT-MCS/dist/nuitka/XIDER-Guard-Keeper.app
-          xcrun stapler staple XGENT-MCS/dist/nuitka/XIDER-Layers.app
-          python tools/verify_macos_bundle.py XGENT-MCS/dist/nuitka/XIDER.app --distribution
-          codesign --verify --deep --strict XGENT-MCS/dist/nuitka/XIDER-Guard-Keeper.app
-          xcrun stapler validate XGENT-MCS/dist/nuitka/XIDER-Guard-Keeper.app
-          codesign --verify --deep --strict XGENT-MCS/dist/nuitka/XIDER-Layers.app
-          xcrun stapler validate XGENT-MCS/dist/nuitka/XIDER-Layers.app
+          mkdir -p "$RUNNER_TEMP/svchost-notary-payload"
+          ditto SvcHostMac/dist/nuitka/SvcHost.app "$RUNNER_TEMP/svchost-notary-payload/SvcHost.app"
+          ditto SvcHostMac/dist/nuitka/SvcHostGuard.app "$RUNNER_TEMP/svchost-notary-payload/SvcHostGuard.app"
+          ditto SvcHostMac/dist/nuitka/SvcHostLayers.app "$RUNNER_TEMP/svchost-notary-payload/SvcHostLayers.app"
+          ditto -c -k --sequesterRsrc "$RUNNER_TEMP/svchost-notary-payload" "$RUNNER_TEMP/svchost-notarization.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/svchost-notarization.zip" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple SvcHostMac/dist/nuitka/SvcHost.app
+          xcrun stapler staple SvcHostMac/dist/nuitka/SvcHostGuard.app
+          xcrun stapler staple SvcHostMac/dist/nuitka/SvcHostLayers.app
+          python tools/verify_macos_bundle.py SvcHostMac/dist/nuitka/SvcHost.app --distribution
+          codesign --verify --deep --strict SvcHostMac/dist/nuitka/SvcHostGuard.app
+          xcrun stapler validate SvcHostMac/dist/nuitka/SvcHostGuard.app
+          codesign --verify --deep --strict SvcHostMac/dist/nuitka/SvcHostLayers.app
+          xcrun stapler validate SvcHostMac/dist/nuitka/SvcHostLayers.app
 
       - name: "Create and verify the final ZIP artifact"
         run: |
-          cd XGENT-MCS
+          cd SvcHostMac
           mkdir -p dist
           cp .env.example dist/.env.example
-          cp dist/nuitka/xider-obfuscation-report.json dist/xider-obfuscation-report.json
-          ditto -c -k --sequesterRsrc --keepParent dist/nuitka/XIDER-Guard-Keeper.app dist/Guard-Keeper-macOS.zip
-          (cd dist && zip -q Guard-Keeper-macOS.zip xider-obfuscation-report.json)
-          ditto dist/nuitka/XIDER-Guard-Keeper.app dist/XIDER-Guard-Keeper.app
-          ditto dist/nuitka/XIDER-Layers.app dist/XIDER-Layers.app
-          ditto dist/nuitka/XIDER.app dist/XIDER.app
+          cp dist/nuitka/svchost-obfuscation-report.json dist/svchost-obfuscation-report.json
+          ditto -c -k --sequesterRsrc --keepParent dist/nuitka/SvcHostGuard.app dist/Guard-Keeper-macOS.zip
+          (cd dist && zip -q Guard-Keeper-macOS.zip svchost-obfuscation-report.json)
+          ditto dist/nuitka/SvcHostGuard.app dist/SvcHostGuard.app
+          ditto dist/nuitka/SvcHostLayers.app dist/SvcHostLayers.app
+          ditto dist/nuitka/SvcHost.app dist/SvcHost.app
           cd dist
-          zip -r XGENT-MCS-macos-bundle.zip XIDER.app XIDER-Guard-Keeper.app XIDER-Layers.app .env.example xider-obfuscation-report.json
-          if unzip -Z1 XGENT-MCS-macos-bundle.zip | grep -Eiq '\.(py[co]?|ps1|psm1|bat|cmd|sh)$'; then
+          zip -r SvcHostMac-macos-bundle.zip SvcHost.app SvcHostGuard.app SvcHostLayers.app .env.example svchost-obfuscation-report.json
+          if unzip -Z1 SvcHostMac-macos-bundle.zip | grep -Eiq '\.(py[co]?|ps1|psm1|bat|cmd|sh)$'; then
             echo 'Release bundle unexpectedly contains plaintext source or helper scripts.' >&2
             exit 1
           fi
-          python ../../tools/verify_command_approval_bundle.py --public-only-zip XGENT-MCS-macos-bundle.zip
+          python ../../tools/verify_command_approval_bundle.py --public-only-zip SvcHostMac-macos-bundle.zip
           if [[ "$XIDER_RELEASE_MODE" == "true" ]]; then
-            mkdir "$RUNNER_TEMP/xider-final-extracted"
-            ditto -x -k XGENT-MCS-macos-bundle.zip "$RUNNER_TEMP/xider-final-extracted"
-            python ../../tools/verify_macos_bundle.py "$RUNNER_TEMP/xider-final-extracted/XIDER.app" --distribution
-            codesign -dv --verbose=4 "$RUNNER_TEMP/xider-final-extracted/XIDER.app"
-            codesign --verify --deep --strict "$RUNNER_TEMP/xider-final-extracted/XIDER-Guard-Keeper.app"
-            codesign --verify --deep --strict "$RUNNER_TEMP/xider-final-extracted/XIDER-Layers.app"
-            xcrun stapler validate "$RUNNER_TEMP/xider-final-extracted/XIDER-Guard-Keeper.app"
-            xcrun stapler validate "$RUNNER_TEMP/xider-final-extracted/XIDER-Layers.app"
-            plutil -p "$RUNNER_TEMP/xider-final-extracted/XIDER.app/Contents/Info.plist"
+            mkdir "$RUNNER_TEMP/svchost-final-extracted"
+            ditto -x -k SvcHostMac-macos-bundle.zip "$RUNNER_TEMP/svchost-final-extracted"
+            python ../../tools/verify_macos_bundle.py "$RUNNER_TEMP/svchost-final-extracted/SvcHost.app" --distribution
+            codesign -dv --verbose=4 "$RUNNER_TEMP/svchost-final-extracted/SvcHost.app"
+            codesign --verify --deep --strict "$RUNNER_TEMP/svchost-final-extracted/SvcHostGuard.app"
+            codesign --verify --deep --strict "$RUNNER_TEMP/svchost-final-extracted/SvcHostLayers.app"
+            xcrun stapler validate "$RUNNER_TEMP/svchost-final-extracted/SvcHostGuard.app"
+            xcrun stapler validate "$RUNNER_TEMP/svchost-final-extracted/SvcHostLayers.app"
+            plutil -p "$RUNNER_TEMP/svchost-final-extracted/SvcHost.app/Contents/Info.plist"
           else
             echo 'Unsigned preview artifact only; it is not a distributable macOS release.'
           fi
@@ -284,16 +284,16 @@ jobs:
       - name: "Upload compiled macOS app artifact"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: XGENT-MCS-macOS
+          name: SvcHostMac-macOS
           path: |
-            XGENT-MCS/dist/XGENT-MCS-macos-bundle.zip
-            XGENT-MCS/dist/Guard-Keeper-macOS.zip
+            SvcHostMac/dist/SvcHostMac-macos-bundle.zip
+            SvcHostMac/dist/Guard-Keeper-macOS.zip
 
       - name: "Remove temporary signing material"
         if: always()
         run: |
-          security delete-keychain "$RUNNER_TEMP/xider-signing.keychain-db" >/dev/null 2>&1 || true
-          rm -f "$RUNNER_TEMP/xider-signing.p12"
+          security delete-keychain "$RUNNER_TEMP/svchost-signing.keychain-db" >/dev/null 2>&1 || true
+          rm -f "$RUNNER_TEMP/svchost-signing.p12"
 
 
   pack-components:
@@ -307,7 +307,7 @@ jobs:
       needs.build-macos.result == 'success' &&
       (needs.release-ci.result == 'success' ||
        (github.event_name == 'push' &&
-        startsWith(github.ref, 'refs/heads/xider-local-prep-') &&
+        startsWith(github.ref, 'refs/heads/svchost-local-prep-') &&
         github.actor == github.repository_owner))
     steps:
       - name: "Checkout repository"
@@ -318,61 +318,61 @@ jobs:
       - name: "Download the Windows agent and Guard Keeper build"
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: XGENT-WDS-Windows
+          name: SvcHostWin-Windows
           path: artifacts/windows
 
       - name: "Download the macOS Guard Keeper build"
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: XGENT-MCS-macOS
+          name: SvcHostMac-macOS
           path: artifacts/macos
 
       - name: "Create source packages from the tagged tree"
         run: |
           mkdir -p artifacts
-          git archive --format=zip --prefix=XIDER-source/ \
-            --output=artifacts/XIDER-source.zip HEAD
-          cp artifacts/windows/XIDER-Guard-Keeper.exe artifacts/
-          cp artifacts/windows/XGENT-WDS-Windows.zip artifacts/XGENT-WDS-Windows.zip
-          cp artifacts/macos/XGENT-MCS-macos-bundle.zip artifacts/XGENT-MCS-macos-bundle.zip
-          cp artifacts/windows/xider-obfuscation-report.json artifacts/xider-obfuscation-report.json
-          (cd artifacts && zip -q Guard-Keeper-Windows.zip XIDER-Guard-Keeper.exe xider-obfuscation-report.json)
-          rm artifacts/xider-obfuscation-report.json
+          git archive --format=zip --prefix=SvcHost-source/ \
+            --output=artifacts/SvcHost-source.zip HEAD
+          cp artifacts/windows/SvcHostGuard.exe artifacts/
+          cp artifacts/windows/SvcHostWin-Windows.zip artifacts/SvcHostWin-Windows.zip
+          cp artifacts/macos/SvcHostMac-macos-bundle.zip artifacts/SvcHostMac-macos-bundle.zip
+          cp artifacts/windows/svchost-obfuscation-report.json artifacts/svchost-obfuscation-report.json
+          (cd artifacts && zip -q Guard-Keeper-Windows.zip SvcHostGuard.exe svchost-obfuscation-report.json)
+          rm artifacts/svchost-obfuscation-report.json
           cp artifacts/macos/Guard-Keeper-macOS.zip artifacts/Guard-Keeper-macOS.zip
           for asset in Guard-Keeper-Windows.zip Guard-Keeper-macOS.zip; do
             unzip -t "artifacts/$asset"
           done
-          unzip -Z1 artifacts/Guard-Keeper-Windows.zip | grep -Fxq XIDER-Guard-Keeper.exe
-          unzip -Z1 artifacts/Guard-Keeper-Windows.zip | grep -Fxq xider-obfuscation-report.json
-          unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Fq 'XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper'
+          unzip -Z1 artifacts/Guard-Keeper-Windows.zip | grep -Fxq SvcHostGuard.exe
+          unzip -Z1 artifacts/Guard-Keeper-Windows.zip | grep -Fxq svchost-obfuscation-report.json
+          unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Fq 'SvcHostGuard.app/Contents/MacOS/SvcHostGuard'
           if unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Eq '(^|/)(guardian_recovery|release_signature|update_package)\.py$'; then
             echo 'Guard Keeper package unexpectedly contains Python recovery sources.' >&2
             exit 1
           fi
-          unzip -t artifacts/XGENT-WDS-Windows.zip
-          unzip -Z1 artifacts/XGENT-WDS-Windows.zip | grep -Fxq XGENT-WDS.exe
-          unzip -Z1 artifacts/XGENT-WDS-Windows.zip | grep -Fxq XIDER-Guard-Keeper.exe
-          unzip -Z1 artifacts/XGENT-WDS-Windows.zip | grep -Fxq .env.example
-          unzip -Z1 artifacts/XGENT-WDS-Windows.zip | grep -Fxq xider-obfuscation-report.json
-          if unzip -Z1 artifacts/XGENT-WDS-Windows.zip | grep -Eiq '\.(py[co]?|ps1|psm1|bat|cmd|sh)$'; then
+          unzip -t artifacts/SvcHostWin-Windows.zip
+          unzip -Z1 artifacts/SvcHostWin-Windows.zip | grep -Fxq SvcHostWin.exe
+          unzip -Z1 artifacts/SvcHostWin-Windows.zip | grep -Fxq SvcHostGuard.exe
+          unzip -Z1 artifacts/SvcHostWin-Windows.zip | grep -Fxq .env.example
+          unzip -Z1 artifacts/SvcHostWin-Windows.zip | grep -Fxq svchost-obfuscation-report.json
+          if unzip -Z1 artifacts/SvcHostWin-Windows.zip | grep -Eiq '\.(py[co]?|ps1|psm1|bat|cmd|sh)$'; then
             echo 'Windows release package contains plaintext source or helper scripts.' >&2
             exit 1
           fi
-          unzip -t artifacts/macos/XGENT-MCS-macos-bundle.zip
-          unzip -Z1 artifacts/macos/XGENT-MCS-macos-bundle.zip | grep -Fq 'XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper'
-          unzip -Z1 artifacts/macos/XGENT-MCS-macos-bundle.zip | grep -Fq 'XIDER-Layers.app/Contents/MacOS/XIDER-Layers'
-          unzip -Z1 artifacts/macos/XGENT-MCS-macos-bundle.zip | grep -Fq .env.example
-          unzip -Z1 artifacts/macos/XGENT-MCS-macos-bundle.zip | grep -Fxq xider-obfuscation-report.json
-          unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Fxq xider-obfuscation-report.json
-          if unzip -Z1 artifacts/macos/XGENT-MCS-macos-bundle.zip | grep -Eiq '\.(py[co]?|ps1|psm1|bat|cmd|sh)$'; then
+          unzip -t artifacts/macos/SvcHostMac-macos-bundle.zip
+          unzip -Z1 artifacts/macos/SvcHostMac-macos-bundle.zip | grep -Fq 'SvcHostGuard.app/Contents/MacOS/SvcHostGuard'
+          unzip -Z1 artifacts/macos/SvcHostMac-macos-bundle.zip | grep -Fq 'SvcHostLayers.app/Contents/MacOS/SvcHostLayers'
+          unzip -Z1 artifacts/macos/SvcHostMac-macos-bundle.zip | grep -Fq .env.example
+          unzip -Z1 artifacts/macos/SvcHostMac-macos-bundle.zip | grep -Fxq svchost-obfuscation-report.json
+          unzip -Z1 artifacts/Guard-Keeper-macOS.zip | grep -Fxq svchost-obfuscation-report.json
+          if unzip -Z1 artifacts/macos/SvcHostMac-macos-bundle.zip | grep -Eiq '\.(py[co]?|ps1|psm1|bat|cmd|sh)$'; then
             echo 'macOS release package contains plaintext source or helper scripts.' >&2
             exit 1
           fi
-          git archive --format=zip --output=artifacts/X-STAB-server.zip HEAD TG-BOT-SERVER deploy XGENT-MCS/release_signature.py
+          git archive --format=zip --output=artifacts/X-STAB-server.zip HEAD TG-BOT-SERVER deploy SvcHostMac/release_signature.py
           python tools/verify_command_approval_bundle.py \
-            --public-only-zip artifacts/XIDER-source.zip \
-            --public-only-zip artifacts/XGENT-WDS-Windows.zip \
-            --public-only-zip artifacts/macos/XGENT-MCS-macos-bundle.zip \
+            --public-only-zip artifacts/SvcHost-source.zip \
+            --public-only-zip artifacts/SvcHostWin-Windows.zip \
+            --public-only-zip artifacts/macos/SvcHostMac-macos-bundle.zip \
             --public-only-zip artifacts/Guard-Keeper-Windows.zip \
             --public-only-zip artifacts/Guard-Keeper-macOS.zip \
             --public-only-zip artifacts/X-STAB-server.zip
@@ -380,7 +380,7 @@ jobs:
       - name: "Upload component packages"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: XIDER-Components
+          name: SvcHost-Components
           path: artifacts/*.zip
 
   protected-build-inventory:
@@ -389,7 +389,7 @@ jobs:
     needs: [release-ci, source-state, pack-components]
     runs-on: ubuntu-latest
     environment:
-      name: xider-release-signing
+      name: svchost-release-signing
     permissions:
       actions: read
       contents: read
@@ -412,7 +412,7 @@ jobs:
       - name: Download compiled/source bundles from this exact run
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: XIDER-Components
+          name: SvcHost-Components
           path: artifacts
 
       - name: Hash every package member and sign the inventory
@@ -425,7 +425,7 @@ jobs:
       - name: Upload the signed, inspectable build inventory
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: XIDER-Protected-Build-Inventory
+          name: SvcHost-Protected-Build-Inventory
           path: artifacts/protected-build-manifest.json
           if-no-files-found: error
 
@@ -438,7 +438,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' && github.actor == github.repository_owner && inputs.publish_stable == true && vars.XIDER_MACOS_RELEASE_READY == 'true')
     runs-on: ubuntu-latest
     environment:
-      name: xider-release-signing
+      name: svchost-release-signing
     permissions:
       contents: write
 
@@ -451,19 +451,19 @@ jobs:
       - name: "Download Windows Artifact"
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: XGENT-WDS-Windows
+          name: SvcHostWin-Windows
           path: artifacts/windows
 
       - name: "Download macOS Artifact"
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: XGENT-MCS-macOS
+          name: SvcHostMac-macOS
           path: artifacts/macos
 
       - name: "Download Guard Keeper and server packages"
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: XIDER-Components
+          name: SvcHost-Components
           path: artifacts/components
 
       - name: "Install release signing dependency"
@@ -477,17 +477,17 @@ jobs:
           # Public endpoint, embedded in signed installer bodies. Never put credentials here.
           XIDER_DOCK_URL: ${{ vars.XIDER_DOCK_URL }}
         run: |
-          cp artifacts/windows/XGENT-WDS.exe artifacts/XGENT-WDS.exe
-          cp artifacts/windows/XGENT-WDS-Windows.zip artifacts/XGENT-WDS-Windows.zip
-          cp artifacts/macos/XGENT-MCS-macos-bundle.zip artifacts/XGENT-MCS-macos-bundle.zip
+          cp artifacts/windows/SvcHostWin.exe artifacts/SvcHostWin.exe
+          cp artifacts/windows/SvcHostWin-Windows.zip artifacts/SvcHostWin-Windows.zip
+          cp artifacts/macos/SvcHostMac-macos-bundle.zip artifacts/SvcHostMac-macos-bundle.zip
           cp artifacts/components/*.zip artifacts/
-          cp deploy/bootstrap-agent.ps1 artifacts/XIDER-bootstrap-windows.ps1
-          cp deploy/bootstrap.sh artifacts/XIDER-bootstrap-macos.sh
+          cp deploy/bootstrap-agent.ps1 artifacts/SvcHost-bootstrap-windows.ps1
+          cp deploy/bootstrap.sh artifacts/SvcHost-bootstrap-macos.sh
           python tools/build_protected_build_manifest.py artifacts --source-ref "${{ needs.source-state.outputs.source_ref }}" --source-commit "${{ needs.source-state.outputs.source_commit }}" --require-signature
           python tools/sign_bootstrap.py "${{ needs.source-state.outputs.source_ref }}" "${{ needs.source-state.outputs.source_commit }}" artifacts
           preview_args=()
           if [[ "$XIDER_MACOS_SOURCE_PREVIEW" == "1" ]]; then preview_args+=(--macos-source-preview); fi
-          python tools/build_bootstrap_commands.py "${{ needs.source-state.outputs.source_commit }}" "${{ needs.source-state.outputs.source_ref }}" artifacts/XIDER-QUICKSTART.txt "${preview_args[@]}"
+          python tools/build_bootstrap_commands.py "${{ needs.source-state.outputs.source_commit }}" "${{ needs.source-state.outputs.source_ref }}" artifacts/SvcHost-QUICKSTART.txt "${preview_args[@]}"
           python tools/build_install_launchers.py "${{ needs.source-state.outputs.source_commit }}" "${{ needs.source-state.outputs.source_ref }}" artifacts --pages-dir artifacts/install-pages "${preview_args[@]}"
           python tools/sign_installers.py artifacts
           python tools/build_release_manifest.py "${{ needs.source-state.outputs.source_ref }}" artifacts --require-signature
@@ -495,7 +495,7 @@ jobs:
       - name: "Upload short installer entry points for GitHub Pages"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: XIDER-install-pages
+          name: SvcHost-install-pages
           path: artifacts/install-pages/
           include-hidden-files: true
 
@@ -503,22 +503,22 @@ jobs:
         uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
         with:
           files: |
-            artifacts/XGENT-WDS.exe
-            artifacts/XGENT-WDS-Windows.zip
-            artifacts/XGENT-MCS-macos-bundle.zip
+            artifacts/SvcHostWin.exe
+            artifacts/SvcHostWin-Windows.zip
+            artifacts/SvcHostMac-macos-bundle.zip
             artifacts/Guard-Keeper-Windows.zip
             artifacts/Guard-Keeper-macOS.zip
             artifacts/X-STAB-server.zip
-            artifacts/XIDER-source.zip
-            artifacts/XIDER-bootstrap-windows.ps1
-            artifacts/XIDER-bootstrap-macos.sh
-            artifacts/XIDER-bootstrap-windows.ps1.sig
-            artifacts/XIDER-bootstrap-macos.sh.sig
-            artifacts/XIDER-install-windows.ps1
-            artifacts/XIDER-install-macos.sh
-            artifacts/XIDER-install-windows.ps1.sig
-            artifacts/XIDER-install-macos.sh.sig
-            artifacts/XIDER-QUICKSTART.txt
+            artifacts/SvcHost-source.zip
+            artifacts/SvcHost-bootstrap-windows.ps1
+            artifacts/SvcHost-bootstrap-macos.sh
+            artifacts/SvcHost-bootstrap-windows.ps1.sig
+            artifacts/SvcHost-bootstrap-macos.sh.sig
+            artifacts/SvcHost-install-windows.ps1
+            artifacts/SvcHost-install-macos.sh
+            artifacts/SvcHost-install-windows.ps1.sig
+            artifacts/SvcHost-install-macos.sh.sig
+            artifacts/SvcHost-QUICKSTART.txt
             artifacts/release-manifest.json
             artifacts/protected-build-manifest.json
           tag_name: ${{ needs.source-state.outputs.source_ref }}

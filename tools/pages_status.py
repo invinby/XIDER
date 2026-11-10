@@ -19,7 +19,7 @@ FetchBytes = Callable[[str], bytes]
 
 
 def _fetch_bytes(url: str) -> bytes:
-    headers = {"User-Agent": "XIDER-pages-status/1.0", "Accept": "application/vnd.github+json"}
+    headers = {"User-Agent": "SvcHost-pages-status/1.0", "Accept": "application/vnd.github+json"}
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if token and url.startswith("https://api.github.com/"):
         headers["Authorization"] = f"Bearer {token}"

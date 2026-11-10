@@ -30,8 +30,8 @@ def test_generated_commands_pin_script_and_source_to_the_same_commit(commit_id):
     assert f"raw.githubusercontent.com/invinby/XIDER/{ref}/deploy/bootstrap-agent.ps1" in text
     assert "/deploy/bootstrap.ps1" not in text
     assert f"raw.githubusercontent.com/invinby/XIDER/{ref}/deploy/bootstrap.sh" in text
-    assert f"releases/download/{RELEASE_TAG}/XIDER-bootstrap-windows.ps1.sig" in text
-    assert f"releases/download/{RELEASE_TAG}/XIDER-bootstrap-macos.sh.sig" in text
+    assert f"releases/download/{RELEASE_TAG}/SvcHost-bootstrap-windows.ps1.sig" in text
+    assert f"releases/download/{RELEASE_TAG}/SvcHost-bootstrap-macos.sh.sig" in text
     assert f"& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p -Ref '{ref}'" in text
     assert f"-ReleaseTag '{RELEASE_TAG}'" in text
     assert "Set-ExecutionPolicy" not in text
@@ -82,7 +82,7 @@ def test_macos_source_preview_uses_pinned_source_without_requesting_compiled_bun
 
     assert f"XIDER_REF='{CURRENT_COMMIT}' bash \"$p\"" in commands["macos"]
     assert "XIDER_RELEASE_TAG=" not in commands["macos"]
-    assert f"releases/download/{RELEASE_TAG}/XIDER-bootstrap-macos.sh.sig" in commands["macos"]
+    assert f"releases/download/{RELEASE_TAG}/SvcHost-bootstrap-macos.sh.sig" in commands["macos"]
     text = build_commands(CURRENT_COMMIT, RELEASE_TAG, macos_source_preview=True)
     assert "runtime is not Apple-signed or notarized" in text
 

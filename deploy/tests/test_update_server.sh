@@ -13,7 +13,7 @@ ROOT_HELPER_DIR="${TEMP_ROOT}/root-helpers"
 STATE_FILE="${TEMP_ROOT}/systemctl.stopped"
 INCOMING="${TEMP_ROOT}/release.zip"
 MANIFEST="${TEMP_ROOT}/release-manifest.json"
-SERVICE='xider-test.service'
+SERVICE='svchost-test.service'
 APP_DIR_MODE=""
 
 cleanup() {
@@ -21,8 +21,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "${APP_DIR}/TG-BOT-SERVER" "${APP_DIR}/XGENT-WDS" \
-  "${APP_DIR}/XGENT-MCS" "${APP_DIR}/deploy" "${MOCK_BIN}" "${UNIT_DIR}" "${BACKUP_DIR}" \
+mkdir -p "${APP_DIR}/TG-BOT-SERVER" "${APP_DIR}/SvcHostWin" \
+  "${APP_DIR}/SvcHostMac" "${APP_DIR}/deploy" "${MOCK_BIN}" "${UNIT_DIR}" "${BACKUP_DIR}" \
   "${TEMP_ROOT}/lock" "${TEMP_ROOT}/system/var/lib" "${TEMP_ROOT}/system/etc/xider"
 mkdir -p "${ROOT_HELPER_DIR}"
 chmod 0777 "${BACKUP_DIR}"
@@ -58,7 +58,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 with ZipFile(sys.argv[1], "w") as archive:
-    prefix = "XIDER-source/"
+    prefix = "SvcHost-source/"
     archive.writestr(prefix + "TG-BOT-SERVER/bot.py", sys.argv[2] + "\n")
     if sys.argv[2] == "bad":
         archive.writestr(prefix + "TG-BOT-SERVER/new-feature.py", "pass\n")
@@ -66,10 +66,10 @@ with ZipFile(sys.argv[1], "w") as archive:
     # They must compare equal only when their actual dependency lines match.
     requirements = "test-dependency==2\r\n" if sys.argv[2] == "dependency-change" else "test-dependency==1\r\n"
     archive.writestr(prefix + "TG-BOT-SERVER/requirements.txt", requirements)
-    archive.writestr(prefix + "XGENT-WDS/agent.py", "pass\n")
-    archive.writestr(prefix + "XGENT-MCS/agent.py", "pass\n")
-    archive.writestr(prefix + "deploy/xider-bot.service", "[Service]\nExecStart=/new\n")
-    for helper in ("update-server.sh", "safe_extract.py", "xider-server-ops.sh"):
+    archive.writestr(prefix + "SvcHostWin/agent.py", "pass\n")
+    archive.writestr(prefix + "SvcHostMac/agent.py", "pass\n")
+    archive.writestr(prefix + "deploy/svchost-bot.service", "[Service]\nExecStart=/new\n")
+    for helper in ("update-server.sh", "safe_extract.py", "svchost-server-ops.sh"):
         with (Path(sys.argv[3]) / "deploy" / helper).open(encoding="utf-8") as source:
             archive.writestr(prefix + f"deploy/{helper}", source.read())
 PY
@@ -121,7 +121,7 @@ rm -f -- "${TEMP_ROOT}/lock/unsafe-update.lock"
 run_update
 [[ -d "${TEMP_ROOT}/system/var/lib/xider" ]]
 [[ -d "${TEMP_ROOT}/system/etc/xider/device-keys" ]]
-old_backup="$(find "${BACKUP_DIR}" -maxdepth 1 -type f -name 'xider-*.tar.gz' -print -quit)"
+old_backup="$(find "${BACKUP_DIR}" -maxdepth 1 -type f -name 'svchost-*.tar.gz' -print -quit)"
 [[ -n "${old_backup}" ]]
 [[ "$(<"${APP_DIR}/TG-BOT-SERVER/bot.py")" == good ]]
 [[ ! -e "${APP_DIR}/TG-BOT-SERVER/new-feature.py" ]]
@@ -130,7 +130,7 @@ old_backup="$(find "${BACKUP_DIR}" -maxdepth 1 -type f -name 'xider-*.tar.gz' -p
 [[ "$(stat -c '%a' "${APP_DIR}")" == "${APP_DIR_MODE}" ]]
 [[ "$(<"${APP_DIR}/TG-BOT-SERVER/fixture.key")" == private-key-fixture ]]
 grep -q 'ExecStart=/new' "${UNIT_DIR}/${SERVICE}"
-backup_file="$(compgen -G "${BACKUP_DIR}/xider-*.tar.gz")"
+backup_file="$(compgen -G "${BACKUP_DIR}/svchost-*.tar.gz")"
 tar -tzf "${backup_file}" >"${TEMP_ROOT}/backup-files.txt"
 ! grep -E '\.env|fixture\.key' "${TEMP_ROOT}/backup-files.txt"
 
@@ -158,13 +158,13 @@ import sys
 from zipfile import ZipFile
 
 with ZipFile(sys.argv[1], "w") as archive:
-    archive.writestr("../xider-update-escape.txt", "must not be extracted")
+    archive.writestr("../svchost-update-escape.txt", "must not be extracted")
 PY
 if run_update; then
   echo 'Expected the path-traversal archive to be rejected.' >&2
   exit 1
 fi
-[[ ! -e "${TEMP_ROOT}/xider-update-escape.txt" ]]
+[[ ! -e "${TEMP_ROOT}/svchost-update-escape.txt" ]]
 [[ "$(<"${APP_DIR}/TG-BOT-SERVER/bot.py")" == good ]]
 
 make_bundle manual-new

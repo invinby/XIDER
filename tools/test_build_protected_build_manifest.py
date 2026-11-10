@@ -22,7 +22,7 @@ def _obfuscation_report(platform, component_ids):
     return {
         "schema": "xider.obfuscation-report.v1",
         "platform": platform,
-        "source_tree": "XGENT-WDS" if platform == "windows" else "XGENT-MCS",
+        "source_tree": "SvcHostWin" if platform == "windows" else "SvcHostMac",
         "state": "applied",
         "tool": {"name": "PyObfus", "version": "0.11.1", "edition": "Community"},
         "configuration": "test cross-file configuration",
@@ -33,7 +33,7 @@ def _obfuscation_report(platform, component_ids):
         "execution_performed_by_obfuscator": False,
         "preflight": {"high_risk_findings": 0, "parse_errors": 0},
         "components": [
-            {"id": item, "state": "applied", "source_tree": "XGENT-WDS" if platform == "windows" else "XGENT-MCS"}
+            {"id": item, "state": "applied", "source_tree": "SvcHostWin" if platform == "windows" else "SvcHostMac"}
             for item in component_ids
         ],
     }
@@ -54,28 +54,28 @@ def _key():
 
 def _archives(directory, override_name=None, override_members=None):
     members_by_archive = {
-        "XGENT-WDS-Windows.zip": {
-            "XGENT-WDS.exe": b"windows-agent",
-            "xider-obfuscation-report.json": json.dumps(_obfuscation_report(
+        "SvcHostWin-Windows.zip": {
+            "SvcHostWin.exe": b"windows-agent",
+            "svchost-obfuscation-report.json": json.dumps(_obfuscation_report(
                 "windows", ["windows_agent", "windows_guard_keeper"],
             )).encode(),
         },
         "Guard-Keeper-Windows.zip": {
-            "XIDER-Guard-Keeper.exe": b"windows-keeper",
-            "xider-obfuscation-report.json": json.dumps(_obfuscation_report(
+            "SvcHostGuard.exe": b"windows-keeper",
+            "svchost-obfuscation-report.json": json.dumps(_obfuscation_report(
                 "windows", ["windows_agent", "windows_guard_keeper"],
             )).encode(),
         },
-        "XGENT-MCS-macos-bundle.zip": {
-            "XIDER.app/Contents/MacOS/XGENT-MCS": b"macos-agent",
-            "XIDER-Layers.app/Contents/MacOS/XIDER-Layers": b"macos-layers",
-            "xider-obfuscation-report.json": json.dumps(_obfuscation_report(
+        "SvcHostMac-macos-bundle.zip": {
+            "SvcHost.app/Contents/MacOS/SvcHostMac": b"macos-agent",
+            "SvcHostLayers.app/Contents/MacOS/SvcHostLayers": b"macos-layers",
+            "svchost-obfuscation-report.json": json.dumps(_obfuscation_report(
                 "macos", ["macos_agent", "macos_guard_keeper", "safari", "siri"],
             )).encode(),
         },
         "Guard-Keeper-macOS.zip": {
-            "XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper": b"macos-keeper",
-            "xider-obfuscation-report.json": json.dumps(_obfuscation_report(
+            "SvcHostGuard.app/Contents/MacOS/SvcHostGuard": b"macos-keeper",
+            "svchost-obfuscation-report.json": json.dumps(_obfuscation_report(
                 "macos", ["macos_guard_keeper"],
             )).encode(),
         },
@@ -88,13 +88,13 @@ def _archives(directory, override_name=None, override_members=None):
 
 
 def test_manifest_hashes_archives_and_signed_obfuscation_evidence(tmp_path):
-    _archives(tmp_path, "XGENT-WDS-Windows.zip", {
-        "XGENT-WDS.exe": b"compiled-agent",
-        "xider-obfuscation-report.json": json.dumps(_obfuscation_report(
+    _archives(tmp_path, "SvcHostWin-Windows.zip", {
+        "SvcHostWin.exe": b"compiled-agent",
+        "svchost-obfuscation-report.json": json.dumps(_obfuscation_report(
             "windows", ["windows_agent", "windows_guard_keeper"],
         )).encode(),
     })
-    archive = tmp_path / "XGENT-WDS-Windows.zip"
+    archive = tmp_path / "SvcHostWin-Windows.zip"
 
     manifest = build_manifest(tmp_path, source_ref="v4.3.4", source_commit=COMMIT)
 
@@ -109,7 +109,7 @@ def test_manifest_hashes_archives_and_signed_obfuscation_evidence(tmp_path):
     assert asset["build_kind"] == "compiled_source_free_package"
     assert asset["sha256"] == hashlib.sha256(archive.read_bytes()).hexdigest()
     assert [row["path"] for row in asset["members"]] == [
-        "XGENT-WDS.exe", "xider-obfuscation-report.json",
+        "SvcHostWin.exe", "svchost-obfuscation-report.json",
     ]
     assert asset["members"][0]["sha256"] == hashlib.sha256(b"compiled-agent").hexdigest()
     component = next(row for row in manifest["components"] if row["id"] == "windows_agent")
@@ -133,7 +133,7 @@ def test_component_inventory_reports_safari_and_siri_as_one_shared_bundle(tmp_pa
 
     safari = next(row for row in manifest["components"] if row["id"] == "safari")
     siri = next(row for row in manifest["components"] if row["id"] == "siri")
-    assert safari["package_asset"] == siri["package_asset"] == "XGENT-MCS-macos-bundle.zip"
+    assert safari["package_asset"] == siri["package_asset"] == "SvcHostMac-macos-bundle.zip"
     assert safari["entrypoint"] == siri["entrypoint"]
     assert safari["output_sha256"] == siri["output_sha256"] == hashlib.sha256(b"macos-layers").hexdigest()
     assert all(row["obfuscation"]["state"] == "obfuscated" for row in manifest["components"])
@@ -141,7 +141,7 @@ def test_component_inventory_reports_safari_and_siri_as_one_shared_bundle(tmp_pa
 
 def test_preview_inventory_marks_every_missing_macos_component_not_built(tmp_path):
     _archives(tmp_path)
-    (tmp_path / "XGENT-MCS-macos-bundle.zip").unlink()
+    (tmp_path / "SvcHostMac-macos-bundle.zip").unlink()
     (tmp_path / "Guard-Keeper-macOS.zip").unlink()
 
     manifest = build_manifest(
@@ -160,16 +160,16 @@ def test_preview_inventory_marks_every_missing_macos_component_not_built(tmp_pat
 
 def test_full_build_inventory_still_requires_macos_archives(tmp_path):
     _archives(tmp_path)
-    (tmp_path / "XGENT-MCS-macos-bundle.zip").unlink()
+    (tmp_path / "SvcHostMac-macos-bundle.zip").unlink()
 
     with pytest.raises(ValueError, match="Build archive set mismatch"):
         build_manifest(tmp_path, source_ref="v4.3.17", source_commit=COMMIT)
 
 
 def test_manifest_rejects_missing_component_entrypoint(tmp_path):
-    _archives(tmp_path, "XGENT-WDS-Windows.zip", {
+    _archives(tmp_path, "SvcHostWin-Windows.zip", {
         "unexpected.bin": b"not the agent",
-        "xider-obfuscation-report.json": json.dumps(_obfuscation_report(
+        "svchost-obfuscation-report.json": json.dumps(_obfuscation_report(
             "windows", ["windows_agent", "windows_guard_keeper"],
         )).encode(),
     })
@@ -180,16 +180,16 @@ def test_manifest_rejects_missing_component_entrypoint(tmp_path):
 
 @pytest.mark.parametrize(("field", "value"), [
     ("platform", "macos"),
-    ("source_tree", "XGENT-MCS"),
+    ("source_tree", "SvcHostMac"),
     ("source_files_processed", True),
     ("names_obfuscated", 0),
 ])
 def test_manifest_rejects_mismatched_or_invalid_obfuscation_report(tmp_path, field, value):
     report = _obfuscation_report("windows", ["windows_agent", "windows_guard_keeper"])
     report[field] = value
-    _archives(tmp_path, "XGENT-WDS-Windows.zip", {
-        "XGENT-WDS.exe": b"compiled-agent",
-        "xider-obfuscation-report.json": json.dumps(report).encode(),
+    _archives(tmp_path, "SvcHostWin-Windows.zip", {
+        "SvcHostWin.exe": b"compiled-agent",
+        "svchost-obfuscation-report.json": json.dumps(report).encode(),
     })
 
     with pytest.raises(ValueError, match="Obfuscation report does not satisfy"):
@@ -230,7 +230,7 @@ def test_signed_manifest_detects_tampered_member_hash(tmp_path):
 
 
 def test_manifest_rejects_unsafe_zip_member(tmp_path):
-    _archives(tmp_path, "XIDER-source.zip", {"../outside.txt": b"escape"})
+    _archives(tmp_path, "SvcHost-source.zip", {"../outside.txt": b"escape"})
     with pytest.raises(ValueError, match="Unsafe or duplicate"):
         build_manifest(tmp_path, source_ref="v4.3.4", source_commit=COMMIT)
 

@@ -13,16 +13,16 @@ if (-not $KeyPath) {
     $KeyPath = if ($env:XIDER_SSH_KEY) { $env:XIDER_SSH_KEY } else { Join-Path $env:USERPROFILE '.ssh\xider' }
 }
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$bundle = Join-Path $env:TEMP ("xider-source-{0}.zip" -f ([guid]::NewGuid().ToString('N')))
-$manifest = Join-Path $env:TEMP ("xider-manifest-{0}.json" -f ([guid]::NewGuid().ToString('N')))
-$stage = Join-Path $env:TEMP ("xider-stage-{0}" -f ([guid]::NewGuid().ToString('N')))
-$remoteBundle = "xider-source-$([guid]::NewGuid().ToString('N')).zip"
-$remoteManifest = "xider-manifest-$([guid]::NewGuid().ToString('N')).json"
-$remoteUpdater = "xider-update-$([guid]::NewGuid().ToString('N')).sh"
-$remoteExtractor = "xider-extract-$([guid]::NewGuid().ToString('N')).py"
-$remoteVerifier = "xider-verify-$([guid]::NewGuid().ToString('N')).py"
-$remoteSignature = "xider-signature-$([guid]::NewGuid().ToString('N')).py"
-$remoteOps = "xider-ops-$([guid]::NewGuid().ToString('N')).sh"
+$bundle = Join-Path $env:TEMP ("svchost-source-{0}.zip" -f ([guid]::NewGuid().ToString('N')))
+$manifest = Join-Path $env:TEMP ("svchost-manifest-{0}.json" -f ([guid]::NewGuid().ToString('N')))
+$stage = Join-Path $env:TEMP ("svchost-stage-{0}" -f ([guid]::NewGuid().ToString('N')))
+$remoteBundle = "svchost-source-$([guid]::NewGuid().ToString('N')).zip"
+$remoteManifest = "svchost-manifest-$([guid]::NewGuid().ToString('N')).json"
+$remoteUpdater = "svchost-update-$([guid]::NewGuid().ToString('N')).sh"
+$remoteExtractor = "svchost-extract-$([guid]::NewGuid().ToString('N')).py"
+$remoteVerifier = "svchost-verify-$([guid]::NewGuid().ToString('N')).py"
+$remoteSignature = "svchost-signature-$([guid]::NewGuid().ToString('N')).py"
+$remoteOps = "svchost-ops-$([guid]::NewGuid().ToString('N')).sh"
 if (-not $KnownHostsPath) {
     $KnownHostsPath = if ($env:XIDER_SSH_KNOWN_HOSTS) {
         $env:XIDER_SSH_KNOWN_HOSTS
@@ -63,11 +63,11 @@ try {
     }
 
     if ($RollbackOnly) {
-        if (-not $BackupPath -or $BackupPath -notmatch '^/var/backups/xider/xider-[A-Za-z0-9._-]+\.tar\.gz$') {
-            throw 'RollbackOnly requires a verified /var/backups/xider/xider-*.tar.gz path.'
+        if (-not $BackupPath -or $BackupPath -notmatch '^/var/backups/xider/svchost-[A-Za-z0-9._-]+\.tar\.gz$') {
+            throw 'RollbackOnly requires a verified /var/backups/xider/svchost-*.tar.gz path.'
         }
         Write-Host "[rollback] Restoring the requested server snapshot on $ServerIp..."
-        $rollbackCommand = "sudo /usr/local/sbin/xider-server-ops rollback '$BackupPath'"
+        $rollbackCommand = "sudo /usr/local/sbin/svchost-server-ops rollback '$BackupPath'"
         & ssh @sshOpts "ubuntu@$ServerIp" $rollbackCommand | Out-Host
         if ($LASTEXITCODE -ne 0) { throw 'Server rollback failed; inspect the XIDER service and preserved backup.' }
         Write-Host '[OK] Server rollback completed.'
@@ -139,8 +139,8 @@ try {
         'TG-BOT-SERVER\text_store.py',
         'TG-BOT-SERVER\ui_cards.py',
         'TG-BOT-SERVER\xlex.py',
-        'XGENT-MCS\release_signature.py',
-        'XGENT-MCS\update_package.py',
+        'SvcHostMac\release_signature.py',
+        'SvcHostMac\update_package.py',
         'deploy\update-server.sh',
         'deploy\safe_extract.py',
         'deploy\verify_server_bundle.py',
@@ -180,8 +180,8 @@ try {
         @{ Local = 'deploy\update-server.sh'; Remote = $remoteUpdater },
         @{ Local = 'deploy\safe_extract.py'; Remote = $remoteExtractor },
         @{ Local = 'deploy\verify_server_bundle.py'; Remote = $remoteVerifier },
-        @{ Local = 'XGENT-MCS\release_signature.py'; Remote = $remoteSignature },
-        @{ Local = 'deploy\xider-server-ops.sh'; Remote = $remoteOps }
+        @{ Local = 'SvcHostMac\release_signature.py'; Remote = $remoteSignature },
+        @{ Local = 'deploy\svchost-server-ops.sh'; Remote = $remoteOps }
     )
     foreach ($helper in $bootstrapHelpers) {
         & scp @sshOpts -- (Join-Path $repo $helper.Local) "ubuntu@${ServerIp}:/tmp/$($helper.Remote)"
@@ -198,12 +198,12 @@ extractor="/tmp/__REMOTE_EXTRACTOR__"
 verifier="/tmp/__REMOTE_VERIFIER__"
 signature="/tmp/__REMOTE_SIGNATURE__"
 ops="/tmp/__REMOTE_OPS__"
-incoming='/opt/xider/incoming/xider-source.zip'
+incoming='/opt/xider/incoming/svchost-source.zip'
 incoming_manifest='/opt/xider/incoming/release-manifest.json'
 trap 'sudo rm -f "$bundle" "$manifest" "$updater" "$extractor" "$verifier" "$signature" "$ops"' EXIT
 sudo test -r /etc/xider/bot.env
-sudo systemctl is-enabled --quiet xider-bot.service
-sudo systemctl is-active --quiet xider-bot.service
+sudo systemctl is-enabled --quiet svchost-bot.service
+sudo systemctl is-active --quiet svchost-bot.service
 sudo python3 -c 'import cryptography.hazmat.primitives.asymmetric.ed25519' || {
   echo 'System Python is missing python3-cryptography; run the signed server installer first.' >&2
   exit 4
@@ -218,14 +218,14 @@ sudo install -o root -g root -m 0750 "$updater" /usr/local/libexec/xider/update-
 sudo install -o root -g root -m 0640 "$extractor" /usr/local/libexec/xider/safe_extract.py
 sudo install -o root -g root -m 0640 "$verifier" /usr/local/libexec/xider/verify_server_bundle.py
 sudo install -o root -g root -m 0640 "$signature" /usr/local/libexec/xider/release_signature.py
-sudo install -o root -g root -m 0755 "$ops" /usr/local/sbin/xider-server-ops
-sudo visudo -cf /etc/sudoers.d/xider-server-ops
+sudo install -o root -g root -m 0755 "$ops" /usr/local/sbin/svchost-server-ops
+sudo visudo -cf /etc/sudoers.d/svchost-server-ops
 sudo install -d -o root -g xider -m 0750 /opt/xider/incoming
 sudo chown root:xider /opt/xider/incoming
 sudo chmod 0750 /opt/xider/incoming
 sudo install -o root -g xider -m 0640 "$bundle" "$incoming"
 sudo install -o root -g xider -m 0640 "$manifest" "$incoming_manifest"
-sudo /usr/local/sbin/xider-server-ops update
+sudo /usr/local/sbin/svchost-server-ops update
 '@
     $remote = $remote.Replace("`r`n", "`n").Replace("`r", "`n")
     $remote = $remote.Replace('__REMOTE_BUNDLE__', $remoteBundle)
@@ -239,14 +239,14 @@ sudo /usr/local/sbin/xider-server-ops update
     $updateOutput = @($updateResult.Output)
     $updateExit = [int]$updateResult.ExitCode
     $updateOutput | Out-Host
-    if ($updateExit -ne 0) { throw 'Safe server update failed; the updater should have restored the previous source. Inspect journalctl -u xider-bot.' }
+    if ($updateExit -ne 0) { throw 'Safe server update failed; the updater should have restored the previous source. Inspect journalctl -u svchost-bot.' }
     $updateText = ($updateOutput | ForEach-Object { [string]$_ }) -join "`n"
-    $backupMatch = [regex]::Match($updateText, 'Backup:\s*(?<path>/var/backups/xider/xider-[A-Za-z0-9._-]+\.tar\.gz)')
+    $backupMatch = [regex]::Match($updateText, 'Backup:\s*(?<path>/var/backups/xider/svchost-[A-Za-z0-9._-]+\.tar\.gz)')
     if (-not $backupMatch.Success) { throw 'Server update succeeded, but its rollback snapshot path was not reported.' }
     Write-Output ("XIDER_SERVER_BACKUP={0}" -f $backupMatch.Groups['path'].Value)
 
     Write-Host 'Done. The live .env was not uploaded or modified.'
-    Write-Host "Logs: ssh -i `"$KeyPath`" ubuntu@$ServerIp 'sudo journalctl -u xider-bot -f'"
+    Write-Host "Logs: ssh -i `"$KeyPath`" ubuntu@$ServerIp 'sudo journalctl -u svchost-bot -f'"
 }
 finally {
     Remove-Item -LiteralPath $bundle -Force -ErrorAction SilentlyContinue

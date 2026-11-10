@@ -9,25 +9,25 @@ APP_DIR="${XIDER_APP_DIR:-/opt/xider}"
 BOT_ENV="${XIDER_BOT_ENV:-/etc/xider/bot.env}"
 PUBLIC_IP="${XIDER_PUBLIC_IP:-}"
 CERT_EMAIL="${XIDER_CERT_EMAIL:-}"
-DOCK_DIR=/etc/xider-dock
-DATA_DIR=/var/lib/xider-dock
-WEBROOT=/var/www/xider-dock-acme
-BROKER_SERVICE=xider-dock-mqtt.service
+DOCK_DIR=/etc/svchost-dock
+DATA_DIR=/var/lib/svchost-dock
+WEBROOT=/var/www/svchost-dock-acme
+BROKER_SERVICE=svchost-dock-mqtt.service
 BROKER_UNIT=/etc/systemd/system/$BROKER_SERVICE
-WS_GUARD_UNIT=/etc/systemd/system/xider-ws-firewall.service
-WS_GUARD_SCRIPT=/usr/local/sbin/xider-ws-firewall
+WS_GUARD_UNIT=/etc/systemd/system/svchost-ws-firewall.service
+WS_GUARD_SCRIPT=/usr/local/sbin/svchost-ws-firewall
 WS_BROKER_DROPIN=/etc/systemd/system/$BROKER_SERVICE.d/20-ws-firewall.conf
-NGINX_SITE=/etc/nginx/conf.d/xider-dock.conf
+NGINX_SITE=/etc/nginx/conf.d/svchost-dock.conf
 BROKER_CONFIG=$DOCK_DIR/mosquitto.conf
-BOT_SERVICE=xider-bot.service
+BOT_SERVICE=svchost-bot.service
 BOT_ENV_BACKUP="$BOT_ENV.pre-x-dock"
 CERT_NAME=""
 CERT_LINEAGE=""
 CERT_RENEWAL=""
 CERTBOT_BIN="$(command -v certbot || true)"
-CERT_HOOK=/etc/letsencrypt/renewal-hooks/deploy/50-xider-dock
-RENEW_SERVICE=/etc/systemd/system/xider-dock-cert-renew.service
-RENEW_TIMER=/etc/systemd/system/xider-dock-cert-renew.timer
+CERT_HOOK=/etc/letsencrypt/renewal-hooks/deploy/50-svchost-dock
+RENEW_SERVICE=/etc/systemd/system/svchost-dock-cert-renew.service
+RENEW_TIMER=/etc/systemd/system/svchost-dock-cert-renew.timer
 STAGE=""
 BOT_ENV_CHANGED=0
 MOSQUITTO_RUNTIME_MASKED=0
@@ -76,10 +76,10 @@ if [[ ! "$CERT_EMAIL" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]; the
   echo "Set XIDER_CERT_EMAIL to a reachable certificate-expiry contact." >&2
   exit 2
 fi
-CERT_NAME="xider-dock-$PUBLIC_IP"
+CERT_NAME="svchost-dock-$PUBLIC_IP"
 CERT_LINEAGE="/etc/letsencrypt/live/$CERT_NAME"
 CERT_RENEWAL="/etc/letsencrypt/renewal/$CERT_NAME.conf"
-if [[ ! -d "$APP_DIR/broker" || ! -f "$APP_DIR/deploy/xider-bot.service" || \
+if [[ ! -d "$APP_DIR/broker" || ! -f "$APP_DIR/deploy/svchost-bot.service" || \
       ! -x "$APP_DIR/TG-BOT-SERVER/venv/bin/python" || ! -f "$BOT_ENV" || ! -r "$BOT_ENV" || -L "$BOT_ENV" ]]; then
   echo "An installed XIDER bot and readable $BOT_ENV are required." >&2
   exit 2
@@ -218,12 +218,12 @@ cleanup_on_exit() {
     rm -f -- "$BOT_ENV_BACKUP"
   fi
   if [[ "$RENEW_TIMER_INSTALLED" -eq 1 ]]; then
-    systemctl disable --now xider-dock-cert-renew.timer >/dev/null 2>&1 || true
+    systemctl disable --now svchost-dock-cert-renew.timer >/dev/null 2>&1 || true
     rm -f -- "$RENEW_SERVICE" "$RENEW_TIMER"
   fi
   systemctl disable --now "$BROKER_SERVICE" >/dev/null 2>&1 || true
   rm -f -- "$BROKER_UNIT"
-  systemctl disable --now xider-ws-firewall.service >/dev/null 2>&1 || true
+  systemctl disable --now svchost-ws-firewall.service >/dev/null 2>&1 || true
   rm -f -- "$WS_GUARD_UNIT" "$WS_GUARD_SCRIPT" "$WS_BROKER_DROPIN"
   if [[ "$APPARMOR_OVERRIDE_CHANGED" -eq 1 ]]; then
     if [[ "$APPARMOR_LOCAL_PREEXISTED" -eq 1 && -f "$STAGE/apparmor-local.backup" ]]; then
@@ -235,7 +235,7 @@ cleanup_on_exit() {
       echo "Could not reload the restored Mosquitto AppArmor profile; review it before retrying." >&2
     fi
   fi
-  rm -f -- "$CERT_HOOK" /usr/local/sbin/xider-dock-cert-deploy "$NGINX_SITE"
+  rm -f -- "$CERT_HOOK" /usr/local/sbin/svchost-dock-cert-deploy "$NGINX_SITE"
   systemctl daemon-reload >/dev/null 2>&1 || true
   if [[ "$NGINX_WAS_ACTIVE" -eq 1 ]]; then
     if command -v nginx >/dev/null 2>&1 && nginx -t >/dev/null 2>&1; then
@@ -402,7 +402,7 @@ fi
 install -d -o root -g mosquitto -m 0750 "$DOCK_DIR" "$DOCK_DIR/tls"
 install -d -o mosquitto -g mosquitto -m 0750 "$DATA_DIR" "$DATA_DIR/data"
 install -d -o root -g root -m 0755 "$WEBROOT/.well-known/acme-challenge"
-STAGE="$(mktemp -d /var/tmp/xider-dock.XXXXXX)"
+STAGE="$(mktemp -d /var/tmp/svchost-dock.XXXXXX)"
 chmod 0700 "$STAGE"
 if [[ "$APPARMOR_LOCAL_PREEXISTED" -eq 1 ]]; then
   cp -a "$APPARMOR_LOCAL" "$STAGE/apparmor-local.backup"
@@ -445,10 +445,10 @@ if [[ "$APPARMOR_WAS_ACTIVE" -eq 1 ]]; then
   cat >> "$APPARMOR_LOCAL" <<'EOF'
 
 # XIDER X-DOCK BEGIN
-/etc/xider-dock/ r,
-/etc/xider-dock/** r,
-/var/lib/xider-dock/ r,
-/var/lib/xider-dock/** rwk,
+/etc/svchost-dock/ r,
+/etc/svchost-dock/** r,
+/var/lib/svchost-dock/ r,
+/var/lib/svchost-dock/** rwk,
 # XIDER X-DOCK END
 EOF
   chown root:root "$APPARMOR_LOCAL"
@@ -456,11 +456,11 @@ EOF
   apparmor_parser -r "$APPARMOR_PROFILE"
 fi
 
-cat > "$STAGE/xider-dock-mqtt.service" <<EOF
+cat > "$STAGE/svchost-dock-mqtt.service" <<EOF
 [Unit]
 Description=XIDER X-DOCK per-device MQTT broker
-Requires=xider-ws-firewall.service
-After=xider-ws-firewall.service
+Requires=svchost-ws-firewall.service
+After=svchost-ws-firewall.service
 After=network-online.target
 Wants=network-online.target
 
@@ -482,11 +482,11 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 [Install]
 WantedBy=multi-user.target
 EOF
-install -o root -g root -m 0644 "$STAGE/xider-dock-mqtt.service" "$BROKER_UNIT"
-install -o root -g root -m 0750 "$APP_DIR/deploy/xider-ws-firewall.sh" "$WS_GUARD_SCRIPT"
-install -o root -g root -m 0644 "$APP_DIR/deploy/xider-ws-firewall.service" "$WS_GUARD_UNIT"
+install -o root -g root -m 0644 "$STAGE/svchost-dock-mqtt.service" "$BROKER_UNIT"
+install -o root -g root -m 0750 "$APP_DIR/deploy/svchost-ws-firewall.sh" "$WS_GUARD_SCRIPT"
+install -o root -g root -m 0644 "$APP_DIR/deploy/svchost-ws-firewall.service" "$WS_GUARD_UNIT"
 systemctl daemon-reload
-systemctl enable --now xider-ws-firewall.service
+systemctl enable --now svchost-ws-firewall.service
 "$WS_GUARD_SCRIPT"
 systemctl enable --now "$BROKER_SERVICE"
 
@@ -498,7 +498,7 @@ ss -ltn | awk '{print $4}' | grep -q '127.0.0.1:18884$'
 
 export XIDER_DOCK_ADMIN_USERNAME=admin
 export XIDER_DOCK_ADMIN_PASSWORD="$ADMIN_PASSWORD"
-export XIDER_DOCK_BOT_USERNAME=xider-bot
+export XIDER_DOCK_BOT_USERNAME=svchost-bot
 export XIDER_DOCK_BOT_PASSWORD="$BOT_PASSWORD"
 PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
   "$APP_DIR/TG-BOT-SERVER/venv/bin/python" "$APP_DIR/broker/x_dock_provision.py" \
@@ -603,7 +603,7 @@ install -o root -g root -m 0644 "$STAGE/nginx-public.conf" "$NGINX_SITE"
 nginx -t
 systemctl reload nginx
 
-cat > "$STAGE/xider-dock-cert-deploy" <<EOF
+cat > "$STAGE/svchost-dock-cert-deploy" <<EOF
 #!/usr/bin/env bash
 set -Eeuo pipefail
 LINEAGE="\${RENEWED_LINEAGE:-}"
@@ -615,15 +615,15 @@ systemctl restart $BROKER_SERVICE
 nginx -t
 systemctl reload nginx
 EOF
-install -o root -g root -m 0750 "$STAGE/xider-dock-cert-deploy" /usr/local/sbin/xider-dock-cert-deploy
+install -o root -g root -m 0750 "$STAGE/svchost-dock-cert-deploy" /usr/local/sbin/svchost-dock-cert-deploy
 install -d -o root -g root -m 0755 /etc/letsencrypt/renewal-hooks/deploy
-ln -s /usr/local/sbin/xider-dock-cert-deploy \
-  /etc/letsencrypt/renewal-hooks/deploy/50-xider-dock
+ln -s /usr/local/sbin/svchost-dock-cert-deploy \
+  /etc/letsencrypt/renewal-hooks/deploy/50-svchost-dock
 
 # Prefer the scheduler installed by Certbot (apt or snap). Only add an X-DOCK
 # timer when this host has no active or enabled Certbot timer/cron, avoiding duplicates.
 if ! certbot_scheduler_active; then
-  cat > "$STAGE/xider-dock-cert-renew.service" <<EOF
+  cat > "$STAGE/svchost-dock-cert-renew.service" <<EOF
 [Unit]
 Description=Renew the XIDER X-DOCK short-lived IP certificate
 
@@ -631,7 +631,7 @@ Description=Renew the XIDER X-DOCK short-lived IP certificate
 Type=oneshot
 ExecStart=$CERTBOT_BIN renew --quiet --cert-name $CERT_NAME
 EOF
-  cat > "$STAGE/xider-dock-cert-renew.timer" <<'EOF'
+  cat > "$STAGE/svchost-dock-cert-renew.timer" <<'EOF'
 [Unit]
 Description=Check the XIDER X-DOCK short-lived certificate renewal window
 
@@ -644,10 +644,10 @@ Persistent=true
 WantedBy=timers.target
 EOF
   RENEW_TIMER_INSTALLED=1
-  install -o root -g root -m 0644 "$STAGE/xider-dock-cert-renew.service" "$RENEW_SERVICE"
-  install -o root -g root -m 0644 "$STAGE/xider-dock-cert-renew.timer" "$RENEW_TIMER"
+  install -o root -g root -m 0644 "$STAGE/svchost-dock-cert-renew.service" "$RENEW_SERVICE"
+  install -o root -g root -m 0644 "$STAGE/svchost-dock-cert-renew.timer" "$RENEW_TIMER"
   systemctl daemon-reload
-  systemctl enable --now xider-dock-cert-renew.timer
+  systemctl enable --now svchost-dock-cert-renew.timer
 fi
 
 install -d -o xider -g xider -m 0700 /etc/xider/device-keys /var/lib/xider
@@ -659,7 +659,7 @@ export XIDER_DOCK_BROKER_HOST="$PUBLIC_IP"
 export XIDER_DOCK_BROKER_PORT=8884
 export XIDER_DOCK_WS_PORT=18885
 export XIDER_DOCK_PUBLIC_PORT=443
-export XIDER_DOCK_BOT_USERNAME=xider-bot
+export XIDER_DOCK_BOT_USERNAME=svchost-bot
 export XIDER_DOCK_BOT_PASSWORD="$BOT_PASSWORD"
 export XIDER_DOCK_ADMIN_USERNAME=admin
 export XIDER_DOCK_ADMIN_PASSWORD="$ADMIN_PASSWORD"

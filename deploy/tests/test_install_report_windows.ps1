@@ -17,13 +17,13 @@ foreach ($name in @('Write-XiderInstallReport', 'Get-XiderActiveInstallVersion',
 function Get-CimInstance {
     param($ClassName, $Filter, $ErrorAction)
     $processId = [int]([regex]::Match($Filter, '\d+').Value)
-    return [pscustomobject]@{ ProcessId = $processId; Name = 'pythonw.exe'; CommandLine = 'xgent_wds.py'; ExecutablePath = '' }
+    return [pscustomobject]@{ ProcessId = $processId; Name = 'pythonw.exe'; CommandLine = 'svchost_win.py'; ExecutablePath = '' }
 }
 function Test-XiderManagedProcess { param($Process, $AgentDirectory) return $true }
 function Get-ScheduledTask { param($TaskName, $ErrorAction) return [pscustomobject]@{ State = 'Running' } }
 function Get-Process { param($Id, $ErrorAction) return [pscustomobject]@{ ProcessName = 'pythonw' } }
 
-$reportRoot = Join-Path $env:TEMP ('xider-install-report-' + [guid]::NewGuid().ToString('N'))
+$reportRoot = Join-Path $env:TEMP ('svchost-install-report-' + [guid]::NewGuid().ToString('N'))
 $installReportPath = Join-Path $reportRoot 'install-report.json'
 $installReportId = 'install-test-' + [guid]::NewGuid().ToString('N')
 try {
@@ -46,7 +46,7 @@ try {
         throw 'Windows report has an incorrect process, bot-response, or platform result.'
     }
 
-    $agentDirectory = Join-Path $reportRoot 'git-ver\XGENT-WDS'
+    $agentDirectory = Join-Path $reportRoot 'git-ver\SvcHostWin'
     $healthDirectory = Join-Path $reportRoot 'health'
     New-Item -ItemType Directory -Path $agentDirectory, $healthDirectory -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $agentDirectory 'config.py'), 'VERSION = "4.3.8"', [Text.UTF8Encoding]::new($false))
@@ -95,7 +95,7 @@ try {
     }
     Write-Host 'Windows install-report fixture passed.'
 } finally {
-    if ($reportRoot -like (Join-Path $env:TEMP 'xider-install-report-*')) {
+    if ($reportRoot -like (Join-Path $env:TEMP 'svchost-install-report-*')) {
         Remove-Item -LiteralPath $reportRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 }

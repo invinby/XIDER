@@ -24,7 +24,7 @@ def signed_installer_message(platform: str, digest: str) -> bytes:
         raise ValueError("unsupported installer platform")
     if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
         raise ValueError("installer SHA-256 must be lowercase hexadecimal")
-    return f"XIDER-INSTALLER-SHA256\n{platform}\n{digest}\n".encode("ascii")
+    return f"SvcHost-INSTALLER-SHA256\n{platform}\n{digest}\n".encode("ascii")
 
 
 def sign_installers(
@@ -56,7 +56,7 @@ def sign_installers(
         if (directory / f"{filename}.sig").exists():
             raise FileExistsError(directory / f"{filename}.sig")
     outputs = []
-    with tempfile.TemporaryDirectory(prefix="xider-installer-sign-") as temp:
+    with tempfile.TemporaryDirectory(prefix="svchost-installer-sign-") as temp:
         root = Path(temp)
         key_path = root / "key"
         allowed = root / "allowed_signers"

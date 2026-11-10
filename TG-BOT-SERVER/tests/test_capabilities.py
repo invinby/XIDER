@@ -135,7 +135,7 @@ def test_macos_location_help_explains_first_grant_when_xider_is_missing_from_set
     text = bot._format_permission_help("macOS", "location")
 
     assert "Если XIDER ещё нет в списке" in text
-    assert "./XIDER.app/Contents/MacOS/XGENT-MCS --location-setup" in text
+    assert "./SvcHost.app/Contents/MacOS/SvcHostMac --location-setup" in text
     assert "корректно подписанным приложением" in text
     assert "Бот не может запросить согласие удалённо" in text
 

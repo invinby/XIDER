@@ -18,11 +18,11 @@ COMMIT_ID = re.compile(r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
 REPOSITORY = "invinby/XIDER"
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_TAG = re.compile(r"^v\d+\.\d+\.\d+$")
-SIGNER_IDENTITY = "xider-release"
-SIGNATURE_NAMESPACE = "xider-bootstrap@xider.link"
+SIGNER_IDENTITY = "svchost-release"
+SIGNATURE_NAMESPACE = "svchost-bootstrap@xider.link"
 DOCK_URL_ENV = "XIDER_DOCK_URL"
 
-RELEASE_MODULE_DIR = ROOT / "XGENT-MCS"
+RELEASE_MODULE_DIR = ROOT / "SvcHostMac"
 if str(RELEASE_MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(RELEASE_MODULE_DIR))
 from release_signature import TRUSTED_RELEASE_KEYS
@@ -115,7 +115,7 @@ def build_platform_commands(
         _openssh_allowed_signers().encode("ascii")
     ).decode("ascii")
     windows = (
-        "$ErrorActionPreference='Stop'; $d=Join-Path $env:TEMP ('xider-'+[guid]::NewGuid().ToString('N')); "
+        "$ErrorActionPreference='Stop'; $d=Join-Path $env:TEMP ('svchost-'+[guid]::NewGuid().ToString('N')); "
         "New-Item -ItemType Directory -Path $d|Out-Null; try { "
         "$p=Join-Path $d 'bootstrap.ps1'; $s=Join-Path $d 'bootstrap.sig'; $a=Join-Path $d 'allowed_signers'; $m=Join-Path $d 'message'; "
         f"iwr -UseBasicParsing -TimeoutSec 90 -Uri '{raw_base}/deploy/bootstrap-agent.ps1' -OutFile $p; "
@@ -127,9 +127,9 @@ def build_platform_commands(
         "$sshCommand=Get-Command ssh-keygen.exe -ErrorAction SilentlyContinue; "
         "if(-not $sshCommand){$sshPath=Join-Path $env:WINDIR 'System32\\OpenSSH\\ssh-keygen.exe'; if(Test-Path -LiteralPath $sshPath -PathType Leaf){$sshCommand=[pscustomobject]@{Source=$sshPath}}}; "
         "if($sshCommand){ "
-        f"iwr -UseBasicParsing -TimeoutSec 90 -Uri '{release_base}/XIDER-bootstrap-windows.ps1.sig' -OutFile $s; "
+        f"iwr -UseBasicParsing -TimeoutSec 90 -Uri '{release_base}/SvcHost-bootstrap-windows.ps1.sig' -OutFile $s; "
         "$ssh=$sshCommand.Source; "
-        f"$mb=[Text.Encoding]::ASCII.GetBytes(\"XIDER-BOOTSTRAP-SHA256`nwindows`n{release_tag}`n{ref}`n\"+$hash+\"`n\"); "
+        f"$mb=[Text.Encoding]::ASCII.GetBytes(\"SvcHost-BOOTSTRAP-SHA256`nwindows`n{release_tag}`n{ref}`n\"+$hash+\"`n\"); "
         "[IO.File]::WriteAllBytes($m,$mb); "
         "$c=Join-Path $d 'verify.cmd'; "
         f"$verify='@echo off'+[Environment]::NewLine+'pushd \"%~dp0\"'+[Environment]::NewLine+'\"'+$ssh+'\" -Y verify -f \"allowed_signers\" -I {SIGNER_IDENTITY} -n {SIGNATURE_NAMESPACE} -s \"bootstrap.sig\" < \"message\"'+[Environment]::NewLine+'exit /b %errorlevel%'; "
@@ -149,10 +149,10 @@ def build_platform_commands(
         "set -eu; d=\"$(mktemp -d)\"; trap 'rm -rf \"$d\"' EXIT; "
         f"p=\"$d/bootstrap.sh\"; s=\"$d/bootstrap.sig\"; a=\"$d/allowed_signers\"; "
         f"curl -fsSL --max-time 90 '{raw_base}/deploy/bootstrap.sh' -o \"$p\"; "
-        f"curl -fsSL --max-time 90 '{release_base}/XIDER-bootstrap-macos.sh.sig' -o \"$s\"; "
+        f"curl -fsSL --max-time 90 '{release_base}/SvcHost-bootstrap-macos.sh.sig' -o \"$s\"; "
         f"printf '%s' '{allowed_signers_b64}' | base64 -D > \"$a\"; "
         f"h=\"$(shasum -a 256 \"$p\" | awk '{{print $1}}')\"; "
-        f"printf 'XIDER-BOOTSTRAP-SHA256\\nmacos\\n{release_tag}\\n{ref}\\n%s\\n' \"$h\" | "
+        f"printf 'SvcHost-BOOTSTRAP-SHA256\\nmacos\\n{release_tag}\\n{ref}\\n%s\\n' \"$h\" | "
         f"ssh-keygen -Y verify -f \"$a\" -I {SIGNER_IDENTITY} -n {SIGNATURE_NAMESPACE} -s \"$s\"; "
         + (f"XIDER_DOCK_URL='{dock_url}' " if dock_url else "")
         + (

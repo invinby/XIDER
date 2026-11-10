@@ -7,7 +7,7 @@ import re
 import os
 import subprocess
 
-BUNDLE_ID = "com.xider.agent"
+BUNDLE_ID = "com.svchost.agent"
 
 def verify_release_credentials(env):
     required = ("XIDER_MACOS_SIGNING_IDENTITY", "APPLE_CERTIFICATE_B64",
@@ -28,7 +28,7 @@ def verify_bundle(app, *, distribution=False, run=subprocess.run):
     except (OSError, ValueError, plistlib.InvalidFileException):
         return ["Missing or invalid Info.plist"]
     if info.get("CFBundleIdentifier") != BUNDLE_ID:
-        errors.append("CFBundleIdentifier must be com.xider.agent")
+        errors.append("CFBundleIdentifier must be com.svchost.agent")
     usage = info.get("NSLocationUsageDescription")
     if not isinstance(usage, str) or not usage.strip():
         errors.append("NSLocationUsageDescription must explain the one-shot request")

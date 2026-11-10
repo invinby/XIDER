@@ -3,7 +3,7 @@ param(
     [string]$ServerIp = '16.16.200.207',
     [string]$KeyPath,
     [string]$EnvRoot = $env:XIDER_ENV_ROOT,
-    [string]$InstallRoot = "$env:LOCALAPPDATA\XIDER",
+    [string]$InstallRoot = "$env:LOCALAPPDATA\SvcHost",
     [string]$Branch = 'main',
     [string]$Ref = $env:XIDER_REF,
     [string]$SourceArchive
@@ -25,8 +25,8 @@ $repoUrl = if ($Ref) {
 } else {
     "https://github.com/invinby/XIDER/archive/refs/heads/$Branch.zip"
 }
-$zip = Join-Path $env:TEMP ('xider-main-' + [guid]::NewGuid().ToString('N') + '.zip')
-$extract = Join-Path $env:TEMP ('xider-bootstrap-' + [guid]::NewGuid().ToString('N'))
+$zip = Join-Path $env:TEMP ('svchost-main-' + [guid]::NewGuid().ToString('N') + '.zip')
+$extract = Join-Path $env:TEMP ('svchost-bootstrap-' + [guid]::NewGuid().ToString('N'))
 $repo = Join-Path $InstallRoot 'git-ver'
 $stagedKey = $null
 $backup = $null
@@ -133,7 +133,7 @@ try {
     Expand-XiderArchiveSafely -ArchivePath $zip -DestinationPath $extract
     $downloaded = Get-ChildItem -LiteralPath $extract -Directory | Select-Object -First 1
     if (-not $downloaded) { throw 'GitHub archive is empty.' }
-    foreach ($requiredFile in @('deploy\setup-all.ps1', 'XGENT-WDS\install_agent.ps1')) {
+    foreach ($requiredFile in @('deploy\setup-all.ps1', 'SvcHostWin\install_agent.ps1')) {
         if (-not (Test-Path -LiteralPath (Join-Path $downloaded.FullName $requiredFile) -PathType Leaf)) {
             throw "В архиве нет $requiredFile; существующая установка не изменена."
         }
@@ -141,12 +141,12 @@ try {
 
     Write-Host '[2/5] Ищу и сохраняю текущую конфигурацию агента...'
     $envCandidates = @()
-    if ($EnvRoot) { $envCandidates += (Join-Path (Join-Path $EnvRoot 'XGENT-WDS') '.env') }
+    if ($EnvRoot) { $envCandidates += (Join-Path (Join-Path $EnvRoot 'SvcHostWin') '.env') }
     $envCandidates += @(
-        (Join-Path (Split-Path $repo -Parent) 'XGENT-WDS\.env'),
-        (Join-Path $repo 'XGENT-WDS\.env'),
-        "$env:USERPROFILE\Desktop\XIDER\git-ver\XGENT-WDS\.env",
-        "$env:USERPROFILE\Desktop\XIDER\XGENT-WDS\.env"
+        (Join-Path (Split-Path $repo -Parent) 'SvcHostWin\.env'),
+        (Join-Path $repo 'SvcHostWin\.env'),
+        "$env:USERPROFILE\Desktop\XIDER\git-ver\SvcHostWin\.env",
+        "$env:USERPROFILE\Desktop\XIDER\SvcHostWin\.env"
     )
     $agentEnvSource = $envCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
 
@@ -178,7 +178,7 @@ try {
     }
 
     $installRoot = Split-Path $repo -Parent
-    $installAgentDir = Join-Path $installRoot 'XGENT-WDS'
+    $installAgentDir = Join-Path $installRoot 'SvcHostWin'
     New-Item -ItemType Directory -Path $installAgentDir -Force | Out-Null
     $installAgentEnv = Join-Path $installAgentDir '.env'
     if ($agentEnvSource -and (Test-Path -LiteralPath $agentEnvSource) -and
@@ -188,7 +188,7 @@ try {
     # OpenSSH rejects keys that inherit the CodexSandboxUsers ACL. Stage a
     # temporary copy with read access for the current Windows user only.
     if (Test-Path -LiteralPath $KeyPath) {
-        $stagedKey = Join-Path $env:TEMP ('xider-key-' + [guid]::NewGuid().ToString('N') + '.key')
+        $stagedKey = Join-Path $env:TEMP ('svchost-key-' + [guid]::NewGuid().ToString('N') + '.key')
         Copy-Item -LiteralPath $KeyPath -Destination $stagedKey -Force
         icacls.exe $stagedKey /inheritance:r | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Не удалось ограничить ACL временного SSH-ключа.' }
@@ -213,7 +213,7 @@ try {
             try {
                 $failed = Join-Path $InstallRoot ('git-ver.failed.' + (Get-Date -Format 'yyyyMMddHHmmss'))
                 Move-Item -LiteralPath $repo -Destination $failed
-                $failedEnv = Join-Path $failed 'XGENT-WDS\.env'
+                $failedEnv = Join-Path $failed 'SvcHostWin\.env'
                 if (Test-Path -LiteralPath $failedEnv) {
                     try { Remove-Item -LiteralPath $failedEnv -Force }
                     catch { Write-Warning ("Не удалось удалить копию .env из неудачной версии: {0}" -f $_.Exception.Message) }
@@ -234,7 +234,7 @@ try {
         $failed = Join-Path $InstallRoot ('git-ver.failed.' + (Get-Date -Format 'yyyyMMddHHmmss'))
         try {
             Move-Item -LiteralPath $repo -Destination $failed
-            $failedEnv = Join-Path $failed 'XGENT-WDS\.env'
+            $failedEnv = Join-Path $failed 'SvcHostWin\.env'
             if (Test-Path -LiteralPath $failedEnv) { Remove-Item -LiteralPath $failedEnv -Force }
             Write-Warning "Первая установка не завершилась; неполная версия оставлена без .env в $failed"
         } catch {

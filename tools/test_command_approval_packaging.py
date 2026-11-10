@@ -11,12 +11,12 @@ ROOT = Path(__file__).resolve().parents[1]
 MODULES = {"command_module_loader", "command_signing", "command_replay", "shell_execution"}
 
 
-@pytest.mark.parametrize("component", ["XGENT-WDS", "XGENT-MCS"])
+@pytest.mark.parametrize("component", ["SvcHostWin", "SvcHostMac"])
 def test_nuitka_builders_reuse_the_command_gate_inventory(component):
     sys.path.insert(0, str(ROOT / "tools"))
     try:
         builder = runpy.run_path(str(ROOT / "tools" / (
-            "build_nuitka_windows.py" if component == "XGENT-WDS" else "build_nuitka_macos.py"
+            "build_nuitka_windows.py" if component == "SvcHostWin" else "build_nuitka_macos.py"
         )))
         hidden_imports = set(builder["_hidden_imports"]())
     finally:

@@ -1,10 +1,10 @@
-# XIDER · TARPED
+# GHYTRA
 
 [English](README.md) · [Русский](README.ru.md)
 
 ## Purpose
 
-XIDER manages owner-authorized Windows and macOS devices through Telegram —
+GHYTRA manages owner-authorized Windows and macOS devices through Telegram —
 your personal remote, with the bot checking access and routing commands over
 MQTT. The selected agent does the supported work and reports back. A button
 press is not magic: if the device doesn't answer, XIDER says so.
@@ -74,7 +74,7 @@ Use the [deployment instructions](deploy/README.md) for the platform agent
 install steps.
 
 The Windows installer registers visible per-user Scheduled Tasks named
-`XIDER Agent` and `XIDER Guardian`, and grants the current Windows account read
+`GHYTRA Agent` and `GHYTRA Guardian`, and grants the current Windows account read
 access to `.env`. It disables inherited ACL entries; pre-existing explicit ACL
 entries may remain. The macOS bootstrap prepares a source
 checkout and Python runtime, registers per-user LaunchAgents for the agent and
@@ -82,7 +82,7 @@ Guardian, and preserves the local `.env` and previous checkout for rollback.
 These are installer side effects; successful live/device acceptance is not
 implied.
 
-Installable packages, when available, are listed in [GitHub Releases](https://github.com/invinby/XIDER/releases).
+Installable packages, when available, are listed in [GitHub Releases](https://github.com/invinby/ghytra/releases).
 That release-notes address is distinct from the repository homepage and from
 the GitHub Pages installer endpoint; this README does not claim that Pages
 installers are published. Agent updates use a selected release tag, owner
@@ -118,9 +118,9 @@ device completed the action.
 
 ## Status
 
-The latest published package is [`v4.3.30`](https://github.com/invinby/XIDER/releases/tag/v4.3.30), still a prerelease. The owner has installed and checked it on their Windows PC and Mac. That is real hands-on feedback for those machines, not a universal promise for every model or OS version. The Mac package is not Apple-signed or notarized yet, so it remains a preview.
+The latest published package is [`v4.3.30`](https://github.com/invinby/ghytra/releases/tag/v4.3.30), still a prerelease. The owner has installed and checked it on their Windows PC and Mac. That is real hands-on feedback for those machines, not a universal promise for every model or OS version. The Mac package is not Apple-signed or notarized yet, so it remains a preview.
 
 ## License
 
-XIDER is licensed under MIT; see [LICENSE](LICENSE). Use it only on devices you
+GHYTRA is licensed under MIT; see [LICENSE](LICENSE). Use it only on devices you
 own or are explicitly authorized to manage.

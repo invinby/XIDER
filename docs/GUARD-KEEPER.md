@@ -8,14 +8,14 @@ X-Guard Keeper — прозрачный supervisor агента. Он не ма�
 Пример для macOS/Linux:
 
 ```bash
-python3 ops/guard_keeper.py --log XGENT-MCS/guard-keeper.log -- \
-  python3 XGENT-MCS/xgent_mcs.py
+python3 ops/guard_keeper.py --log SvcHostMac/guard-keeper.log -- \
+  python3 SvcHostMac/svchost_mac.py
 ```
 
 Пример для Windows PowerShell:
 
 ```powershell
-py -3 ops\guard_keeper.py --log XGENT-WDS\guard-keeper.log -- py -3 XGENT-WDS\xgent_wds.py
+py -3 ops\guard_keeper.py --log SvcHostWin\guard-keeper.log -- py -3 SvcHostWin\svchost_win.py
 ```
 
 Остановка — `Ctrl+C` или штатный сигнал процесса. Установка в LaunchAgent или

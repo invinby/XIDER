@@ -41,7 +41,7 @@ def keyset(entries):
 @unittest.skipUnless(os.name == "posix" and os.geteuid() == 0, "requires POSIX root temporary fixture")
 class ProvisionTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="xider-command-key-test-")
+        self.tmp = tempfile.TemporaryDirectory(prefix="svchost-command-key-test-")
         self.addCleanup(self.tmp.cleanup)
         self.directory = Path(self.tmp.name)
         self.key = self.directory / "command-signing-private.pem"
@@ -99,7 +99,7 @@ class ProvisionTests(unittest.TestCase):
         self.assertNotIn(b"PRIVATE KEY", content)
         self.assertEqual(stat.S_IMODE(self.env.stat().st_mode), 0o640)
         self.assertEqual(self.env.read_text().split(f"{NAME}=")[1].strip(), keyset(public_entry(key)))
-        spec = importlib.util.spec_from_file_location("test_agent_key_contract", ROOT / "XGENT-MCS/command_signing.py")
+        spec = importlib.util.spec_from_file_location("test_agent_key_contract", ROOT / "SvcHostMac/command_signing.py")
         verifier = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(verifier)
         with unittest.mock.patch.dict(os.environ, {NAME: keyset(public_entry(key))}):

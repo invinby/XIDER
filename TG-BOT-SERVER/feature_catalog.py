@@ -458,6 +458,7 @@ def visible_navigation_pages(
                 "terminal_shell_runbook_templates",
                 "terminal_shell_metadata_export",
                 "clock_drift",
+                "ddos",
                 "system_summary_history",
                 "system_summary_comparison",
                 "system_summary_export",

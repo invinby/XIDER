@@ -13,7 +13,7 @@ def test_successful_build_removes_only_its_staging_tree_and_keeps_outputs(tmp_pa
     output.mkdir(parents=True)
     unrelated = output / "owner-note.txt"
     unrelated.write_text("keep", encoding="utf-8")
-    legacy = output / "xgent_wds.build"
+    legacy = output / "svchost_win.build"
     legacy.mkdir()
     (legacy / "generated.c").write_text("generated", encoding="utf-8")
     unknown = output / "guardian"
@@ -43,7 +43,7 @@ def test_successful_build_removes_only_its_staging_tree_and_keeps_outputs(tmp_pa
 
 def test_legacy_intermediate_with_diagnostics_or_env_is_preserved(tmp_path, monkeypatch):
     output = tmp_path / "dist" / "nuitka"
-    legacy = output / "xgent_wds.build"
+    legacy = output / "svchost_win.build"
     legacy.mkdir(parents=True)
     diagnostic = legacy / "nuitka-crash-report.xml"
     diagnostic.write_text("diagnostic", encoding="utf-8")

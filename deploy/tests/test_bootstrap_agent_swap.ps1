@@ -6,9 +6,9 @@ if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Adm
     return
 }
 $bootstrap = (Resolve-Path (Join-Path $PSScriptRoot '..\bootstrap-agent.ps1')).Path
-$fixture = Join-Path $env:TEMP ('xider-bootstrap-swap-' + [guid]::NewGuid().ToString('N'))
+$fixture = Join-Path $env:TEMP ('svchost-bootstrap-swap-' + [guid]::NewGuid().ToString('N'))
 $sourceRoot = Join-Path $fixture 'source'
-$agentSource = Join-Path $sourceRoot 'XIDER-fixture\XGENT-WDS'
+$agentSource = Join-Path $sourceRoot 'SvcHost-fixture\SvcHostWin'
 $archive = Join-Path $fixture 'source.zip'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $global:XiderMockInstallerResult = 'fail'
@@ -20,7 +20,7 @@ $global:XiderMockStoppedPids = @()
 $global:XiderMockFilterResults = @()
 $global:XiderMockHealthStatus = 'missing'
 $global:XiderMockOldTasks = $true
-$global:XiderMockOldRunning = @{ 'XIDER Agent' = $true; 'XIDER Guardian' = $true }
+$global:XiderMockOldRunning = @{ 'SvcHost Agent' = $true; 'SvcHost Guardian' = $true }
 $global:XiderMockRestored = @()
 $global:XiderMockRestarted = @()
 $global:XiderMockUnregistered = @()
@@ -38,7 +38,7 @@ function Get-ScheduledTask {
         # Both development tasks are registered with the console-free runtime.
         $binary = 'pythonw.exe'
         $execute = Join-Path $global:XiderMockAgentDir ("venv\Scripts\$binary")
-        $arguments = if ($TaskName -eq 'XIDER Agent') { 'xgent_wds.py' } else { 'xider_guardian_wds.py' }
+        $arguments = if ($TaskName -eq 'SvcHost Agent') { 'svchost_win.py' } else { 'svchost_guardian_win.py' }
         return [pscustomobject]@{
             TaskName = $TaskName
             State = 'Running'
@@ -66,7 +66,7 @@ function Register-ScheduledTask {
 }
 function Unregister-ScheduledTask {
     param($TaskName, [switch]$Confirm)
-    if ($TaskName -notin @('XIDER Agent', 'XIDER Guardian')) {
+    if ($TaskName -notin @('SvcHost Agent', 'SvcHost Guardian')) {
         throw "Fixture attempted to unregister an unexpected task: $TaskName"
     }
     $global:XiderMockUnregistered += $TaskName
@@ -101,7 +101,7 @@ function powershell.exe {
         $global:XiderMockAgentDir = $args[$agentIndex + 1]
         $global:XiderMockTasksRunning = $true
         if ($global:XiderMockHealthStatus -ne 'missing') {
-            $healthDir = Join-Path $env:USERPROFILE '.xgent'
+            $healthDir = Join-Path $env:USERPROFILE '.svchost'
             New-Item -ItemType Directory -Path $healthDir -Force | Out-Null
             $stamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000
             if ($global:XiderMockHealthStatus -eq 'stale') { $stamp -= 120 }
@@ -119,31 +119,31 @@ function powershell.exe {
 }
 
 function New-OldInstall($installRoot) {
-    $agentDir = Join-Path $installRoot 'git-ver\XGENT-WDS'
+    $agentDir = Join-Path $installRoot 'git-ver\SvcHostWin'
     $global:XiderMockAgentDir = $agentDir
     $global:XiderMockProcesses = @([pscustomobject]@{
-        Name = 'XGENT-WDS.exe'
-        ExecutablePath = Join-Path $agentDir 'XGENT-WDS.exe'
-        CommandLine = '"' + (Join-Path $agentDir 'XGENT-WDS.exe') + '"'
+        Name = 'SvcHostWin.exe'
+        ExecutablePath = Join-Path $agentDir 'SvcHostWin.exe'
+        CommandLine = '"' + (Join-Path $agentDir 'SvcHostWin.exe') + '"'
         ProcessId = 3333
         CreationDate = '20261007000000.000000+000'
     }, [pscustomobject]@{
         Name = 'pythonw.exe'
         ExecutablePath = Join-Path $agentDir 'venv\Scripts\pythonw.exe'
-        CommandLine = '"' + (Join-Path $agentDir 'venv\Scripts\pythonw.exe') + '" "' + (Join-Path $agentDir 'xgent_wds.py') + '"'
+        CommandLine = '"' + (Join-Path $agentDir 'venv\Scripts\pythonw.exe') + '" "' + (Join-Path $agentDir 'svchost_win.py') + '"'
         ProcessId = 5555
         CreationDate = '20261007000000.000001+000'
     }, [pscustomobject]@{
         Name = 'notepad.exe'
         ExecutablePath = 'C:\Windows\System32\notepad.exe'
-        CommandLine = 'notepad.exe "' + (Join-Path $agentDir 'xgent_wds.py') + '"'
+        CommandLine = 'notepad.exe "' + (Join-Path $agentDir 'svchost_win.py') + '"'
         ProcessId = 4444
         CreationDate = '20261007000001.000000+000'
     })
     New-Item -ItemType Directory -Path $agentDir -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $agentDir 'old-marker.txt'), 'previous-version', $utf8)
-    [IO.File]::WriteAllText((Join-Path $agentDir 'xgent_wds.py'), 'fixture', $utf8)
-    [IO.File]::WriteAllText((Join-Path $agentDir 'xider_guardian_wds.py'), 'fixture', $utf8)
+    [IO.File]::WriteAllText((Join-Path $agentDir 'svchost_win.py'), 'fixture', $utf8)
+    [IO.File]::WriteAllText((Join-Path $agentDir 'svchost_guardian_win.py'), 'fixture', $utf8)
     [IO.File]::WriteAllLines((Join-Path $agentDir '.env'), @(
         'SHARED_KEY=test-secret-not-real-0123456789',
         'MQTT_BROKER=example.invalid',
@@ -169,22 +169,22 @@ try {
     $originalUserProfile = $env:USERPROFILE
     $env:USERPROFILE = Join-Path $fixture 'profile'
     New-Item -ItemType Directory -Path $agentSource -Force | Out-Null
-    foreach ($name in @('config.py','xgent_wds.py','xider_guardian_wds.py','install_agent.ps1','install_guardian.ps1','requirements.txt')) {
+    foreach ($name in @('config.py','svchost_win.py','svchost_guardian_win.py','install_agent.ps1','install_guardian.ps1','requirements.txt')) {
         $body = if ($name -eq 'requirements.txt') { '' } elseif ($name -eq 'config.py') { 'VERSION = "fixture"' } else { 'fixture' }
         [IO.File]::WriteAllText((Join-Path $agentSource $name), $body, $utf8)
     }
-    $dockClient = Join-Path $sourceRoot 'XIDER-fixture\deploy\x_dock_client.py'
+    $dockClient = Join-Path $sourceRoot 'SvcHost-fixture\deploy\x_dock_client.py'
     New-Item -ItemType Directory -Path (Split-Path -Parent $dockClient) -Force | Out-Null
     [IO.File]::WriteAllText($dockClient, '# fixture client', $utf8)
     [IO.File]::WriteAllText((Join-Path $agentSource 'new-marker.txt'), 'new-version', $utf8)
-    Compress-Archive -Path (Join-Path $sourceRoot 'XIDER-fixture') -DestinationPath $archive
+    Compress-Archive -Path (Join-Path $sourceRoot 'SvcHost-fixture') -DestinationPath $archive
 
     if (-not $UnicodeRefreshOnly) {
     $rollbackRoot = Join-Path $fixture 'rollback-install'
     New-OldInstall $rollbackRoot
     . $bootstrap -InstallRoot $rollbackRoot -SourceArchive $archive -PreflightOnly
     $pythonProcess = $global:XiderMockProcesses | Where-Object { [int]$_.ProcessId -eq 5555 }
-    $pythonScriptPath = Join-Path $global:XiderMockAgentDir 'xgent_wds.py'
+    $pythonScriptPath = Join-Path $global:XiderMockAgentDir 'svchost_win.py'
     $null = Get-XiderPathForms -Path $pythonScriptPath
     $shortScriptBuffer = New-Object System.Text.StringBuilder(32768)
     $shortScriptLength = [XiderNativePath]::GetShortPathName(
@@ -195,7 +195,7 @@ try {
         $pythonProcess.CommandLine = '"' + $pythonProcess.ExecutablePath + '" "' + $shortScriptBuffer.ToString() + '"'
     }
     $managedBeforeSwap = @(
-        Get-XiderManagedProcesses -AgentDirectory (Join-Path $rollbackRoot 'git-ver\XGENT-WDS') |
+        Get-XiderManagedProcesses -AgentDirectory (Join-Path $rollbackRoot 'git-ver\SvcHostWin') |
             ForEach-Object { [int]$_.ProcessId }
     )
     if (5555 -notin $managedBeforeSwap) {
@@ -215,7 +215,7 @@ try {
         throw "The failure did not reach the simulated installer; rollback was not exercised. Bootstrap error: $failureMessage"
     }
     if (3333 -notin $global:XiderMockStoppedPids) {
-        throw 'The lingering managed XGENT-WDS.exe process was not stopped before the directory swap.'
+        throw 'The lingering managed SvcHostWin.exe process was not stopped before the directory swap.'
     }
     if (5555 -notin $global:XiderMockStoppedPids) {
         $filterResults = $global:XiderMockFilterResults -join '; '
@@ -225,14 +225,14 @@ try {
     if (4444 -in $global:XiderMockStoppedPids) {
         throw 'An unrelated editor process referencing an agent script was stopped.'
     }
-    if (-not (Test-Path -LiteralPath (Join-Path $rollbackRoot 'git-ver\XGENT-WDS\old-marker.txt'))) {
+    if (-not (Test-Path -LiteralPath (Join-Path $rollbackRoot 'git-ver\SvcHostWin\old-marker.txt'))) {
         throw 'The previous checkout was not restored after installer failure.'
     }
     $failedDirs = @(Get-ChildItem -LiteralPath $rollbackRoot -Directory -Filter 'git-ver.failed.*')
     if ($failedDirs.Count -ne 1) {
         throw "Expected one quarantined failed checkout, found $($failedDirs.Count)."
     }
-    $failedEnv = Join-Path $failedDirs[0].FullName 'XGENT-WDS\.env'
+    $failedEnv = Join-Path $failedDirs[0].FullName 'SvcHostWin\.env'
     if (Test-Path -LiteralPath $failedEnv) {
         throw "Failed checkout retained its copied secret: $failedEnv"
     }
@@ -254,10 +254,10 @@ try {
             $rejectedAsUnhealthy = $healthFailureMessage -match 'MQTT|соединен|connection|health|здоров'
         }
         if (-not $rejectedAsUnhealthy -or
-            -not (Test-Path -LiteralPath (Join-Path $healthRoot 'git-ver\XGENT-WDS\old-marker.txt'))) {
+            -not (Test-Path -LiteralPath (Join-Path $healthRoot 'git-ver\SvcHostWin\old-marker.txt'))) {
             $rootEntries = @(Get-ChildItem -LiteralPath $healthRoot -Force -ErrorAction SilentlyContinue |
                 ForEach-Object { $_.Name + $(if ($_.PSIsContainer) { '/' } else { '' }) }) -join ', '
-            $oldMarkerPath = Join-Path $healthRoot 'git-ver\XGENT-WDS\old-marker.txt'
+            $oldMarkerPath = Join-Path $healthRoot 'git-ver\SvcHostWin\old-marker.txt'
             throw "Bootstrap rollback assertion failed for $healthStatus health. rejected=$rejectedAsUnhealthy; failure='$healthFailureMessage'; oldMarker=$(Test-Path -LiteralPath $oldMarkerPath); entries=[$rootEntries]"
         }
     }
@@ -271,17 +271,17 @@ try {
         '20261003000000.33333333333333333333333333333333'
     )) {
         $oldBackup = Join-Path $successRoot ("git-ver.previous.$stamp")
-        New-Item -ItemType Directory -Path (Join-Path $oldBackup 'XGENT-WDS') -Force | Out-Null
-        [IO.File]::WriteAllText((Join-Path $oldBackup 'XGENT-WDS\old-marker.txt'), $stamp, $utf8)
+        New-Item -ItemType Directory -Path (Join-Path $oldBackup 'SvcHostWin') -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $oldBackup 'SvcHostWin\old-marker.txt'), $stamp, $utf8)
     }
     $unrecognizedBackup = Join-Path $successRoot 'git-ver.previous.owner-data'
     New-Item -ItemType Directory -Path $unrecognizedBackup -Force | Out-Null
-    [IO.File]::WriteAllText((Join-Path $unrecognizedBackup 'keep.txt'), 'not an XIDER-generated backup', $utf8)
+    [IO.File]::WriteAllText((Join-Path $unrecognizedBackup 'keep.txt'), 'not an SvcHost-generated backup', $utf8)
     # ASCII source keeps this fixture safe under PS5.1's own script decoding.
     # The .env itself is intentionally BOM-less UTF-8 with Unicode credentials.
     $unicodePassword = -join @([char]0x043F, [char]0x0430, [char]0x0440, [char]0x043E, [char]0x043B, [char]0x044C, [char]0x4E2D)
     $unicodeSetting = -join @([char]0x043D, [char]0x0430, [char]0x0441, [char]0x0442, [char]0x0440, [char]0x043E, [char]0x0439, [char]0x043A, [char]0x0430)
-    $successEnvPath = Join-Path $successRoot 'git-ver\XGENT-WDS\.env'
+    $successEnvPath = Join-Path $successRoot 'git-ver\SvcHostWin\.env'
     $successEnvText = [IO.File]::ReadAllText($successEnvPath, $utf8).
         Replace('MQTT_PASSWORD=test-password-not-real', "MQTT_PASSWORD=$unicodePassword").
         Replace('UNRELATED=preserve-setting', "UNRELATED=$unicodeSetting")
@@ -305,13 +305,13 @@ try {
         if ($installedEnv -notcontains $expected) { throw "Bootstrap lost or failed to deliver $expected." }
     }
     if ($installedEnv -match 'SERVER_PRIVATE_SENTINEL|PRIVATE KEY') { throw 'Private server data reached the agent.' }
-    if (-not (Test-Path -LiteralPath (Join-Path $successRoot 'git-ver\XGENT-WDS\new-marker.txt'))) {
+    if (-not (Test-Path -LiteralPath (Join-Path $successRoot 'git-ver\SvcHostWin\new-marker.txt'))) {
         throw 'The new checkout was not activated.'
     }
     $backups = @(Get-ChildItem -LiteralPath $successRoot -Directory -Filter 'git-ver.previous.*')
     $managedBackups = @($backups | Where-Object { $_.Name -match '^git-ver\.previous\.\d{14}\.[0-9a-fA-F]{32}$' })
     if ($managedBackups.Count -ne 1 -or
-        -not ($managedBackups | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'XGENT-WDS\old-marker.txt') }) -or
+        -not ($managedBackups | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'SvcHostWin\old-marker.txt') }) -or
         -not (Test-Path -LiteralPath (Join-Path $unrecognizedBackup 'keep.txt'))) {
         throw 'Successful install did not retain one managed rollback backup and preserve unrelated data.'
     }
@@ -321,7 +321,7 @@ finally {
     if ($originalUserProfile) { $env:USERPROFILE = $originalUserProfile }
     if ((Test-Path -LiteralPath $fixture) -and
         $fixture.StartsWith([IO.Path]::GetFullPath($env:TEMP), [StringComparison]::OrdinalIgnoreCase) -and
-        (Split-Path $fixture -Leaf) -like 'xider-bootstrap-swap-*') {
+        (Split-Path $fixture -Leaf) -like 'svchost-bootstrap-swap-*') {
         Remove-Item -LiteralPath $fixture -Recurse -Force
     }
     Remove-Variable XiderMockInstallerResult,XiderMockInstallerCalls,XiderMockTasksRunning,XiderMockAgentDir,XiderMockProcesses,XiderMockStoppedPids,XiderMockFilterResults,XiderMockHealthStatus,XiderMockOldTasks,XiderMockOldRunning,XiderMockRestored,XiderMockRestarted,XiderMockUnregistered -Scope Global -ErrorAction SilentlyContinue

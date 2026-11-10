@@ -98,32 +98,32 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.release-state.outputs.tag }}
         run: |
-          $versionMatch = Select-String -Path XGENT-WDS/config.py -Pattern '^VERSION = "([0-9.]+)"$'
+          $versionMatch = Select-String -Path SvcHostWin/config.py -Pattern '^VERSION = "([0-9.]+)"$'
           $version = $versionMatch.Matches.Groups[1].Value
           if ("v$version" -ne $env:RELEASE_TAG) { throw "Source version $version does not match release tag $env:RELEASE_TAG." }
           python -m pip install --upgrade pip
-          python -m pip install -r XGENT-WDS/requirements.txt nuitka==4.3.1 pyobfus==0.11.1
+          python -m pip install -r SvcHostWin/requirements.txt nuitka==4.3.1 pyobfus==0.11.1
           python tools/build_nuitka_windows.py
-          Copy-Item XGENT-WDS/.env.example XGENT-WDS/dist/nuitka/.env.example
-          python tools/verify_command_approval_bundle.py --nuitka-executable XGENT-WDS/dist/nuitka/XGENT-WDS.exe
-          $expected = @('.env.example', 'XGENT-WDS.exe', 'XIDER-Guard-Keeper.exe', 'xider-obfuscation-report.json') | Sort-Object
-          $actual = @(Get-ChildItem XGENT-WDS/dist/nuitka -Force -File | ForEach-Object Name | Sort-Object)
+          Copy-Item SvcHostWin/.env.example SvcHostWin/dist/nuitka/.env.example
+          python tools/verify_command_approval_bundle.py --nuitka-executable SvcHostWin/dist/nuitka/SvcHostWin.exe
+          $expected = @('.env.example', 'SvcHostWin.exe', 'SvcHostGuard.exe', 'svchost-obfuscation-report.json') | Sort-Object
+          $actual = @(Get-ChildItem SvcHostWin/dist/nuitka -Force -File | ForEach-Object Name | Sort-Object)
           Write-Host "Compiled Windows package files: $($actual -join ', ')"
           if (Compare-Object $expected $actual) { throw "Unexpected compiled Windows package contents: $($actual -join ', ')" }
-          $package = Join-Path $env:RUNNER_TEMP 'XGENT-WDS-Windows.zip'
-          $packageFiles = @($expected | ForEach-Object { Join-Path 'XGENT-WDS/dist/nuitka' $_ })
+          $package = Join-Path $env:RUNNER_TEMP 'SvcHostWin-Windows.zip'
+          $packageFiles = @($expected | ForEach-Object { Join-Path 'SvcHostWin/dist/nuitka' $_ })
           Compress-Archive -LiteralPath $packageFiles -DestinationPath $package -Force
           python tools/verify_command_approval_bundle.py --public-only-zip $package
           New-Item -ItemType Directory -Path artifacts -Force | Out-Null
-          Copy-Item XGENT-WDS/dist/nuitka/XGENT-WDS.exe artifacts/
-          Copy-Item XGENT-WDS/dist/nuitka/XIDER-Guard-Keeper.exe artifacts/
-          Copy-Item XGENT-WDS/dist/nuitka/xider-obfuscation-report.json artifacts/
-          Copy-Item $package artifacts/XGENT-WDS-Windows.zip
+          Copy-Item SvcHostWin/dist/nuitka/SvcHostWin.exe artifacts/
+          Copy-Item SvcHostWin/dist/nuitka/SvcHostGuard.exe artifacts/
+          Copy-Item SvcHostWin/dist/nuitka/svchost-obfuscation-report.json artifacts/
+          Copy-Item $package artifacts/SvcHostWin-Windows.zip
 
       - name: Upload compiled Windows package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: XIDER-Windows-Release
+          name: SvcHost-Windows-Release
           path: artifacts/*
 
   publish-windows:
@@ -131,7 +131,7 @@ jobs:
     if: needs.release-state.outputs.exists == 'false'
     runs-on: ubuntu-latest
     environment:
-      name: xider-release-signing
+      name: svchost-release-signing
     permissions:
       contents: write
     env:
@@ -154,7 +154,7 @@ jobs:
       - name: Download compiled Windows package
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: XIDER-Windows-Release
+          name: SvcHost-Windows-Release
           path: artifacts
 
       - name: Build and sign Windows-only release inventory
@@ -165,15 +165,15 @@ jobs:
           set -euo pipefail
           COMMIT=$(git rev-parse "${BUILD_SHA}^{commit}")
           mkdir -p artifacts
-          git archive --format=zip --prefix=XIDER-source/ "$COMMIT" > artifacts/XIDER-source.zip
-          git archive --format=zip --output=artifacts/X-STAB-server.zip "$COMMIT" TG-BOT-SERVER deploy XGENT-MCS/release_signature.py
-          git show "${COMMIT}:deploy/bootstrap-agent.ps1" > artifacts/XIDER-bootstrap-windows.ps1
-          git show "${COMMIT}:deploy/bootstrap.sh" > artifacts/XIDER-bootstrap-macos.sh
-          (cd artifacts && zip -q Guard-Keeper-Windows.zip XIDER-Guard-Keeper.exe xider-obfuscation-report.json)
+          git archive --format=zip --prefix=SvcHost-source/ "$COMMIT" > artifacts/SvcHost-source.zip
+          git archive --format=zip --output=artifacts/X-STAB-server.zip "$COMMIT" TG-BOT-SERVER deploy SvcHostMac/release_signature.py
+          git show "${COMMIT}:deploy/bootstrap-agent.ps1" > artifacts/SvcHost-bootstrap-windows.ps1
+          git show "${COMMIT}:deploy/bootstrap.sh" > artifacts/SvcHost-bootstrap-macos.sh
+          (cd artifacts && zip -q Guard-Keeper-Windows.zip SvcHostGuard.exe svchost-obfuscation-report.json)
           python tools/build_install_launchers.py "$COMMIT" "$TAG" artifacts --macos-source-preview
           python tools/sign_bootstrap.py "$TAG" "$COMMIT" artifacts
           python tools/sign_installers.py artifacts
-          python - "$COMMIT" "$TAG" artifacts/XIDER-QUICKSTART.txt <<'PY'
+          python - "$COMMIT" "$TAG" artifacts/SvcHost-QUICKSTART.txt <<'PY'
           import sys
           from pathlib import Path
           sys.path.insert(0, str(Path("tools").resolve()))
@@ -188,13 +188,13 @@ jobs:
               encoding="utf-8",
           )
           PY
-          python tools/build_release_manifest.py "$TAG" artifacts --platform windows --platform macos --platform linux --exclude-asset XGENT-MCS-macos-bundle.zip --exclude-asset Guard-Keeper-macOS.zip --require-signature
+          python tools/build_release_manifest.py "$TAG" artifacts --platform windows --platform macos --platform linux --exclude-asset SvcHostMac-macos-bundle.zip --exclude-asset Guard-Keeper-macOS.zip --require-signature
           python tools/build_protected_build_manifest.py artifacts --source-ref "$TAG" --source-commit "$COMMIT" --require-signature --allow-missing-platforms
           python - <<'PY'
           import json
           import sys
           from pathlib import Path
-          sys.path.insert(0, str(Path("XGENT-MCS").resolve()))
+          sys.path.insert(0, str(Path("SvcHostMac").resolve()))
           from release_signature import verify_manifest_signature
           verify_manifest_signature(json.loads(Path("artifacts/release-manifest.json").read_text(encoding="utf-8")))
           PY
@@ -212,21 +212,21 @@ jobs:
             macOS source preview uses the pinned XIDER source and Python runtime. Its bootstrap and installer are publisher-signed, but the runtime is not Apple-signed or notarized. This is not the full compiled macOS app release; Safari and Siri installation are reported as separate verified steps.
             The signed manifest pins the exact source commit used to build these assets.
           files: |
-            artifacts/XIDER-source.zip
+            artifacts/SvcHost-source.zip
             artifacts/X-STAB-server.zip
-            artifacts/XGENT-WDS.exe
-            artifacts/XIDER-Guard-Keeper.exe
+            artifacts/SvcHostWin.exe
+            artifacts/SvcHostGuard.exe
             artifacts/Guard-Keeper-Windows.zip
-            artifacts/XGENT-WDS-Windows.zip
-            artifacts/XIDER-bootstrap-windows.ps1
-            artifacts/XIDER-bootstrap-macos.sh
-            artifacts/XIDER-bootstrap-windows.ps1.sig
-            artifacts/XIDER-bootstrap-macos.sh.sig
-            artifacts/XIDER-install-windows.ps1
-            artifacts/XIDER-install-macos.sh
-            artifacts/XIDER-install-windows.ps1.sig
-            artifacts/XIDER-install-macos.sh.sig
-            artifacts/XIDER-QUICKSTART.txt
+            artifacts/SvcHostWin-Windows.zip
+            artifacts/SvcHost-bootstrap-windows.ps1
+            artifacts/SvcHost-bootstrap-macos.sh
+            artifacts/SvcHost-bootstrap-windows.ps1.sig
+            artifacts/SvcHost-bootstrap-macos.sh.sig
+            artifacts/SvcHost-install-windows.ps1
+            artifacts/SvcHost-install-macos.sh
+            artifacts/SvcHost-install-windows.ps1.sig
+            artifacts/SvcHost-install-macos.sh.sig
+            artifacts/SvcHost-QUICKSTART.txt
             artifacts/release-manifest.json
             artifacts/protected-build-manifest.json
 

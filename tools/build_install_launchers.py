@@ -22,10 +22,10 @@ from build_bootstrap_commands import (
 
 
 INSTALLERS = {
-    "windows": "XIDER-install-windows.ps1",
-    "macos": "XIDER-install-macos.sh",
+    "windows": "SvcHost-install-windows.ps1",
+    "macos": "SvcHost-install-macos.sh",
 }
-INSTALLER_NAMESPACE = "xider-installer@xider.link"
+INSTALLER_NAMESPACE = "svchost-installer@xider.link"
 DEFAULT_MACOS_INSTALLER_TAG = ""
 
 
@@ -44,7 +44,7 @@ def build_installers(
         INSTALLERS["windows"]: (
             "param([string]$LogPath)\n"
             "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'\n"
-            "if(-not $LogPath){$LogPath=Join-Path $env:TEMP ('xider-install-'+[guid]::NewGuid().ToString('N')+'.log')}\n"
+            "if(-not $LogPath){$LogPath=Join-Path $env:TEMP ('svchost-install-'+[guid]::NewGuid().ToString('N')+'.log')}\n"
             "New-Item -ItemType Directory -Path (Split-Path -Parent $LogPath) -Force | Out-Null\n"
             "Start-Transcript -Path $LogPath -Force | Out-Null\n"
             "try {\n"
@@ -112,7 +112,7 @@ def build_pages_launchers() -> dict[str, str]:
         f"curl -fsSL --max-time 90 \"$base/{INSTALLERS['macos']}.sig\" -o \"$s\"\n"
         f"printf '%s' '{allowed_b64}' | base64 -D > \"$a\"\n"
         "h=\"$(shasum -a 256 \"$p\" | awk '{print $1}')\"\n"
-        "printf 'XIDER-INSTALLER-SHA256\\nmacos\\n%s\\n' \"$h\" | "
+        "printf 'SvcHost-INSTALLER-SHA256\\nmacos\\n%s\\n' \"$h\" | "
         f"ssh-keygen -Y verify -f \"$a\" -I {SIGNER_IDENTITY} -n {INSTALLER_NAMESPACE} -s \"$s\"\n"
         "bash \"$p\"\n"
     )
@@ -120,7 +120,7 @@ def build_pages_launchers() -> dict[str, str]:
         "$ErrorActionPreference='Stop'\n"
         "$ProgressPreference='SilentlyContinue'\n"
         "function Get-XiderSha256Hex { param([Parameter(Mandatory)][string]$Path); $stream=[IO.File]::OpenRead($Path); $algorithm=[Security.Cryptography.SHA256]::Create(); try { [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-','').ToLowerInvariant() } finally { $stream.Dispose(); $algorithm.Dispose() } }\n"
-        "$d=Join-Path $env:TEMP ('xider-launch-'+[guid]::NewGuid().ToString('N'))\n"
+        "$d=Join-Path $env:TEMP ('svchost-launch-'+[guid]::NewGuid().ToString('N'))\n"
         "New-Item -ItemType Directory -Path $d|Out-Null\ntry {\n"
         "  $p=Join-Path $d 'install.ps1'; $s=Join-Path $d 'install.sig'; $a=Join-Path $d 'allowed_signers'; $m=Join-Path $d 'message'; $manifestPath=Join-Path $d 'release-manifest.json'\n"
         "  Write-Host 'XIDER: checking the release and signature verifier...'\n"
@@ -129,7 +129,7 @@ def build_pages_launchers() -> dict[str, str]:
         "  $tag=$env:XIDER_INSTALL_TAG\n"
         "  if($tag -and $tag -notmatch '^v\\d{1,6}\\.\\d{1,6}\\.\\d{1,6}$'){throw 'XIDER release tag is invalid.'}\n"
         f"  $installerBase='{windows_base}'\n"
-        "  $repo='" + REPOSITORY + "'; $apiRoot='https://api.github.com/repos/'+$repo; $headers=@{Accept='application/vnd.github+json';'User-Agent'='XIDER-Windows-Installer'}\n"
+        "  $repo='" + REPOSITORY + "'; $apiRoot='https://api.github.com/repos/'+$repo; $headers=@{Accept='application/vnd.github+json';'User-Agent'='SvcHost-Windows-Installer'}\n"
         "  if(-not $tag -and $installerBase -match '/releases/download/(v\\d+\\.\\d+\\.\\d+)$'){$tag=$Matches[1]}\n"
         "  if(-not $tag){$release=Invoke-RestMethod -UseBasicParsing -TimeoutSec 30 -Headers $headers -Uri ($apiRoot+'/releases/latest'); $tag=[string]$release.tag_name}\n"
         "  if($tag -notmatch '^v\\d{1,6}\\.\\d{1,6}\\.\\d{1,6}$'){throw 'GitHub returned an invalid XIDER release tag.'}\n"
@@ -142,7 +142,7 @@ def build_pages_launchers() -> dict[str, str]:
         "  if($sshCommand){\n"
         f"    Invoke-WebRequest -UseBasicParsing -TimeoutSec 90 -Uri \"$installerBase/{INSTALLERS['windows']}.sig\" -OutFile $s\n"
         f"    [IO.File]::WriteAllBytes($a,[Convert]::FromBase64String('{allowed_b64}'))\n"
-        "    [IO.File]::WriteAllBytes($m,[Text.Encoding]::ASCII.GetBytes(\"XIDER-INSTALLER-SHA256`nwindows`n\"+$hash+\"`n\"))\n"
+        "    [IO.File]::WriteAllBytes($m,[Text.Encoding]::ASCII.GetBytes(\"SvcHost-INSTALLER-SHA256`nwindows`n\"+$hash+\"`n\"))\n"
         "    $ssh=$sshCommand.Source; $c=Join-Path $d 'verify.cmd'\n"
         f"    $verify='@echo off'+[Environment]::NewLine+'pushd \"%~dp0\"'+[Environment]::NewLine+'\"'+$ssh+'\" -Y verify -f \"allowed_signers\" -I {SIGNER_IDENTITY} -n {INSTALLER_NAMESPACE} -s \"install.sig\" < \"message\"'+[Environment]::NewLine+'exit /b %errorlevel%'\n"
         "    [IO.File]::WriteAllText($c,$verify,[Text.Encoding]::ASCII)\n"
@@ -151,12 +151,12 @@ def build_pages_launchers() -> dict[str, str]:
         "    Write-Host 'XIDER: release signature verified.'\n"
         "  } else {\n"
         "    Write-Host 'XIDER: OpenSSH is absent; using GitHub HTTPS metadata and release-manifest SHA-256 checks (detached signature is not verified).' -ForegroundColor Yellow\n"
-        "    $manifestAsset=@($release.assets | Where-Object { $_.name -ceq 'release-manifest.json' }); $installerAsset=@($release.assets | Where-Object { $_.name -ceq 'XIDER-install-windows.ps1' })\n"
+        "    $manifestAsset=@($release.assets | Where-Object { $_.name -ceq 'release-manifest.json' }); $installerAsset=@($release.assets | Where-Object { $_.name -ceq 'SvcHost-install-windows.ps1' })\n"
         "    if($manifestAsset.Count -ne 1 -or $installerAsset.Count -ne 1 -or $manifestAsset[0].digest -notmatch '^sha256:[0-9a-fA-F]{64}$' -or $installerAsset[0].digest -notmatch '^sha256:[0-9a-fA-F]{64}$'){throw 'GitHub release metadata has no unique SHA-256 digest for the installer and manifest.'}\n"
         "    Invoke-WebRequest -UseBasicParsing -TimeoutSec 90 -Uri ($installerBase+'/release-manifest.json') -OutFile $manifestPath\n"
         "    $manifestHash=Get-XiderSha256Hex -Path $manifestPath; $expectedManifestHash=([string]$manifestAsset[0].digest).Substring(7).ToLowerInvariant(); if($manifestHash -cne $expectedManifestHash){throw ('Release manifest SHA-256 mismatch (actual '+$manifestHash+', expected '+$expectedManifestHash+').')}\n"
         "    $manifest=Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json; if($manifest.schema -ne 1 -or [string]$manifest.release -cne $tag -or -not $manifest.assets -or $manifest.signature.algorithm -cne 'ed25519' -or -not $manifest.signature.key_id -or -not $manifest.signature.value){throw 'Release manifest schema, signature envelope, or release tag is invalid.'}\n"
-        "    $entries=@($manifest.assets | Where-Object { $_.name -ceq 'XIDER-install-windows.ps1' -and $_.component -ceq 'installer' -and $_.platform -ceq 'windows' }); if($entries.Count -ne 1){throw 'Release manifest has no unique Windows installer entry.'}\n"
+        "    $entries=@($manifest.assets | Where-Object { $_.name -ceq 'SvcHost-install-windows.ps1' -and $_.component -ceq 'installer' -and $_.platform -ceq 'windows' }); if($entries.Count -ne 1){throw 'Release manifest has no unique Windows installer entry.'}\n"
         "    $actualSize=(Get-Item -LiteralPath $p).Length; $manifestDigest=([string]$entries[0].sha256).ToLowerInvariant(); $apiDigest=([string]$installerAsset[0].digest).Substring(7).ToLowerInvariant()\n"
         "    if($manifestDigest -notmatch '^[0-9a-f]{64}$' -or $hash -cne $manifestDigest -or $hash -cne $apiDigest -or [long]$entries[0].size -ne $actualSize -or [long]$installerAsset[0].size -ne $actualSize){throw 'Installer failed release-manifest or SHA-256 validation.'}\n"
         "  }\n"

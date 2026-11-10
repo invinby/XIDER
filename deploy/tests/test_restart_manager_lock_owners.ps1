@@ -18,7 +18,7 @@ if (-not $functionAst) {
 }
 . ([scriptblock]::Create($functionAst.Extent.Text))
 
-$fixture = Join-Path $env:TEMP ('xider-rm-fixture-' + [guid]::NewGuid().ToString('N'))
+$fixture = Join-Path $env:TEMP ('svchost-rm-fixture-' + [guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $fixture
 $file = Join-Path $fixture 'held-open.bin'
 $holderScript = Join-Path $fixture 'hold-open.ps1'

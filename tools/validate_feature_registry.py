@@ -338,6 +338,7 @@ def _validate_navigation(rows: Any, errors: list[str]) -> None:
             "terminal_shell_metadata_export",
             "terminal_shell_runbook",
             "clock_drift",
+            "ddos",
             "network_jitter",
             "network_throughput",
                 "system_summary_history",

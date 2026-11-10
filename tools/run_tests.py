@@ -16,21 +16,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TEST_ENV = {
-    "SHARED_KEY": "xider-test-only-shared-key-0123456789",
+    "SHARED_KEY": "svchost-test-only-shared-key-0123456789",
     "BOT_TOKEN": "123456:TEST-TOKEN-NOT-REAL",
     "ADMIN_ID": "0",
     "MQTT_BROKER": "localhost",
     "MQTT_PORT": "8883",
     "MQTT_PREFIX": "xgent/test",
     "MQTT_TLS": "true",
-    "MQTT_USERNAME": "xider-test-user",
-    "MQTT_PASSWORD": "xider-test-password-not-real",
+    "MQTT_USERNAME": "svchost-test-user",
+    "MQTT_PASSWORD": "svchost-test-password-not-real",
     "ENCRYPT_PAYLOAD": "false",
 }
 SUITES = (
     ("Telegram bot", ROOT / "TG-BOT-SERVER", "tests"),
-    ("Windows agent", ROOT / "XGENT-WDS", "tests"),
-    ("macOS agent", ROOT / "XGENT-MCS", "tests"),
+    ("Windows agent", ROOT / "SvcHostWin", "tests"),
+    ("macOS agent", ROOT / "SvcHostMac", "tests"),
     ("Operations", ROOT, "ops/tests"),
     ("Release tools", ROOT / "tools", "."),
     ("Deployment archive and server signatures", ROOT / "deploy", "tests"),

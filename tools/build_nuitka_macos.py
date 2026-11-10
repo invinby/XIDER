@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
 from tools.obfuscation_build import REPORT_NAME, obfuscate_tree
 
 
-MCS = ROOT / "XGENT-MCS"
+MCS = ROOT / "SvcHostMac"
 OUTPUT = MCS / "dist" / "nuitka"
 BUILD_ROOT = MCS / "build" / "nuitka-macos"
 VERSION_FILE = MCS / "config.py"
@@ -55,12 +55,12 @@ def _version() -> str:
             value = ast.literal_eval(node.value)
             if isinstance(value, str) and value.count(".") == 2 and all(part.isdigit() for part in value.split(".")):
                 return value
-    raise ValueError("Could not read a numeric XGENT-MCS VERSION from config.py")
+    raise ValueError("Could not read a numeric SvcHostMac VERSION from config.py")
 
 
 def _hidden_imports() -> tuple[str, ...]:
     """Reuse the explicit dynamic-import inventory from the existing spec."""
-    tree = ast.parse((MCS / "XGENT-MCS.spec").read_text(encoding="utf-8"))
+    tree = ast.parse((MCS / "SvcHostMac.spec").read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -72,9 +72,9 @@ def _hidden_imports() -> tuple[str, ...]:
             continue
         value = ast.literal_eval(keyword.value)
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-            raise ValueError("XGENT-MCS.spec hiddenimports must remain a literal string list")
+            raise ValueError("SvcHostMac.spec hiddenimports must remain a literal string list")
         return tuple(dict.fromkeys((*value, "command_approval_bundle_smoke")))
-    raise ValueError("Could not find Analysis(hiddenimports=...) in XGENT-MCS.spec")
+    raise ValueError("Could not find Analysis(hiddenimports=...) in SvcHostMac.spec")
 
 
 def _command(
@@ -226,33 +226,33 @@ def main() -> int:
     report_path = obfuscation_root / REPORT_NAME
     report = obfuscate_tree(MCS, obfuscated_mcs, report_path, platform="macos")
     report["components"] = [
-        {"id": "macos_agent", "state": "applied", "source_tree": "XGENT-MCS"},
-        {"id": "macos_guard_keeper", "state": "applied", "source_tree": "XGENT-MCS"},
-        {"id": "safari", "state": "applied", "source_tree": "XGENT-MCS"},
-        {"id": "siri", "state": "applied", "source_tree": "XGENT-MCS"},
+        {"id": "macos_agent", "state": "applied", "source_tree": "SvcHostMac"},
+        {"id": "macos_guard_keeper", "state": "applied", "source_tree": "SvcHostMac"},
+        {"id": "safari", "state": "applied", "source_tree": "SvcHostMac"},
+        {"id": "siri", "state": "applied", "source_tree": "SvcHostMac"},
     ]
     report["unobfuscated_first_party_scope"] = (
         "Build-only helper modules loaded from tools and third-party dependencies are not counted as obfuscated."
     )
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     agent, executable = _build(
-        obfuscated_mcs / "xgent_mcs.py", "XGENT-MCS", "XIDER", "com.xider.agent", version=version,
+        obfuscated_mcs / "svchost_mac.py", "SvcHostMac", "XIDER", "com.svchost.agent", version=version,
         modules=_hidden_imports(), resources=AGENT_RESOURCES,
         signing_identity=identity,
         entitlements=MCS / "location.entitlements",
     )
     guardian, _ = _build(
-        obfuscated_mcs / "xider_guardian.py", "XIDER-Guard-Keeper", "XIDER-Guard-Keeper", "com.xider.guardian",
+        obfuscated_mcs / "svchost_guardian.py", "SvcHostGuard", "SvcHostGuard", "com.svchost.guardian",
         version=version, signing_identity=identity,
     )
     layers, _ = _build(
-        obfuscated_mcs / "xider_layers.py", "XIDER-Layers", "XIDER-Layers", "com.xider.layers",
+        obfuscated_mcs / "svchost_layers.py", "SvcHostLayers", "SvcHostLayers", "com.svchost.layers",
         version=version, signing_identity=identity,
     )
     destinations = (
-        (agent, OUTPUT / "XIDER.app"),
-        (guardian, OUTPUT / "XIDER-Guard-Keeper.app"),
-        (layers, OUTPUT / "XIDER-Layers.app"),
+        (agent, OUTPUT / "SvcHost.app"),
+        (guardian, OUTPUT / "SvcHostGuard.app"),
+        (layers, OUTPUT / "SvcHostLayers.app"),
     )
     for source, destination in destinations:
         if destination.exists():
@@ -265,8 +265,8 @@ def main() -> int:
         print(f"Warning: successful obfuscation staging remains for cleanup: {obfuscation_root}")
     if identity:
         subprocess.run([sys.executable, str(ROOT / "tools" / "verify_macos_bundle.py"),
-                        str(OUTPUT / "XIDER.app")], cwd=ROOT, check=True)
-    _verify_agent_executable(OUTPUT / "XIDER.app" / "Contents" / "MacOS" / "XGENT-MCS")
+                        str(OUTPUT / "SvcHost.app")], cwd=ROOT, check=True)
+    _verify_agent_executable(OUTPUT / "SvcHost.app" / "Contents" / "MacOS" / "SvcHostMac")
     _assert_compiled_bundles_are_source_free(destinations)
     mode = "signed" if identity else "unsigned preview"
     print(f"Built {mode} Nuitka bundles under {OUTPUT}; unsigned previews are not distributable.")

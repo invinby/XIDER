@@ -78,7 +78,7 @@
 - [x] Test that pull requests do not deploy and unapproved refs cannot publish.
 - [x] Run `python -m pytest tools/test_pages_workflow.py -q`; expected: tests fail until guarded workflow exists.
 - [x] Add least-privilege, pinned-action workflow consistent with existing CI policy.
-- [x] Add `python -m compileall -q TG-BOT-SERVER XGENT-WDS XGENT-MCS ops tools deploy` to CI, alongside existing bash and Windows PowerShell syntax checks; exclude generated virtual environments and build outputs.
+- [x] Add `python -m compileall -q TG-BOT-SERVER SvcHostWin SvcHostMac ops tools deploy` to CI, alongside existing bash and Windows PowerShell syntax checks; exclude generated virtual environments and build outputs.
 - [x] Rerun workflow and site checks; expected: PR validation passes without live publication.
 - [x] Commit workflow. Do not deploy until separate owner confirmation.
 

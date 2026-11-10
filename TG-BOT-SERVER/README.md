@@ -26,7 +26,7 @@ python bot.py
 |---|---|
 | `BOT_TOKEN` | Токен бота от @BotFather |
 | `ADMIN_ID` | Telegram ID владельца; только владелец открывает админ-раздел и имеет полный доступ |
-| `SHARED_KEY` | Секрет HMAC-подписи — **должен совпадать** в XGENT-MCS и XGENT-WDS |
+| `SHARED_KEY` | Секрет HMAC-подписи — **должен совпадать** в SvcHostMac и SvcHostWin |
 | `MQTT_BROKER` / `MQTT_PORT` | Приватный брокер; порт TLS по умолчанию `8883` |
 | `MQTT_PREFIX` | Префикс топиков (xgent/v1) |
 | `MQTT_TLS` | Обязательно `true`; plaintext MQTT запрещён |

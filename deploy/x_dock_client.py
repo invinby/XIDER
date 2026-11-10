@@ -95,7 +95,7 @@ def _post_json(url: str, expected_host: str, payload: dict, *, timeout: float = 
 
 
 def _device_identity() -> tuple[str, str]:
-    config = Path.home() / ".xgent" / "config.json"
+    config = Path.home() / ".svchost" / "config.json"
     config.parent.mkdir(parents=True, exist_ok=True)
     try:
         data = json.loads(config.read_text(encoding="utf-8"))
@@ -136,7 +136,7 @@ def _write_env(path: Path, settings: dict) -> None:
             raise ValueError("X-DOCK returned an invalid configuration value")
     path.parent.mkdir(parents=True, exist_ok=True)
     content = "".join(f"{name}={settings[name]}\n" for name in sorted(settings))
-    fd, temporary_name = tempfile.mkstemp(prefix=".xider-env-", dir=path.parent)
+    fd, temporary_name = tempfile.mkstemp(prefix=".svchost-env-", dir=path.parent)
     try:
         if hasattr(os, "fchmod"):
             os.fchmod(fd, 0o600)

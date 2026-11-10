@@ -31,7 +31,7 @@ Generate the recovery pair on an owner-controlled computer, not on either
 VPS, and choose a new protected directory outside the repository checkout:
 
 ```sh
-python ops/x_vault.py keygen --directory /path/to/owner-only/xider-vault-key
+python ops/x_vault.py keygen --directory /path/to/owner-only/svchost-vault-key
 ```
 
 The command prints paths and a public-key fingerprint, never private-key
@@ -51,8 +51,8 @@ or passphrase there:
 python3 ops/x_vault.py backup \
   --source /opt/xider \
   --include-file /etc/xider/bot.env \
-  --include-file /etc/systemd/system/xider-bot.service \
-  --vault /var/backups/xider-vault \
+  --include-file /etc/systemd/system/svchost-bot.service \
+  --vault /var/backups/svchost-vault \
   --recipient-public-key /etc/xider/vault-recipient-public.pem
 ```
 
@@ -62,7 +62,7 @@ restore, use the private-key file on the owner-controlled computer:
 ```sh
 python ops/x_vault.py verify \
   --archive /path/to/xvault-....xvlt \
-  --private-key /path/to/owner-only/xider-vault-key/vault-recipient-private.pem
+  --private-key /path/to/owner-only/svchost-vault-key/vault-recipient-private.pem
 ```
 
 The archive is authenticated; a wrong key or modified bytes are rejected. The
@@ -106,8 +106,8 @@ Before setup, prepare these files out-of-band:
   exactly one `XIDER_VAULT_TARGET=xvault-upload@standby-host` and
   `XIDER_VAULT_REMOTE_DIR=/incoming` assignment.
 
-The setup entry points are `deploy/xider-vault-primary-setup.sh` on the
-primary and `deploy/xider-vault-standby-setup.sh /path/to/upload-key.pub` on
+The setup entry points are `deploy/svchost-vault-primary-setup.sh` on the
+primary and `deploy/svchost-vault-standby-setup.sh /path/to/upload-key.pub` on
 the standby. They install root-owned helpers and systemd timers, and the
 standby script validates the effective SSH policy before reloading sshd. They
 have not been run against either production VPS in this local preparation.
@@ -135,15 +135,15 @@ prefer recipient encryption so the decrypting secret is not on the source VPS.
 python3 ops/x_vault.py backup \
   --source /opt/xider \
   --include-file /etc/xider/bot.env \
-  --include-file /etc/systemd/system/xider-bot.service \
-  --vault /var/backups/xider-vault
+  --include-file /etc/systemd/system/svchost-bot.service \
+  --vault /var/backups/svchost-vault
 ```
 
 The output path is unique; it does not overwrite an earlier backup. Verify a
 saved archive with:
 
 ```sh
-python3 ops/x_vault.py verify --archive /var/backups/xider-vault/xvault-....xvlt
+python3 ops/x_vault.py verify --archive /var/backups/svchost-vault/xvault-....xvlt
 ```
 
 Verification checks the passphrase and authenticated archive contents; it does
@@ -160,8 +160,8 @@ Restore only into a new or empty staging directory:
 
 ```sh
 python3 ops/x_vault.py restore-stage \
-  --archive /var/backups/xider-vault/xvault-....xvlt \
-  --stage /tmp/xider-vault-restore-check
+  --archive /var/backups/svchost-vault/xvault-....xvlt \
+  --stage /tmp/svchost-vault-restore-check
 ```
 
 This command never writes over `/opt/xider`, `/etc/xider`, or a non-empty

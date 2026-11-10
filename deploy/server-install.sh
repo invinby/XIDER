@@ -67,18 +67,18 @@ python3 -m venv "${APP_DIR}/TG-BOT-SERVER/venv"
 "${APP_DIR}/TG-BOT-SERVER/venv/bin/python" -m pip install --upgrade pip
 "${APP_DIR}/TG-BOT-SERVER/venv/bin/pip" install --requirement "${APP_DIR}/TG-BOT-SERVER/requirements.txt"
 
-install -m 0644 "${APP_DIR}/deploy/xider-bot.service" /etc/systemd/system/xider-bot.service
-install -m 0755 "${APP_DIR}/deploy/xider-server-ops.sh" /usr/local/sbin/xider-server-ops
+install -m 0644 "${APP_DIR}/deploy/svchost-bot.service" /etc/systemd/system/svchost-bot.service
+install -m 0755 "${APP_DIR}/deploy/svchost-server-ops.sh" /usr/local/sbin/svchost-server-ops
 install -d -o root -g root -m 0750 /usr/local/libexec/xider
 install -o root -g root -m 0750 "${APP_DIR}/deploy/update-server.sh" /usr/local/libexec/xider/update-server.sh
 install -o root -g root -m 0640 "${APP_DIR}/deploy/safe_extract.py" /usr/local/libexec/xider/safe_extract.py
 install -o root -g root -m 0640 "${APP_DIR}/deploy/verify_server_bundle.py" /usr/local/libexec/xider/verify_server_bundle.py
-install -o root -g root -m 0640 "${APP_DIR}/XGENT-MCS/release_signature.py" /usr/local/libexec/xider/release_signature.py
-cat > /etc/sudoers.d/xider-server-ops <<EOF
-xider ALL=(root) NOPASSWD: /usr/local/sbin/xider-server-ops
+install -o root -g root -m 0640 "${APP_DIR}/SvcHostMac/release_signature.py" /usr/local/libexec/xider/release_signature.py
+cat > /etc/sudoers.d/svchost-server-ops <<EOF
+xider ALL=(root) NOPASSWD: /usr/local/sbin/svchost-server-ops
 EOF
-chmod 0440 /etc/sudoers.d/xider-server-ops
-visudo -cf /etc/sudoers.d/xider-server-ops
+chmod 0440 /etc/sudoers.d/svchost-server-ops
+visudo -cf /etc/sudoers.d/svchost-server-ops
 chown -R xider:xider "${APP_DIR}"
 install -d -o root -g xider -m 0750 "${APP_DIR}/incoming"
 chown root:xider "${ENV_FILE}"
@@ -88,6 +88,6 @@ chmod 0640 "${ENV_FILE}"
 "${APP_DIR}/TG-BOT-SERVER/venv/bin/python" "${APP_DIR}/deploy/provision_command_signing_key.py" --env-file "${ENV_FILE}"
 
 systemctl daemon-reload
-systemctl enable xider-bot.service
-systemctl restart xider-bot.service
-systemctl --no-pager --full status xider-bot.service --lines=20
+systemctl enable svchost-bot.service
+systemctl restart svchost-bot.service
+systemctl --no-pager --full status svchost-bot.service --lines=20

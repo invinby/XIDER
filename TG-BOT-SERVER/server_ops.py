@@ -19,8 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-SERVICE = "xider-bot.service"
-CONTROL = Path(os.environ.get("XIDER_SERVER_OPS", "/usr/local/sbin/xider-server-ops"))
+SERVICE = "svchost-bot.service"
+CONTROL = Path(os.environ.get("XIDER_SERVER_OPS", "/usr/local/sbin/svchost-server-ops"))
 HISTORY_FILE = Path(os.environ.get(
     "XIDER_METRICS_FILE",
     str(Path(__file__).resolve().parent / ".server_metrics.json"),

@@ -67,7 +67,7 @@ def check_readme_pair(english: str, russian: str) -> list[str]:
         "Windows and macOS support": (r"Windows.{0,40}macOS|macOS.{0,40}Windows", r"Windows.{0,40}macOS|macOS.{0,40}Windows"),
         "Telegram interface": (r"Telegram", r"Telegram"),
         "MQTT transport": (r"MQTT", r"MQTT"),
-        "bot and both agents": (r"TG-BOT-SERVER.{0,120}XGENT-WDS.{0,80}XGENT-MCS|TG-BOT-SERVER.{0,120}XGENT-MCS.{0,80}XGENT-WDS", r"TG-BOT-SERVER.{0,120}XGENT-WDS.{0,80}XGENT-MCS|TG-BOT-SERVER.{0,120}XGENT-MCS.{0,80}XGENT-WDS"),
+        "bot and both agents": (r"TG-BOT-SERVER.{0,120}SvcHostWin.{0,80}SvcHostMac|TG-BOT-SERVER.{0,120}SvcHostMac.{0,80}SvcHostWin", r"TG-BOT-SERVER.{0,120}SvcHostWin.{0,80}SvcHostMac|TG-BOT-SERVER.{0,120}SvcHostMac.{0,80}SvcHostWin"),
         "license": (r"MIT", r"MIT"),
         "canonical release notes": (r"https://github\.com/invinby/XIDER/releases", r"https://github\.com/invinby/XIDER/releases"),
         "supervisor limitation": (r"Guard Keeper.{0,120}(?:cannot|can't).{0,80}(?:offline|powered-off).{0,80}available", r"Guard Keeper.{0,120}не.{0,100}(?:без сети|выключен\w*).{0,80}доступн|Guard Keeper.{0,120}не.{0,100}доступн.{0,80}(?:без сети|выключен\w*)"),
@@ -164,7 +164,7 @@ The Windows installer creates visible per-user Scheduled Tasks named Agent and G
 IP-based location is approximate, not GPS.
 ## License
 ## Status
-XIDER 4.3.5 for Windows and macOS uses Telegram and MQTT. TG-BOT-SERVER, XGENT-WDS and XGENT-MCS. Guard Keeper cannot make an offline computer available. X-LEX changes wording, not permissions. Python 3.11 and Docker Compose are required. Signed updates support rollback. ENCRYPT_PAYLOAD encryption is conditional. Offline fixtures do not connect to Telegram, MQTT or a VPS. MIT. Release: https://github.com/invinby/XIDER/releases.
+XIDER 4.3.5 for Windows and macOS uses Telegram and MQTT. TG-BOT-SERVER, SvcHostWin and SvcHostMac. Guard Keeper cannot make an offline computer available. X-LEX changes wording, not permissions. Python 3.11 and Docker Compose are required. Signed updates support rollback. ENCRYPT_PAYLOAD encryption is conditional. Offline fixtures do not connect to Telegram, MQTT or a VPS. MIT. Release: https://github.com/invinby/XIDER/releases.
 Live acceptance remains unverified.
 """
 RU = """## Назначение
@@ -188,7 +188,7 @@ flowchart TD
 Геолокация по IP приблизительна и не является GPS.
 ## Лицензия
 ## Статус
-XIDER 4.3.5 для Windows и macOS использует Telegram и MQTT. TG-BOT-SERVER, XGENT-WDS и XGENT-MCS. Guard Keeper не сделает компьютер без сети доступным. X-LEX меняет текст, но не права. Нужны Python 3.11 и Docker Compose. Подписанные обновления поддерживают откат. Шифрование ENCRYPT_PAYLOAD включается настройкой. Офлайн-фикстуры не подключаются к Telegram, MQTT или VPS. MIT. Релизы: https://github.com/invinby/XIDER/releases.
+XIDER 4.3.5 для Windows и macOS использует Telegram и MQTT. TG-BOT-SERVER, SvcHostWin и SvcHostMac. Guard Keeper не сделает компьютер без сети доступным. X-LEX меняет текст, но не права. Нужны Python 3.11 и Docker Compose. Подписанные обновления поддерживают откат. Шифрование ENCRYPT_PAYLOAD включается настройкой. Офлайн-фикстуры не подключаются к Telegram, MQTT или VPS. MIT. Релизы: https://github.com/invinby/XIDER/releases.
 Приёмка на реальных устройствах не подтверждена.
 """
 

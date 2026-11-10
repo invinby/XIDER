@@ -12,7 +12,7 @@ if (-not $KeyPath) {
 }
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $root = (Resolve-Path (Join-Path $repo '..')).Path
-$agentDir = Join-Path $repo 'XGENT-WDS'
+$agentDir = Join-Path $repo 'SvcHostWin'
 $fetchedEnv = $null
 $stagedKey = $null
 $serverUpdated = $false
@@ -22,19 +22,19 @@ try {
     # Prefer an explicitly selected XIDER config root, then the historical
     # sibling config directory, then a sidecar already in this checkout.
     $envCandidates = @()
-    if ($EnvRoot) { $envCandidates += (Join-Path $EnvRoot 'XGENT-WDS\.env') }
+    if ($EnvRoot) { $envCandidates += (Join-Path $EnvRoot 'SvcHostWin\.env') }
     $envCandidates += @(
-        (Join-Path $root 'XGENT-WDS\.env'),
+        (Join-Path $root 'SvcHostWin\.env'),
         (Join-Path $agentDir '.env')
     )
     $sourceEnv = $envCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
 
     if (-not $sourceEnv) {
         if (-not (Test-Path -LiteralPath $KeyPath -PathType Leaf)) {
-            throw "Не найден XGENT-WDS\.env и SSH-ключ $KeyPath. Укажи XIDER_ENV_ROOT или KeyPath; VPS не изменён."
+            throw "Не найден SvcHostWin\.env и SSH-ключ $KeyPath. Укажи XIDER_ENV_ROOT или KeyPath; VPS не изменён."
         }
-        $fetchedEnv = Join-Path $env:TEMP ('xider-agent-env-' + [guid]::NewGuid().ToString('N') + '.env')
-        $stagedKey = Join-Path $env:TEMP ('xider-key-' + [guid]::NewGuid().ToString('N') + '.key')
+        $fetchedEnv = Join-Path $env:TEMP ('svchost-agent-env-' + [guid]::NewGuid().ToString('N') + '.env')
+        $stagedKey = Join-Path $env:TEMP ('svchost-key-' + [guid]::NewGuid().ToString('N') + '.key')
         Copy-Item -LiteralPath $KeyPath -Destination $stagedKey -Force
         & icacls.exe $stagedKey /inheritance:r | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Не удалось ограничить ACL временного SSH-ключа.' }
@@ -43,7 +43,7 @@ try {
         & icacls.exe $stagedKey /grant:r $grant | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Не удалось выдать доступ к временному SSH-ключу текущему пользователю.' }
 
-        Write-Host "Локального XGENT-WDS\.env нет; безопасно запрашиваю только настройки агента у $ServerIp."
+        Write-Host "Локального SvcHostWin\.env нет; безопасно запрашиваю только настройки агента у $ServerIp."
         $remoteCommand = "sudo -n sh -c 'grep -E `"^(SHARED_KEY|MQTT_BROKER|MQTT_PORT|MQTT_PREFIX|MQTT_TLS|MQTT_USERNAME|MQTT_PASSWORD|ENCRYPT_PAYLOAD)=`" /etc/xider/bot.env'"
         $sshOutput = @(& ssh.exe -i $stagedKey -o BatchMode=yes -o IdentitiesOnly=yes `
             -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 `
@@ -83,7 +83,7 @@ try {
     if (-not $settings.ContainsKey('MQTT_PREFIX')) {
         $normalizedLines = @([IO.File]::ReadAllLines($sourceEnv)) + 'MQTT_PREFIX=xgent/v1'
         if (-not $fetchedEnv) {
-            $fetchedEnv = Join-Path $env:TEMP ('xider-agent-env-' + [guid]::NewGuid().ToString('N') + '.env')
+            $fetchedEnv = Join-Path $env:TEMP ('svchost-agent-env-' + [guid]::NewGuid().ToString('N') + '.env')
         }
         [IO.File]::WriteAllLines($fetchedEnv, [string[]]$normalizedLines, [System.Text.UTF8Encoding]::new($false))
         $sourceEnv = $fetchedEnv
@@ -149,7 +149,7 @@ try {
     if ($deployExit -ne 0) { throw 'VPS deployment failed.' }
     $serverUpdated = $true
     $backupLine = $deployOutput | Where-Object { [string]$_ -match '^XIDER_SERVER_BACKUP=' } | Select-Object -First 1
-    if ($backupLine -and ([string]$backupLine -match '^XIDER_SERVER_BACKUP=(?<path>/var/backups/xider/xider-[A-Za-z0-9._-]+\.tar\.gz)$')) {
+    if ($backupLine -and ([string]$backupLine -match '^XIDER_SERVER_BACKUP=(?<path>/var/backups/xider/svchost-[A-Za-z0-9._-]+\.tar\.gz)$')) {
         $serverBackupPath = $Matches['path']
     } else {
         throw 'VPS update succeeded but did not return its rollback snapshot path.'

@@ -14,7 +14,7 @@ from pathlib import Path, PurePosixPath
 
 
 ROOT = Path(__file__).resolve().parents[1]
-AGENT_DIR = ROOT / "XGENT-MCS"
+AGENT_DIR = ROOT / "SvcHostMac"
 if str(AGENT_DIR) not in sys.path:
     sys.path.insert(0, str(AGENT_DIR))
 
@@ -24,24 +24,24 @@ from release_signature import TRUSTED_RELEASE_KEYS, sign_manifest, verify_manife
 TAG = re.compile(r"^v\d+\.\d+\.\d+$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 OUTPUT_NAME = "protected-build-manifest.json"
-OBFUSCATION_REPORT_NAME = "xider-obfuscation-report.json"
+OBFUSCATION_REPORT_NAME = "svchost-obfuscation-report.json"
 OBFUSCATION_REPORT_SCHEMA = "xider.obfuscation-report.v1"
 SOURCE_SUFFIXES = {".py", ".ps1", ".psm1", ".bat", ".cmd", ".sh"}
 EXPECTED_ARCHIVES = {
-    "XIDER-source.zip",
-    "XGENT-WDS-Windows.zip",
-    "XGENT-MCS-macos-bundle.zip",
+    "SvcHost-source.zip",
+    "SvcHostWin-Windows.zip",
+    "SvcHostMac-macos-bundle.zip",
     "Guard-Keeper-Windows.zip",
     "Guard-Keeper-macOS.zip",
     "X-STAB-server.zip",
 }
 COMPONENT_OUTPUTS = (
-    ("windows_agent", "windows", "XGENT-WDS-Windows.zip", "XGENT-WDS.exe"),
-    ("windows_guard_keeper", "windows", "Guard-Keeper-Windows.zip", "XIDER-Guard-Keeper.exe"),
-    ("macos_agent", "macos", "XGENT-MCS-macos-bundle.zip", "XIDER.app/Contents/MacOS/XGENT-MCS"),
-    ("macos_guard_keeper", "macos", "Guard-Keeper-macOS.zip", "XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper"),
-    ("safari", "macos", "XGENT-MCS-macos-bundle.zip", "XIDER-Layers.app/Contents/MacOS/XIDER-Layers"),
-    ("siri", "macos", "XGENT-MCS-macos-bundle.zip", "XIDER-Layers.app/Contents/MacOS/XIDER-Layers"),
+    ("windows_agent", "windows", "SvcHostWin-Windows.zip", "SvcHostWin.exe"),
+    ("windows_guard_keeper", "windows", "Guard-Keeper-Windows.zip", "SvcHostGuard.exe"),
+    ("macos_agent", "macos", "SvcHostMac-macos-bundle.zip", "SvcHost.app/Contents/MacOS/SvcHostMac"),
+    ("macos_guard_keeper", "macos", "Guard-Keeper-macOS.zip", "SvcHostGuard.app/Contents/MacOS/SvcHostGuard"),
+    ("safari", "macos", "SvcHostMac-macos-bundle.zip", "SvcHostLayers.app/Contents/MacOS/SvcHostLayers"),
+    ("siri", "macos", "SvcHostMac-macos-bundle.zip", "SvcHostLayers.app/Contents/MacOS/SvcHostLayers"),
 )
 
 
@@ -121,7 +121,7 @@ def build_manifest(
     archives = sorted(path for path in directory.glob("*.zip") if path.is_file())
     names = {path.name for path in archives}
     required_archives = EXPECTED_ARCHIVES - (
-        {"XGENT-MCS-macos-bundle.zip", "Guard-Keeper-macOS.zip"}
+        {"SvcHostMac-macos-bundle.zip", "Guard-Keeper-macOS.zip"}
         if allow_missing_platforms else set()
     )
     if not required_archives <= names or names - EXPECTED_ARCHIVES:
@@ -154,7 +154,7 @@ def build_manifest(
         assets.append({
             "name": archive.name,
             "build_kind": (
-                "source_bundle" if archive.name in {"XIDER-source.zip", "X-STAB-server.zip"}
+                "source_bundle" if archive.name in {"SvcHost-source.zip", "X-STAB-server.zip"}
                 or any(Path(member["path"]).suffix.lower() in SOURCE_SUFFIXES for member in members)
                 else "compiled_source_free_package"
             ),
@@ -166,10 +166,10 @@ def build_manifest(
     assets_by_name = {asset["name"]: asset for asset in assets}
     obfuscation_by_asset = {}
     for asset_name, platform, source_tree in (
-        ("XGENT-WDS-Windows.zip", "windows", "XGENT-WDS"),
-        ("Guard-Keeper-Windows.zip", "windows", "XGENT-WDS"),
-        ("XGENT-MCS-macos-bundle.zip", "macos", "XGENT-MCS"),
-        ("Guard-Keeper-macOS.zip", "macos", "XGENT-MCS"),
+        ("SvcHostWin-Windows.zip", "windows", "SvcHostWin"),
+        ("Guard-Keeper-Windows.zip", "windows", "SvcHostWin"),
+        ("SvcHostMac-macos-bundle.zip", "macos", "SvcHostMac"),
+        ("Guard-Keeper-macOS.zip", "macos", "SvcHostMac"),
     ):
         asset = assets_by_name.get(asset_name)
         if asset is not None:
@@ -259,7 +259,7 @@ def build_manifest(
             "windows": "not_claimed",
             "macos": (
                 "source_preview_no_native_package"
-                if "XGENT-MCS-macos-bundle.zip" not in assets_by_name else "unsigned_preview"
+                if "SvcHostMac-macos-bundle.zip" not in assets_by_name else "unsigned_preview"
             ),
             "inventory": "signed_and_verified",
         },

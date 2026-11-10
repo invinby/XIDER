@@ -16,7 +16,7 @@ import paho.mqtt.client as mqtt
 from config import ENCRYPT_PAYLOAD, MQTT_BROKER, MQTT_PASSWORD, MQTT_PORT, MQTT_PREFIX, MQTT_TLS, MQTT_TRANSPORT, MQTT_USERNAME, MQTT_WS_PATH
 from crypto import sign_message
 from device_keys import enrolled_device_ids, key_for_device
-from xgencrypto import encrypt_payload
+from svchost_crypto import encrypt_payload
 from command_signing import verify_approved_command
 
 log = logging.getLogger("xgent.transport")

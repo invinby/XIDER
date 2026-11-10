@@ -18,30 +18,30 @@ if str(ROOT) not in sys.path:
 from tools.obfuscation_build import REPORT_NAME, obfuscate_tree
 
 
-WDS = ROOT / "XGENT-WDS"
-MCS = ROOT / "XGENT-MCS"
+WDS = ROOT / "SvcHostWin"
+MCS = ROOT / "SvcHostMac"
 TOOLS = ROOT / "tools"
 OUTPUT = WDS / "dist" / "nuitka"
 BUILD_PARENT = WDS / "build"
 LEGACY_NUITKA_INTERMEDIATES = (
-    "xgent_wds.build", "xgent_wds.dist", "xgent_wds.onefile-build",
-    "xider_guardian_wds.build", "xider_guardian_wds.dist",
-    "xider_guardian_wds.onefile-build",
+    "svchost_win.build", "svchost_win.dist", "svchost_win.onefile-build",
+    "svchost_guardian_win.build", "svchost_guardian_win.dist",
+    "svchost_guardian_win.onefile-build",
 )
 
 
 def _hidden_imports() -> tuple[str, ...]:
     """Read the existing explicit hidden-module inventory without PyInstaller."""
-    tree = ast.parse((WDS / "XGENT-WDS.spec").read_text(encoding="utf-8"))
+    tree = ast.parse((WDS / "SvcHostWin.spec").read_text(encoding="utf-8"))
     for node in tree.body:
         if not isinstance(node, ast.Assign):
             continue
         if any(isinstance(target, ast.Name) and target.id == "hiddenimports" for target in node.targets):
             value = ast.literal_eval(node.value)
             if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-                raise ValueError("XGENT-WDS.spec hiddenimports must remain a literal string list")
+                raise ValueError("SvcHostWin.spec hiddenimports must remain a literal string list")
             return tuple(dict.fromkeys((*value, "command_approval_bundle_smoke")))
-    raise ValueError("Could not find the hiddenimports list in XGENT-WDS.spec")
+    raise ValueError("Could not find the hiddenimports list in SvcHostWin.spec")
 
 
 def _build(entry: Path, output_dir: Path, output_name: str, modules: tuple[str, ...] = ()) -> Path:
@@ -65,7 +65,7 @@ def _build(entry: Path, output_dir: Path, output_name: str, modules: tuple[str, 
         f"--output-dir={output_dir}",
         f"--output-filename={output_name}",
     ]
-    if entry.name == "xgent_wds.py":
+    if entry.name == "svchost_win.py":
         command.extend((
             "--include-package=pyttsx3", "--include-module=soundfile",
             "--enable-plugin=tk-inter",
@@ -122,19 +122,19 @@ def build_packages() -> tuple[Path, Path]:
     report_path = build_root / REPORT_NAME
     report = obfuscate_tree(WDS, obfuscated_wds, report_path, platform="windows")
     report["components"] = [
-        {"id": "windows_agent", "state": "applied", "source_tree": "XGENT-WDS"},
-        {"id": "windows_guard_keeper", "state": "applied", "source_tree": "XGENT-WDS"},
+        {"id": "windows_agent", "state": "applied", "source_tree": "SvcHostWin"},
+        {"id": "windows_guard_keeper", "state": "applied", "source_tree": "SvcHostWin"},
     ]
     report["unobfuscated_first_party_scope"] = (
-        "MCS helper modules loaded from XGENT-MCS and build-only helpers from tools; "
+        "MCS helper modules loaded from SvcHostMac and build-only helpers from tools; "
         "Nuitka compiles these modules but they are not counted as obfuscated."
     )
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     agent = _build(
-        obfuscated_wds / "xgent_wds.py", build_root / "agent", "XGENT-WDS.exe", _hidden_imports(),
+        obfuscated_wds / "svchost_win.py", build_root / "agent", "SvcHostWin.exe", _hidden_imports(),
     )
     guardian = _build(
-        obfuscated_wds / "xider_guardian_wds.py", build_root / "guardian", "XIDER-Guard-Keeper.exe",
+        obfuscated_wds / "svchost_guardian_win.py", build_root / "guardian", "SvcHostGuard.exe",
         ("update_package", "release_signature"),
     )
     # Copy only compiled executables into the release root. Nuitka's generated

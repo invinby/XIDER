@@ -48,7 +48,7 @@ def test_enrollment_client_uses_owner_approval_and_writes_only_sealed_config(tmp
     printed = capsys.readouterr().out
     assert "unique-message-key-not-printed" not in printed
     assert "unique-broker-password-not-printed" not in printed
-    assert json.loads((tmp_path / ".xgent" / "config.json").read_text())['device_id']
+    assert json.loads((tmp_path / ".svchost" / "config.json").read_text())['device_id']
     if os.name == "posix":
         assert output.stat().st_mode & 0o077 == 0
 

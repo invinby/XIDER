@@ -12,14 +12,14 @@ $definition = $ast.Find({
 if (-not $definition) { throw 'The bootstrap has no testable Guardian executable selector.' }
 . ([scriptblock]::Create($definition.Extent.Text))
 
-$agentDirectory = 'C:\XIDER\git-ver\XGENT-WDS'
+$agentDirectory = 'C:\XIDER\git-ver\SvcHostWin'
 $developmentPath = Get-XiderExpectedGuardianExecutable -AgentDirectory $agentDirectory
 if ($developmentPath -cne (Join-Path $agentDirectory 'venv\Scripts\pythonw.exe')) {
     throw "Development Guardian health check expected '$developmentPath'; installer registers pythonw.exe."
 }
 
 $releasePath = Get-XiderExpectedGuardianExecutable -AgentDirectory $agentDirectory -ReleaseTag 'v4.3.3'
-if ($releasePath -cne (Join-Path $agentDirectory 'XIDER-Guard-Keeper.exe')) {
+if ($releasePath -cne (Join-Path $agentDirectory 'SvcHostGuard.exe')) {
     throw "Release Guardian health check selected unexpected executable '$releasePath'."
 }
 

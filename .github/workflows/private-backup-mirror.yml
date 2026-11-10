@@ -26,8 +26,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git remote add xider-source https://github.com/invinby/XIDER.git
-          git fetch --no-tags xider-source main
-          git fetch --no-tags xider-source 'refs/tags/v*:refs/tags/v*'
-          git push origin refs/remotes/xider-source/main:refs/heads/main
+          git remote add svchost-source https://github.com/invinby/XIDER.git
+          git fetch --no-tags svchost-source main
+          git fetch --no-tags svchost-source 'refs/tags/v*:refs/tags/v*'
+          git push origin refs/remotes/svchost-source/main:refs/heads/main
           git push origin 'refs/tags/v*'

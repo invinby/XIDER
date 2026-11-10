@@ -25,14 +25,14 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 TAG = re.compile(r"^v\d+\.\d+\.\d+$")
 COMMIT_ID = re.compile(r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
-NAMESPACE = "xider-bootstrap@xider.link"
-SIGNER_IDENTITY = "xider-release"
+NAMESPACE = "svchost-bootstrap@xider.link"
+SIGNER_IDENTITY = "svchost-release"
 BOOTSTRAPS = {
-    "windows": "XIDER-bootstrap-windows.ps1",
-    "macos": "XIDER-bootstrap-macos.sh",
+    "windows": "SvcHost-bootstrap-windows.ps1",
+    "macos": "SvcHost-bootstrap-macos.sh",
 }
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE_MODULE_DIR = ROOT / "XGENT-MCS"
+RELEASE_MODULE_DIR = ROOT / "SvcHostMac"
 if str(RELEASE_MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(RELEASE_MODULE_DIR))
 
@@ -51,7 +51,7 @@ def signed_hash_message(platform: str, tag: str, commit_id: str, digest: str) ->
         raise ValueError("bootstrap SHA-256 must be lowercase hexadecimal")
 
     body = (
-        f"XIDER-BOOTSTRAP-SHA256\n{platform}\n{tag}\n"
+        f"SvcHost-BOOTSTRAP-SHA256\n{platform}\n{tag}\n"
         f"{commit_id.lower()}\n{digest}\n"
     ).encode("ascii")
     # The Windows quickstart writes these ASCII bytes directly through the
@@ -165,7 +165,7 @@ def sign_bootstrap_assets(
         serialization.NoEncryption(),
     )
     created: list[Path] = []
-    with tempfile.TemporaryDirectory(prefix="xider-bootstrap-sign-") as folder:
+    with tempfile.TemporaryDirectory(prefix="svchost-bootstrap-sign-") as folder:
         temp_root = Path(folder)
         private_path = temp_root / "release-signing-key"
         allowed_signers_path = temp_root / "allowed_signers"

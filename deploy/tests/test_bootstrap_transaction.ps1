@@ -1,8 +1,8 @@
 $ErrorActionPreference = 'Stop'
 $bootstrap = (Resolve-Path (Join-Path $PSScriptRoot '..\bootstrap.ps1')).Path
-$fixture = Join-Path $env:TEMP ('xider-bootstrap-transaction-' + [guid]::NewGuid().ToString('N'))
+$fixture = Join-Path $env:TEMP ('svchost-bootstrap-transaction-' + [guid]::NewGuid().ToString('N'))
 $sourceRoot = Join-Path $fixture 'source'
-$sourceRepo = Join-Path $sourceRoot 'XIDER-fixture'
+$sourceRepo = Join-Path $sourceRoot 'SvcHost-fixture'
 $archive = Join-Path $fixture 'source.zip'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $global:XiderBootstrapSetupResult = 8
@@ -27,7 +27,7 @@ function Invoke-WebRequest {
 
 function New-OldCheckout($installRoot) {
     $oldRepo = Join-Path $installRoot 'git-ver'
-    $oldAgent = Join-Path $oldRepo 'XGENT-WDS'
+    $oldAgent = Join-Path $oldRepo 'SvcHostWin'
     New-Item -ItemType Directory -Path $oldAgent -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $oldRepo 'old-marker.txt'), 'previous-version', $utf8)
     [IO.File]::WriteAllText((Join-Path $oldAgent '.env'), 'SHARED_KEY=old-local-secret', $utf8)
@@ -48,14 +48,14 @@ function New-TraversalZip($path, $entryName) {
 }
 
 try {
-    New-Item -ItemType Directory -Path (Join-Path $sourceRepo 'deploy'),(Join-Path $sourceRepo 'XGENT-WDS') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $sourceRepo 'deploy'),(Join-Path $sourceRepo 'SvcHostWin') -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $sourceRepo 'deploy\setup-all.ps1'), '# fixture', $utf8)
-    [IO.File]::WriteAllText((Join-Path $sourceRepo 'XGENT-WDS\install_agent.ps1'), '# fixture', $utf8)
+    [IO.File]::WriteAllText((Join-Path $sourceRepo 'SvcHostWin\install_agent.ps1'), '# fixture', $utf8)
     [IO.File]::WriteAllText((Join-Path $sourceRepo 'new-marker.txt'), 'new-version', $utf8)
     Compress-Archive -Path $sourceRepo -DestinationPath $archive
 
     $traversalArchive = Join-Path $fixture 'traversal.zip'
-    $escapeName = 'xider-bootstrap-escape-' + [guid]::NewGuid().ToString('N') + '.txt'
+    $escapeName = 'svchost-bootstrap-escape-' + [guid]::NewGuid().ToString('N') + '.txt'
     New-TraversalZip $traversalArchive $escapeName
     $guardRoot = Join-Path $fixture 'archive-guard-install'
     New-OldCheckout $guardRoot
@@ -79,11 +79,11 @@ try {
     if (-not (Test-Path -LiteralPath (Join-Path $activeRepo 'old-marker.txt'))) {
         throw 'The previous checkout was not restored.'
     }
-    if ((Get-Content -LiteralPath (Join-Path $activeRepo 'XGENT-WDS\.env') -Raw) -ne 'SHARED_KEY=old-local-secret') {
+    if ((Get-Content -LiteralPath (Join-Path $activeRepo 'SvcHostWin\.env') -Raw) -ne 'SHARED_KEY=old-local-secret') {
         throw 'The prior agent configuration was not restored exactly.'
     }
     $failedRepos = @(Get-ChildItem -LiteralPath $rollbackRoot -Directory -Filter 'git-ver.failed.*')
-    if ($failedRepos.Count -ne 1 -or (Test-Path -LiteralPath (Join-Path $failedRepos[0].FullName 'XGENT-WDS\.env'))) {
+    if ($failedRepos.Count -ne 1 -or (Test-Path -LiteralPath (Join-Path $failedRepos[0].FullName 'SvcHostWin\.env'))) {
         throw 'The failed checkout was not kept without the copied secret.'
     }
 
@@ -101,7 +101,7 @@ try {
     if (-not (Test-Path -LiteralPath (Join-Path $activeRepo 'new-marker.txt'))) {
         throw 'The new checkout was not activated.'
     }
-    if ((Get-Content -LiteralPath (Join-Path $successRoot 'XGENT-WDS\.env') -Raw) -ne 'SHARED_KEY=old-local-secret') {
+    if ((Get-Content -LiteralPath (Join-Path $successRoot 'SvcHostWin\.env') -Raw) -ne 'SHARED_KEY=old-local-secret') {
         throw 'The agent configuration was not carried into the new checkout.'
     }
     $backups = @(Get-ChildItem -LiteralPath $successRoot -Directory -Filter 'git-ver.previous.*')
@@ -139,7 +139,7 @@ try {
     } catch { $failedFirstInstall = $_.Exception.Message -match 'XIDER setup failed' }
     if (-not $failedFirstInstall) { throw 'Simulated first-install failure did not fail bootstrap.' }
     $partial = @(Get-ChildItem -LiteralPath $firstInstallRoot -Directory -Filter 'git-ver.failed.*')
-    if ($partial.Count -ne 1 -or (Test-Path -LiteralPath (Join-Path $partial[0].FullName 'XGENT-WDS\.env'))) {
+    if ($partial.Count -ne 1 -or (Test-Path -LiteralPath (Join-Path $partial[0].FullName 'SvcHostWin\.env'))) {
         throw 'A failed first install was not isolated without its copied configuration.'
     }
 
@@ -154,7 +154,7 @@ finally {
     $env:XIDER_REF = $originalXiderRef
     if ((Test-Path -LiteralPath $fixture) -and
         $fixture.StartsWith([IO.Path]::GetFullPath($env:TEMP), [StringComparison]::OrdinalIgnoreCase) -and
-        (Split-Path $fixture -Leaf) -like 'xider-bootstrap-transaction-*') {
+        (Split-Path $fixture -Leaf) -like 'svchost-bootstrap-transaction-*') {
         Remove-Item -LiteralPath $fixture -Recurse -Force
     }
     Remove-Variable XiderBootstrapSetupResult,XiderBootstrapSetupCalls,XiderBootstrapSetupArgs,XiderBootstrapDownloadSource,XiderBootstrapObservedUri -Scope Global -ErrorAction SilentlyContinue

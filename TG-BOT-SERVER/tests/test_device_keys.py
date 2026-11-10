@@ -7,7 +7,7 @@ import bot
 import crypto
 import device_keys
 import transport
-import xgencrypto
+import svchost_crypto
 
 
 def test_device_key_is_loaded_outside_source_tree_and_legacy_still_works(tmp_path, monkeypatch):
@@ -36,13 +36,13 @@ def test_device_key_is_created_once_without_overwriting(tmp_path, monkeypatch):
 
 def test_per_device_hmac_and_encryption_reject_legacy_key():
     key = "d" * 64
-    encrypted = xgencrypto.encrypt_payload({"type": "status", "device_id": "macbook1"}, key=key)
+    encrypted = svchost_crypto.encrypt_payload({"type": "status", "device_id": "macbook1"}, key=key)
     envelope = crypto.sign_message(encrypted, key=key)
     signed, reason = crypto.verify_message_detailed(envelope, key=key)
     assert reason == "ok"
-    assert xgencrypto.decrypt_payload(signed, key=key)["device_id"] == "macbook1"
+    assert svchost_crypto.decrypt_payload(signed, key=key)["device_id"] == "macbook1"
     assert crypto.verify_message_detailed(envelope)[1] == "bad_hmac"
-    assert xgencrypto.decrypt_payload(signed) is None
+    assert svchost_crypto.decrypt_payload(signed) is None
 
 
 def test_bot_verifies_key_selected_by_topic_before_routing(tmp_path, monkeypatch):

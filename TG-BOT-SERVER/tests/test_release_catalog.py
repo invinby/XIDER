@@ -11,7 +11,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-sys.path.append(str(Path(__file__).resolve().parents[2] / "XGENT-MCS"))
+sys.path.append(str(Path(__file__).resolve().parents[2] / "SvcHostMac"))
 import release_signature
 import release_catalog as ledger
 
@@ -31,10 +31,10 @@ def signed_release(monkeypatch):
     key = Ed25519PrivateKey.generate()
     public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     monkeypatch.setattr(release_signature, "TRUSTED_RELEASE_KEYS", {release_signature.release_key_id(public): public})
-    names = {"XGENT-WDS.exe", "XIDER-source.zip", "release-manifest.json"}
+    names = {"SvcHostWin.exe", "SvcHost-source.zip", "release-manifest.json"}
     manifest = release_signature.sign_manifest({"schema": 1, "release": "v4.1.0", "assets": [
-        {"name": "XGENT-WDS.exe", "component": "windows_agent", "platform": "windows", "size": 3, "sha256": "a" * 64},
-        {"name": "XIDER-source.zip", "component": "source", "platform": "all", "size": 4, "sha256": "b" * 64},
+        {"name": "SvcHostWin.exe", "component": "windows_agent", "platform": "windows", "size": 3, "sha256": "a" * 64},
+        {"name": "SvcHost-source.zip", "component": "source", "platform": "all", "size": 4, "sha256": "b" * 64},
     ]}, key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
     release = ledger.Release("v4.1.0", (4, 1, 0), "Prior", "2026-10-01", "Rollback notes", frozenset(names))
     return release, manifest
@@ -52,19 +52,19 @@ def test_signed_component_build_report_is_bound_to_release_package_hashes(monkey
     private_pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
     archive_digest = "a" * 64
     assets = [
-        {"name": "XGENT-WDS-Windows.zip", "component": "windows_agent", "platform": "windows", "size": 100, "sha256": archive_digest},
-        {"name": "XIDER-source.zip", "component": "source", "platform": "all", "size": 200, "sha256": "b" * 64},
+        {"name": "SvcHostWin-Windows.zip", "component": "windows_agent", "platform": "windows", "size": 100, "sha256": archive_digest},
+        {"name": "SvcHost-source.zip", "component": "source", "platform": "all", "size": 200, "sha256": "b" * 64},
     ]
     release = ledger.Release(
         "v4.3.18", (4, 3, 18), "preview", "2026-11-01", "notes",
-        frozenset({"XGENT-WDS-Windows.zip", "XIDER-source.zip", "release-manifest.json", "protected-build-manifest.json"}),
+        frozenset({"SvcHostWin-Windows.zip", "SvcHost-source.zip", "release-manifest.json", "protected-build-manifest.json"}),
     )
     release_manifest = release_signature.sign_manifest(
         {"schema": 1, "release": release.tag, "assets": assets}, private_pem,
     )
     component = {
         "id": "windows_agent", "platform": "windows", "version": release.tag,
-        "package_asset": "XGENT-WDS-Windows.zip", "entrypoint": "XGENT-WDS.exe",
+        "package_asset": "SvcHostWin-Windows.zip", "entrypoint": "SvcHostWin.exe",
         "build_mode": "nuitka_compiled", "compiler": "Nuitka 4.3.1", "source_included": False,
         "obfuscation": {"state": "not_applied"}, "output_sha256": "c" * 64,
         "output_verification": "sha256_in_signed_member_inventory",
@@ -85,8 +85,8 @@ def test_signed_component_build_report_is_bound_to_release_package_hashes(monkey
             "windows": "not_claimed", "macos": "source_preview_no_native_package",
             "inventory": "signed_and_verified",
         },
-        "assets": [{"name": "XGENT-WDS-Windows.zip", "size": 100, "sha256": archive_digest,
-                    "members": [{"path": "XGENT-WDS.exe", "size": 50, "sha256": "c" * 64}]}],
+        "assets": [{"name": "SvcHostWin-Windows.zip", "size": 100, "sha256": archive_digest,
+                    "members": [{"path": "SvcHostWin.exe", "size": 50, "sha256": "c" * 64}]}],
     }, private_pem)
 
     assert ledger.verify_protected_build_metadata(release, protected_manifest, release_manifest)
@@ -148,10 +148,10 @@ def test_invalid_signed_catalogue_fails_closed(signed_release, mutation):
 def test_signed_preview_releases_are_selectable_but_stable_remains_default_update_target():
     releases = ledger.parse_releases([
         {"tag_name": "v5.0.0", "prerelease": True,
-         "assets": [{"name": "XGENT-WDS.exe"}]},
+         "assets": [{"name": "SvcHostWin.exe"}]},
         {"tag_name": "v4.2.0-rc.1"},
-        {"tag_name": "v4.1.9", "assets": [{"name": "XGENT-WDS.exe"}]},
-        {"tag_name": "v4.1.10", "assets": [{"name": "XGENT-WDS.exe"}]},
+        {"tag_name": "v4.1.9", "assets": [{"name": "SvcHostWin.exe"}]},
+        {"tag_name": "v4.1.10", "assets": [{"name": "SvcHostWin.exe"}]},
         {"tag_name": "v6.0.0", "draft": True},
     ])
     assert [release.tag for release in releases] == ["v5.0.0", "v4.1.10", "v4.1.9"]
@@ -162,7 +162,7 @@ def test_signed_preview_releases_are_selectable_but_stable_remains_default_updat
 
 def test_unsigned_catalogue_cannot_offer_install():
     import bot
-    release = ledger.Release("v4.1.0", (4, 1, 0), "", "", "", frozenset({"XGENT-WDS.exe", "XIDER-source.zip", "release-manifest.json"}))
+    release = ledger.Release("v4.1.0", (4, 1, 0), "", "", "", frozenset({"SvcHostWin.exe", "SvcHost-source.zip", "release-manifest.json"}))
     info = {"os": "Windows", "version": "4.1.0", "update_mode": "source", "release_update_ready": True, "update_manifest_binding_protocol": 1, "online": True, "last_seen": time.time()}
     assert bot._version_install_block_reason("agent", release, "windows_agent", info) is not None
 
@@ -176,7 +176,7 @@ def test_frozen_windows_install_requires_signed_exe_and_fresh_guardian_protocol(
 
     release = signed_catalog_release(release_catalog.Release(
         "v4.2.0", (4, 2, 0), "signed Windows", "", "",
-        frozenset({"XGENT-WDS.exe", "XIDER-source.zip", "release-manifest.json"}),
+        frozenset({"SvcHostWin.exe", "SvcHost-source.zip", "release-manifest.json"}),
     ))
     info = {
         "os": "Windows 11", "version": "4.1.0", "update_mode": "frozen",
@@ -194,7 +194,7 @@ def test_frozen_windows_install_requires_signed_exe_and_fresh_guardian_protocol(
 
     without_exe = signed_catalog_release(release_catalog.Release(
         "v4.2.0", (4, 2, 0), "zip only", "", "",
-        frozenset({"XGENT-WDS-Windows.zip", "XIDER-source.zip", "release-manifest.json"}),
+        frozenset({"SvcHostWin-Windows.zip", "SvcHost-source.zip", "release-manifest.json"}),
     ))
     assert bot._version_install_block_reason(
         "agent", without_exe, "windows_agent", info,
@@ -210,7 +210,7 @@ def test_frozen_mac_install_requires_signed_bundle_and_fresh_guardian_protocol(
 
     release = signed_catalog_release(release_catalog.Release(
         "v4.2.0", (4, 2, 0), "signed macOS bundle", "", "",
-        frozenset({"XGENT-MCS-macos-bundle.zip", "XIDER-source.zip", "release-manifest.json"}),
+        frozenset({"SvcHostMac-macos-bundle.zip", "SvcHost-source.zip", "release-manifest.json"}),
     ))
     info = {
         "os": "macOS 27", "version": "4.1.0", "update_mode": "frozen",
@@ -231,7 +231,7 @@ def test_frozen_mac_install_requires_signed_bundle_and_fresh_guardian_protocol(
 
     without_bundle = signed_catalog_release(release_catalog.Release(
         "v4.2.0", (4, 2, 0), "source only", "", "",
-        frozenset({"XIDER-source.zip", "release-manifest.json"}),
+        frozenset({"SvcHost-source.zip", "release-manifest.json"}),
     ))
     assert bot._version_install_block_reason(
         "agent", without_bundle, "mac_agent", info,
@@ -241,7 +241,7 @@ def test_frozen_mac_install_requires_signed_bundle_and_fresh_guardian_protocol(
 @pytest.mark.parametrize('capability', [None, 0, True, '1'])
 def test_old_agent_without_manifest_binding_fails_closed(signed_catalog_release, capability):
     import bot
-    release = signed_catalog_release(ledger.Release('v4.2.0', (4, 2, 0), '', '', '', frozenset({'XGENT-WDS.exe', 'XIDER-source.zip', 'release-manifest.json'})))
+    release = signed_catalog_release(ledger.Release('v4.2.0', (4, 2, 0), '', '', '', frozenset({'SvcHostWin.exe', 'SvcHost-source.zip', 'release-manifest.json'})))
     info = {'os': 'Windows', 'version': '4.2.0', 'update_mode': 'source', 'release_update_ready': True,
             'online': True, 'last_seen': time.time(), 'update_manifest_binding_protocol': capability}
     assert bot._version_install_block_reason('agent', release, 'windows_agent', info) == 'versions_install_requires_agent'
@@ -261,9 +261,9 @@ def test_explicit_version_state_keeps_component_versions_separate(signed_release
 
 
 def test_available_version_requires_package_inside_signed_inventory(signed_catalog_release):
-    source = ledger.Release("v4.1.0", (4, 1, 0), "", "", "", frozenset({"XIDER-source.zip", "release-manifest.json"}))
+    source = ledger.Release("v4.1.0", (4, 1, 0), "", "", "", frozenset({"SvcHost-source.zip", "release-manifest.json"}))
     signed = signed_catalog_release(source)
-    advertised = dataclasses.replace(signed, asset_names=signed.asset_names | {"XGENT-WDS.exe"})
+    advertised = dataclasses.replace(signed, asset_names=signed.asset_names | {"SvcHostWin.exe"})
     assert ledger.version_state("4.0.1", advertised, "windows_agent")["available"] is None
 
 

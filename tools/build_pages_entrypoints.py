@@ -19,7 +19,7 @@ _VERSION_RE = re.compile(r"\d+\.\d+\.\d+\Z")
 def source_version_from_config() -> str:
     """Read the source version and reject platform metadata drift."""
     versions = {}
-    for component in ("XGENT-WDS", "XGENT-MCS"):
+    for component in ("SvcHostWin", "SvcHostMac"):
         config = ROOT / component / "config.py"
         match = re.search(r'(?m)^VERSION\s*=\s*"(?P<version>[^\"]+)"\s*$', config.read_text(encoding="utf-8"))
         if not match or not _VERSION_RE.fullmatch(match.group("version")):

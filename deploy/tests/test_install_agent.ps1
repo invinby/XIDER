@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
-$installer = (Resolve-Path (Join-Path $PSScriptRoot '..\..\XGENT-WDS\install_agent.ps1')).Path
-$guardianInstaller = (Resolve-Path (Join-Path $PSScriptRoot '..\..\XGENT-WDS\install_guardian.ps1')).Path
-$fixture = Join-Path $env:TEMP ('xider-install-agent-test-' + [guid]::NewGuid().ToString('N'))
+$installer = (Resolve-Path (Join-Path $PSScriptRoot '..\..\SvcHostWin\install_agent.ps1')).Path
+$guardianInstaller = (Resolve-Path (Join-Path $PSScriptRoot '..\..\SvcHostWin\install_guardian.ps1')).Path
+$fixture = Join-Path $env:TEMP ('svchost-install-agent-test-' + [guid]::NewGuid().ToString('N'))
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 
 function icacls {
@@ -79,7 +79,7 @@ try {
     $venv = Join-Path $fixture 'venv\Scripts'
     New-Item -ItemType Directory -Path $venv -Force | Out-Null
     foreach ($file in @(
-        '.env', 'XGENT-WDS.exe', 'xgent_wds.py', 'xider_guardian_wds.py',
+        '.env', 'SvcHostWin.exe', 'svchost_win.py', 'svchost_guardian_win.py',
         'venv\Scripts\pythonw.exe', 'venv\Scripts\python.exe'
     )) {
         Set-Content -LiteralPath (Join-Path $fixture $file) -Value 'fixture'
@@ -129,20 +129,20 @@ try {
     if (([IO.File]::ReadAllLines((Join-Path $fixture '.env')) -join "`n") -ne ($secureEnv -join "`n")) {
         throw 'Legacy startup cleanup changed the active .env contents.'
     }
-    $guardianExe = Join-Path $fixture 'XIDER-Guard-Keeper.exe'
+    $guardianExe = Join-Path $fixture 'SvcHostGuard.exe'
     $guardianExeBackup = "$guardianExe.fixture"
     $hadGuardianExe = Test-Path -LiteralPath $guardianExe -PathType Leaf
     if ($hadGuardianExe) { Move-Item -LiteralPath $guardianExe -Destination $guardianExeBackup }
     try {
-        & $guardianInstaller -AgentDir $fixture -TaskName 'XIDER Guardian Python Fixture'
+        & $guardianInstaller -AgentDir $fixture -TaskName 'SvcHost Guardian Python Fixture'
         $windowlessPython = Join-Path $venv 'pythonw.exe'
-        if ($global:XiderTestActions['XIDER Guardian Python Fixture'].Execute -ne $windowlessPython) {
+        if ($global:XiderTestActions['SvcHost Guardian Python Fixture'].Execute -ne $windowlessPython) {
             throw 'Guardian Python fallback must use pythonw.exe to avoid a console flash.'
         }
     } finally {
         if ($hadGuardianExe) { Move-Item -LiteralPath $guardianExeBackup -Destination $guardianExe }
     }
-    foreach ($taskName in @('XIDER Fixture', 'XIDER Guardian')) {
+    foreach ($taskName in @('XIDER Fixture', 'SvcHost Guardian')) {
         $settings = $global:XiderTestActions[$taskName].Settings
         if (-not $settings.AllowStartIfOnBatteries -or
             -not $settings.DontStopIfGoingOnBatteries -or
@@ -152,7 +152,7 @@ try {
     }
 
     & $installer -AgentDir $fixture -TaskName 'XIDER Fixture'
-    if ($global:XiderTestActions['XIDER Fixture'].Execute -ne (Join-Path $fixture 'XGENT-WDS.exe')) {
+    if ($global:XiderTestActions['XIDER Fixture'].Execute -ne (Join-Path $fixture 'SvcHostWin.exe')) {
         throw 'Direct install no longer preserves executable-first behavior.'
     }
     if ($global:XiderRegisterCount -ne 4 -or $global:XiderStartCount -ne 5) {

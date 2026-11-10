@@ -57,13 +57,13 @@
 
 #### Task 2: Transactional updater behavior and rollback
 
-**Files:** Modify existing `XGENT-MCS/update_package.py`, Windows/Mac agent update handlers, `deploy` scripts only where a failing test exposes a gap; reuse current platform updater tests.
+**Files:** Modify existing `SvcHostMac/update_package.py`, Windows/Mac agent update handlers, `deploy` scripts only where a failing test exposes a gap; reuse current platform updater tests.
 
 **Interface:** Every update reports an operation id and one of `queued`, `downloading`, `verifying`, `installing`, `reconnecting`, `health_check`, `rolling_back`, `succeeded`, `rolled_back`, `failed`, `unknown`; never infer success from publish acceptance. `unknown` is reconciled only by fresh evidence for the same operation id.
 
 - [x] Add/extend tests for bad signature, corrupt archive, interruption after backup, health timeout, rollback success and rollback failure while preserving `.env`/user config.
 - [x] Test that rollback only selects a compatible previously signed release and that temporary/partial files are cleaned after success or rollback.
-- [x] Run `python -m pytest tests/test_agent_update.py -q` in `XGENT-WDS`, and `python -m pytest tests/test_agent_update.py tests/test_update_package.py -q` in `XGENT-MCS`; expected: every covered failure state has a deterministic result.
+- [x] Run `python -m pytest tests/test_agent_update.py -q` in `SvcHostWin`, and `python -m pytest tests/test_agent_update.py tests/test_update_package.py -q` in `SvcHostMac`; expected: every covered failure state has a deterministic result.
 - [x] Implement missing state mapping by reusing existing atomic swap/backup functions.
 - [x] Run platform-appropriate `deploy/tests/test_bootstrap_transaction.ps1` or `test_bootstrap_macos_transaction.sh`, plus `test_safe_extract.py` and `test_verify_server_bundle.py`.
 - [x] Commit transaction fixes separately per platform if their rollback behavior differs.
@@ -86,7 +86,7 @@ Task 3 verification: commits `006c063`, `d2e4d63`, `1d7f6ed`, `c80447f`; full ag
 
 #### Task 4: Server health and safe operations
 
-**Files:** Modify `TG-BOT-SERVER/server_ops.py`, server menu handlers in `bot.py`, and `deploy/xider-server-ops.sh`; test `TG-BOT-SERVER/tests/test_server_ops.py`.
+**Files:** Modify `TG-BOT-SERVER/server_ops.py`, server menu handlers in `bot.py`, and `deploy/svchost-server-ops.sh`; test `TG-BOT-SERVER/tests/test_server_ops.py`.
 
 **Interface:** Preserve `Result`, `status()`, `logs(lines=40)`, `restart()`, `update()`, `rollback()`, `metrics()` and `run_terminal(command)`; status fields must include `checked_at` and independent service/broker/VPS states.
 

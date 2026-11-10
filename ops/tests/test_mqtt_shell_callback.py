@@ -130,10 +130,10 @@ print(json.dumps({"hmac_accepted": len(accepted_hmac), "shell_entries": len(shel
 '''
 
 
-@pytest.mark.parametrize("component,module", [("XGENT-WDS", "xgent_wds"), ("XGENT-MCS", "xgent_mcs")])
+@pytest.mark.parametrize("component,module", [("SvcHostWin", "svchost_win"), ("SvcHostMac", "svchost_mac")])
 def test_actual_mqtt_callback_rejects_hmac_only_shell_before_executor(tmp_path, component, module):
     env = os.environ.copy()
-    env.update(SHARED_KEY="xider-test-only-shared-key-0123456789", MQTT_BROKER="localhost",
+    env.update(SHARED_KEY="svchost-test-only-shared-key-0123456789", MQTT_BROKER="localhost",
                MQTT_PORT="8883", MQTT_PREFIX="xgent/offline", MQTT_TLS="true",
                MQTT_USERNAME="test-user", MQTT_PASSWORD="test-password-not-real", ENCRYPT_PAYLOAD="false")
     mode = "mutate" if env.get("XIDER_TEST_MUTATE_SHELL_GATE") == "1" else "normal"
