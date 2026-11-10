@@ -7310,6 +7310,8 @@ def system_menu(user_id: int | None = None):
                 grants=set(access_store.get_effective_grants(user_id)["callbacks"]),
             )
             text = _limit_button_label(str(feature.get("title") or "Camera quality check")) if feature else "Camera quality check"
+        elif page["presentation"] == "ddos":
+            text = "🎯 DDoS-проба"
         else:
             text = _lex(str(page["label_id"]))
         _action_button(
@@ -9860,6 +9862,7 @@ network_traffic_collector = ResponseCollector()
 network_traffic_alert_collector = ResponseCollector()
 interface_status_history_collector = ResponseCollector()
 clock_drift_collector = ResponseCollector()
+ddos_collector = ResponseCollector()
 volume_history_collector = ResponseCollector()
 webcam_collector = ResponseCollector()
 camera_series_collector = ResponseCollector()
@@ -10837,6 +10840,8 @@ def on_mqtt_message(topic: str, data: dict) -> None:
                 log.info("Rejected malformed D04-F19 sample for %s", device_id)
     elif msg_type == "clock_drift" and payload.get("type") == "clock_drift_snapshot":
         clock_drift_collector.submit(device_id, payload)
+    elif msg_type == "ddos" and payload.get("type") == "ddos_result":
+        ddos_collector.submit(device_id, payload)
     elif msg_type == "volume_history" and payload.get("type") == "volume_history":
         volume_history_collector.submit(device_id, payload)
 
@@ -21633,6 +21638,41 @@ async def on_clock_drift(cq: CallbackQuery):
     await _replace_callback_message(cq, body, delivery_guard=guard, reply_markup=back_to_device_kb())
 
 
+@router.callback_query(OwnerFilter(), F.data == "ddos:run")
+async def on_ddos(cq: CallbackQuery):
+    target = SESSION.get("target")
+    if not target or target == "all":
+        await cq.answer(_lex("single_device_only"), show_alert=True)
+        return
+    if not await _callback_result_access_or_report(cq, target):
+        return
+    if _device_declares_command(devices.get(target) or {}, "ddos") is False:
+        await cq.answer("Обнови агент: он не объявляет поддержку ddos.", show_alert=True)
+        await _replace_callback_message(
+            cq, "Агент не объявляет поддержку ddos; запрос не отправлялся.",
+            reply_markup=back_to_device_kb(),
+        )
+        return
+    await cq.answer("Гоню трафик по цели…")
+    sent, command_id = publish_tracked("ddos", _target=target, count=200, concurrency=20)
+    if not sent:
+        await _replace_callback_message(cq, _lex("mqtt_disconnected"), reply_markup=back_to_device_kb())
+        return
+    guard = _callback_delivery_guard(cq, target)
+    await _replace_callback_message(
+        cq, "🎯 DDoS-проба: 200 запросов, 20 потоков. Агент вернёт сводку.",
+        delivery_guard=guard, reply_markup=back_to_device_kb(),
+    )
+    result = await ddos_collector.wait_for(target, "ddos", 90.0, command_id)
+    if not await _callback_result_access_or_report(cq, target, published=True):
+        return
+    body = _format_ddos(
+        result, (devices.get(target) or {}).get("name", "?"),
+        expected_device_id=target, expected_request_id=command_id,
+    )
+    await _replace_callback_message(cq, body, delivery_guard=guard, reply_markup=back_to_device_kb())
+
+
 @router.callback_query(OwnerFilter(), F.data == "sysinfo:history")
 async def on_system_snapshot_history(cq: CallbackQuery):
     target = SESSION.get("target")
@@ -23476,6 +23516,38 @@ def _record_smart_trend_snapshot(
     return (
         prefix + f"изменения за {elapsed // 3600} ч {(elapsed % 3600) // 60} мин:\n"
         + "\n".join(lines) + suffix + "\nСравниваются только одинаковые доступные счётчики; серийники не сохраняются."
+    )
+
+
+def _format_ddos(
+    result: dict | None, device_name: str, *, expected_device_id: str,
+    expected_request_id: str,
+) -> str:
+    """Render a bounded HTTP flood report; never claim an exact hit rate."""
+    safe_name = html.escape(str(device_name)[:160])
+    unknown = f"🎯 <b>{safe_name}</b>\n\nDDoS-проба (D04-DDOS): <b>неизвестно</b> — нет корректного ответа."
+    valid = (
+        isinstance(result, dict) and result.get("type") == "ddos_result"
+        and result.get("schema") == "xider.ddos.v1"
+        and result.get("device_id") == expected_device_id
+        and result.get("request_id") == expected_request_id
+    )
+    if not valid:
+        return unknown
+    ok = result.get("ok")
+    errors = result.get("errors")
+    if type(ok) is not int or type(errors) is not int or ok < 0 or errors < 0:
+        return unknown
+    url = html.escape(str(result.get("url"))[:200])
+    elapsed = result.get("elapsed_s")
+    rps = result.get("rps")
+    size = result.get("bytes")
+    size_text = f"{size/1024:.1f} КиБ" if type(size) is int and size >= 1024 else f"{size or 0} Б"
+    return (
+        f"🎯 <b>{safe_name}</b>\n\n<b>DDoS-проба</b> (D04-DDOS)\n"
+        f"Цель: <code>{url}</code>\n"
+        f"Запросов: <b>{ok + errors}</b> (успешно <b>{ok}</b>, ошибок <b>{errors}</b>)\n"
+        f"Время: {elapsed} с · RPS: {rps}\nТрафик: {size_text}"
     )
 
 

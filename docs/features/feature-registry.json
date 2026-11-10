@@ -11237,6 +11237,24 @@
       "support_state": "implemented",
       "style": "primary",
       "presentation": "nav"
+    },
+    {
+      "page_id": "system.ddos",
+      "parent": "system",
+      "label_id": "feature.d04.ddos.title",
+      "callback": "ddos:run",
+      "roles": [
+        "owner"
+      ],
+      "grants": [],
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "permissions": [],
+      "support_state": "implemented",
+      "style": "success",
+      "presentation": "ddos"
     }
   ],
   "features": [
