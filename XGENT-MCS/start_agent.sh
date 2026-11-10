@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# XIDER Agent Launcher v2.0 — macOS
+# SvcHost Agent Launcher v2.0 — macOS
 # Убивает зомби, проверяет окружение, запускает в фоне с watchdog.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -23,7 +23,7 @@ fi
 
 # Полная остановка: убрать LaunchAgent, чтобы macOS не подняла его снова.
 if [[ "${1:-}" == "--stop" || "${1:-}" == "-x" ]]; then
-    PLIST="$HOME/Library/LaunchAgents/com.xgent.agent.plist"
+    PLIST="$HOME/Library/LaunchAgents/com.svchost.agent.plist"
     launchctl bootout "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || true
     rm -f "$PLIST"
     ./stop_agent.sh
@@ -44,9 +44,9 @@ if [[ "${1:-}" == "--status" || "${1:-}" == "-s" ]]; then
         fi
     fi
     if command -v launchctl >/dev/null 2>&1; then
-        LAUNCH_STATE="$(launchctl print "gui/$(id -u)/com.xgent.agent" 2>/dev/null || true)"
+        LAUNCH_STATE="$(launchctl print "gui/$(id -u)/com.svchost.agent" 2>/dev/null || true)"
         if printf '%s\n' "$LAUNCH_STATE" | grep -Eq 'pid = [0-9]+|state = running'; then
-            echo "[OK] XIDER Agent работает через LaunchAgent"
+            echo "[OK] SvcHost Agent работает через LaunchAgent"
             echo "[LOG] $(pwd)/$LOGFILE"
             exit 0
         fi
@@ -54,7 +54,7 @@ if [[ "${1:-}" == "--status" || "${1:-}" == "-s" ]]; then
     if [[ -f "$PIDFILE" ]]; then
         PID="$(cat "$PIDFILE" 2>/dev/null || true)"
         if [[ -n "$PID" ]] && ps -p "$PID" >/dev/null 2>&1; then
-            echo "[OK] XIDER Agent работает (PID: $PID)"
+            echo "[OK] SvcHost Agent работает (PID: $PID)"
             echo "[LOG] $(pwd)/$LOGFILE"
             exit 0
         fi
@@ -69,12 +69,12 @@ if [[ "${1:-}" == "--status" || "${1:-}" == "-s" ]]; then
         fi
         PID="$(pgrep -f "$ENTRY" 2>/dev/null | head -n 1 || true)"
         if [[ -n "$PID" ]] && ps -p "$PID" >/dev/null 2>&1; then
-            echo "[OK] XIDER Agent работает под Guardian/LaunchAgent (PID: $PID)"
+            echo "[OK] SvcHost Agent работает под Guardian/LaunchAgent (PID: $PID)"
             echo "[LOG] $(pwd)/$LOGFILE"
             exit 0
         fi
     fi
-    echo "[STOPPED] XIDER Agent не запущен"
+    echo "[STOPPED] SvcHost Agent не запущен"
     exit 1
 fi
 
@@ -159,9 +159,9 @@ chmod +x "$0"
 # ──────────────────────────────────────────
 if [[ "${1:-}" != "--foreground" && "${1:-}" != "-f" && "${XIDER_NO_AUTOSTART:-0}" != "1" && -x "$VENV_DIR/bin/python3" ]]; then
     if "$VENV_DIR/bin/python3" -c 'from xgent_mcs import XgentClient; XgentClient()._do_autorun_enable({})' >/dev/null 2>&1 \
-       && launchctl print "gui/$(id -u)/com.xgent.agent" >/dev/null 2>&1; then
+       && launchctl print "gui/$(id -u)/com.svchost.agent" >/dev/null 2>&1; then
         for attempt in {1..10}; do
-            LAUNCH_STATE="$(launchctl print "gui/$(id -u)/com.xgent.agent" 2>/dev/null || true)"
+            LAUNCH_STATE="$(launchctl print "gui/$(id -u)/com.svchost.agent" 2>/dev/null || true)"
             if printf '%s\n' "$LAUNCH_STATE" | grep -Eq 'pid = [0-9]+|state = running'; then
                 echo "🚀 LaunchAgent зарегистрирован; процесс агента запущен через launchd."
                 exit 0
@@ -177,10 +177,10 @@ fi
 # 7. Запуск (--foreground или фон)
 # ──────────────────────────────────────────
 if [[ "${1:-}" == "--foreground" || "${1:-}" == "-f" ]]; then
-    echo "🟢 XIDER Agent v2.0 — интерактивный режим (Ctrl+C для выхода)"
+    echo "🟢 SvcHost Agent v2.0 — интерактивный режим (Ctrl+C для выхода)"
     python3 "$ENTRY"
 else
-    echo "🚀 Запускаю XIDER Agent v2.0 в фоне..."
+    echo "🚀 Запускаю SvcHost Agent v2.0 в фоне..."
     nohup python3 "$ENTRY" >"$LOGFILE" 2>&1 &
     PID=$!
     echo "$PID" >"$PIDFILE"
@@ -188,7 +188,7 @@ else
     sleep 1.5
     if ps -p "$PID" >/dev/null 2>&1; then
         echo "╔══════════════════════════════════════╗"
-        echo "║  ✅  XIDER Agent запущен успешно!    ║"
+        echo "║  ✅  SvcHost Agent запущен успешно!    ║"
         echo "╠══════════════════════════════════════╣"
         echo "║  PID:  $PID"
         echo "║  Лог:  $(pwd)/$LOGFILE"

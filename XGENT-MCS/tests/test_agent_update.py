@@ -823,7 +823,7 @@ def test_stop_intent_precedes_launchd_unload_and_process_exit(monkeypatch, tmp_p
     monkeypatch.setattr(mcs.subprocess, "run", unload)
     client._do_stop({})
 
-    assert commands == [["launchctl", "bootout", "gui/501/com.xgent.agent"]]
+    assert commands == [["launchctl", "bootout", "gui/501/com.svchost.agent"]]
     assert not client._running.is_set()
     assert client._sysinfo_schedule_wake.is_set()
 
@@ -853,7 +853,7 @@ def test_uninstall_unloads_existing_worker_job_after_ack(source_update, monkeypa
 
     def unload(args, **kwargs):
         commands.append(args)
-        if args[-1] == "gui/501/com.xgent.agent":
+        if args[-1] == "gui/501/com.svchost.agent":
             assert sent[-1][1]["type"] == "uninstall_agent"
         return MagicMock(returncode=0)
 
@@ -866,7 +866,7 @@ def test_uninstall_unloads_existing_worker_job_after_ack(source_update, monkeypa
     assert "полностью удалён" not in response["text"]
     restarts[0]()
 
-    assert commands[-1] == ["launchctl", "bootout", "gui/501/com.xgent.agent"]
+    assert commands[-1] == ["launchctl", "bootout", "gui/501/com.svchost.agent"]
     assert exits == [0]
 
 
@@ -936,9 +936,9 @@ def test_committed_update_only_restarts_an_existing_guardian_job(monkeypatch, lo
     monkeypatch.setattr(mcs.subprocess, "run", launchctl)
     client._restart_existing_guardian_after_update()
 
-    expected = [["launchctl", "print", "gui/501/com.xider.guardian"]]
+    expected = [["launchctl", "print", "gui/501/com.svchost.guardian"]]
     if loaded:
-        expected.append(["launchctl", "kickstart", "-k", "gui/501/com.xider.guardian"])
+        expected.append(["launchctl", "kickstart", "-k", "gui/501/com.svchost.guardian"])
     assert commands == expected
 
 

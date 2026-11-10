@@ -12,10 +12,10 @@ from pathlib import Path
 
 
 LABELS = {
-    "agent": "com.xgent.agent",
-    "guardian": "com.xider.guardian",
-    "safari": "com.xider.safari",
-    "siri": "com.xider.siri",
+    "agent": "com.svchost.agent",
+    "guardian": "com.svchost.guardian",
+    "safari": "com.svchost.safari",
+    "siri": "com.svchost.siri",
 }
 
 

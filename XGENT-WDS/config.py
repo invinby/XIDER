@@ -90,8 +90,8 @@ SHARED_KEY = _env_key
 # Интервал heartbeat-сообщений о статусе (секунды).
 HEARTBEAT_INTERVAL = 60
 
-# Каталог с локальными данными клиента (%USERPROFILE%\.xgent).
-CONFIG_DIR = Path.home() / ".xgent"
+# Каталог с локальными данными клиента (%USERPROFILE%\.svchost).
+CONFIG_DIR = Path.home() / ".svchost"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 

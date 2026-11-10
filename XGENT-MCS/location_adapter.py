@@ -356,7 +356,7 @@ def signed_bundle_available():
     try:
         with (app / "Contents/Info.plist").open("rb") as stream:
             info = plistlib.load(stream)
-        if info.get("CFBundleIdentifier") != "com.xider.agent" or not info.get("NSLocationUsageDescription", "").strip():
+        if info.get("CFBundleIdentifier") != "com.svchost.agent" or not info.get("NSLocationUsageDescription", "").strip():
             return False
         verified = subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)],
                                   capture_output=True, timeout=10)

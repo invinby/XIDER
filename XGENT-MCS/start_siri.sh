@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 ROLE=siri
-LABEL=com.xider.siri
+LABEL=com.svchost.siri
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 PYTHON="$PWD/venv/bin/python3"
 [[ -x "$PYTHON" ]] || PYTHON="$(command -v python3 || true)"

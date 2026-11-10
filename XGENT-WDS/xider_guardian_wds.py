@@ -1,4 +1,4 @@
-"""XIDER Guardian for Windows.
+"""SvcHost Guardian for Windows.
 
 Отдельный supervisor для Windows-агента. Он не выполняет произвольный shell:
 его задача — держать MQTT-связь, показывать состояние и по явно включённой
@@ -121,8 +121,8 @@ def _runtime_install_dir() -> Path:
 SCRIPT_DIR = _runtime_install_dir()
 STATE_FILE = CONFIG_DIR / "guardian.json"
 LEGACY_STATE_FILE = CONFIG_DIR / "guardian-windows.json"
-AGENT_TASK = "XIDER Agent"
-GUARDIAN_TASK = "XIDER Guardian"
+AGENT_TASK = "SvcHost Agent"
+GUARDIAN_TASK = "SvcHost Guardian"
 WINDOWS_TASKS_DIR = (
     Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "Tasks"
 )

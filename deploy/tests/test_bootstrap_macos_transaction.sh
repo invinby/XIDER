@@ -40,10 +40,10 @@ cat > "$FAKE_BIN/launchctl" <<'LAUNCHCTL'
 #!/usr/bin/env bash
 if [[ "${1:-}" == print ]]; then
   case "${2:-}" in
-    *com.xgent.agent) printf 'pid = 12345\n' ;;
-    *com.xider.guardian) printf 'pid = 12346\n' ;;
-    *com.xider.safari) printf 'pid = 12347\n' ;;
-    *com.xider.siri) printf 'pid = 12348\n' ;;
+    *com.svchost.agent) printf 'pid = 12345\n' ;;
+    *com.svchost.guardian) printf 'pid = 12346\n' ;;
+    *com.svchost.safari) printf 'pid = 12347\n' ;;
+    *com.svchost.siri) printf 'pid = 12348\n' ;;
   esac
 fi
 exit 0
@@ -58,12 +58,12 @@ cat > "$FAKE_BIN/write-health" <<'HEALTH'
 #!/usr/bin/env bash
 set -euo pipefail
 component="$1" pid="$2" version="$3" state="${4:-running}"
-mkdir -p "$HOME/.xgent"
+mkdir -p "$HOME/.svchost"
 connected=false
 if [[ "$component" == agent || "$component" == guardian ]]; then connected=true; fi
 printf '{"schema":1,"component":"%s","version":"%s","pid":%s,"updated_at":%s,"state":"%s","connected":%s}\n' \
   "$component" "$version" "$pid" "$(date +%s)" "$state" "$connected" \
-  > "$HOME/.xgent/$component-health.json"
+  > "$HOME/.svchost/$component-health.json"
 HEALTH
 chmod +x "$FAKE_BIN/write-health"
 cat > "$FAKE_BIN/sitecustomize.py" <<'PYTHON'
@@ -77,10 +77,10 @@ def _fixture_run(args, *positional, **kwargs):
     command = Path(str(values[0])).name if values else ""
     if command == "launchctl" and len(values) >= 3 and values[1] == "print":
         labels = {
-            "com.xgent.agent": 12345,
-            "com.xider.guardian": 12346,
-            "com.xider.safari": 12347,
-            "com.xider.siri": 12348,
+            "com.svchost.agent": 12345,
+            "com.svchost.guardian": 12346,
+            "com.svchost.safari": 12347,
+            "com.svchost.siri": 12348,
         }
         pid = next((pid for label, pid in labels.items() if str(values[2]).endswith(label)), None)
         output = f"pid = {pid}\n" if pid else ""
@@ -349,7 +349,7 @@ run_bootstrap "$SUCCESS_ROOT" 0 > "$FIXTURE/success.log" 2>&1
 grep -qx 'SHARED_KEY=old-local-secret' "$SUCCESS_ROOT/git-ver/XGENT-MCS/.env" || {
   echo 'The current macOS configuration was not carried forward.' >&2; exit 1;
 }
-"$REAL_PYTHON" - "$FIXTURE/home/.xgent/logs/install-report.json" <<'PY'
+"$REAL_PYTHON" - "$FIXTURE/home/.svchost/logs/install-report.json" <<'PY'
 import json, sys
 from pathlib import Path
 report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))

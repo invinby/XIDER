@@ -6,7 +6,7 @@ eval "$(sed -n '/^# XIDER_LEGACY_MIGRATION_HELPERS_BEGIN$/,/^# XIDER_LEGACY_MIGR
 FIXTURE="$(mktemp -d "${TMPDIR:-/tmp}/xider-legacy-location.XXXXXX")"
 trap '[[ "$FIXTURE" == "${TMPDIR:-/tmp}"/xider-legacy-location.* ]] && rm -rf -- "$FIXTURE"' EXIT
 
-install_root="$FIXTURE/home/Library/Application Support/XIDER"
+install_root="$FIXTURE/home/Library/Application Support/SvcHost"
 legacy_root="$FIXTURE/home/XIDER"
 current_backup="$install_root/git-ver.previous.20261104110000.1111"
 mkdir -p "$install_root/git-ver/XGENT-MCS" "$current_backup/XGENT-MCS"

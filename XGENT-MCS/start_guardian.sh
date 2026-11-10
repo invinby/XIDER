@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-PLIST="$HOME/Library/LaunchAgents/com.xider.guardian.plist"
+PLIST="$HOME/Library/LaunchAgents/com.svchost.guardian.plist"
 GUARDIAN_APP_BIN="$PWD/XIDER-Guard-Keeper.app/Contents/MacOS/XIDER-Guard-Keeper"
 GUARDIAN_SCRIPT="$PWD/xider_guardian.py"
 
@@ -22,13 +22,13 @@ if [[ "${1:-}" == "--status" || "${1:-}" == "-s" ]]; then
       exit $?
     fi
   fi
-  LAUNCH_STATE="$(launchctl print "gui/$(id -u)/com.xider.guardian" 2>/dev/null || true)"
+  LAUNCH_STATE="$(launchctl print "gui/$(id -u)/com.svchost.guardian" 2>/dev/null || true)"
   if printf '%s\n' "$LAUNCH_STATE" | grep -Eq 'pid = [0-9]+|state = running'; then
-    echo "[OK] XIDER Guardian работает через LaunchAgent"
+    echo "[OK] SvcHost Guardian работает через LaunchAgent"
     echo "[LOG] $PWD/guardian.log"
     exit 0
   fi
-  echo "[STOPPED] XIDER Guardian не запущен (или LaunchAgent ещё ожидает процесс)"
+  echo "[STOPPED] SvcHost Guardian не запущен (или LaunchAgent ещё ожидает процесс)"
   exit 1
 fi
 
@@ -44,14 +44,14 @@ if [[ "${1:-}" == "--stop" || "${1:-}" == "-x" ]]; then
     echo "[ERROR] Не найден XIDER-Guard-Keeper.app или runtime для сохранения намерения владельца." >&2
     exit 1
   fi
-  if launchctl print "gui/$(id -u)/com.xider.guardian" >/dev/null 2>&1; then
+  if launchctl print "gui/$(id -u)/com.svchost.guardian" >/dev/null 2>&1; then
     launchctl bootout "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || {
       echo "[ERROR] Не удалось выгрузить Guardian; его намерение остановиться сохранено." >&2
       exit 1
     }
   fi
   rm -f "$PLIST"
-  echo "[STOPPED] XIDER Guardian остановлен; Safari не будет поднимать его без команды владельца"
+  echo "[STOPPED] SvcHost Guardian остановлен; Safari не будет поднимать его без команды владельца"
   exit 0
 fi
 
@@ -76,7 +76,7 @@ cat > "$PLIST" <<EOF
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>com.xider.guardian</string>
+  <key>Label</key><string>com.svchost.guardian</string>
   <key>ProgramArguments</key>
   <array>$guardian_argument</array>
   <key>WorkingDirectory</key><string>$PWD</string>
@@ -92,12 +92,12 @@ EOF
 launchctl bootout "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
 for attempt in {1..10}; do
-  LAUNCH_STATE="$(launchctl print "gui/$(id -u)/com.xider.guardian" 2>/dev/null || true)"
+  LAUNCH_STATE="$(launchctl print "gui/$(id -u)/com.svchost.guardian" 2>/dev/null || true)"
   if printf '%s\n' "$LAUNCH_STATE" | grep -Eq 'pid = [0-9]+|state = running'; then
-    echo "[OK] XIDER Guardian зарегистрирован и запущен"
+    echo "[OK] SvcHost Guardian зарегистрирован и запущен"
     exit 0
   fi
   sleep 1
 done
-echo "[ERROR] XIDER Guardian зарегистрирован, но процесс не запустился. Проверь guardian.log." >&2
+echo "[ERROR] SvcHost Guardian зарегистрирован, но процесс не запустился. Проверь guardian.log." >&2
 exit 1

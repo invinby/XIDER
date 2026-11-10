@@ -2575,7 +2575,7 @@ COPY.update({
         "xadam": "🍏 Mac",
     },
     "manual_install_windows_title": {
-        "xtech": "Установка XIDER Agent · Windows",
+        "xtech": "Установка SvcHost Agent · Windows",
         "xperson": "Команда для Windows · вставь в PowerShell",
         "xpikmi": "🎀 Командочка для Windows готова",
         "xtarped": "Windows · одна строка для PowerShell",
@@ -2583,7 +2583,7 @@ COPY.update({
         "xadam": "Развертывание агента · Windows",
     },
     "manual_install_macos_title": {
-        "xtech": "Установка XIDER Agent · macOS",
+        "xtech": "Установка SvcHost Agent · macOS",
         "xperson": "Команда для Mac · вставь в Terminal",
         "xpikmi": "🎀 Командочка для Mac готова",
         "xtarped": "macOS · одна строка для Terminal",

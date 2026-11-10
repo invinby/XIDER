@@ -12,10 +12,10 @@ from command_replay import CommandReplayLedger, default_replay_path
 def test_default_replay_paths_match_the_approved_per_platform_locations():
     assert default_replay_path(
         "win32", local_app_data=r"C:\Users\example\AppData\Local"
-    ) == Path(r"C:\Users\example\AppData\Local\XIDER\command-replay.json")
+    ) == Path(r"C:\Users\example\AppData\Local\SvcHost\command-replay.json")
     assert default_replay_path(
         "darwin", home="/Users/example"
-    ) == Path("/Users/example/Library/Application Support/XIDER/command-replay.json")
+    ) == Path("/Users/example/Library/Application Support/SvcHost/command-replay.json")
     with pytest.raises(OSError):
         default_replay_path("linux", home="/tmp")
     with pytest.raises(OSError):

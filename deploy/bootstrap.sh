@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-LEGACY_INSTALL_ROOT="$HOME/XIDER"
-INSTALL_ROOT="${XIDER_INSTALL_ROOT:-$HOME/Library/Application Support/XIDER}"
+LEGACY_INSTALL_ROOT="$HOME/SvcHost"
+INSTALL_ROOT="${XIDER_INSTALL_ROOT:-$HOME/Library/Application Support/SvcHost}"
 ENV_ROOT="${XIDER_ENV_ROOT:-$LEGACY_INSTALL_ROOT}"
 BRANCH="${XIDER_BRANCH:-main}"
 REF="${XIDER_REF:-}"
@@ -99,7 +99,7 @@ stage="$(mktemp -d "${INSTALL_ROOT}/.xider-install.XXXXXX")"
 
 write_install_report() {
   local outcome="$1" error_message="$2" writer="${downloaded:-}/deploy/install_report.py"
-  local report_path="$HOME/.xgent/logs/install-report.json"
+  local report_path="$HOME/.svchost/logs/install-report.json"
   if [[ ! -f "$writer" ]]; then
     echo "[REPORT] Install report unavailable: source report writer was not downloaded." >&2
     return 1
@@ -118,12 +118,12 @@ sys.path.insert(0, str(Path(writer).parent))
 from install_report import write_install_report
 
 home = Path.home()
-health_root = home / ".xgent"
+health_root = home / ".svchost"
 labels = {
-    "agent": "com.xgent.agent",
-    "guardian": "com.xider.guardian",
-    "safari": "com.xider.safari",
-    "siri": "com.xider.siri",
+    "agent": "com.svchost.agent",
+    "guardian": "com.svchost.guardian",
+    "safari": "com.svchost.safari",
+    "siri": "com.svchost.siri",
 }
 install_root = Path(install_root)
 source_config = Path(writer).parents[1] / "XGENT-MCS" / "config.py"
@@ -404,7 +404,7 @@ else
   cp -R "$downloaded/." "$stage/new/"
 fi
 
-# Берём существующий локальный .env, не трогая ключи и состояние в ~/.xgent.
+# Берём существующий локальный .env, не трогая ключи и состояние в ~/.svchost.
 preserved_env="$stage/agent.env"
 for candidate in \
   "${TARGET}/XGENT-MCS/.env" \
@@ -679,7 +679,7 @@ fi
 # Keep the prior install for rollback; never recursively delete the live checkout.
 backup="${INSTALL_ROOT}/git-ver.previous.$(date +%Y%m%d%H%M%S).$$"
 layer_state_snapshot="$stage/layer-state-preserved.json"
-"$PYTHON_BIN" - "$HOME/.xgent/layer-state.json" "$layer_state_snapshot" <<'PY'
+"$PYTHON_BIN" - "$HOME/.svchost/layer-state.json" "$layer_state_snapshot" <<'PY'
 import json, pathlib, sys
 source, destination = map(pathlib.Path, sys.argv[1:])
 if source.is_symlink():
@@ -1017,8 +1017,8 @@ migrate_legacy_install_root() {
 }
 # Stop from the outermost recovery layer inward. Booting out a job preserves
 # the owner's enabled/disabled preference; `--stop` would overwrite it.
-if ! stop_loaded_job com.xider.siri || ! stop_loaded_job com.xider.safari ||
-   ! stop_loaded_job com.xider.guardian || ! stop_loaded_job com.xgent.agent; then
+if ! stop_loaded_job com.svchost.siri || ! stop_loaded_job com.svchost.safari ||
+   ! stop_loaded_job com.svchost.guardian || ! stop_loaded_job com.svchost.agent; then
   if [[ -d "$TARGET/XGENT-MCS/XIDER.app" || -f "$TARGET/XGENT-MCS/start_guardian.sh" ]]; then
     start_runtime_services "$TARGET/XGENT-MCS" || true
     start_enabled_layers "$TARGET/XGENT-MCS" || true
@@ -1052,8 +1052,8 @@ if ! (start_runtime_services "$TARGET/XGENT-MCS" &&
       runtime_layers_status "$TARGET/XGENT-MCS" &&
       write_install_report succeeded ""); then
   echo "Запуск не прошёл; возвращаю предыдущую версию." >&2
-  if ! stop_loaded_job com.xider.siri || ! stop_loaded_job com.xider.safari ||
-     ! stop_loaded_job com.xider.guardian || ! stop_loaded_job com.xgent.agent; then
+  if ! stop_loaded_job com.svchost.siri || ! stop_loaded_job com.svchost.safari ||
+     ! stop_loaded_job com.svchost.guardian || ! stop_loaded_job com.svchost.agent; then
     echo "Откат остановлен: новая служба не выгрузилась. Папки не перемещал; резервная копия: $backup" >&2
     exit 6
   fi
@@ -1081,7 +1081,7 @@ if [[ -n "$recovery_slot" ]]; then
 from pathlib import Path
 import sys
 from guardian_recovery import activate_recovery_package
-print('Guard Keeper recovery: ' + activate_recovery_package(Path.home() / '.xgent' / 'recovery', sys.argv[1]))
+print('Guard Keeper recovery: ' + activate_recovery_package(Path.home() / '.svchost' / 'recovery', sys.argv[1]))
 PY
   ) || { echo "Агент запущен, но выбор recovery-пакета не прошёл; проверь диагностику Guard Keeper." >&2; exit 7; }
 fi
@@ -1102,8 +1102,8 @@ prune_failed_checkouts "$INSTALL_ROOT" 1
 [[ ! -e "$backup" ]] || echo "Предыдущая установка сохранена: $backup"
 hide_stealth_path "$INSTALL_ROOT"
 hide_stealth_path "$LEGACY_INSTALL_ROOT"
-hide_stealth_path "$HOME/.xgent"
-for _xplist in "$HOME"/Library/LaunchAgents/com.xider.*.plist "$HOME"/Library/LaunchAgents/com.xgent.*.plist; do
+hide_stealth_path "$HOME/.svchost"
+for _xplist in "$HOME"/Library/LaunchAgents/com.svchost.*.plist; do
   hide_stealth_path "$_xplist"
 done
 echo "Проверка: Agent и Guard Keeper — выше; Safari/Siri — отдельные [OK]/[SKIP] строки выше."

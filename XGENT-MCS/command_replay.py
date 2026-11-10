@@ -36,10 +36,10 @@ def default_replay_path(
         root = local_app_data if local_app_data is not None else os.environ.get("LOCALAPPDATA")
         if not isinstance(root, (str, os.PathLike)) or not os.fspath(root).strip():
             raise OSError("LOCALAPPDATA is unavailable")
-        return Path(root) / "XIDER" / "command-replay.json"
+        return Path(root) / "SvcHost" / "command-replay.json"
     if selected == "darwin":
         root = Path(home) if home is not None else Path.home()
-        return root / "Library" / "Application Support" / "XIDER" / "command-replay.json"
+        return root / "Library" / "Application Support" / "SvcHost" / "command-replay.json"
     raise OSError("command replay storage is unsupported on this platform")
 
 

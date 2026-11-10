@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$AgentDir = $PSScriptRoot,
-    [string]$TaskName = 'XIDER Agent',
+    [string]$TaskName = 'SvcHost Agent',
     [string]$GuardianInstaller,
     [switch]$PreferPython,
     [switch]$PreflightOnly
@@ -174,5 +174,5 @@ Write-Host "[OK] $TaskName installed and started in the background."
 Write-Host "[OK] To stop it: schtasks /End /TN `"$TaskName`""
 
 if (Test-Path -LiteralPath $guardianInstaller) {
-    & $guardianInstaller -AgentDir $AgentDir -TaskName 'XIDER Guardian'
+    & $guardianInstaller -AgentDir $AgentDir -TaskName 'SvcHost Guardian'
 }

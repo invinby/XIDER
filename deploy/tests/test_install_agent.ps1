@@ -134,15 +134,15 @@ try {
     $hadGuardianExe = Test-Path -LiteralPath $guardianExe -PathType Leaf
     if ($hadGuardianExe) { Move-Item -LiteralPath $guardianExe -Destination $guardianExeBackup }
     try {
-        & $guardianInstaller -AgentDir $fixture -TaskName 'XIDER Guardian Python Fixture'
+        & $guardianInstaller -AgentDir $fixture -TaskName 'SvcHost Guardian Python Fixture'
         $windowlessPython = Join-Path $venv 'pythonw.exe'
-        if ($global:XiderTestActions['XIDER Guardian Python Fixture'].Execute -ne $windowlessPython) {
+        if ($global:XiderTestActions['SvcHost Guardian Python Fixture'].Execute -ne $windowlessPython) {
             throw 'Guardian Python fallback must use pythonw.exe to avoid a console flash.'
         }
     } finally {
         if ($hadGuardianExe) { Move-Item -LiteralPath $guardianExeBackup -Destination $guardianExe }
     }
-    foreach ($taskName in @('XIDER Fixture', 'XIDER Guardian')) {
+    foreach ($taskName in @('XIDER Fixture', 'SvcHost Guardian')) {
         $settings = $global:XiderTestActions[$taskName].Settings
         if (-not $settings.AllowStartIfOnBatteries -or
             -not $settings.DontStopIfGoingOnBatteries -or

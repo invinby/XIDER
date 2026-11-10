@@ -1,4 +1,4 @@
-"""XIDER Guardian: прозрачный supervisor для macOS-агента.
+"""SvcHost Guardian: прозрачный supervisor для macOS-агента.
 
 Guardian работает отдельным видимым LaunchAgent. Он не выполняет shell-команды
 из Telegram и не собирает камеру/микрофон/геолокацию. Его задача — держать
@@ -557,7 +557,7 @@ class Guardian:
     def launchd_loaded(self) -> bool:
         """Whether the worker LaunchAgent is registered in this GUI session."""
         result = subprocess.run(
-            ["launchctl", "print", f"gui/{os.getuid()}/com.xgent.agent"],
+            ["launchctl", "print", f"gui/{os.getuid()}/com.svchost.agent"],
             capture_output=True, check=False,
         )
         return result.returncode == 0
@@ -565,7 +565,7 @@ class Guardian:
     def guardian_launchd_loaded(self) -> bool:
         """Whether the separate Guardian supervisor is registered."""
         result = subprocess.run(
-            ["launchctl", "print", f"gui/{os.getuid()}/com.xider.guardian"],
+            ["launchctl", "print", f"gui/{os.getuid()}/com.svchost.guardian"],
             capture_output=True, check=False,
         )
         return result.returncode == 0
@@ -575,8 +575,8 @@ class Guardian:
         worker_launchd_loaded = self.launchd_loaded()
         guardian_launchd_loaded = self.guardian_launchd_loaded()
         companions = _layer_health_snapshot()
-        worker_registration_count = count_launchagent_registrations("com.xgent.agent")
-        guardian_registration_count = count_launchagent_registrations("com.xider.guardian")
+        worker_registration_count = count_launchagent_registrations("com.svchost.agent")
+        guardian_registration_count = count_launchagent_registrations("com.svchost.guardian")
         duplicate_summary = (
             f"агент: {max(0, worker_registration_count - 1)}, "
             f"Guardian: {max(0, guardian_registration_count - 1)}"
@@ -789,11 +789,11 @@ class Guardian:
         # загруженным и поэтому может запустить агент снова из Telegram.
         subprocess.run(
             ["launchctl", "bootout", f"gui/{os.getuid()}",
-             str(Path.home() / "Library" / "LaunchAgents" / "com.xgent.agent.plist")],
+             str(Path.home() / "Library" / "LaunchAgents" / "com.svchost.agent.plist")],
             capture_output=True, check=False,
         )
         try:
-            (Path.home() / "Library" / "LaunchAgents" / "com.xgent.agent.plist").unlink()
+            (Path.home() / "Library" / "LaunchAgents" / "com.svchost.agent.plist").unlink()
         except FileNotFoundError:
             pass
         pid = self.agent_pid()
@@ -818,7 +818,7 @@ class Guardian:
     def _stop_agent_for_bundle_update(self, was_launchd_loaded: bool) -> None:
         """Stop the worker without changing the owner's persisted run intent."""
         self._require_running_intent()
-        plist = Path.home() / "Library" / "LaunchAgents" / "com.xgent.agent.plist"
+        plist = Path.home() / "Library" / "LaunchAgents" / "com.svchost.agent.plist"
         if was_launchd_loaded:
             result = subprocess.run(
                 ["launchctl", "bootout", f"gui/{os.getuid()}", str(plist)],
@@ -845,7 +845,7 @@ class Guardian:
 
     def _start_agent_after_bundle_update(self, was_launchd_loaded: bool) -> int | None:
         self._require_running_intent()
-        plist = Path.home() / "Library" / "LaunchAgents" / "com.xgent.agent.plist"
+        plist = Path.home() / "Library" / "LaunchAgents" / "com.svchost.agent.plist"
         if was_launchd_loaded and plist.is_file() and not plist.is_symlink():
             result = subprocess.run(
                 ["launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist)],
@@ -954,7 +954,7 @@ class Guardian:
                 threading.Timer(
                     2.0,
                     lambda: subprocess.run(
-                        ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.xider.guardian"],
+                        ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.svchost.guardian"],
                         capture_output=True, check=False,
                     ),
                 ).start()
@@ -1144,7 +1144,7 @@ class Guardian:
 def main() -> int:
     if sys.argv[1:] == ["--owner-stop-agent"]:
         set_guardian_desired_running(False)
-        print("[OK] XIDER Guardian saved the owner's stop choice.")
+        print("[OK] SvcHost Guardian saved the owner's stop choice.")
         return 0
     if len(sys.argv) >= 2 and sys.argv[1] == "--service":
         parser = argparse.ArgumentParser(description="XIDER macOS Guard Keeper LaunchAgent control")

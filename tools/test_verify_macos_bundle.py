@@ -13,9 +13,9 @@ class BundleVerifierTests(unittest.TestCase):
         self.app = pathlib.Path(self.tmp.name) / "XIDER.app"
         (self.app / "Contents/MacOS").mkdir(parents=True)
         (self.app / "Contents/MacOS/XGENT-MCS").write_bytes(b"fixture")
-        self.info = {"CFBundleIdentifier": "com.xider.agent", "CFBundleExecutable": "XGENT-MCS",
+        self.info = {"CFBundleIdentifier": "com.svchost.agent", "CFBundleExecutable": "XGENT-MCS",
                      "NSLocationUsageDescription": "One explicit request after local permission."}
-        self.identity = "Identifier=com.xider.agent\nAuthority=Apple Development: Test (TEAM)\nTeamIdentifier=TEAM\n"
+        self.identity = "Identifier=com.svchost.agent\nAuthority=Apple Development: Test (TEAM)\nTeamIdentifier=TEAM\n"
         self.verify_code = 0
         self.notary_code = 0
         self.calls = []
@@ -54,15 +54,15 @@ class BundleVerifierTests(unittest.TestCase):
         self.verify_code = 1
         self.assertTrue(self.verify())
     def test_ad_hoc_signature_is_rejected(self):
-        self.identity = "Identifier=com.xider.agent\nSignature=adhoc\nTeamIdentifier=not set"
+        self.identity = "Identifier=com.svchost.agent\nSignature=adhoc\nTeamIdentifier=not set"
         self.assertTrue(self.verify())
     def test_codesign_identity_must_match_plist(self):
-        self.identity = self.identity.replace("Identifier=com.xider.agent", "Identifier=com.other.agent")
+        self.identity = self.identity.replace("Identifier=com.svchost.agent", "Identifier=com.other.agent")
         self.assertTrue(self.verify())
     def test_development_identity_cannot_be_distributed(self):
         self.assertTrue(self.verify(distribution=True))
     def test_distribution_requires_stapled_developer_id(self):
-        self.identity = "Identifier=com.xider.agent\nAuthority=Developer ID Application: Test (TEAM)\nTeamIdentifier=TEAM"
+        self.identity = "Identifier=com.svchost.agent\nAuthority=Developer ID Application: Test (TEAM)\nTeamIdentifier=TEAM"
         self.assertEqual(self.verify(distribution=True), [])
         self.assertTrue(any(call[:3] == ["xcrun", "stapler", "validate"] for call in self.calls))
 
@@ -84,7 +84,7 @@ class BundleVerifierTests(unittest.TestCase):
         self.assertTrue(gate(values))
 
     def test_distribution_rejects_invalid_notarization_ticket(self):
-        self.identity = "Identifier=com.xider.agent\nAuthority=Developer ID Application: Test (TEAM)\nTeamIdentifier=TEAM"
+        self.identity = "Identifier=com.svchost.agent\nAuthority=Developer ID Application: Test (TEAM)\nTeamIdentifier=TEAM"
         self.notary_code = 1
         self.assertTrue(self.verify(distribution=True))
 

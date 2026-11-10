@@ -95,7 +95,7 @@ def _post_json(url: str, expected_host: str, payload: dict, *, timeout: float = 
 
 
 def _device_identity() -> tuple[str, str]:
-    config = Path.home() / ".xgent" / "config.json"
+    config = Path.home() / ".svchost" / "config.json"
     config.parent.mkdir(parents=True, exist_ok=True)
     try:
         data = json.loads(config.read_text(encoding="utf-8"))

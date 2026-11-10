@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 ROLE=safari
-LABEL=com.xider.safari
+LABEL=com.svchost.safari
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 PYTHON="$PWD/venv/bin/python3"
 [[ -x "$PYTHON" ]] || PYTHON="$(command -v python3 || true)"

@@ -1,4 +1,4 @@
-"""Local, publisher-signed recovery inputs for the visible XIDER Guardian.
+"""Local, publisher-signed recovery inputs for the visible SvcHost Guardian.
 
 The installer stages a verified release archive outside the mutable checkout.
 Slots are content addressed, never overwritten, and verified again before use.

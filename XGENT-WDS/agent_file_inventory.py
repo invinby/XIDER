@@ -312,7 +312,7 @@ def collect_agent_file_inventory(
     agent_version: str | None = None,
     guardian_version: str | None = None,
 ) -> dict[str, Any]:
-    """Collect bounded metadata for the XIDER Agent and Guard Keeper only."""
+    """Collect bounded metadata for the SvcHost Agent and Guard Keeper only."""
     generated_at = _datetime.datetime.now(_datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     root, error = _safe_root(install_root)
     if root is None:

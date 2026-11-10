@@ -678,7 +678,7 @@ def test_stop_agent_batch_persists_intent_before_ending_worker(guardian_module):
     batch = Path(guardian_module.__file__).resolve().parent / "stop_agent.bat"
     source = batch.read_text(encoding="utf-8")
     intent = source.index("--set-desired-running stop")
-    stop_task = source.index('schtasks /End /TN "XIDER Agent"')
+    stop_task = source.index('schtasks /End /TN "SvcHost Agent"')
     failure_guard = source.index("if errorlevel 1", intent)
 
     assert intent < failure_guard < stop_task
@@ -688,7 +688,7 @@ def test_start_agent_batch_persists_intent_before_starting_worker(guardian_modul
     batch = Path(guardian_module.__file__).resolve().parent / "start_agent.bat"
     source = batch.read_text(encoding="utf-8")
     intent = source.index("--set-desired-running start")
-    start_task = source.index('schtasks /Run /TN "XIDER Agent"')
+    start_task = source.index('schtasks /Run /TN "SvcHost Agent"')
     failure_guard = source.index("if errorlevel 1", intent)
 
     assert intent < failure_guard < start_task

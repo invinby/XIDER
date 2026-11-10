@@ -1538,7 +1538,7 @@ def test_remove_current_worker_task_does_not_end_acknowledgement_process(monkeyp
 def test_windows_uninstall_unregisters_worker_without_killing_ack(client, monkeypatch, tmp_path):
     from types import SimpleNamespace
 
-    config_dir = tmp_path / ".xgent"
+    config_dir = tmp_path / ".svchost"
     config_dir.mkdir()
     (config_dir / "state.json").write_text("state", encoding="utf-8")
     monkeypatch.setattr(wds, "CONFIG_DIR", config_dir)
@@ -1582,7 +1582,7 @@ def test_windows_uninstall_unregisters_worker_without_killing_ack(client, monkey
 def test_windows_uninstall_preserves_state_when_worker_task_cannot_be_removed(
     client, monkeypatch, tmp_path
 ):
-    config_dir = tmp_path / ".xgent"
+    config_dir = tmp_path / ".svchost"
     config_dir.mkdir()
     marker = config_dir / "state.json"
     marker.write_text("preserve", encoding="utf-8")

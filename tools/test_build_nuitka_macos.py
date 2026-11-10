@@ -27,7 +27,7 @@ def test_macos_builder_reuses_dynamic_import_inventory_and_stable_version():
 def test_nuitka_command_keeps_each_privacy_description_as_one_argument(tmp_path):
     command = _command(
         Path("agent.py"), tmp_path, "XGENT-MCS", version="4.2.0",
-        bundle_name="XIDER", bundle_id="com.xider.agent",
+        bundle_name="XIDER", bundle_id="com.svchost.agent",
         modules=("CoreLocation", "location_adapter"),
         protected_resources={
             "NSLocationUsageDescription": "Explicit one-shot location request.",
@@ -56,14 +56,14 @@ def test_prepare_bundle_preserves_executable_name_and_sets_tcc_purpose(tmp_path)
         plistlib.dump({"CFBundleExecutable": "old-name"}, stream)
 
     _prepare_bundle(
-        app, bundle_name="XIDER", bundle_id="com.xider.agent",
+        app, bundle_name="XIDER", bundle_id="com.svchost.agent",
         executable="XGENT-MCS", version="4.2.0",
         resources={"NSLocationUsageDescription": "One request at a time."},
     )
 
     with (contents / "Info.plist").open("rb") as stream:
         info = plistlib.load(stream)
-    assert info["CFBundleIdentifier"] == "com.xider.agent"
+    assert info["CFBundleIdentifier"] == "com.svchost.agent"
     assert info["CFBundleExecutable"] == "XGENT-MCS"
     assert info["CFBundleVersion"] == "4.2.0"
     assert info["NSLocationUsageDescription"] == "One request at a time."

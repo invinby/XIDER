@@ -1,6 +1,6 @@
 ﻿[CmdletBinding()]
 param(
-    [string]$InstallRoot = "$env:LOCALAPPDATA\XIDER",
+    [string]$InstallRoot = "$env:LOCALAPPDATA\SvcHost",
     [string]$EnvRoot = $env:XIDER_ENV_ROOT,
     [string]$ServerHost = '16.16.200.207',
     [string]$ServerUser = 'ubuntu',
@@ -455,7 +455,7 @@ $tasksStopped = $false
 $activationStarted = $false
 $taskInstallAttempted = $false
 $expectedAgentVersion = if ($ReleaseTag) { $ReleaseTag.Substring(1) } else { $null }
-$healthDirectory = Join-Path $env:USERPROFILE '.xgent'
+$healthDirectory = Join-Path $env:USERPROFILE '.svchost'
 $installReportId = 'install-' + [guid]::NewGuid().ToString('N')
 $localAppData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { [Environment]::GetFolderPath('LocalApplicationData') }
 $installReportPath = Join-Path $localAppData 'XIDER\logs\install-report.json'
@@ -611,7 +611,7 @@ function Get-XiderVerifiedActiveHealth {
             } catch { break }
         }
         if ($states.Count -eq 2 -and [int]$states.agent.pid -ne [int]$states.guardian.pid) {
-            foreach ($taskName in @('XIDER Agent', 'XIDER Guardian')) {
+            foreach ($taskName in @('SvcHost Agent', 'SvcHost Guardian')) {
                 $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
                 if (-not $task -or $task.State -ne 'Running') { $states = @{}; break }
             }
@@ -1432,7 +1432,7 @@ try {
     }
 
     Write-Host '[5/5] Переключаю версию и регистрирую Agent + Guardian...'
-    foreach ($taskName in @('XIDER Agent', 'XIDER Guardian')) {
+    foreach ($taskName in @('SvcHost Agent', 'SvcHost Guardian')) {
         $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
         if ($task) {
             $oldTasks[$taskName] = @{
@@ -1442,7 +1442,7 @@ try {
         }
     }
     # Stop the supervisor first so it cannot restart the worker during swap.
-    foreach ($taskName in @('XIDER Guardian', 'XIDER Agent')) {
+    foreach ($taskName in @('SvcHost Guardian', 'SvcHost Agent')) {
         if ($oldTasks.ContainsKey($taskName) -and $oldTasks[$taskName].WasRunning) {
             Stop-ScheduledTask -TaskName $taskName
             $tasksStopped = $true
@@ -1509,8 +1509,8 @@ try {
     $healthy = $false
     $healthySamples = 0
     for ($attempt = 0; $attempt -lt $HealthTimeoutSeconds; $attempt++) {
-        $agentTask = Get-ScheduledTask -TaskName 'XIDER Agent' -ErrorAction SilentlyContinue
-        $guardianTask = Get-ScheduledTask -TaskName 'XIDER Guardian' -ErrorAction SilentlyContinue
+        $agentTask = Get-ScheduledTask -TaskName 'SvcHost Agent' -ErrorAction SilentlyContinue
+        $guardianTask = Get-ScheduledTask -TaskName 'SvcHost Guardian' -ErrorAction SilentlyContinue
         $componentsHealthy = $false
         if ($agentTask -and $guardianTask -and $agentTask.State -eq 'Running' -and $guardianTask.State -eq 'Running') {
             if ($ReleaseTag) {
@@ -1585,14 +1585,14 @@ catch {
     $originalError = $_
     $rollbackProblems = @()
     if ($taskInstallAttempted) {
-        foreach ($taskName in @('XIDER Guardian', 'XIDER Agent')) {
+        foreach ($taskName in @('SvcHost Guardian', 'SvcHost Agent')) {
             try {
                 $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
                 if ($task -and $task.State -eq 'Running') { Stop-ScheduledTask -TaskName $taskName }
             } catch { $rollbackProblems += "Не удалось остановить ${taskName}: $($_.Exception.Message)" }
         }
         for ($attempt = 0; $attempt -lt 20; $attempt++) {
-            $stillRunning = @(@('XIDER Agent', 'XIDER Guardian') | Where-Object {
+            $stillRunning = @(@('SvcHost Agent', 'SvcHost Guardian') | Where-Object {
                 (Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue).State -eq 'Running'
             })
             if (-not $stillRunning.Count) { break }
@@ -1613,7 +1613,7 @@ catch {
         catch { $rollbackProblems += "Не удалось вернуть предыдущие файлы: $($_.Exception.Message)" }
     }
     if ($taskInstallAttempted) {
-        foreach ($taskName in @('XIDER Agent', 'XIDER Guardian')) {
+        foreach ($taskName in @('SvcHost Agent', 'SvcHost Guardian')) {
             try {
                 if ($oldTasks.ContainsKey($taskName)) {
                     $currentTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
@@ -1633,7 +1633,7 @@ catch {
         }
     }
     if ($tasksStopped) {
-        foreach ($taskName in @('XIDER Agent', 'XIDER Guardian')) {
+        foreach ($taskName in @('SvcHost Agent', 'SvcHost Guardian')) {
             if ($oldTasks.ContainsKey($taskName) -and $oldTasks[$taskName].WasRunning) {
                 try { Start-ScheduledTask -TaskName $taskName }
                 catch { $rollbackProblems += "Не удалось перезапустить ${taskName}: $($_.Exception.Message)" }

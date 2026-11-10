@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$AgentDir = $PSScriptRoot,
-    [string]$TaskName = 'XIDER Guardian',
+    [string]$TaskName = 'SvcHost Guardian',
     [switch]$PreflightOnly
 )
 

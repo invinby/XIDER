@@ -20,7 +20,7 @@ $global:XiderMockStoppedPids = @()
 $global:XiderMockFilterResults = @()
 $global:XiderMockHealthStatus = 'missing'
 $global:XiderMockOldTasks = $true
-$global:XiderMockOldRunning = @{ 'XIDER Agent' = $true; 'XIDER Guardian' = $true }
+$global:XiderMockOldRunning = @{ 'SvcHost Agent' = $true; 'SvcHost Guardian' = $true }
 $global:XiderMockRestored = @()
 $global:XiderMockRestarted = @()
 $global:XiderMockUnregistered = @()
@@ -38,7 +38,7 @@ function Get-ScheduledTask {
         # Both development tasks are registered with the console-free runtime.
         $binary = 'pythonw.exe'
         $execute = Join-Path $global:XiderMockAgentDir ("venv\Scripts\$binary")
-        $arguments = if ($TaskName -eq 'XIDER Agent') { 'xgent_wds.py' } else { 'xider_guardian_wds.py' }
+        $arguments = if ($TaskName -eq 'SvcHost Agent') { 'xgent_wds.py' } else { 'xider_guardian_wds.py' }
         return [pscustomobject]@{
             TaskName = $TaskName
             State = 'Running'
@@ -66,7 +66,7 @@ function Register-ScheduledTask {
 }
 function Unregister-ScheduledTask {
     param($TaskName, [switch]$Confirm)
-    if ($TaskName -notin @('XIDER Agent', 'XIDER Guardian')) {
+    if ($TaskName -notin @('SvcHost Agent', 'SvcHost Guardian')) {
         throw "Fixture attempted to unregister an unexpected task: $TaskName"
     }
     $global:XiderMockUnregistered += $TaskName
@@ -101,7 +101,7 @@ function powershell.exe {
         $global:XiderMockAgentDir = $args[$agentIndex + 1]
         $global:XiderMockTasksRunning = $true
         if ($global:XiderMockHealthStatus -ne 'missing') {
-            $healthDir = Join-Path $env:USERPROFILE '.xgent'
+            $healthDir = Join-Path $env:USERPROFILE '.svchost'
             New-Item -ItemType Directory -Path $healthDir -Force | Out-Null
             $stamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000
             if ($global:XiderMockHealthStatus -eq 'stale') { $stamp -= 120 }

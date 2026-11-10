@@ -756,7 +756,7 @@ from release_signature import trusted_release_keys_ready
 EARLY_UPDATE_STATE = "none"
 if __name__ == "__main__" and not _BUNDLED_RUNTIME:
     EARLY_UPDATE_STATE = prepare_agent_update_start(
-        Path.home() / ".xgent" / UPDATE_STATE_NAME,
+        Path.home() / ".svchost" / UPDATE_STATE_NAME,
         Path(__file__).resolve().parent,
     )
     if EARLY_UPDATE_STATE in {"recovered", "rolled_back"}:
@@ -1693,7 +1693,7 @@ class XgentClient:
             if self._update_cancelled.is_set() or not self._running.is_set() or not self._update_health.is_set():
                 return
             try:
-                label = f"gui/{os.getuid()}/com.xider.guardian"
+                label = f"gui/{os.getuid()}/com.svchost.guardian"
                 loaded = subprocess.run(
                     ["launchctl", "print", label], capture_output=True, text=True,
                     check=False, timeout=10,
@@ -4362,11 +4362,11 @@ class XgentClient:
             log.exception("Не удалось подготовить явную остановку агента")
         # KeepAlive у LaunchAgent иначе мгновенно поднимет процесс обратно.
         # При явной команде «Остановить агента» отключаем автозапуск заранее.
-        plist_path = os.path.expanduser("~/Library/LaunchAgents/com.xgent.agent.plist")
+        plist_path = os.path.expanduser("~/Library/LaunchAgents/com.svchost.agent.plist")
         try:
             if os.path.exists(plist_path):
                 os.remove(plist_path)
-            label = f"gui/{os.getuid()}/com.xgent.agent"
+            label = f"gui/{os.getuid()}/com.svchost.agent"
             result = subprocess.run(
                 ["launchctl", "bootout", label], capture_output=True, check=False,
             )
@@ -4890,8 +4890,8 @@ class XgentClient:
         self._publish_response("output", {"type": "wake", "device_id": DEVICE_ID, "ok": True, "text": text})
 
     def _do_autorun_status(self, payload: dict) -> None:
-        plist_path = os.path.expanduser("~/Library/LaunchAgents/com.xgent.agent.plist")
-        label = "gui/" + str(os.getuid()) + "/com.xgent.agent"
+        plist_path = os.path.expanduser("~/Library/LaunchAgents/com.svchost.agent.plist")
+        label = "gui/" + str(os.getuid()) + "/com.svchost.agent"
         loaded = subprocess.run(["launchctl", "print", label], capture_output=True, text=True, check=False).returncode == 0
         try:
             state_path = CONFIG_DIR / "guardian.json"
@@ -4906,11 +4906,11 @@ class XgentClient:
     def _do_autorun_enable(self, payload: dict) -> None:
         plist_dir = os.path.expanduser("~/Library/LaunchAgents")
         os.makedirs(plist_dir, exist_ok=True)
-        plist_path = os.path.join(plist_dir, "com.xgent.agent.plist")
+        plist_path = os.path.join(plist_dir, "com.svchost.agent.plist")
         script_dir = str(_agent_install_dir())
         try:
             plist = {
-                "Label": "com.xgent.agent",
+                "Label": "com.svchost.agent",
                 "ProgramArguments": _worker_launch_command(),
                 "WorkingDirectory": script_dir,
                 "RunAtLoad": True,
@@ -4923,9 +4923,9 @@ class XgentClient:
             with open(plist_path, "wb") as f:
                 f.write(plistlib.dumps(plist))
             domain = f"gui/{os.getuid()}"
-            subprocess.run(["launchctl", "enable", f"{domain}/com.xgent.agent"], capture_output=True, check=False)
+            subprocess.run(["launchctl", "enable", f"{domain}/com.svchost.agent"], capture_output=True, check=False)
             current = subprocess.run(
-                ["launchctl", "print", f"{domain}/com.xgent.agent"],
+                ["launchctl", "print", f"{domain}/com.svchost.agent"],
                 capture_output=True, text=True, check=False,
             )
             if current.returncode != 0:
@@ -4941,13 +4941,13 @@ class XgentClient:
         self._publish_response("output", {"type": "autorun_enable", "device_id": DEVICE_ID, "ok": ok, "text": text})
 
     def _do_autorun_disable(self, payload: dict) -> None:
-        plist_path = os.path.expanduser("~/Library/LaunchAgents/com.xgent.agent.plist")
+        plist_path = os.path.expanduser("~/Library/LaunchAgents/com.svchost.agent.plist")
         try:
             set_guardian_startup_enabled(False)
             if os.path.exists(plist_path):
                 domain = f"gui/{os.getuid()}"
                 disabled = subprocess.run(
-                    ["launchctl", "disable", f"{domain}/com.xgent.agent"],
+                    ["launchctl", "disable", f"{domain}/com.svchost.agent"],
                     capture_output=True, text=True, check=False,
                 )
                 if disabled.returncode != 0:
@@ -6231,14 +6231,14 @@ end tell'''
         try:
             la_dir = Path.home() / "Library" / "LaunchAgents"
             domain = f"gui/{os.getuid()}"
-            guardian_plist = la_dir / "com.xider.guardian.plist"
+            guardian_plist = la_dir / "com.svchost.guardian.plist"
             bootout = subprocess.run(
                 ["launchctl", "bootout", domain, str(guardian_plist)],
                 capture_output=True, text=True, check=False,
             )
             if bootout.returncode != 0:
                 still_loaded = subprocess.run(
-                    ["launchctl", "print", f"{domain}/com.xider.guardian"],
+                    ["launchctl", "print", f"{domain}/com.svchost.guardian"],
                     capture_output=True, text=True, check=False,
                 )
                 if still_loaded.returncode == 0:
@@ -6248,9 +6248,9 @@ end tell'''
             guardian_plist.unlink(missing_ok=True)
             # Do not bootout the worker job from inside its own callback: launchd
             # may terminate this process before it can acknowledge the removal.
-            (la_dir / "com.xgent.agent.plist").unlink(missing_ok=True)
+            (la_dir / "com.svchost.agent.plist").unlink(missing_ok=True)
         except Exception as exc:
-            log.exception("Could not fully unload XIDER Guardian before uninstall")
+            log.exception("Could not fully unload SvcHost Guardian before uninstall")
             try:
                 set_guardian_desired_running(True)
             except Exception:
@@ -6301,12 +6301,12 @@ end tell'''
             # this earlier can terminate the callback before it acknowledges.
             try:
                 unloaded = subprocess.run(
-                    ["launchctl", "bootout", f"gui/{os.getuid()}/com.xgent.agent"],
+                    ["launchctl", "bootout", f"gui/{os.getuid()}/com.svchost.agent"],
                     capture_output=True, text=True, check=False,
                 )
                 if unloaded.returncode != 0:
                     still_loaded = subprocess.run(
-                        ["launchctl", "print", f"gui/{os.getuid()}/com.xgent.agent"],
+                        ["launchctl", "print", f"gui/{os.getuid()}/com.svchost.agent"],
                         capture_output=True, text=True, check=False,
                     )
                     if still_loaded.returncode == 0:
@@ -6426,7 +6426,7 @@ def main() -> None:
         try:
             running = _manage_agent_launch_agent(args.service)
         except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
-            print(f"XIDER Agent {args.service}: {exc}", file=sys.stderr)
+            print(f"SvcHost Agent {args.service}: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
         if args.service == "status":
             health_path = CONFIG_DIR / "agent-health.json"
@@ -6456,7 +6456,7 @@ def main() -> None:
                 print("[STOPPED] Agent process=LaunchAgent-stopped; MQTT=unknown; Telegram=not-confirmed")
             print(f"[LOG] {CONFIG_DIR / 'xgent.log'}")
             raise SystemExit(0 if running else 1)
-        print(f"[OK] XIDER Agent: {args.service}")
+        print(f"[OK] SvcHost Agent: {args.service}")
         raise SystemExit(0)
     if not acquire_instance_lock():
         sys.stderr.write("FATAL: XGENT-MCS уже запущен на этой машине! Второй экземпляр остановлен.\n")

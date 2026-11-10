@@ -3,7 +3,7 @@ param(
     [string]$ServerIp = '16.16.200.207',
     [string]$KeyPath,
     [string]$EnvRoot = $env:XIDER_ENV_ROOT,
-    [string]$InstallRoot = "$env:LOCALAPPDATA\XIDER",
+    [string]$InstallRoot = "$env:LOCALAPPDATA\SvcHost",
     [string]$Branch = 'main',
     [string]$Ref = $env:XIDER_REF,
     [string]$SourceArchive

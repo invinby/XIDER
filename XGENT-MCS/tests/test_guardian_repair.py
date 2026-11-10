@@ -190,7 +190,7 @@ def test_safari_restarts_healthy_guardian_when_agent_heartbeat_is_stale(
     )
 
     assert xider_layers._start_child("safari") == "guardian_restarted_for_agent"
-    assert commands == [["launchctl", "kickstart", "-k", f"gui/{xider_layers.os.getuid()}/com.xider.guardian"]]
+    assert commands == [["launchctl", "kickstart", "-k", f"gui/{xider_layers.os.getuid()}/com.svchost.guardian"]]
 
 
 def test_siri_layer_state_updates_preserve_safari_owner_choice(guardian_module, monkeypatch):
@@ -267,7 +267,7 @@ def test_compiled_layer_cli_writes_release_launch_agent_without_python_sources(
     source.write_text("raise RuntimeError('source fallback must not run')", encoding="utf-8")
     release_marker = tmp_path / ".xider-signed-release"
     release_marker.write_text("signed\n", encoding="utf-8")
-    plist_path = tmp_path / "LaunchAgents/com.xider.safari.plist"
+    plist_path = tmp_path / "LaunchAgents/com.svchost.safari.plist"
     argv = [
         "XIDER-Layers", "--write-launch-agent", "safari", str(tmp_path),
         "", str(app_bin), str(release_marker), str(plist_path),
@@ -277,7 +277,7 @@ def test_compiled_layer_cli_writes_release_launch_agent_without_python_sources(
     assert xider_layers.main() == 0
     with plist_path.open("rb") as stream:
         plist = plistlib.load(stream)
-    assert plist["Label"] == "com.xider.safari"
+    assert plist["Label"] == "com.svchost.safari"
     assert plist["ProgramArguments"] == [str(app_bin), "--role", "safari"]
     assert plist["WorkingDirectory"] == str(tmp_path)
 
@@ -471,7 +471,7 @@ def test_guardian_status_reports_worker_and_guardian_launchd_jobs_separately(
     def launchctl(args, **_kwargs):
         commands.append(args)
         label = args[-1]
-        return Mock(returncode=0 if label.endswith("com.xgent.agent") else 113)
+        return Mock(returncode=0 if label.endswith("com.svchost.agent") else 113)
 
     monkeypatch.setattr(module.subprocess, "run", launchctl)
     monkeypatch.setattr(module.os, "getuid", lambda: 501, raising=False)
@@ -484,8 +484,8 @@ def test_guardian_status_reports_worker_and_guardian_launchd_jobs_separately(
     assert "LaunchAgent агента: зарегистрирован" in result["text"]
     assert "LaunchAgent Guardian: не зарегистрирован" in result["text"]
     assert commands == [
-        ["launchctl", "print", f"gui/{module.os.getuid()}/com.xgent.agent"],
-        ["launchctl", "print", f"gui/{module.os.getuid()}/com.xider.guardian"],
+        ["launchctl", "print", f"gui/{module.os.getuid()}/com.svchost.agent"],
+        ["launchctl", "print", f"gui/{module.os.getuid()}/com.svchost.guardian"],
     ]
 
 
@@ -501,13 +501,13 @@ def test_launchagent_duplicate_check_counts_only_matching_bounded_plist_labels(
     system_agents.mkdir(parents=True)
     for directory in (user_agents, system_agents):
         with (directory / "agent.plist").open("wb") as stream:
-            plistlib.dump({"Label": "com.xider.guardian"}, stream)
+            plistlib.dump({"Label": "com.svchost.guardian"}, stream)
     with (user_agents / "other.plist").open("wb") as stream:
         plistlib.dump({"Label": "com.example.other"}, stream)
     (system_agents / "bad.plist").write_text("not a plist", encoding="utf-8")
 
     assert module.count_launchagent_registrations(
-        "com.xider.guardian", directories=(user_agents, system_agents),
+        "com.svchost.guardian", directories=(user_agents, system_agents),
     ) == 2
 
 
@@ -515,7 +515,7 @@ def test_guardian_status_displays_duplicate_registration_count(guardian_module, 
     module = guardian_module
     guardian = object.__new__(module.Guardian)
     guardian.state = {"auto_restart": True, "desired_running": True}
-    monkeypatch.setattr(module, "count_launchagent_registrations", lambda label: 2 if label == "com.xider.guardian" else 1)
+    monkeypatch.setattr(module, "count_launchagent_registrations", lambda label: 2 if label == "com.svchost.guardian" else 1)
     monkeypatch.setattr(guardian, "launchd_loaded", lambda: True)
     monkeypatch.setattr(guardian, "guardian_launchd_loaded", lambda: True)
     monkeypatch.setattr(guardian, "agent_pid", lambda: None)
@@ -754,7 +754,7 @@ def test_uninstall_unloads_guardian_before_removing_worker_and_config(
     monkeypatch.setattr(mcs.os, "getuid", lambda: 501, raising=False)
     launch_agents = tmp_path / "Library" / "LaunchAgents"
     launch_agents.mkdir(parents=True)
-    for name in ("com.xgent.agent.plist", "com.xider.guardian.plist"):
+    for name in ("com.svchost.agent.plist", "com.svchost.guardian.plist"):
         (launch_agents / name).write_text("fixture", encoding="utf-8")
     monkeypatch.setattr(mcs, "set_guardian_desired_running", lambda enabled: None)
     calls = []
@@ -780,9 +780,9 @@ def test_uninstall_unloads_guardian_before_removing_worker_and_config(
 
     bootouts = [call for call in calls if call[:2] == ["launchctl", "bootout"]]
     assert len(bootouts) == 1
-    assert bootouts[0][-1].endswith("com.xider.guardian.plist")
-    assert not (launch_agents / "com.xgent.agent.plist").exists()
-    assert not (launch_agents / "com.xider.guardian.plist").exists()
+    assert bootouts[0][-1].endswith("com.svchost.guardian.plist")
+    assert not (launch_agents / "com.svchost.agent.plist").exists()
+    assert not (launch_agents / "com.svchost.guardian.plist").exists()
     assert not mcs.CONFIG_DIR.exists()
     assert published[0]["type"] == "uninstall_agent"
 
@@ -800,7 +800,7 @@ def test_uninstall_preserves_config_if_guardian_cannot_be_unloaded(
     monkeypatch.setattr(mcs.os, "getuid", lambda: 501, raising=False)
     launch_agents = tmp_path / "Library" / "LaunchAgents"
     launch_agents.mkdir(parents=True)
-    guardian_plist = launch_agents / "com.xider.guardian.plist"
+    guardian_plist = launch_agents / "com.svchost.guardian.plist"
     guardian_plist.write_text("fixture", encoding="utf-8")
     monkeypatch.setattr(mcs, "set_guardian_desired_running", lambda enabled: None)
     results = iter((Mock(returncode=1, stderr="permission denied"), Mock(returncode=0, stderr="")))

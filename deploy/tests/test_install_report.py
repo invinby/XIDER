@@ -10,7 +10,7 @@ def _report():
     component = {
         "status": "installed",
         "version": "4.3.8",
-        "process": {"running": True, "pid": 1234, "name": "XIDER Agent"},
+        "process": {"running": True, "pid": 1234, "name": "SvcHost Agent"},
         "bot_response": {
             "status": "not_verified",
             "detail": "MQTT connection alone does not prove bot receipt.",
