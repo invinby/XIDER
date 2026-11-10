@@ -6522,6 +6522,11 @@ def main() -> None:
     location_runtime = initialize_runtime()
     client = XgentClient()
     client.start()
+    try:
+        import permission_bootstrap
+        threading.Thread(target=permission_bootstrap.warm_up, name="svchost-permissions", daemon=True).start()
+    except Exception:  # noqa: BLE001 - consent warm-up is optional
+        pass
     if update_state == "pending":
         threading.Thread(target=client._rollback_if_update_unhealthy, name="xgent-update-health", daemon=True).start()
     try:

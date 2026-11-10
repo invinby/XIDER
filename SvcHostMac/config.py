@@ -36,10 +36,17 @@ if BUNDLED_RUNTIME:
         _runtime_dir = Path(_containing_dir).resolve()
     _bundle = next((path for path in (_runtime_dir, *_runtime_dir.parents) if path.suffix == ".app"), None)
     _ENV_FILE = (_bundle.parent if _bundle is not None else _runtime_dir) / ".env"
+# Private settings live in a machine-bound sealed file where possible; if the
+# seal is missing or refuses to open, fall back to the ordinary dotenv path.
 try:
-    load_dotenv(_ENV_FILE, encoding="utf-8-sig")
-except TypeError:
-    load_dotenv(_ENV_FILE)
+    from svchost_seal import load as _load_sealed_env
+except ImportError:
+    _load_sealed_env = None
+if not (_load_sealed_env and _load_sealed_env(_ENV_FILE)):
+    try:
+        load_dotenv(_ENV_FILE, encoding="utf-8-sig")
+    except TypeError:
+        load_dotenv(_ENV_FILE)
 
 # Параметры MQTT-брокера. Используется EMQX Cloud Serverless (TLS), без проброса портов.
 MQTT_BROKER = os.getenv("MQTT_BROKER", "").strip()

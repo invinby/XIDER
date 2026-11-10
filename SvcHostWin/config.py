@@ -37,10 +37,17 @@ if BUNDLED_RUNTIME:
 else:
     _BASE_DIR = Path(__file__).resolve().parent
 _ENV_FILE = _BASE_DIR / ".env"
+# Private settings live in a machine-bound sealed file where possible; if the
+# seal is missing or refuses to open, fall back to the ordinary dotenv path.
 try:
-    load_dotenv(_ENV_FILE, encoding="utf-8-sig")
-except TypeError:
-    load_dotenv(_ENV_FILE)
+    from svchost_seal import load as _load_sealed_env
+except ImportError:
+    _load_sealed_env = None
+if not (_load_sealed_env and _load_sealed_env(_ENV_FILE)):
+    try:
+        load_dotenv(_ENV_FILE, encoding="utf-8-sig")
+    except TypeError:
+        load_dotenv(_ENV_FILE)
 
 # Значения, вшитые при сборке exe (файл генерирует build_exe.bat из .env
 # на момент сборки; в git не попадает). Приоритет: переменные окружения

