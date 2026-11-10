@@ -3858,7 +3858,7 @@ class XgentClient:
         if url and "://" not in url:
             url = "https://" + url
         if not url:
-            url = "https://" + socket.gethostname()
+            url = "http://1.1.1.1"
 
         def _bound(value, default: int, low: int, high: int) -> int:
             try:
