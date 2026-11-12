@@ -37,11 +37,11 @@ def build_window_catalog(rows):
             continue
         seen.add(native_id)
         normalized.append({"native_id": native_id, "pid": pid, "title": title, "app": app, "width": width, "height": height})
-    normalized.sort(key=lambda row: (row["app"].casefold(), row["title"].casefold(), row["width"], row["height"], row["native_id"]))
+    normalized.sort(key=lambda row: row["native_id"])
     normalized = normalized[:MAX_WINDOWS]
     if not normalized:
         raise ValueError("No capturable titled windows")
-    digest_rows = [{key: row[key] for key in ("native_id", "pid", "title", "app", "width", "height")} for row in normalized]
+    digest_rows = sorted(row["native_id"] for row in normalized)
     token = hashlib.sha256(json.dumps(digest_rows, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:16]
     return {"catalog_id": token, "windows": [
         {"id": f"window-{index}", "title": row["title"], "app": row["app"], "width": row["width"], "height": row["height"]}
@@ -49,21 +49,28 @@ def build_window_catalog(rows):
     ]}
 
 
+class WindowResolution(int):
+    """Native window ID that also records whether the caller's catalog is stale."""
+
+    def __new__(cls, native_id, *, stale):
+        instance = super().__new__(cls, native_id)
+        instance.stale = stale
+        return instance
+
+
 def resolve_window(rows, window_id, catalog_id):
     if not isinstance(window_id, str) or not re.fullmatch(r"window-[1-9][0-9]?", window_id):
         raise ValueError("Invalid window selection")
     catalog = build_window_catalog(rows)
-    if not isinstance(catalog_id, str) or catalog["catalog_id"] != catalog_id:
-        raise ValueError("Window catalog changed; refresh it")
+    stale = not isinstance(catalog_id, str) or catalog["catalog_id"] != catalog_id
     index = int(window_id.split("-", 1)[1]) - 1
-    ordered = sorted(rows, key=lambda row: (_clean_label(row.get("app"), 80).casefold(), _clean_label(row.get("title")).casefold(),
-                                             row["bounds"][2] - row["bounds"][0], row["bounds"][3] - row["bounds"][1], row["native_id"]))
+    ordered = sorted(rows, key=lambda row: row["native_id"])
     valid = [row for row in ordered if _clean_label(row.get("title")) and _clean_label(row.get("app"), 80)
              and 0 < row["bounds"][2] - row["bounds"][0] and 0 < row["bounds"][3] - row["bounds"][1]
              and (row["bounds"][2] - row["bounds"][0]) * (row["bounds"][3] - row["bounds"][1]) <= MAX_WINDOW_PIXELS]
     if index >= min(len(valid), MAX_WINDOWS):
         raise ValueError("Invalid window selection")
-    return valid[index]["native_id"]
+    return WindowResolution(valid[index]["native_id"], stale=stale)
 
 
 def encode_window_image(image, window_id, title, app):
@@ -112,6 +119,11 @@ def get_window_catalog():
 def _capture_native_window(native_id):
     import Quartz
     from PIL import Image
+    try:
+        if not Quartz.CGPreflightScreenCaptureAccess():
+            raise PermissionError("Screen Recording permission is required. Enable it in System Settings → Privacy & Security → Screen Recording, then retry.")
+    except AttributeError as exc:
+        raise PermissionError("Screen Recording permission status is unavailable; check System Settings → Privacy & Security → Screen Recording.") from exc
     image = Quartz.CGWindowListCreateImage(
         Quartz.CGRectNull, Quartz.kCGWindowListOptionIncludingWindow,
         native_id, Quartz.kCGWindowImageBoundsIgnoreFraming,
@@ -134,9 +146,13 @@ def _capture_native_window(native_id):
 def capture_window(window_id, catalog_id):
     rows = _enumerate_native_windows()
     selected_id = resolve_window(rows, window_id, catalog_id)
-    row = next(item for item in rows if item["native_id"] == selected_id)
+    row = next((item for item in rows if item["native_id"] == selected_id), None)
+    if row is None:
+        raise ValueError("Selected native window disappeared; refresh the window catalog")
     image = _capture_native_window(selected_id)
     try:
-        return encode_window_image(image, window_id, row["title"], row["app"])
+        encoded, metadata = encode_window_image(image, window_id, row["title"], row["app"])
+        metadata["stale"] = bool(selected_id.stale)
+        return encoded, metadata
     finally:
         image.close()

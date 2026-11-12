@@ -2,8 +2,21 @@
 import datetime
 import json
 import math
+import threading
 import time
 import urllib.request
+
+_WINRT_THREAD_STATE = threading.local()
+
+
+def _ensure_winrt_mta():
+    """Initialize WinRT on command worker threads before activating APIs."""
+    if getattr(_WINRT_THREAD_STATE, "initialized", False):
+        return
+    from winrt.runtime import ApartmentType, init_apartment
+
+    init_apartment(ApartmentType.MULTI_THREADED)
+    _WINRT_THREAD_STATE.initialized = True
 
 def result(state, label, source="system", latitude=None, longitude=None, accuracy_m=None):
     return {"source": source, "state": state, "latitude": latitude, "longitude": longitude,
@@ -112,6 +125,7 @@ class WindowsLocationBackend:
         import sys
         if sys.platform != "win32":
             raise OSError("Windows required")
+        _ensure_winrt_mta()
         from winrt.windows.devices.geolocation import Geolocator
         from winrt.windows.security.authorization.appcapabilityaccess import AppCapability
         self.capability = AppCapability.create("location")

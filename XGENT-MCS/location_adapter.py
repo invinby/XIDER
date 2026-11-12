@@ -202,10 +202,11 @@ class MacLocationRuntime:
         """Start an OS-owned consent flow from the Cocoa thread, without using the resource."""
         permission = job["permission"]
 
-        def finish(state, text):
+        def finish(state, text, *, restart_required=False):
             if not job["cancelled"]:
                 job["state"] = state
                 job["text"] = text
+                job["restart_required"] = bool(restart_required)
                 job["done"].set()
 
         if permission in {"camera", "microphone"}:
@@ -237,7 +238,8 @@ class MacLocationRuntime:
                 requested = bool(Quartz.CGRequestScreenCaptureAccess())
                 finish("granted" if requested else "prompt_requested",
                        "macOS разрешила запись экрана." if requested else
-                       "Системный запрос вызван. Если окно не появилось, выдай доступ в Системных настройках.")
+                       "Системный запрос вызван. Если окно не появилось, выдай доступ в Системных настройках.",
+                       restart_required=requested)
             return
 
         if permission == "accessibility":
@@ -331,8 +333,9 @@ class MacLocationRuntime:
         self.queue.put(job)
         if not job["done"].wait(timeout):
             job["cancelled"] = True
-            return {"state": "prompt_requested", "text": "Запрос отправлен на Mac; проверь системное окно и ответь на нём."}
-        return {"state": job.get("state", "unknown"), "text": job.get("text", "Состояние разрешения неизвестно.")}
+            return {"state": "prompt_requested", "text": "Запрос отправлен на Mac; проверь системное окно и ответь на нём.", "restart_required": False}
+        return {"state": job.get("state", "unknown"), "text": job.get("text", "Состояние разрешения неизвестно."),
+                "restart_required": bool(job.get("restart_required", False))}
 
 def signed_bundle_available():
     import sys
