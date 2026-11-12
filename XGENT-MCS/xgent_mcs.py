@@ -3770,10 +3770,15 @@ class XgentClient:
                 } else "unknown"
                 result["ok"] = result["state"] in {"granted", "denied", "prompt_requested"}
                 result["text"] = str(outcome.get("text", "Состояние разрешения неизвестно."))[:500]
+                restart_required = permission == "screen_recording" and outcome.get("restart_required") is True
+                if restart_required:
+                    result["restart_required"] = True
+                    result["text"] += " Перезапускаю агент, чтобы macOS применила доступ."
             except Exception:
                 log.info("macOS permission request unavailable for %s", permission, exc_info=True)
                 result["state"] = "unavailable"
                 result["text"] = "Системный запрос не запустился; открой соответствующий раздел Системных настроек."
+                restart_required = False
             # A denied native prompt cannot grant access again. Take the owner
             # straight to the exact pane where macOS lets them change that decision.
             if result["state"] in {"denied", "unavailable", "unsupported"} and uri:
@@ -3790,6 +3795,15 @@ class XgentClient:
                 except (OSError, subprocess.SubprocessError):
                     result["settings_opened"] = False
             self._publish_response("permission_settings", result)
+            if restart_required:
+                def _restart_after_screen_permission():
+                    time.sleep(2.0)
+                    try:
+                        os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]])
+                    except OSError:
+                        log.exception("Could not restart macOS agent after Screen Recording permission grant")
+                threading.Thread(target=_restart_after_screen_permission,
+                                 name="xgent-screen-permission-restart", daemon=True).start()
             return result
         if uri:
             try:

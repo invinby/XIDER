@@ -33,9 +33,9 @@ def _mark_seen(nonce: str, ts: float) -> bool:
             _seen_set.intersection_update(nonce for nonce, _ in retained)
         if nonce in _seen_set:
             return False
-        # Never evict a fresh nonce: that would make its replay valid again.
         if len(_seen) >= _SEEN_NONCES_MAX:
-            return False
+            oldest_nonce, _oldest_ts = _seen.popleft()
+            _seen_set.discard(oldest_nonce)
         _seen.append((nonce, ts))
         _seen_set.add(nonce)
         return True
@@ -80,7 +80,7 @@ def verify_message(envelope: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 def log_replay_warning(nonce: str, ts: float) -> None:
     """Заглушка для логирования replay-попыток (без спама в stdout)."""
     import logging
-    logging.getLogger("xgent.crypto").warning("Rejected replay nonce %s (ts=%s", nonce, ts)
+    logging.getLogger("xgent.crypto").warning("Rejected replay nonce %s (ts=%s)", nonce, ts)
 
 
 def _canonical(payload: Dict[str, Any]) -> bytes:
