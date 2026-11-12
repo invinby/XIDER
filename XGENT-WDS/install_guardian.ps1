@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$AgentDir = $PSScriptRoot,
+    [string]$AgentDataDir = (Join-Path $env:USERPROFILE '.xgent'),
     [string]$TaskName = 'XIDER Guardian',
     [switch]$PreflightOnly
 )
@@ -44,10 +45,13 @@ if ($PreflightOnly) {
     return
 }
 
-icacls $envPath /grant:r "$($env:USERNAME):R" | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'icacls failed to grant the current account read access to the XIDER .env file.' }
-icacls $envPath /inheritance:r | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'icacls failed to remove inherited access from the XIDER .env file.' }
+$ownerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$ownerGrant = '*{0}:(OI)(CI)F' -f $ownerSid
+New-Item -ItemType Directory -Path $AgentDataDir -Force | Out-Null
+foreach ($protectedPath in @($AgentDir, $AgentDataDir)) {
+    icacls $protectedPath /inheritance:r /grant:r $ownerGrant /T /C /Q | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "icacls failed to secure XIDER files and logs under '$protectedPath'." }
+}
 
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $settings = New-ScheduledTaskSettingsSet `

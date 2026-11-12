@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$AgentDir = $PSScriptRoot,
+    [string]$AgentDataDir = (Join-Path $env:USERPROFILE '.xgent'),
     [string]$TaskName = 'XIDER Agent',
     [string]$GuardianInstaller,
     [switch]$PreferPython,
@@ -113,12 +114,14 @@ try {
     Write-Warning ("Не удалось очистить известные старые ключи автозапуска XGENT: {0}" -f $_.Exception.Message)
 }
 
-# Add the dedicated account ACE before removing inherited entries, so a failed
-# inheritance update does not take away the user's existing access.
-icacls $envPath /grant:r "$($env:USERNAME):R" | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'icacls failed to grant the current account read access to the XIDER .env file.' }
-icacls $envPath /inheritance:r | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'icacls failed to remove inherited access from the XIDER .env file.' }
+# Keep the agent payload and its logs/config private to the installing account.
+$ownerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$ownerGrant = '*{0}:(OI)(CI)F' -f $ownerSid
+New-Item -ItemType Directory -Path $AgentDataDir -Force | Out-Null
+foreach ($protectedPath in @($AgentDir, $AgentDataDir)) {
+    icacls $protectedPath /inheritance:r /grant:r $ownerGrant /T /C /Q | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "icacls failed to secure XIDER files and logs under '$protectedPath'." }
+}
 
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 # Guardian is the sole worker-recovery owner. A second Task Scheduler restart
@@ -174,5 +177,5 @@ Write-Host "[OK] $TaskName installed and started in the background."
 Write-Host "[OK] To stop it: schtasks /End /TN `"$TaskName`""
 
 if (Test-Path -LiteralPath $guardianInstaller) {
-    & $guardianInstaller -AgentDir $AgentDir -TaskName 'XIDER Guardian'
+    & $guardianInstaller -AgentDir $AgentDir -AgentDataDir $AgentDataDir -TaskName 'XIDER Guardian'
 }

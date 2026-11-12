@@ -48,6 +48,13 @@ LINUX_FIXTURES = (
     ("macOS LaunchAgent status", "test_macos_launch_status.sh"),
     ("macOS bootstrap transaction", "test_bootstrap_macos_transaction.sh"),
 )
+MACOS_FIXTURES = (
+    ("macOS LaunchAgent status", "test_macos_launch_status.sh"),
+    ("macOS failed-install cleanup", "test_bootstrap_macos_failed_retention.sh"),
+    ("macOS bootstrap transaction", "test_bootstrap_macos_transaction.sh"),
+    ("macOS legacy install location", "test_bootstrap_macos_legacy_location.sh"),
+    ("macOS backup retention", "test_bootstrap_macos_retention.sh"),
+)
 
 
 def run_registry_gate(registry: Path = ROOT / "docs/features/feature-registry.json") -> int:
@@ -70,6 +77,10 @@ def run_platform_fixtures(env: dict[str, str]) -> list[str]:
     elif sys.platform.startswith("linux"):
         shell = shutil.which("bash")
         fixtures = LINUX_FIXTURES
+        prefix = [shell] if shell else []
+    elif sys.platform == "darwin":
+        shell = shutil.which("bash")
+        fixtures = MACOS_FIXTURES
         prefix = [shell] if shell else []
     else:
         print("SKIP: deploy shell fixtures require Linux coreutils; run them in the Linux CI job.")
@@ -105,6 +116,9 @@ def main() -> int:
         return 1
 
     for label, cwd, test_path in SUITES:
+        if label == "Windows agent" and sys.platform == "darwin":
+            print("\n=== Windows agent ===\nSKIP: Windows-only runtime tests run in the Windows CI job.", flush=True)
+            continue
         print(f"\n=== {label} ===", flush=True)
         test_args = (
             sorted(path.name for path in cwd.glob("test_*.py"))
