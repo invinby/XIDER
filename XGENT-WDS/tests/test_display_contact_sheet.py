@@ -62,6 +62,58 @@ def test_agent_returns_correlated_logical_backing_resolution_report(monkeypatch)
     assert "device_name" not in str(result) and "native_id" not in str(result)
 
 
+def test_agent_reports_invalid_display_resolution_request_without_query(monkeypatch):
+    called = []
+    monkeypatch.setattr(capture, "get_resolution_report", lambda *_args: called.append(True))
+    client = object.__new__(agent.XgentClient)
+    sent = []
+    client._publish_response = lambda topic, result: sent.append((topic, result)) or True
+
+    client._do_display_resolution({"id": "bad-resolution", "display_id": "display-0", "topology_id": "bad"})
+
+    assert called == []
+    assert sent[0][0] == "display_resolution"
+    assert sent[0][1]["state"] == "invalid_request"
+    assert sent[0][1]["display_id"] == "display-0"
+    assert sent[0][1]["data"] is None
+
+
+def test_agent_reports_display_resolution_permission_denial(monkeypatch):
+    def denied(*_args):
+        raise PermissionError("details must not escape")
+
+    monkeypatch.setattr(capture, "get_resolution_report", denied)
+    client = object.__new__(agent.XgentClient)
+    sent = []
+    client._publish_response = lambda topic, result: sent.append((topic, result)) or True
+
+    client._do_display_resolution({"display_id": "display-1", "topology_id": "a" * 16})
+
+    assert sent[0][1]["state"] == "denied"
+    assert sent[0][1]["data"] is None
+    assert "details must not escape" not in str(sent[0][1])
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_state"),
+    [(PermissionError("denied"), "denied"), (OSError("unavailable"), "unsupported")],
+)
+def test_agent_maps_display_catalog_failures_to_legacy_states(monkeypatch, failure, expected_state):
+    def fail():
+        raise failure
+
+    monkeypatch.setattr(capture, "get_display_catalog", fail)
+    client = object.__new__(agent.XgentClient)
+    sent = []
+    client._publish_response = lambda topic, result: sent.append((topic, result)) or True
+
+    client._do_display_catalog({"id": "catalog-ticket"})
+
+    assert sent[0][0] == "display_catalog"
+    assert sent[0][1]["state"] == expected_state
+    assert sent[0][1]["data"] is None
+
+
 def test_windows_resolution_query_uses_per_monitor_device_context_and_returns_no_native_name(monkeypatch):
     rows = [{"id": "display-1", "width": 1280, "height": 720, "primary": True,
              "bounds": (0, 0, 1280, 720), "device_name": "\\\\.\\DISPLAY1"}]
@@ -297,6 +349,42 @@ def test_agent_returns_correlated_owner_window_catalog_and_selected_image(monkey
     assert sent[1][1]["request_id"] == "window-shot-1"
     assert sent[1][1]["data"]["id"] == "window-1"
     assert sent[1][1]["image"] == base64.b64encode(b"\x89PNG\r\n\x1a\nimage").decode("ascii")
+
+
+def test_window_catalog_reports_session_unavailable_without_enumerating(monkeypatch):
+    import window_capture
+
+    called = []
+    monkeypatch.setattr(window_capture, "get_window_catalog", lambda: called.append(True))
+    monkeypatch.setattr(agent, "_screenshot_session_available", lambda: False)
+    client = object.__new__(agent.XgentClient)
+    sent = []
+    client._publish_response = lambda topic, result: sent.append((topic, result)) or True
+
+    client._do_window_catalog({"id": "window-list-2"})
+
+    assert called == []
+    assert sent[0][0] == "window_catalog"
+    assert sent[0][1]["state"] == "session_unavailable"
+    assert sent[0][1]["request_id"] == "window-list-2"
+
+
+def test_window_catalog_preserves_no_capturable_windows_state(monkeypatch):
+    import window_capture
+
+    def no_capturable_windows():
+        raise ValueError("no capturable windows")
+
+    monkeypatch.setattr(window_capture, "get_window_catalog", no_capturable_windows)
+    monkeypatch.setattr(agent, "_screenshot_session_available", lambda: True)
+    client = object.__new__(agent.XgentClient)
+    sent = []
+    client._publish_response = lambda topic, result: sent.append((topic, result)) or True
+
+    client._do_window_catalog({})
+
+    assert sent[0][1]["state"] == "unsupported"
+    assert sent[0][1]["data"] is None
 
 
 def test_agent_returns_correlated_full_resolution_single_display(monkeypatch):

@@ -225,6 +225,7 @@ def test_volume_history_keeps_real_samples_and_withholds_short_term_forecast(mon
     assert result["device_id"] == agent.DEVICE_ID
     assert result["request_id"] == "volume-ticket"
     assert result["state"] == "supported"
+    assert result["data"]["history_minimum_span_seconds"] == agent._VOLUME_HISTORY_MIN_SPAN_SECONDS
     volume = result["data"]["volumes"][0]
     assert volume["used_bytes"] == 400_000_000_000
     assert volume["used_percent"] == 40.0
@@ -258,6 +259,21 @@ def test_volume_history_estimates_only_from_same_volume_capacity_after_six_hours
     assert volume["observed_span_seconds"] == 8 * 3600
     assert volume["delta_used_bytes"] == 200_000_000_000
     assert volume["estimated_hours_to_full"] == 16.0
+
+
+def test_volume_history_marks_empty_inventory_unsupported(monkeypatch):
+    monkeypatch.setattr(agent.psutil, "disk_partitions", lambda all=False: [])
+    client = object.__new__(agent.XgentClient)
+    sent = []
+    client._publish_response = lambda topic, payload: sent.append((topic, dict(payload)))
+
+    client._do_volume_history({"id": "empty-volume-list"})
+
+    topic, result = sent[0]
+    assert topic == "volume_history"
+    assert result["state"] == "unsupported"
+    assert result["detail"] == "no_mountable_volumes"
+    assert result["data"]["volumes"] == []
 
 
 def test_memory_pressure_history_samples_native_source_and_marks_its_contract(monkeypatch):

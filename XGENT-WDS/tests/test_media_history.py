@@ -78,3 +78,23 @@ def test_agent_media_history_command_returns_only_correlated_metadata(monkeypatc
     assert result["feature_id"] == "D02-F24" and result["request_id"] == "history-ticket"
     assert result["data"]["events"][0]["action"] == "mic"
     assert "private" not in json.dumps(result)
+
+
+def test_agent_media_history_rejects_invalid_limit_without_reading(monkeypatch, tmp_path):
+    monkeypatch.setattr(wds, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(wds, "DEVICE_ID", "windows-1")
+    published = []
+    client = object.__new__(wds.XgentClient)
+    client._publish_response = lambda topic, payload: published.append((topic, payload))
+
+    def unexpected_read(*args, **kwargs):
+        raise AssertionError("history must not be read for an invalid limit")
+
+    monkeypatch.setattr(media_history, "read_events", unexpected_read)
+    client._do_media_history({"id": "ticket", "limit": True})
+
+    assert published[0][0] == "media_history"
+    result = published[0][1]
+    assert result["detail"] == "invalid_limit"
+    assert result["data"] is None
+    assert result["request_id"] == "ticket"

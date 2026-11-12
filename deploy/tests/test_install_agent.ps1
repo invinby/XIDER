@@ -106,13 +106,17 @@ try {
     $global:XiderRemovedLegacyValues = @()
     $global:XiderTestActions = @{}
     $global:XiderDenyExistingTaskWrites = $false
-    & $installer -AgentDir $fixture -TaskName 'XIDER Fixture' -PreflightOnly
+    $agentDataFixture = Join-Path $fixture 'agent-data'
+    & $installer -AgentDir $fixture -AgentDataDir $agentDataFixture -TaskName 'XIDER Fixture' -PreflightOnly
     if ($global:XiderTestActions.Count -ne 0 -or $global:XiderAclCallCount -ne 0 -or
         $global:XiderRegisterCount -ne 0 -or $global:XiderStartCount -ne 0) {
         throw 'Preflight changed ACLs, registered a task, or started a task.'
     }
 
-    & $installer -AgentDir $fixture -TaskName 'XIDER Fixture' -PreferPython
+    & $installer -AgentDir $fixture -AgentDataDir $agentDataFixture -TaskName 'XIDER Fixture' -PreferPython
+    if (-not (Test-Path -LiteralPath $agentDataFixture -PathType Container)) {
+        throw 'Agent installation did not create the private config/log directory before starting tasks.'
+    }
     if ($global:XiderTestActions['XIDER Fixture'].Execute -ne (Join-Path $venv 'pythonw.exe')) {
         throw 'PreferPython selected the stale executable instead of the downloaded Python source.'
     }
@@ -134,7 +138,7 @@ try {
     $hadGuardianExe = Test-Path -LiteralPath $guardianExe -PathType Leaf
     if ($hadGuardianExe) { Move-Item -LiteralPath $guardianExe -Destination $guardianExeBackup }
     try {
-        & $guardianInstaller -AgentDir $fixture -TaskName 'XIDER Guardian Python Fixture'
+        & $guardianInstaller -AgentDir $fixture -AgentDataDir $agentDataFixture -TaskName 'XIDER Guardian Python Fixture'
         $windowlessPython = Join-Path $venv 'pythonw.exe'
         if ($global:XiderTestActions['XIDER Guardian Python Fixture'].Execute -ne $windowlessPython) {
             throw 'Guardian Python fallback must use pythonw.exe to avoid a console flash.'
@@ -151,7 +155,7 @@ try {
         }
     }
 
-    & $installer -AgentDir $fixture -TaskName 'XIDER Fixture'
+    & $installer -AgentDir $fixture -AgentDataDir $agentDataFixture -TaskName 'XIDER Fixture'
     if ($global:XiderTestActions['XIDER Fixture'].Execute -ne (Join-Path $fixture 'XGENT-WDS.exe')) {
         throw 'Direct install no longer preserves executable-first behavior.'
     }
@@ -162,7 +166,7 @@ try {
     $global:XiderDenyExistingTaskWrites = $true
     $registerBeforeMatchingInstall = $global:XiderRegisterCount
     $startBeforeMatchingInstall = $global:XiderStartCount
-    & $installer -AgentDir $fixture -TaskName 'XIDER Fixture'
+    & $installer -AgentDir $fixture -AgentDataDir $agentDataFixture -TaskName 'XIDER Fixture'
     if ($global:XiderRegisterCount -ne $registerBeforeMatchingInstall -or
         $global:XiderStartCount -ne ($startBeforeMatchingInstall + 2)) {
         throw 'A matching Agent/Guardian task was rewritten instead of being preserved and started.'
@@ -181,9 +185,9 @@ try {
             $aclFailureRejected = $false
             try {
                 if ($installerCase.Name -eq 'agent ACL') {
-                    & $installerCase.Script -AgentDir $fixture -TaskName $installerCase.Task -PreferPython
+                    & $installerCase.Script -AgentDir $fixture -AgentDataDir $agentDataFixture -TaskName $installerCase.Task -PreferPython
                 } else {
-                    & $installerCase.Script -AgentDir $fixture -TaskName $installerCase.Task
+                    & $installerCase.Script -AgentDir $fixture -AgentDataDir $agentDataFixture -TaskName $installerCase.Task
                 }
             } catch {
                 $aclFailureRejected = $_.Exception.Message -match 'icacls|ACL'
@@ -203,7 +207,7 @@ try {
     )) {
         [IO.File]::WriteAllLines((Join-Path $fixture '.env'), [string[]]$case.Lines, $utf8)
         $rejected = $false
-        try { & $installer -AgentDir $fixture -TaskName 'XIDER Fixture' -PreflightOnly }
+        try { & $installer -AgentDir $fixture -AgentDataDir $agentDataFixture -TaskName 'XIDER Fixture' -PreflightOnly }
         catch { $rejected = $_.Exception.Message -match [regex]::Escape($case.Name) }
         if (-not $rejected -or $global:XiderRegisterCount -ne $registerBeforeSecurityCheck) {
             throw "Installer accepted unsafe $($case.Name) or changed a Scheduled Task."
@@ -215,7 +219,7 @@ try {
     $missingPythonRejected = $false
     $registerBeforeMissingPython = $global:XiderRegisterCount
     $startBeforeMissingPython = $global:XiderStartCount
-    try { & $installer -AgentDir $fixture -TaskName 'XIDER Fixture' -PreferPython }
+    try { & $installer -AgentDir $fixture -AgentDataDir $agentDataFixture -TaskName 'XIDER Fixture' -PreferPython }
     catch { $missingPythonRejected = $true }
     if (-not $missingPythonRejected -or $global:XiderRegisterCount -ne $registerBeforeMissingPython -or
         $global:XiderStartCount -ne $startBeforeMissingPython) {

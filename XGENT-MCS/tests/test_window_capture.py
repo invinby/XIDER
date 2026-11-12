@@ -31,13 +31,24 @@ def test_catalog_is_capped_and_rejects_duplicate_or_invalid_native_rows():
         capture.build_window_catalog([invalid])
 
 
-def test_window_catalog_token_detects_stale_selection_and_maps_only_opaque_id():
+def test_window_catalog_token_marks_stale_selection_and_maps_only_opaque_id():
     catalog = capture.build_window_catalog(_rows())
     assert capture.resolve_window(_rows(), "window-2", catalog["catalog_id"]) == 991
-    with pytest.raises(ValueError, match="catalog"):
-        capture.resolve_window(_rows(), "window-2", "0" * 16)
+    stale = capture.resolve_window(_rows(), "window-2", "0" * 16)
+    assert stale == 991 and stale.stale is True
+    changed_metadata = [{**row, "title": row["title"] + " renamed", "bounds": (0, 0, 10, 10)} for row in _rows()]
+    assert capture.build_window_catalog(changed_metadata)["catalog_id"] == catalog["catalog_id"]
     with pytest.raises(ValueError):
         capture.resolve_window(_rows(), "window-99", catalog["catalog_id"])
+
+
+def test_native_capture_stops_when_screen_recording_permission_is_missing(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    monkeypatch.setitem(sys.modules, "Quartz", SimpleNamespace(CGPreflightScreenCaptureAccess=lambda: False))
+    with pytest.raises(PermissionError, match="Screen Recording permission"):
+        capture._capture_native_window(412)
 
 
 def test_image_encoder_returns_bounded_metadata_free_png(monkeypatch):

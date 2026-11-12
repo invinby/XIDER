@@ -20,7 +20,7 @@ def _update_client():
 
 def test_vpn_route_helper_is_available_to_source_updates_and_frozen_build():
     root = Path(__file__).resolve().parents[2]
-    source = (root / "XGENT-WDS" / "xgent_wds.py").read_text(encoding="utf-8")
+    source = (root / "XGENT-WDS" / "xg_commands" / "lifecycle.py").read_text(encoding="utf-8")
     spec = (root / "XGENT-WDS" / "XGENT-WDS.spec").read_text(encoding="utf-8")
     assert '"vpn_route.py"' in source
     assert "'vpn_route'" in spec

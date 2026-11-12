@@ -129,7 +129,7 @@ def test_windows_frozen_agent_includes_the_network_traffic_helper():
 
     root = Path(agent.__file__).resolve().parent.parent
     spec = (root / "XGENT-WDS" / "XGENT-WDS.spec").read_text(encoding="utf-8")
-    source_bundle = Path(agent.__file__).read_text(encoding="utf-8")
+    source_bundle = (root / "XGENT-WDS" / "xg_commands" / "lifecycle.py").read_text(encoding="utf-8")
     assert "'network_traffic'" in spec
     assert "'network_traffic_schedule'" in spec
     assert '"network_traffic.py"' in source_bundle

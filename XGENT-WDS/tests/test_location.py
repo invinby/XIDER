@@ -133,6 +133,23 @@ def test_windows_native_diagnostic_requires_explicit_os_grant():
     backend.locator.location_status = 3
     assert backend.diagnose() == ("granted", False)
 
+def test_winrt_worker_apartment_is_initialized_once_per_thread(monkeypatch):
+    import sys
+    import types
+    import location_adapter
+
+    calls = []
+    runtime = types.ModuleType("winrt.runtime")
+    runtime.ApartmentType = SimpleNamespace(MULTI_THREADED=object())
+    runtime.init_apartment = lambda apartment: calls.append(apartment)
+    monkeypatch.setitem(sys.modules, "winrt.runtime", runtime)
+    monkeypatch.setattr(location_adapter._WINRT_THREAD_STATE, "initialized", False, raising=False)
+
+    location_adapter._ensure_winrt_mta()
+    location_adapter._ensure_winrt_mta()
+
+    assert calls == [runtime.ApartmentType.MULTI_THREADED]
+
 @pytest.mark.parametrize("status,want", [(0, "denied"), (1, "not_determined"),
                                       (2, "denied"), (3, "not_determined"), (4, "granted")])
 def test_windows_capability_enum_matches_documented_os_status(status, want):

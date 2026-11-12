@@ -64,6 +64,26 @@ def test_camera_catalog_action_publishes_a_correlated_privacy_limited_result(mon
     assert "/private/" not in repr(result)
 
 
+def test_camera_catalog_reports_missing_enumeration_dependency(monkeypatch):
+    camera_devices = _camera_devices()
+
+    def missing_backend():
+        raise ImportError("backend unavailable")
+
+    monkeypatch.setattr(camera_devices, "list_cameras", missing_backend)
+    client = object.__new__(wds.XgentClient)
+    responses = []
+    monkeypatch.setattr(client, "_publish_response", lambda topic, payload: responses.append((topic, payload)))
+
+    client._do_camera_catalog({"id": "catalog-ticket"})
+
+    topic, result = responses[0]
+    assert topic == "camera_catalog"
+    assert result["state"] == "unsupported"
+    assert result["source"] == "opencv_camera_enumeration_dependency_unavailable"
+    assert result["data"] == {"cameras": []}
+
+
 def test_webcam_series_returns_bounded_in_memory_contact_sheet(monkeypatch):
     class Capture:
         released = False

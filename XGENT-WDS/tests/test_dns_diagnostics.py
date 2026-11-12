@@ -84,3 +84,39 @@ def test_agent_publishes_correlated_dns_result_and_does_not_connect_to_addresses
     assert result["data"]["addresses"] == ["203.0.113.10"]
     assert result["data"]["expected_match"] is True
     assert "outbound_connection" not in result
+
+
+def test_agent_reports_validated_dns_settings_and_correlates_request(monkeypatch):
+    monkeypatch.setattr(agent.dns_settings, "read_dns_settings", lambda: {
+        "state": "supported", "source": "synthetic-resolver-fixture", "resolvers": ["192.0.2.53"],
+    })
+    client = object.__new__(agent.XgentClient)
+    sent = []
+    client._publish_response = lambda topic, payload: sent.append((topic, dict(payload)))
+
+    client._do_dns_settings({"id": "settings-ticket"})
+
+    topic, result = sent[0]
+    assert topic == "dns_settings"
+    assert result["schema"] == "xider.dns-settings.v1"
+    assert result["feature_id"] == "D04-F06"
+    assert result["request_id"] == "settings-ticket"
+    assert result["state"] == "supported"
+    assert result["source"] == "synthetic-resolver-fixture"
+    assert result["data"] == {"resolvers": ["192.0.2.53"]}
+
+
+def test_agent_marks_malformed_dns_settings_unknown(monkeypatch):
+    monkeypatch.setattr(agent.dns_settings, "read_dns_settings", lambda: {
+        "state": "surprise", "resolvers": "not-a-list",
+    })
+    client = object.__new__(agent.XgentClient)
+    sent = []
+    client._publish_response = lambda topic, payload: sent.append((topic, dict(payload)))
+
+    client._do_dns_settings({"id": "settings-ticket"})
+
+    result = sent[0][1]
+    assert sent[0][0] == "dns_settings"
+    assert result["state"] == "unknown"
+    assert result["data"] == {"resolvers": []}

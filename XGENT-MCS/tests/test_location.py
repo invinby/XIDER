@@ -2,6 +2,7 @@
 import datetime
 import json
 import sys
+import threading
 import urllib.request
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -102,6 +103,25 @@ def test_passive_screen_recording_check_uses_preflight_only(monkeypatch):
 
     assert state == "needs_live_test"
     assert calls == ["preflight"]
+
+
+@pytest.mark.parametrize("requested,want_state,want_restart", [
+    (True, "granted", True), (False, "prompt_requested", False),
+])
+def test_screen_recording_request_reports_restart_only_after_grant(monkeypatch, requested, want_state, want_restart):
+    from types import SimpleNamespace
+
+    monkeypatch.setitem(sys.modules, "Quartz", SimpleNamespace(
+        CGPreflightScreenCaptureAccess=lambda: False,
+        CGRequestScreenCaptureAccess=lambda: requested,
+    ))
+    runtime = object.__new__(location_adapter.MacLocationRuntime)
+    job = {"permission": "screen_recording", "cancelled": False, "done": threading.Event()}
+
+    runtime._start_permission_request(job)
+
+    assert job["state"] == want_state
+    assert job["restart_required"] is want_restart
 
 @pytest.mark.parametrize("error,want", [(TimeoutError(), "needs_live_test"), (PermissionError(), "denied"),
                                       (OSError(), "unavailable")])

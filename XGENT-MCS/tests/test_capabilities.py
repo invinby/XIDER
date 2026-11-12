@@ -506,6 +506,30 @@ def test_native_permission_falls_back_to_settings_when_runtime_is_unavailable(mo
     assert responses[0][1] == result
 
 
+def test_screen_recording_grant_schedules_agent_restart_after_response(monkeypatch):
+    client = object.__new__(mcs.XgentClient)
+    client._command_context = threading.local()
+    responses = []
+    started = []
+    client._publish_response = lambda topic, payload: responses.append((topic, dict(payload))) or True
+    monkeypatch.setattr(location_adapter, "permission_capability", lambda _permission: ("needs_live_test", "not granted"))
+    monkeypatch.setattr(location_adapter, "request_permission", lambda *_args, **_kwargs: {
+        "state": "granted", "text": "screen recording granted", "restart_required": True,
+    })
+
+    class DeferredThread:
+        def __init__(self, **kwargs): self.kwargs = kwargs
+        def start(self): started.append(self.kwargs)
+
+    monkeypatch.setattr(mcs.threading, "Thread", DeferredThread)
+    result = client._do_permission_settings({"permission": "screen_recording", "id": "screen-grant"})
+
+    assert result["restart_required"] is True
+    assert result["state"] == "granted"
+    assert responses[0][1] == result
+    assert started and started[0]["name"] == "xgent-screen-permission-restart"
+
+
 def test_denied_native_permission_opens_exact_settings_pane_without_claiming_grant(monkeypatch):
     client = object.__new__(mcs.XgentClient)
     client._command_context = threading.local()

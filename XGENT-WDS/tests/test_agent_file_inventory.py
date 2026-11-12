@@ -238,3 +238,21 @@ def test_agent_file_get_command_returns_correlated_allowlisted_content(monkeypat
     client._do_agent_file_get({"id": "file-request-2", "file_id": "../../.env"})
     assert sent[-1][1]["state"] == "not_allowed"
     assert "SECRET" not in str(sent[-1])
+
+
+def test_agent_file_get_command_drops_malformed_request_id(monkeypatch, tmp_path):
+    import xgent_wds as wds
+
+    (tmp_path / "version_info.txt").write_text("XIDER test", encoding="utf-8")
+    client = object.__new__(wds.XgentClient)
+    sent = []
+    client._publish_response = lambda topic, payload: sent.append((topic, payload))
+    monkeypatch.setattr(wds, "DEVICE_ID", "windows-test")
+    monkeypatch.setattr(inventory, "_default_install_root", lambda: tmp_path)
+
+    client._do_agent_file_get({"id": "bad/id", "file_id": "agent-version"})
+
+    response = sent[-1][1]
+    assert response["id"] is None
+    assert response["request_id"] is None
+    assert response["content"] == "XIDER test"

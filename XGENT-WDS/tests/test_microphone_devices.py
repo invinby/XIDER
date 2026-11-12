@@ -318,6 +318,25 @@ def test_agent_stereo_balance_publishes_only_correlated_scalar_metrics(monkeypat
     assert "audio" not in result and "samples" not in result
 
 
+def test_agent_stereo_balance_reports_changed_device_as_unavailable(monkeypatch):
+    def unavailable(*_args, **_kwargs):
+        raise ValueError("selected_stereo_microphone_unavailable")
+
+    monkeypatch.setattr(microphone_devices, "measure_stereo_channel_balance", unavailable)
+    monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace())
+    client = object.__new__(wds.XgentClient)
+    responses = []
+    monkeypatch.setattr(client, "_publish_response", lambda topic, result: responses.append((topic, result)))
+
+    client._do_microphone_balance({"id": "balance-ticket"})
+
+    topic, result = responses[0]
+    assert topic == "microphone_balance"
+    assert result["state"] == "unavailable"
+    assert result["detail"] == "selected_stereo_microphone_unavailable"
+    assert result["data"] is None
+
+
 def test_microphone_roundtrip_deletes_temp_audio_when_playback_fails(tmp_path, monkeypatch):
     import numpy as np
     temp_path = tmp_path / "xider-media-failed.wav"
@@ -412,6 +431,21 @@ def test_agent_publishes_correlated_output_catalog_without_backend_fields(monkey
         {"output_id": "0", "name": "Speakers", "channels": 2, "sample_rate": 44100}
     ]}
     assert "private-output-id" not in repr(result)
+
+
+def test_audio_output_catalog_reports_missing_backend_as_unsupported(monkeypatch):
+    monkeypatch.setitem(sys.modules, "sounddevice", None)
+    client = object.__new__(wds.XgentClient)
+    responses = []
+    monkeypatch.setattr(client, "_publish_response", lambda topic, payload: responses.append((topic, payload)))
+
+    client._do_audio_output_catalog({"id": "output-ticket"})
+
+    topic, result = responses[0]
+    assert topic == "audio_output_catalog"
+    assert result["state"] == "unsupported"
+    assert result["source"] == "sounddevice_dependency_unavailable"
+    assert result["data"] == {"outputs": []}
 
 
 def test_drops_malformed_rows_and_caps_catalog_and_names():

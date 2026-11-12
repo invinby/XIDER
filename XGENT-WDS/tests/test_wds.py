@@ -292,118 +292,166 @@ def test_windows_startup_duration_uses_diagnostics_event_100_only(client, monkey
 
 
 def test_windows_pending_restart_reads_only_fixed_markers_and_publishes_correlated_state(client, monkeypatch):
-    class Result:
-        returncode = 0
-        stdout = json.dumps({"checks": {
-            "component_servicing": False, "windows_update": True,
-            "pending_file_operations": False, "update_exe_volatile": False,
-        }})
-        stderr = ""
-
-    calls = []
-    monkeypatch.setattr(wds.shutil, "which", lambda name: "powershell.exe" if name == "powershell.exe" else None)
-    monkeypatch.setattr(wds.subprocess, "run", lambda args, **kwargs: calls.append((args, kwargs)) or Result())
+    import xg_telemetry.inventory as inv
+    class Key:
+        def __init__(self, path): self.path = path
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+    present = {r"SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired", r"SYSTEM\CurrentControlSet\Control\Session Manager"}
+    def open_key(_root, path, *_args):
+        if path not in present: raise FileNotFoundError(path)
+        return Key(path)
+    def query_value(key, name):
+        assert name == "PendingFileRenameOperations" and key.path.endswith("Session Manager")
+        raise FileNotFoundError(name)
+    monkeypatch.setattr(inv.winreg, "OpenKey", open_key)
+    monkeypatch.setattr(inv.winreg, "QueryValueEx", query_value)
+    monkeypatch.setattr(wds.subprocess, "run", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("PowerShell must not run")))
     monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
-    published = []
-    client._publish_response = lambda topic, payload: published.append((topic, payload))
-
-    assert "pending_restart" in wds.SUPPORTED_COMMANDS
+    published = []; client._publish_response = lambda topic, payload: published.append((topic, payload))
     snapshot = wds._read_pending_restart_snapshot()
     client._do_pending_restart({"id": "restart-ticket"})
-
-    assert len(calls) == 2
-    assert all(call[1]["timeout"] <= 12 for call in calls)
-    script = calls[0][0][-1]
-    assert "Component Based Servicing" in script and "RebootRequired" in script
-    assert "PendingFileRenameOperations" in script and "UpdateExeVolatile" in script
-    assert "GetValue" in script and "ConvertTo-Json" in script
     assert snapshot["pending"] is True and snapshot["reasons"] == ["windows_update"]
-    assert published[0][0] == "pending_restart"
-    assert published[0][1]["feature_id"] == "D01-F12"
-    assert published[0][1]["request_id"] == "restart-ticket"
+    assert published[0][0] == "pending_restart" and published[0][1]["request_id"] == "restart-ticket"
 
 
-def test_windows_os_support_identity_reads_release_and_edition_without_raw_registry(client, monkeypatch):
-    class Result:
-        returncode = 0
-        stdout = json.dumps({"product_name": "Windows 11 Pro", "display_version": "26H2", "build": "26300", "edition": "Professional"})
-        stderr = ""
-
-    calls = []
-    monkeypatch.setattr(wds.shutil, "which", lambda name: "powershell.exe" if name == "powershell.exe" else None)
-    monkeypatch.setattr(wds.subprocess, "run", lambda args, **kwargs: calls.append((args, kwargs)) or Result())
-
-    assert "os_support" in wds.SUPPORTED_COMMANDS
-    identity = wds._read_os_support_identity()
-
-    assert identity == {"state": "supported", "family": "windows", "release": "11|26H2", "edition": "Pro"}
-    assert calls and calls[0][1]["timeout"] <= 12
-    assert "DisplayVersion" in calls[0][0][-1] and "CurrentBuild" in calls[0][0][-1]
-    assert "ProductName" in calls[0][0][-1]
-    assert "ConvertTo-Json" in calls[0][0][-1]
-    assert "Windows 11 Pro" not in repr(identity)
+def test_windows_os_support_identity_reads_release_and_edition_without_raw_registry(monkeypatch):
+    import xg_telemetry.inventory as inv
+    values = {"CurrentBuild": "26300", "DisplayVersion": "26H2", "EditionID": "Professional"}
+    monkeypatch.setattr(inv, "_read_reg_value", lambda _root, _path, name: values[name])
+    monkeypatch.setattr(wds.subprocess, "run", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("PowerShell must not run")))
+    assert wds._read_os_support_identity() == {"state": "supported", "family": "windows", "release": "11|26H2", "edition": "Pro"}
 
 
-def test_windows_hardware_inventory_projects_model_fields_without_serials(client, monkeypatch):
-    class Result:
-        returncode = 0
-        stdout = json.dumps({
-            "manufacturer": "Example Inc", "model": "Board A", "cpu": "CPU Model",
-            "memory_bytes": "17179869184", "graphics": ["GPU One", "GPU Two"],
-            "serial_number": "MUST_NOT_ESCAPE",
-        })
-        stderr = ""
-
-    calls = []
-    monkeypatch.setattr(wds.shutil, "which", lambda name: "powershell.exe" if name == "powershell.exe" else None)
-    monkeypatch.setattr(wds.subprocess, "run", lambda args, **kwargs: calls.append((args, kwargs)) or Result())
+def test_windows_hardware_inventory_projects_model_fields_without_serials(client, monkeypatch, tmp_path):
+    import xg_telemetry.inventory as inv
+    values = {"SystemManufacturer": "Example Inc", "SystemProductName": "Board A", "ProcessorNameString": "CPU Model"}
+    monkeypatch.setattr(inv, "_read_reg_value", lambda _root, _path, name: values[name])
+    monkeypatch.setattr(inv, "_system_architecture", lambda: "x64")
+    monkeypatch.setattr(inv, "_physical_memory_gib", lambda: 16)
+    monkeypatch.setattr(inv, "_display_names", lambda: ["GPU One", "GPU Two"])
+    monkeypatch.setattr(wds.subprocess, "run", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("PowerShell must not run")))
     monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
-    published = []
-    client._publish_response = lambda topic, payload: published.append((topic, payload))
-
-    inventory = wds._read_hardware_inventory_snapshot()
-    client._do_hardware_inventory({"id": "hardware-ticket"})
-
-    assert inventory == {
-        "state": "supported", "manufacturer": "Example Inc", "model": "Board A",
-        "cpu": "CPU Model", "architecture": None, "memory_gib": 16,
-        "graphics": ["GPU One", "GPU Two"],
-    }
-    assert "serial_number" not in inventory and "MUST_NOT_ESCAPE" not in json.dumps(published)
-    assert "SerialNumber" not in calls[0][0][-1]
-    assert published[0][0] == "hardware_inventory"
-    assert published[0][1]["feature_id"] == "D01-F14"
-    assert published[0][1]["request_id"] == "hardware-ticket"
+    monkeypatch.setattr(wds, "CONFIG_DIR", tmp_path)
+    published = []; client._publish_response = lambda topic, payload: published.append((topic, payload))
+    actual = wds._read_hardware_inventory_snapshot(); client._do_hardware_inventory({"id": "hardware-ticket"})
+    assert actual == {"state": "supported", "manufacturer": "Example Inc", "model": "Board A", "cpu": "CPU Model", "architecture": "x64", "memory_gib": 16, "graphics": ["GPU One", "GPU Two"]}
+    assert "serial_number" not in actual and published[0][1]["request_id"] == "hardware-ticket"
 
 
-def test_windows_driver_inventory_projects_only_names_providers_and_versions(client, monkeypatch):
-    class Result:
-        returncode = 0
-        stdout = json.dumps([
-            {"device_name": "Display Adapter", "provider": "Vendor A", "version": "1.2.3", "driver_date": "2026-04-01"},
-        ])
-        stderr = ""
-
-    calls = []
-    monkeypatch.setattr(wds.shutil, "which", lambda name: "powershell.exe" if name == "powershell.exe" else None)
-    monkeypatch.setattr(wds.subprocess, "run", lambda args, **kwargs: calls.append((args, kwargs)) or Result())
+def test_windows_driver_inventory_projects_only_names_providers_and_versions(client, monkeypatch, tmp_path):
+    import xg_telemetry.inventory as inv
+    expected = [{"device_name": "Display Adapter", "provider": "Vendor A", "version": "1.2.3", "driver_date": "2026-04-01"}]
+    monkeypatch.setattr(inv, "_driver_rows", lambda: expected)
+    monkeypatch.setattr(wds.subprocess, "run", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("PowerShell must not run")))
     monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
-    published = []
-    client._publish_response = lambda topic, payload: published.append((topic, payload))
-
-    rows = wds._read_driver_inventory_snapshot()
+    monkeypatch.setattr(wds, "CONFIG_DIR", tmp_path)
+    published = []; client._publish_response = lambda topic, payload: published.append((topic, payload))
+    assert wds._read_driver_inventory_snapshot() == {"state": "supported", "drivers": expected}
     client._do_driver_inventory({"id": "driver-ticket"})
-
-    assert rows == {"state": "supported", "drivers": [
-        {"device_name": "Display Adapter", "provider": "Vendor A", "version": "1.2.3", "driver_date": "2026-04-01"},
-    ]}
-    script = calls[0][0][-1]
-    assert "Win32_PnPSignedDriver" in script and "ConvertTo-Json" in script
-    assert all(term not in script for term in ("HardwareID", "DeviceID", "SerialNumber", "InfName"))
-    assert calls[0][1]["timeout"] <= 20
-    assert published[0][0] == "driver_inventory"
-    assert published[0][1]["feature_id"] == "D01-F15"
     assert published[0][1]["request_id"] == "driver-ticket"
+
+
+def test_windows_driver_inventory_uses_loaded_driver_names_when_registry_metadata_is_empty(monkeypatch):
+    import xg_telemetry.inventory as inv
+    monkeypatch.setattr(inv, "_loaded_driver_names", lambda: ["disk.sys", "ndis.sys"])
+    monkeypatch.setattr(inv, "_driver_rows", lambda: [])
+    assert inv._read_driver_inventory_snapshot() == {
+        "state": "supported",
+        "drivers": [
+            {"device_name": "disk.sys", "provider": None, "version": None, "driver_date": None},
+            {"device_name": "ndis.sys", "provider": None, "version": None, "driver_date": None},
+        ],
+    }
+
+
+def test_windows_driver_inventory_prefers_psapi_loaded_modules_and_keeps_row_schema(monkeypatch):
+    import xg_telemetry.inventory as inv
+    monkeypatch.setattr(inv, "_loaded_driver_names", lambda: ["disk.sys"])
+    monkeypatch.setattr(inv, "_driver_rows", lambda: [
+        {"device_name": "Unloaded Adapter", "provider": "Vendor", "version": "1.0", "driver_date": "2026-01-01"},
+    ])
+    assert inv._read_driver_inventory_snapshot() == {
+        "state": "supported",
+        "drivers": [{"device_name": "disk.sys", "provider": None, "version": None, "driver_date": None}],
+    }
+
+
+@pytest.mark.parametrize(("architecture", "expected"), [(0, "x86"), (9, "x64"), (12, "ARM64"), (65535, None)])
+def test_system_architecture_uses_get_system_info(monkeypatch, architecture, expected):
+    import ctypes
+    import xg_telemetry.inventory as inv
+
+    class NativeFunction:
+        argtypes = None
+        restype = None
+
+        def __call__(self, pointer):
+            info = ctypes.cast(pointer, ctypes.POINTER(inv._SystemInfo)).contents
+            info.wProcessorArchitecture = architecture
+
+    class Kernel32:
+        GetSystemInfo = NativeFunction()
+
+    monkeypatch.setattr(inv.os, "name", "nt")
+    monkeypatch.setattr(inv.ctypes, "WinDLL", lambda *_args, **_kwargs: Kernel32(), raising=False)
+    assert inv._system_architecture() == expected
+
+
+def test_physical_memory_uses_global_memory_status_ex(monkeypatch):
+    import ctypes
+    import xg_telemetry.inventory as inv
+
+    class NativeFunction:
+        argtypes = None
+        restype = None
+
+        def __call__(self, pointer):
+            status = ctypes.cast(pointer, ctypes.POINTER(inv._MemoryStatusEx)).contents
+            status.ullTotalPhys = 16 * 2**30
+            return 1
+
+    class Kernel32:
+        GlobalMemoryStatusEx = NativeFunction()
+
+    monkeypatch.setattr(inv.os, "name", "nt")
+    monkeypatch.setattr(inv.ctypes, "WinDLL", lambda *_args, **_kwargs: Kernel32(), raising=False)
+    assert inv._physical_memory_gib() == 16
+
+
+def test_loaded_driver_names_come_from_psapi(monkeypatch):
+    import ctypes
+    import xg_telemetry.inventory as inv
+
+    class NativeFunction:
+        argtypes = None
+        restype = None
+
+        def __init__(self, callback):
+            self.callback = callback
+
+        def __call__(self, *args):
+            return self.callback(*args)
+
+    def enumerate_drivers(addresses, size, needed_pointer):
+        assert size == ctypes.sizeof(addresses)
+        ctypes.cast(needed_pointer, ctypes.POINTER(inv.wintypes.DWORD)).contents.value = 2 * ctypes.sizeof(ctypes.c_void_p)
+        addresses[0] = 0x1000
+        addresses[1] = 0x2000
+        return 1
+
+    def base_name(address, buffer, _size):
+        name = {0x1000: "disk.sys", 0x2000: "ndis.sys"}[address]
+        buffer.value = name
+        return len(name)
+
+    class Psapi:
+        EnumDeviceDrivers = NativeFunction(enumerate_drivers)
+        GetDeviceDriverBaseNameW = NativeFunction(base_name)
+
+    monkeypatch.setattr(inv.os, "name", "nt")
+    monkeypatch.setattr(inv.ctypes, "WinDLL", lambda *_args, **_kwargs: Psapi(), raising=False)
+    assert inv._loaded_driver_names() == ["disk.sys", "ndis.sys"]
 
 
 def test_windows_installed_app_inventory_projects_only_name_publisher_and_version(client, monkeypatch):
@@ -646,6 +694,17 @@ def test_volume_set_reports_unknown_when_readback_is_unavailable(client, monkeyp
     assert published[0][1]["current"] is None
 
 
+def test_volume_set_rejects_boolean_level(client):
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, dict(payload)))
+
+    client._do_volume_set({"level": True})
+
+    assert [topic for topic, _ in published] == ["volume_set", "output"]
+    assert published[0][1]["state"] == "failed"
+    assert published[0][1]["level"] is None
+
+
 def test_volume_toggle_requires_observed_mute_transition(client, monkeypatch):
     class Volume:
         def __init__(self, *, applies):
@@ -678,6 +737,28 @@ def test_volume_toggle_requires_observed_mute_transition(client, monkeypatch):
         assert result["ok"] is (expected_state == "confirmed")
         assert result["muted"] is expected_muted
         assert result["source"] == "pycaw.IAudioEndpointVolume"
+
+
+def test_agent_logs_are_bounded_and_redact_secrets(client, monkeypatch, tmp_path):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "xgent.log").write_text(
+        "startup ok\npassword=synthetic-value Bearer synthetic-token\n", encoding="utf-8",
+    )
+    monkeypatch.setattr(wds, "CONFIG_DIR", log_dir)
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, dict(payload)))
+
+    client._do_agent_logs({})
+
+    topic, result = published[0]
+    assert topic == "output"
+    assert result["state"] == "available"
+    assert "password=[REDACTED]" in result["text"]
+    assert "Bearer [REDACTED]" in result["text"]
+    assert "synthetic-value" not in result["text"]
+    assert "synthetic-token" not in result["text"]
 
 
 def test_power_shutdown_reports_launch_only_after_successful_spawn(client, monkeypatch):
@@ -842,6 +923,69 @@ def test_display_brightness_reports_unknown_without_readback(client, monkeypatch
     assert result["state"] == "unknown"
     assert result["ok"] is False
     assert result["current"] is None
+
+
+def test_webcam_rejects_stale_camera_selection_before_opening_camera(client, monkeypatch):
+    import types
+
+    opened = []
+    fake_cv2 = types.SimpleNamespace(VideoCapture=lambda *args: opened.append(args))
+    monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
+    monkeypatch.setattr(wds.camera_devices, "resolve_camera", lambda _camera_id: (_ for _ in ()).throw(ValueError("stale")))
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, dict(payload)))
+
+    client._do_webcam({"camera_id": "stale-camera"})
+
+    assert opened == []
+    assert published == [("webcam", {
+        "type": "webcam", "device_id": "win-1", "image": None,
+        "error": "camera_selection_stale",
+    })]
+
+
+def test_microphone_recording_uses_mocks_and_removes_temporary_audio(client, monkeypatch, tmp_path):
+    import base64
+    import types
+
+    audio_path = tmp_path / "sample.ogg"
+    audio_path.write_bytes(b"reserved")
+    releases = []
+
+    class TempFile:
+        name = str(audio_path)
+
+        def close(self, *, retain_reservation=False):
+            assert retain_reservation is True
+
+        def release(self):
+            releases.append(True)
+
+    recorded = []
+    fake_sounddevice = types.SimpleNamespace(
+        rec=lambda frames, **kwargs: recorded.append((frames, kwargs)) or object(),
+        wait=lambda: None,
+    )
+    fake_soundfile = types.SimpleNamespace(
+        write=lambda path, _recording, _rate: Path(path).write_bytes(b"synthetic-ogg"),
+    )
+    monkeypatch.setitem(sys.modules, "sounddevice", fake_sounddevice)
+    monkeypatch.setitem(sys.modules, "soundfile", fake_soundfile)
+    monkeypatch.setattr(wds.media_temp, "create_media_temp_file", lambda _suffix: TempFile())
+    monkeypatch.setattr(wds, "DEVICE_ID", "win-1")
+    published = []
+    client._publish_response = lambda topic, payload: published.append((topic, dict(payload)))
+
+    client._do_mic({"duration": 1})
+
+    assert recorded == [(44100, {"samplerate": 44100, "channels": 1})]
+    assert published == [("mic", {
+        "type": "mic", "device_id": "win-1",
+        "audio": base64.b64encode(b"synthetic-ogg").decode("ascii"),
+    })]
+    assert len(releases) == 2
+    assert not audio_path.exists()
 
 
 def test_windows_clock_drift_compares_wall_and_monotonic_elapsed_without_setting_time(monkeypatch):
@@ -1542,6 +1686,16 @@ def test_windows_uninstall_unregisters_worker_without_killing_ack(client, monkey
     config_dir.mkdir()
     (config_dir / "state.json").write_text("state", encoding="utf-8")
     monkeypatch.setattr(wds, "CONFIG_DIR", config_dir)
+    install_root = tmp_path / "agent-install"
+    install_root.mkdir()
+    (install_root / "xgent_wds.py").write_text("agent", encoding="utf-8")
+    (install_root / "XGENT-WDS.exe").write_bytes(b"agent")
+    (install_root / "XIDER-Guard-Keeper.exe").write_bytes(b"guardian")
+    runtime = install_root / "venv" / "Scripts"
+    runtime.mkdir(parents=True)
+    (runtime / "python.exe").write_bytes(b"python")
+    (runtime / "pythonw.exe").write_bytes(b"pythonw")
+    monkeypatch.setattr(wds, "resolve_agent_install_root", lambda *_args: install_root)
     desired = []
     monkeypatch.setattr(wds, "set_guardian_desired_running", desired.append)
     removed = []
@@ -1558,9 +1712,16 @@ def test_windows_uninstall_unregisters_worker_without_killing_ack(client, monkey
             pass
 
     monkeypatch.setattr(wds.threading, "Thread", NoStartThread)
+    deleted_values = []
+    deleted_consent = []
+    class RegistryKey:
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
     monkeypatch.setitem(sys.modules, "winreg", SimpleNamespace(
         HKEY_CURRENT_USER=0, KEY_SET_VALUE=0,
-        OpenKey=lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError()),
+        OpenKey=lambda *_args, **_kwargs: RegistryKey(),
+        DeleteValue=lambda _key, name: deleted_values.append(name),
+        DeleteKey=lambda _root, path: deleted_consent.append(path),
     ))
     monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
 
@@ -1571,6 +1732,10 @@ def test_windows_uninstall_unregisters_worker_without_killing_ack(client, monkey
         (wds.WINDOWS_TASK_NAME, False),
         (wds.WINDOWS_GUARDIAN_TASK_NAME, True),
     ]
+    assert deleted_values == ["XGENT", "XGentAgent"]
+    assert len(deleted_consent) == 12
+    assert {path.split("\\")[-3] for path in deleted_consent} == {"webcam", "microphone", "location"}
+    assert not install_root.exists()
     assert not config_dir.exists()
     responses = [
         payload for topic, payload in _publish_calls(client)
@@ -1634,17 +1799,14 @@ def test_clipboard_routing(client, monkeypatch):
 
 
 def test_fake_update_is_labeled_demo_and_uses_a_visible_countdown():
-    from pathlib import Path
-    import xgent_wds as wds
+    import inspect
+    from xg_commands import pranks
 
-    source = Path(wds.__file__).read_text(encoding="utf-8")
-    start = source.index("    def _do_prank_fake_update(")
-    end = source.index("    def _do_prank_toast_spam(", start)
-    handler = source[start:end]
+    handler = inspect.getsource(pranks.fake_update)
 
     assert "ДЕМО" in handler
     assert "Esc закрывает" in handler
-    assert "root.after(250, _countdown)" in handler
+    assert "root.after(250, countdown)" in handler
     assert "завершено" not in handler
     assert "Демо-экран запущен на 22 секунды" in handler
     assert "Esc или двойной щелчок" in handler

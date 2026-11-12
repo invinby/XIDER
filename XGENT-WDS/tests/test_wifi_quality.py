@@ -1,6 +1,7 @@
 import xgent_wds as agent
 import wifi_quality
 import wifi_channel
+from xg_commands import network as network_commands
 
 
 def test_windows_signal_parser_returns_only_normalized_quality_not_ssid():
@@ -16,6 +17,24 @@ def test_windows_signal_parser_does_not_invent_a_sample():
         "source": "windows_netsh_signal_percent", "detail": "signal_unavailable",
     }
     assert wifi_quality.parse_windows_signal("Signal : 140%") ["state"] == "unknown"
+
+
+def test_wifi_info_command_uses_netsh_and_publishes_parsed_summary():
+    calls, sent = [], []
+
+    def run_without_console(function, command, **kwargs):
+        calls.append((command, kwargs))
+        return "wifi output"
+
+    network_commands.wifi_info_command(
+        {}, device_id="device-1", publish_response=lambda topic, body: sent.append((topic, body)),
+        run_without_console=run_without_console, check_output=object(), devnull=-3,
+        parse_wifi_output=lambda output: {"ssid": "sample", "signal": "80%"},
+    )
+
+    assert calls == [(["netsh", "wlan", "show", "interfaces"], {"text": True, "stderr": -3, "timeout": 10})]
+    assert sent[0][0] == "wifi_info"
+    assert sent[0][1]["ok"] is True and sent[0][1]["ssid"] == "sample"
 
 
 def test_windows_collector_uses_read_only_netsh_and_returns_only_signal():
